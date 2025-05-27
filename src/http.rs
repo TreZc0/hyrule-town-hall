@@ -127,7 +127,7 @@ pub(crate) enum PageError {
     #[error(transparent)] Sql(#[from] sqlx::Error),
     #[error(transparent)] Wheel(#[from] wheel::Error),
     #[error("missing user data for Trezc0")]
-    TrezUserData,
+    TrezUserData(u8),
 }
 
 impl<E: Into<PageError>> From<E> for StatusOrError<PageError> {
@@ -142,7 +142,7 @@ impl IsNetworkError for PageError {
             Self::Event(_) => false,
             Self::Sql(_) => false,
             Self::Wheel(e) => e.is_network_error(),
-            Self::TrezUserData => false,
+            Self::TrezUserData(_) => false,
         }
     }
 }
@@ -164,7 +164,7 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
     } else {
         (None, Some(content))
     };
-    let trez = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::TrezUserData)?;
+    let trez = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::TrezUserData(1))?;
     transaction.commit().await?;
     Ok(html! {
         : Doctype;
@@ -433,7 +433,7 @@ async fn archive(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, sort: 
 #[rocket::get("/new")]
 async fn new_event(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
     let mut transaction = pool.begin().await?;
-    let trez = User::from_id(&mut *transaction, Id::from(14571800683221815449_u64)).await?.ok_or(PageError::TrezUserData)?;
+    let trez = User::from_id(&mut *transaction, Id::from(14571800683221815449_u64)).await?.ok_or(PageError::TrezUserData(2))?;
     page(transaction, &me, &uri, PageStyle::default(), "New Event — Hyrule Town Hall", html! {
         p {
             : "If you are planning a tournament, community race, or other event for the Ocarina of Time randomizer community, or if you would like Hyrule Town Hall to archive data about a past event you organized, please contact ";
