@@ -231,11 +231,11 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                         : " • ";
                         a(href = "https://fenhl.net/disc") : "disclaimer"; //TODO
                         : " • ";
-                        a(href = "https://status.midos.house/") : "status";
+                        a(href = "https://hthstatus.zeldaspeedruns.com/") : "status";
                         : " • ";
                         a(href = uri!(api::graphql_playground)) : "API";
                         : " • ";
-                        a(href = "https://github.com/midoshouse/midos.house") {
+                        a(href = "https://github.com/trezc0/midos.house") {
                             @if style.mw_footer {
                                 : "website source code";
                             } else {
@@ -433,7 +433,7 @@ async fn archive(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, sort: 
 #[rocket::get("/new")]
 async fn new_event(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
     let mut transaction = pool.begin().await?;
-    let trez = User::from_id(&mut *transaction, Id::from(14571800683221815449_u64)).await?.ok_or(PageError::TrezUserData(2))?;
+    let trez = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::TrezUserData(2))?;
     page(transaction, &me, &uri, PageStyle::default(), "New Event — Hyrule Town Hall", html! {
         p {
             : "If you are planning a tournament, community race, or other event for the Ocarina of Time randomizer community, or if you would like Hyrule Town Hall to archive data about a past event you organized, please contact ";
