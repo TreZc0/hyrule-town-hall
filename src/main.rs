@@ -83,17 +83,17 @@ impl Environment {
     }
 
     fn night_path(&self) -> &'static str {
-        if self.is_dev() { "/net/midoshouse/dev" } else { "/net/midoshouse" }
+        if self.is_dev() { "/var/log/midoshouse/dev" } else { "/var/log/midoshouse/prod" }
     }
 
     fn racetime_host(&self) -> &'static str {
-        if self.is_dev() { "racetime.midos.house" } else { "racetime.gg" }
+        if self.is_dev() { "rtdev.zeldaspeedruns.com" } else { "racetime.gg" }
     }
 
     fn base_uri(&self) -> rocket::http::uri::Absolute<'static> {
         match self {
-            Self::Production => uri!("https://midos.house"),
-            Self::Dev => uri!("https://dev.midos.house"),
+            Self::Production => uri!("https://hth.zeldaspeedruns.com"),
+            Self::Dev => uri!("https://hth.zeldaspeedruns.com"),
             Self::Local => uri!("http://localhost:24814"),
         }
     }
