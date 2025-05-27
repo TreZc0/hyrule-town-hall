@@ -460,13 +460,8 @@ footer,
         grid-template-columns: 64px 64px;
     }
 
-    nav.index .chest {
-        width: 64px;
-        height: 64px;
-    }
-
     nav.index h1 {
-        font-size: 64px;
+        font-size: 40px;
     }
 }
 
@@ -486,7 +481,7 @@ footer,
 
 @media (min-width: 768px) {
     nav h1 {
-        font-size: 64px;
+        font-size: 40px;
     }
 
     table th,
@@ -527,7 +522,7 @@ footer,
 
 @media (min-width: 1152px) {
     nav.index h1 {
-        font-size: 128px;
+        font-size: 48px;
     }
 
     h1.hash,
