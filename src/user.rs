@@ -316,7 +316,7 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
     } else if me.as_ref().is_some_and(|me| me.id == user.id) {
         if let Some(racetime_user) = racetime_user {
             if let Some(racetime_user) = User::from_racetime(&mut *transaction, &racetime_user.id).await? {
-                let trez = User::from_id(&mut *transaction, Id::from(82783364175630336_u64)).await?.ok_or(PageError::TrezUserData)?;
+                let trez = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::TrezUserData)?;
                 html! {
                     p {
                         @let racetime = racetime_user.racetime.expect("racetime.gg user without racetime.gg ID");
@@ -393,7 +393,7 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
     } else if me.as_ref().is_some_and(|me| me.id == user.id) {
         if let Some(discord_user) = discord_user {
             if let Some(discord_user) = User::from_discord(&mut *transaction, discord_user.id).await? {
-                let trez = User::from_id(&mut *transaction, Id::from(82783364175630336_u64)).await?.ok_or(PageError::TrezUserData)?;
+                let trez = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::TrezUserData)?;
                 html! {
                     p {
                         @let discord = discord_user.discord.expect("Discord user without Discord ID");
