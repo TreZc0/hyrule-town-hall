@@ -85,7 +85,7 @@ pub(crate) async fn listen(mut shutdown: rocket::Shutdown, clean_shutdown: Arc<M
         select! {
             () = &mut shutdown => break,
             res = listener.accept() => {
-                let (musock, _) = res.at_unknown()?;
+                let (mut sock, _) = res.at_unknown()?;
                 let clean_shutdown = clean_shutdown.clone();
                 let global_state = global_state.clone();
                 tokio::spawn(async move {
