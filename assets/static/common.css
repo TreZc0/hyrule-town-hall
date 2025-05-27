@@ -32,6 +32,7 @@ a:hover,
 
 .logo {
     display: grid;
+    max-width: 128px;
     grid-template-columns: 32px 32px;
     direction: ltr;
 }
