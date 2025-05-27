@@ -33,14 +33,8 @@ a:hover,
 .logo {
     display: grid;
     max-width: 128px;
-    grid-template-columns: 32px 32px;
+    grid-template-columns: 64px 64px;
     direction: ltr;
-}
-
-.chest {
-    width: 32px;
-    height: 32px;
-    padding: 0;
 }
 
 .mw-logo {
