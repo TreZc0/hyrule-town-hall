@@ -832,8 +832,8 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                     : "There are two plugins that can be used for the item sharing: ";
                     a(href = "https://github.com/TestRunnerSRL/bizhawk-co-op#readme") : "bizhawk-co-op";
                     : " (also known as Multiworld 1.0) and ";
-                    a(href = uri!(crate::mw::index)) : "Mido's House Multiworld";
-                    : ". While we recommend using the Mido's House plugin since it supports Project64 in addition to BizHawk and is easier to use (see ";
+                    a(href = uri!(crate::mw::index)) : "HTH Multiworld";
+                    : ". While we recommend using the HTH plugin since it supports Project64 in addition to BizHawk and is easier to use (see ";
                     a(href = "https://wiki.ootrandomizer.com/index.php?title=Multiworld#Feature_comparison") : "feature comparison";
                     : "), both plugins are legal in this tournament.";
                 }
@@ -1184,7 +1184,7 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                     : "There are two plugins that can be used for the item sharing: ";
                     a(href = "https://github.com/TestRunnerSRL/bizhawk-co-op#readme") : "bizhawk-co-op";
                     : " (also known as Multiworld 1.0) and ";
-                    a(href = uri!(crate::mw::index)) : "Mido's House Multiworld";
+                    a(href = uri!(crate::mw::index)) : "HTH Multiworld";
                     : ". While we recommend using the Mido's House plugin since it supports Project64 in addition to BizHawk and is easier to use (see ";
                     a(href = "https://wiki.ootrandomizer.com/index.php?title=Multiworld#Feature_comparison") : "feature comparison";
                     : "), both plugins are legal in this tournament. For teams using MH MW, official multiworld rooms will be automatically created once the seed is rolled.";
@@ -1562,7 +1562,7 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                         : "There are two plugins that can be used for the item sharing: ";
                         a(href = "https://github.com/TestRunnerSRL/bizhawk-co-op#readme") : "bizhawk-co-op";
                         : " (also known as Multiworld 1.0) and ";
-                        a(href = uri!(crate::mw::index)) : "Mido's House Multiworld";
+                        a(href = uri!(crate::mw::index)) : "HTH Multiworld";
                         : ". While we recommend using the Mido's House plugin since it supports Project64 in addition to BizHawk and is easier to use (see ";
                         a(href = "https://wiki.ootrandomizer.com/index.php?title=Multiworld#Feature_comparison") : "feature comparison";
                         : "), both plugins are legal in this tournament. For teams using MH MW, official multiworld rooms will be automatically created once the seed is rolled.";
@@ -1580,7 +1580,7 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                     p : "The tournament admins reserve the right to make any minor changes to these rules that are deemed in the best interest of the tournament.";
                     h2(id = "restreams") : "Restreams";
                     p : "If you are interested in restreaming one or more races of our tournament, please contact an organizer. We will invite you to a channel for organizing restreams.";
-                    p : "When being restreamed, teams that indicated that they use Mido's House Multiworld must use the provided official multiworld rooms.";
+                    p : "When being restreamed, teams that indicated that they use HTH Multiworld must use the provided official multiworld rooms.";
                     p {
                         : "Please also see ";
                         a(href = "https://docs.google.com/document/d/1A3dKYjSERr6MtZWyqOs04CZ8yRdAPvBxORrD0OsG6-s/edit") : "the guidelines for restreaming races";
@@ -1754,7 +1754,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, me: O
                 : header;
                 article {
                     p {
-                        a(href = uri!(crate::auth::racetime_login(Some(uri!(enter::get(data.series, &*data.event, _, _)))))) : "Connect a racetime.gg account to your Mido's House account";
+                        a(href = uri!(crate::auth::racetime_login(Some(uri!(enter::get(data.series, &*data.event, _, _)))))) : "Connect a racetime.gg account to your Hyrule Town Hall account";
                         : " to enter this event.";
                     }
                 }
@@ -1765,7 +1765,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, me: O
             : header;
             article {
                 p {
-                    a(href = uri!(auth::login(Some(uri!(enter::get(data.series, &*data.event, _, _)))))) : "Sign in or create a Mido's House account";
+                    a(href = uri!(auth::login(Some(uri!(enter::get(data.series, &*data.event, _, _)))))) : "Sign in or create a Hyrule Town Hall account";
                     : " to enter this event.";
                 }
             }
@@ -1905,7 +1905,7 @@ pub(crate) async fn find_team_form(mut transaction: Transaction<'_, Postgres>, m
         Some(html! {
             article {
                 p {
-                    a(href = uri!(auth::login(Some(uri!(event::find_team(data.series, &*data.event)))))) : "Sign in or create a Mido's House account";
+                    a(href = uri!(auth::login(Some(uri!(event::find_team(data.series, &*data.event)))))) : "Sign in or create a Hyrule Town Hall account";
                     : " to add yourself to this list.";
                 }
             }

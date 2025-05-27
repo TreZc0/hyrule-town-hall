@@ -360,6 +360,7 @@ impl<'a> Data<'a> {
             Series::BattleRoyale => false,
             Series::CoOp => false,
             Series::CopaDoBrasil => false,
+            Series::Crosskeys => false,
             Series::League => false,
             Series::MixedPools => false,
             Series::Mq => false,
@@ -761,6 +762,7 @@ pub(crate) async fn info(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
         Series::BattleRoyale => ohko::info(&mut transaction, &data).await?,
         Series::CoOp => coop::info(&mut transaction, &data).await?,
         Series::CopaDoBrasil => br::info(&mut transaction, &data).await?,
+        Series::Crosskeys => xkeys::info(&mut transaction, &data).await?,
         Series::League => league::info(&mut transaction, &data).await?,
         Series::MixedPools => mp::info(&mut transaction, &data).await?,
         Series::Mq => None,
@@ -1107,6 +1109,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User
                         @match data.series {
                             | Series::CoOp
                             | Series::CopaDoBrasil
+                            | Series::Crosskeys
                             | Series::MixedPools
                             | Series::Mq
                             | Series::Rsl
@@ -1220,7 +1223,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User
             : header;
             article {
                 p {
-                    a(href = uri!(auth::login(Some(uri!(status(data.series, &*data.event)))))) : "Sign in or create a Mido's House account";
+                    a(href = uri!(auth::login(Some(uri!(status(data.series, &*data.event)))))) : "Sign in or create a Hyrule Town Hall account";
                     : " to view your status for this event.";
                 }
             }
@@ -1683,7 +1686,7 @@ async fn opt_out_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf: Op
     } else {
         return Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Opt Out — {}", data.display_name), html! {
             p {
-                a(href = uri!(auth::login(Some(uri!(opt_out(series, event)))))) : "Sign in or create a Mido's House account";
+                a(href = uri!(auth::login(Some(uri!(opt_out(series, event)))))) : "Sign in or create a Hyrule Town Hall account";
                 : " to opt out of participating in ";
                 : data;
                 : ".";
@@ -1754,7 +1757,7 @@ pub(crate) async fn opt_out_post(pool: &State<PgPool>, discord_ctx: &State<RwFut
             form.context.push_error(form::Error::validation("You can no longer opt out since you have already entered this event."));
         }
         if me.racetime.is_none() {
-            form.context.push_error(form::Error::validation("Connect a racetime.gg account to your Mido's House account to opt out."));
+            form.context.push_error(form::Error::validation("Connect a racetime.gg account to your Hyrule Town Hall account to opt out."));
         }
         Ok(if form.context.errors().next().is_some() {
             transaction.rollback().await?;

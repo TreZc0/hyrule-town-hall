@@ -126,10 +126,8 @@ pub(crate) enum PageError {
     #[error(transparent)] Event(#[from] event::DataError),
     #[error(transparent)] Sql(#[from] sqlx::Error),
     #[error(transparent)] Wheel(#[from] wheel::Error),
-    #[error("missing user data for Fenhl")]
-    FenhlUserData,
-    #[error("missing user data for Xopar")]
-    XoparUserData,
+    #[error("missing user data for Trezc0")]
+    TrezUserData,
 }
 
 impl<E: Into<PageError>> From<E> for StatusOrError<PageError> {
@@ -144,8 +142,7 @@ impl IsNetworkError for PageError {
             Self::Event(_) => false,
             Self::Sql(_) => false,
             Self::Wheel(e) => e.is_network_error(),
-            Self::FenhlUserData => false,
-            Self::XoparUserData => false,
+            Self::TrezUserData => false,
         }
     }
 }
@@ -167,8 +164,7 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
     } else {
         (None, Some(content))
     };
-    let fenhl = User::from_id(&mut *transaction, Id::from(14571800683221815449_u64)).await?.ok_or(PageError::FenhlUserData)?;
-    let xopar = User::from_id(&mut *transaction, Id::from(17762941071474623984_u64)).await?.ok_or(PageError::XoparUserData)?;
+    let trez = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::TrezUserData)?;
     transaction.commit().await?;
     Ok(html! {
         : Doctype;
@@ -186,23 +182,9 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                     nav(class? = matches!(style.kind, PageKind::Index).then(|| "index")) {
                         a(class = "nav", href? = (!matches!(style.kind, PageKind::Index)).then(|| uri!(index))) {
                             div(class = "logo") {
-                                @for chest in style.chests.0 {
-                                    img(class = format!("chest chest-{}", char::from(chest.texture)), src = match chest.texture {
-                                        ChestTexture::Normal => static_url!("chest/n.png"),
-                                        ChestTexture::OldMajor => static_url!("chest/m.png"),
-                                        ChestTexture::Major => static_url!("chest/i.png"),
-                                        ChestTexture::SmallKeyOld => static_url!("chest/k.png"),
-                                        ChestTexture::SmallKey1500 => static_url!("chest/y.png"),
-                                        ChestTexture::SmallKey1751 => static_url!("chest/a.png"),
-                                        ChestTexture::BossKey => static_url!("chest/b.png"),
-                                        ChestTexture::Token => static_url!("chest/s.png"),
-                                        ChestTexture::Invisible => static_url!("chest/d.png"),
-                                        ChestTexture::Heart => static_url!("chest/h.png"),
-                                        ChestTexture::Bombchu => static_url!("chest/c.png"),
-                                    });
-                                }
+                                img(class = "logo", alt = "hth logo", src = static_url!("hth_logo.png"));
                             }
-                            h1 : "Mido's House";
+                            h1 : "Hyrule Town Hall";
                         }
                         div(id = "login") {
                             @if !matches!(style.kind, PageKind::Login) {
@@ -245,9 +227,9 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                 footer {
                     p {
                         : "hosted by ";
-                        : fenhl;
+                        : trez;
                         : " • ";
-                        a(href = "https://fenhl.net/disc") : "disclaimer";
+                        a(href = "https://fenhl.net/disc") : "disclaimer"; //TODO
                         : " • ";
                         a(href = "https://status.midos.house/") : "status";
                         : " • ";
@@ -262,9 +244,7 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                         }
                     }
                     p {
-                        : "Special thanks to Maplestar for some of the chest icons used in the logo, and to ";
-                        : xopar;
-                        : " and shirosoluna for some of the seed hash icons!";
+                        : "Special thanks to Maplestar for some of the chest icons used in the logo";
                     }
                 }
             }
@@ -316,11 +296,10 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
     }
     let page_content = html! {
         p {
-            : "Mido's House is a platform where ";
-            a(href = "https://ootrandomizer.com/") : "Ocarina of Time randomizer";
-            : " events like tournaments or community races can be organized. You may also be looking for the ";
-            a(href = uri!(crate::mw::index)) : "Mido's House Multiworld";
-            : " app.";
+            : "Hyrule Town Hall is a platform where speedrunning and randomizer";
+            : " events like tournaments or community races can be organized. ";
+            : "It is a fork of ";
+            a(href = "https://github.com/midoshouse/midos.house") : "Mido's House created by fenhl.";
         }
         div(class = "section-list") {
             div {
@@ -374,7 +353,7 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
             : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, None, cal::RaceTableOptions { game_count: false, show_multistreams: true, can_create: false, can_edit: me.as_ref().is_some_and(|me| me.is_archivist), show_restream_consent: false, challonge_import_ctx: None }, &races).await?;
         }
     };
-    Ok(page(transaction, &me, &uri, PageStyle { kind: PageKind::Index, chests, ..PageStyle::default() }, "Mido's House", page_content).await?)
+    Ok(page(transaction, &me, &uri, PageStyle { kind: PageKind::Index, chests, ..PageStyle::default() }, "Hyrule Town Hall", page_content).await?)
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq, Sequence, FromFormField, UriDisplayQuery)]
@@ -448,17 +427,17 @@ async fn archive(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, sort: 
             }
         }
     };
-    Ok(page(transaction, &me, &uri, PageStyle { chests, ..PageStyle::default() }, "Event Archive — Mido's House", page_content).await?)
+    Ok(page(transaction, &me, &uri, PageStyle { chests, ..PageStyle::default() }, "Event Archive — Hyrule Town Hall", page_content).await?)
 }
 
 #[rocket::get("/new")]
 async fn new_event(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
     let mut transaction = pool.begin().await?;
-    let fenhl = User::from_id(&mut *transaction, Id::from(14571800683221815449_u64)).await?.ok_or(PageError::FenhlUserData)?;
-    page(transaction, &me, &uri, PageStyle::default(), "New Event — Mido's House", html! {
+    let trez = User::from_id(&mut *transaction, Id::from(14571800683221815449_u64)).await?.ok_or(PageError::TrezUserData)?;
+    page(transaction, &me, &uri, PageStyle::default(), "New Event — Hyrule Town Hall", html! {
         p {
-            : "If you are planning a tournament, community race, or other event for the Ocarina of Time randomizer community, or if you would like Mido's House to archive data about a past event you organized, please contact ";
-            : fenhl;
+            : "If you are planning a tournament, community race, or other event for the Ocarina of Time randomizer community, or if you would like Hyrule Town Hall to archive data about a past event you organized, please contact ";
+            : trez;
             : " to determine the specific needs of the event.";
         }
     }).await
@@ -475,9 +454,9 @@ async fn bad_request(request: &Request<'_>) -> PageResult {
     let pool = request.guard::<&State<PgPool>>().await.expect("missing database pool");
     let me = request.guard::<User>().await.succeeded();
     let uri = request.guard::<Origin<'_>>().await.succeeded().unwrap_or_else(|| Origin(uri!(index)));
-    page(pool.begin().await?, &me, &uri, PageStyle { chests: ChestAppearances::SMALL_KEYS, ..PageStyle::default() }, "Bad Request — Mido's House", html! {
+    page(pool.begin().await?, &me, &uri, PageStyle { chests: ChestAppearances::SMALL_KEYS, ..PageStyle::default() }, "Bad Request — Hyrule Town Hall", html! {
         h1 : "Error 400: Bad Request";
-        p : "Login failed. If you need help, contact Fenhl on Discord.";
+        p : "Login failed. If you need help, contact TreZ on Discord.";
     }).await
 }
 
@@ -486,7 +465,7 @@ async fn not_found(request: &Request<'_>) -> PageResult {
     let pool = request.guard::<&State<PgPool>>().await.expect("missing database pool");
     let me = request.guard::<User>().await.succeeded();
     let uri = request.guard::<Origin<'_>>().await.succeeded().unwrap_or_else(|| Origin(uri!(index)));
-    page(pool.begin().await?, &me, &uri, PageStyle { kind: PageKind::Banner, chests: ChestAppearances::INVISIBLE, ..PageStyle::default() }, "Not Found — Mido's House", html! {
+    page(pool.begin().await?, &me, &uri, PageStyle { kind: PageKind::Banner, chests: ChestAppearances::INVISIBLE, ..PageStyle::default() }, "Not Found — Hyrule Town Hall", html! {
         div(style = "flex-grow: 0;") {
             h1 : "Error 404: Not Found";
         }
@@ -502,9 +481,9 @@ async fn internal_server_error(request: &Request<'_>) -> PageResult {
     let pool = request.guard::<&State<PgPool>>().await.expect("missing database pool");
     let me = request.guard::<User>().await.succeeded();
     let uri = request.guard::<Origin<'_>>().await.succeeded().unwrap_or_else(|| Origin(uri!(index)));
-    page(pool.begin().await?, &me, &uri, PageStyle { chests: ChestAppearances::TOKENS, ..PageStyle::default() }, "Internal Server Error — Mido's House", html! {
+    page(pool.begin().await?, &me, &uri, PageStyle { chests: ChestAppearances::TOKENS, ..PageStyle::default() }, "Internal Server Error — Hyrule Town Hall", html! {
         h1 : "Error 500: Internal Server Error";
-        p : "Sorry, something went wrong. Please notify Fenhl on Discord.";
+        p : "Sorry, something went wrong. Please notify TreZc0_ on Discord.";
     }).await
 }
 
@@ -513,9 +492,9 @@ async fn bad_gateway(request: &Request<'_>) -> PageResult {
     let pool = request.guard::<&State<PgPool>>().await.expect("missing database pool");
     let me = request.guard::<User>().await.succeeded();
     let uri = request.guard::<Origin<'_>>().await.succeeded().unwrap_or_else(|| Origin(uri!(index)));
-    page(pool.begin().await?, &me, &uri, PageStyle { chests: ChestAppearances::TOKENS, ..PageStyle::default() }, "Bad Gateway — Mido's House", html! {
+    page(pool.begin().await?, &me, &uri, PageStyle { chests: ChestAppearances::TOKENS, ..PageStyle::default() }, "Bad Gateway — Hyrule Town Hall", html! {
         h1 : "Error 502: Bad Gateway";
-        p : "Sorry, there was a network error. Please try again. If this error persists, please contact Fenhl on Discord.";
+        p : "Sorry, there was a network error. Please try again. If this error persists, please contact TreZ on Discord.";
     }).await
 }
 
@@ -528,14 +507,14 @@ async fn fallback_catcher(status: Status, request: &Request<'_>) -> PageResult {
     let pool = request.guard::<&State<PgPool>>().await.expect("missing database pool");
     let me = request.guard::<User>().await.succeeded();
     let uri = request.guard::<Origin<'_>>().await.succeeded().unwrap_or_else(|| Origin(uri!(index)));
-    page(pool.begin().await?, &me, &uri, PageStyle { chests: ChestAppearances::TOKENS, ..PageStyle::default() }, &format!("{} — Mido's House", status.reason_lossy()), html! {
+    page(pool.begin().await?, &me, &uri, PageStyle { chests: ChestAppearances::TOKENS, ..PageStyle::default() }, &format!("{} — Hyrule Town Hall", status.reason_lossy()), html! {
         h1 {
             : "Error ";
             : status.code;
             : ": ";
             : status.reason_lossy();
         }
-        p : "Sorry, something went wrong. Please notify Fenhl on Discord.";
+        p : "Sorry, something went wrong. Please notify TreZ on Discord.";
     }).await
 }
 

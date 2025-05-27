@@ -82,6 +82,9 @@ pub(crate) struct Data {
 #[derive(Debug, Clone)]
 #[cfg_attr(unix, derive(Protocol))]
 pub(crate) enum Files {
+    AlttprDoorRando {
+        race_id: Id<Races>
+    },
     MidosHouse {
         file_stem: Cow<'static, str>,
         locked_spoiler_log_path: Option<String>,
@@ -153,6 +156,7 @@ impl Data {
 
         if_chain! {
             if self.file_hash.is_none() || self.password.is_none() || match self.files {
+                Some(Files::AlttprDoorRando { .. }) => false,
                 Some(Files::MidosHouse { .. }) => true,
                 Some(Files::OotrWeb { gen_time, .. }) => gen_time <= now - WEB_TIMEOUT,
                 Some(Files::TriforceBlitz { .. }) => false,
@@ -247,6 +251,14 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
     //TODO show seed password when appropriate
     let extra = seed.extra(now).await?;
     let mut seed_links = match seed.files {
+        Some(Files::AlttprDoorRando { race_id, .. }) => {
+            let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
+            // TODO need to link to patch URL here
+            patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{race_id}.bps"));
+            Some(html! {
+                a(href = patcher_url.to_string()) : "View";
+            })
+        }
         Some(Files::OotrWeb { id, gen_time, .. }) if gen_time > now - WEB_TIMEOUT => Some(html! {
             a(href = format!("https://ootrandomizer.com/seed/get?id={id}")) : "View";
         }),
@@ -373,7 +385,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>,
     let OptSuffix(file_stem, suffix) = filename;
     if !regex_is_match!("^[0-9A-Za-z_-]+$", file_stem) { return Err(StatusOrError::Status(Status::NotFound)) }
     Ok(match suffix {
-        Some(suffix @ ("zpf" | "zpfz")) => {
+        Some(suffix @ ("bps" | "zpf" | "zpfz")) => {
             let path = Path::new(DIR).join(format!("{file_stem}.{suffix}"));
             GetResponse::Patch {
                 inner: match NamedFile::open(&path).await {
@@ -473,7 +485,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>,
             } else {
                 "zpf"
             };
-            GetResponse::Page(page(transaction, &me, &uri, PageStyle { kind: PageKind::Center, chests: extra.chests, ..PageStyle::default() }, "Seed — Mido's House", html! {
+            GetResponse::Page(page(transaction, &me, &uri, PageStyle { kind: PageKind::Center, chests: extra.chests, ..PageStyle::default() }, "Seed — Hyrule Town Hall", html! {
                 @if let Some(hash) = extra.file_hash {
                     h1(class = "hash") {
                         @for hash_icon in hash {

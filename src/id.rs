@@ -166,6 +166,12 @@ where i64: sqlx::Type<DB> {
     }
 }
 
+impl<T: Table> sqlx::postgres::PgHasArrayType for Id<T> {
+    fn array_type_info() -> sqlx::postgres::PgTypeInfo {
+        i64::array_type_info()
+    }
+}
+
 impl<'a, T: Table> FromParam<'a> for Id<T> {
     type Error = <u64 as FromParam<'a>>::Error;
 

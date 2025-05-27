@@ -200,7 +200,7 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                         em : "In the event of an odd number of players, a random player in the lowest score group who has not yet received a bye will receive a bye.";
                     }
                     h2(id = "scheduling-and-racing") : "Scheduling and Racing";
-                    p : "Scheduling and seed rolling will be handled through Mido's House.";
+                    p : "Scheduling and seed rolling will be handled through Hyrule Town Hall.";
                     p : "Prerolling a seed by Mido is set up to reduce waiting time on generating a seed. Matches that are scheduled on short notice might have to wait a bit, please be patient.";
                     p {
                         : "Seeds can also be generated on Fenhl's branch v8.2.76-10 with the 4th Mixed Pools Tournament preset: ";

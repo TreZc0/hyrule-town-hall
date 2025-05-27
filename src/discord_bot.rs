@@ -30,7 +30,7 @@ use {
     },
 };
 
-pub(crate) const FENHL: UserId = UserId::new(86841168427495424);
+pub(crate) const ADMIN_USER: UserId = UserId::new(82783364175630336); // TreZ
 const BUTTONS_PER_PAGE: usize = 25;
 
 /// A wrapper around serenity's Discord snowflake types that can be stored in a PostgreSQL database as a BIGINT.
@@ -526,7 +526,7 @@ fn parse_timestamp(timestamp: &str) -> Option<DateTime<Utc>> {
 
 pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, db_pool: PgPool, http_client: reqwest::Client, config: Config, new_room_lock: Arc<Mutex<()>>, extra_room_tx: Arc<RwLock<mpsc::Sender<String>>>, clean_shutdown: Arc<Mutex<CleanShutdown>>, shutdown: rocket::Shutdown) -> serenity_utils::Builder {
     discord_builder
-        .error_notifier(ErrorNotifier::User(FENHL)) //TODO also print to stderr and/or report to night
+        .error_notifier(ErrorNotifier::User(ADMIN_USER)) //TODO also print to stderr and/or report to night
         .data::<DbPool>(db_pool)
         .data::<HttpClient>(http_client)
         .data::<RacetimeHost>(racetime::HostInfo {
@@ -997,7 +997,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, db_poo
                             } else {
                                 interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                     .ephemeral(true)
-                                    .content("Sorry, this channel is not configured as the scheduling channel for any ongoing Mido's House events.")
+                                    .content("Sorry, this channel is not configured as the scheduling channel for any ongoing Hyrule Town Hall events.")
                                 )).await?;
                             }
                         } else if Some(interaction.data.id) == command_ids.draft {
@@ -1298,7 +1298,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, db_poo
                             } else {
                                 interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                     .ephemeral(true)
-                                    .content("Sorry, this thread is not associated with an ongoing Mido's House event.")
+                                    .content("Sorry, this thread is not associated with an ongoing Hyrule Town Hall event.")
                                 )).await?;
                             }
                         } else if interaction.data.id == command_ids.schedule {
@@ -1503,7 +1503,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, db_poo
                                                     } else {
                                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                                             .ephemeral(true)
-                                                            .content("Sorry, only participants in this race can use this command for now. Please contact Fenhl to edit the schedule.") //TODO allow TOs to schedule as async (with team parameter)
+                                                            .content("Sorry, only participants in this race can use this command for now. Please contact TreZ to edit the schedule.") //TODO allow TOs to schedule as async (with team parameter)
                                                         )).await?;
                                                         transaction.rollback().await?;
                                                         return Ok(())
@@ -1528,7 +1528,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, db_poo
                                                     } else {
                                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                                             .ephemeral(true)
-                                                            .content("Sorry, only participants in this race can use this command for now. Please contact Fenhl to edit the schedule.") //TODO allow TOs to schedule as async (with team parameter)
+                                                            .content("Sorry, only participants in this race can use this command for now. Please contact TreZ to edit the schedule.") //TODO allow TOs to schedule as async (with team parameter)
                                                         )).await?;
                                                         transaction.rollback().await?;
                                                         return Ok(())
@@ -1560,8 +1560,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, db_poo
                                                             if let Some(channel) = event.discord_organizer_channel {
                                                                 channel.say(ctx, &msg).await?;
                                                             } else {
-                                                                // DM Fenhl
-                                                                FENHL.create_dm_channel(ctx).await?.say(ctx, &msg).await?;
+                                                                // DM Ad
+                                                                ADMIN_USER.create_dm_channel(ctx).await?.say(ctx, &msg).await?;
                                                             }
                                                         } else {
                                                             if let Some(channel) = event.discord_race_room_channel {
@@ -1698,7 +1698,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, db_poo
                                                 } else {
                                                     interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                                         .ephemeral(true)
-                                                        .content("Sorry, only participants in this race can use this command for now. Please contact Fenhl to edit the schedule.") //TODO allow TOs to edit asynced schedules (with team parameter)
+                                                        .content("Sorry, only participants in this race can use this command for now. Please contact TreZ to edit the schedule.") //TODO allow TOs to edit asynced schedules (with team parameter)
                                                     )).await?;
                                                     transaction.rollback().await?;
                                                     return Ok(())
@@ -1723,7 +1723,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, db_poo
                                                 } else {
                                                     interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                                         .ephemeral(true)
-                                                        .content("Sorry, only participants in this race can use this command for now. Please contact Fenhl to edit the schedule.") //TODO allow TOs to edit asynced schedules (with team parameter)
+                                                        .content("Sorry, only participants in this race can use this command for now. Please contact TreZ to edit the schedule.") //TODO allow TOs to edit asynced schedules (with team parameter)
                                                     )).await?;
                                                     transaction.rollback().await?;
                                                     return Ok(())

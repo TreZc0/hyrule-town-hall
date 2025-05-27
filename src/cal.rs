@@ -701,6 +701,7 @@ impl Race {
             },
             | Series::CoOp //TODO add archives of seasons 1 and 2?
             | Series::CopaDoBrasil
+            | Series::Crosskeys
             | Series::MixedPools
             | Series::Mq
             | Series::SongsOfHope
@@ -1070,6 +1071,7 @@ impl Race {
             RaceSchedule::Async { start1, start2, start3, end1, end2, end3, ref room1, ref room2, ref room3 } => (None, [start1, start2, start3], None, [end1, end2, end3], None, [room1.as_ref(), room2.as_ref(), room3.as_ref()]),
         };
         let (web_id, web_gen_time, file_stem, locked_spoiler_log_path, is_tfb_dev, tfb_uuid) = match self.seed.files {
+            Some(seed::Files::AlttprDoorRando { .. }) => (None, None, None, None, false, None),
             Some(seed::Files::MidosHouse { ref file_stem, ref locked_spoiler_log_path }) => (None, None, Some(file_stem), locked_spoiler_log_path.as_ref(), false, None),
             Some(seed::Files::OotrWeb { id, gen_time, ref file_stem }) => (Some(id), Some(gen_time), Some(file_stem), None, false, None),
             Some(seed::Files::TriforceBlitz { is_dev, uuid }) => (None, None, None, None, is_dev, Some(uuid)),
@@ -1283,7 +1285,7 @@ impl Event {
                             Ok(member.id)
                         } else {
                             Err(format!(
-                                "Warning: {member} could not be invited because {subj} {has_not} linked {poss} racetime.gg account to {poss} Mido's House account. Please contact an organizer to invite {obj} manually for now.",
+                                "Warning: {member} could not be invited because {subj} {has_not} linked {poss} racetime.gg account to {poss} Hyrule Town Hall account. Please contact an organizer to invite {obj} manually for now.",
                                 subj = member.subjective_pronoun(),
                                 has_not = if member.subjective_pronoun_uses_plural_form() { "haven't" } else { "hasn't" },
                                 poss = member.possessive_determiner(),
@@ -1415,7 +1417,7 @@ pub(crate) enum Error {
     #[error(transparent)] Wheel(#[from] wheel::Error),
     #[error("no team with this ID")]
     UnknownTeam,
-    #[error("start.gg team ID {0} is not associated with a Mido's House team")]
+    #[error("start.gg team ID {0} is not associated with a Hyrule Town Hall team")]
     UnknownTeamStartGG(startgg::ID),
     #[error("Unqualified entrant ({racetime_id}) in event ({}/{event}) with SGL-style qualifiers", series.slug())]
     UnqualifiedEntrant {
@@ -1567,7 +1569,7 @@ async fn add_event_races(transaction: &mut Transaction<'_, Postgres>, discord_ct
                 cal_event.push(dtstart(start));
                 cal_event.push(dtend(race_event.end().unwrap_or_else(|| start + match event.series {
                     Series::TriforceBlitz => TimeDelta::hours(2),
-                    Series::BattleRoyale => TimeDelta::hours(2) + TimeDelta::minutes(30),
+                    Series::BattleRoyale | Series::Crosskeys => TimeDelta::hours(2) + TimeDelta::minutes(30),
                     Series::CoOp | Series::MixedPools | Series::Scrubs | Series::SpeedGaming | Series::WeTryToBeBetter => TimeDelta::hours(3),
                     Series::CopaDoBrasil | Series::League | Series::NineDaysOfSaws | Series::SongsOfHope | Series::Standard | Series::TournoiFrancophone => TimeDelta::hours(3) + TimeDelta::minutes(30),
                     Series::Mq | Series::Multiworld | Series::Pictionary => TimeDelta::hours(4),
@@ -1617,7 +1619,7 @@ async fn add_event_races(transaction: &mut Transaction<'_, Postgres>, discord_ct
 
 #[rocket::get("/calendar")]
 pub(crate) async fn index_help(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
-    page(pool.begin().await?, &me, &uri, PageStyle::default(), "Calendar — Mido's House", html! {
+    page(pool.begin().await?, &me, &uri, PageStyle::default(), "Calendar — MHyrule Town Hall", html! {
         p {
             : "A calendar of all races across all events can be found at ";
             code : uri!(base_uri(), index);
@@ -1770,7 +1772,7 @@ pub(crate) async fn create_race_form(mut transaction: Transaction<'_, Postgres>,
         html! {
             article {
                 p {
-                    a(href = uri!(auth::login(Some(uri!(create_race(event.series, &*event.event, Some(NonZero::<u8>::new(if ctx.field_value("team3").is_some() { 3 } else { 2 }).unwrap()))))))) : "Sign in or create a Mido's House account";
+                    a(href = uri!(auth::login(Some(uri!(create_race(event.series, &*event.event, Some(NonZero::<u8>::new(if ctx.field_value("team3").is_some() { 3 } else { 2 }).unwrap()))))))) : "Sign in or create a Hyrule Town Hall account";
                     : " to create a race.";
                 }
             }
@@ -2266,7 +2268,7 @@ pub(crate) async fn import_races_form(mut transaction: Transaction<'_, Postgres>
             html! {
                 article {
                     p {
-                        a(href = uri!(auth::login(Some(uri!(import_races(event.series, &*event.event)))))) : "Sign in or create a Mido's House account";
+                        a(href = uri!(auth::login(Some(uri!(import_races(event.series, &*event.event)))))) : "Sign in or create a Hyrule Town Hall account";
                         : " to import races.";
                     }
                 }
@@ -2327,7 +2329,7 @@ pub(crate) async fn import_races_form(mut transaction: Transaction<'_, Postgres>
             html! {
                 article {
                     p {
-                        a(href = uri!(auth::login(Some(uri!(import_races(event.series, &*event.event)))))) : "Sign in or create a Mido's House account";
+                        a(href = uri!(auth::login(Some(uri!(import_races(event.series, &*event.event)))))) : "Sign in or create a Hyrule Town Hall account";
                         : " to import races.";
                     }
                 }
@@ -2721,7 +2723,7 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, http_client: &State<reqw
 
 pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, discord_ctx: &DiscordCtx, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: event::Data<'_>, race: Race, redirect_to: Option<Origin<'_>>, ctx: Option<Context<'_>>) -> Result<RawHtml<String>, event::Error> {
     let header = event.header(&mut transaction, me.as_ref(), Tab::Races, true).await?;
-    let fenhl = User::from_id(&mut *transaction, Id::<Users>::from(14571800683221815449_u64)).await?.ok_or(PageError::FenhlUserData)?;
+    let trez = User::from_id(&mut *transaction, Id::<Users>::from(16287394041462225947_u64)).await?.ok_or(PageError::TrezUserData)?;
     let form = if me.is_some() {
         let mut errors = ctx.as_ref().map(|ctx| ctx.errors().collect()).unwrap_or_default();
         full_form(uri!(edit_race_post(event.series, &*event.event, race.id, redirect_to)), csrf, html! {
@@ -2783,7 +2785,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                             th {
                                 : "Restreamer";
                                 br;
-                                small(style = "font-weight: normal;") : "racetime.gg profile URL, racetime.gg user ID, or Mido's House user ID. Enter “me” to assign yourself.";
+                                small(style = "font-weight: normal;") : "racetime.gg profile URL, racetime.gg user ID, or Hyrule Town Hall user ID. Enter “me” to assign yourself.";
                             }
                         }
                     }
@@ -2820,7 +2822,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
         html! {
             article {
                 p {
-                    a(href = uri!(auth::login(Some(uri!(edit_race(event.series, &*event.event, race.id, redirect_to)))))) : "Sign in or create a Mido's House account";
+                    a(href = uri!(auth::login(Some(uri!(edit_race(event.series, &*event.event, race.id, redirect_to)))))) : "Sign in or create a Hyrule Town Hall account";
                     : " to edit this race.";
                 }
             }
@@ -2978,7 +2980,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
         }
         p {
             : "The data above is currently not editable for technical reasons. Please contact ";
-            : fenhl;
+            : trez;
             : " if you've spotted an error in it.";
         }
         : form;
@@ -3026,7 +3028,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
         form.context.push_error(form::Error::validation("This race is not part of this event."));
     }
     if !me.is_archivist && !event.organizers(&mut transaction).await?.contains(&me) && !event.restreamers(&mut transaction).await?.contains(&me) {
-        form.context.push_error(form::Error::validation("You must be an organizer, restreamer, or archivist to edit this race. If you would like to become an archivist, please contact Fenhl on Discord."));
+        form.context.push_error(form::Error::validation("You must be an organizer, restreamer, or archivist to edit this race. If you would like to become an archivist, please contact TreZ on Discord."));
     }
     Ok(if let Some(ref value) = form.value {
         let mut valid_room_urls = HashMap::new();
@@ -3352,7 +3354,7 @@ pub(crate) async fn add_file_hash_form(mut transaction: Transaction<'_, Postgres
         html! {
             article {
                 p {
-                    a(href = uri!(auth::login(Some(uri!(add_file_hash(event.series, &*event.event, race.id)))))) : "Sign in or create a Mido's House account";
+                    a(href = uri!(auth::login(Some(uri!(add_file_hash(event.series, &*event.event, race.id)))))) : "Sign in or create a Hyrule Town Hall account";
                     : " to edit this race.";
                 }
             }
@@ -3434,7 +3436,7 @@ pub(crate) async fn add_file_hash_post(pool: &State<PgPool>, http_client: &State
         form.context.push_error(form::Error::validation("This race is not part of this event."));
     }
     if !me.is_archivist && !event.organizers(&mut transaction).await?.contains(&me) {
-        form.context.push_error(form::Error::validation("You must be an archivist to edit this race. If you would like to become an archivist, please contact Fenhl on Discord."));
+        form.context.push_error(form::Error::validation("You must be an archivist to edit this race. If you would like to become an archivist, please contact TreZ on Discord."));
     }
     Ok(if let Some(ref value) = form.value {
         let hash1 = if let Ok(hash1) = value.hash1.parse::<HashIcon>() {

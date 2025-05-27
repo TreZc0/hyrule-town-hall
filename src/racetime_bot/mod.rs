@@ -40,7 +40,7 @@ use {
     crate::{
         cal::Entrant,
         config::ConfigRaceTime,
-        discord_bot::FENHL,
+        discord_bot::ADMIN_USER,
         prelude::*,
     },
 };
@@ -52,7 +52,7 @@ mod report;
 #[cfg(unix)] const PYTHON: &str = "python3";
 #[cfg(windows)] const PYTHON: &str = "py";
 
-pub(crate) const CATEGORY: &str = "ootr";
+pub(crate) const CATEGORY: &str = "alttpr";
 
 const OOTR_DISCORD_GUILD: GuildId = GuildId::new(274180765816848384);
 
@@ -63,15 +63,15 @@ pub(crate) enum ParseUserError {
     #[error(transparent)] Reqwest(#[from] reqwest::Error),
     #[error(transparent)] Sql(#[from] sqlx::Error),
     #[error(transparent)] Wheel(#[from] wheel::Error),
-    #[error("this seems to be neither a URL, nor a racetime.gg user ID, nor a Mido's House user ID")]
+    #[error("this seems to be neither a URL, nor a racetime.gg user ID, nor a Hyrule Town Hall user ID")]
     Format,
     #[error("there is no racetime.gg user with this ID (error 404)")]
     IdNotFound,
     #[error("this URL is not a racetime.gg user profile URL")]
     InvalidUrl,
-    #[error("there is no Mido's House user with this ID")]
+    #[error("there is no Hyrule Town Hall user with this ID")]
     MidosHouseId,
-    #[error("There is no racetime.gg account associated with this Mido's House account. Ask the user to go to their profile and select “Connect a racetime.gg account”. You can also link to their racetime.gg profile directly.")]
+    #[error("There is no racetime.gg account associated with this Hyrule Town Hall account. Ask the user to go to their profile and select “Connect a racetime.gg account”. You can also link to their racetime.gg profile directly.")]
     MidosHouseUserNoRacetime,
     #[error("there is no racetime.gg user with this URL (error 404)")]
     UrlNotFound,
@@ -191,6 +191,7 @@ pub(crate) enum Goal {
     Cc7,
     CoOpS3,
     CopaDoBrasil,
+    Crosskeys2025,
     LeagueS8,
     MixedPoolsS2,
     MixedPoolsS3,
@@ -228,7 +229,7 @@ impl Goal {
     fn from_race_data(race_data: &RaceData) -> Option<Self> {
         let Ok(bot_goal) = race_data.goal.name.parse::<Self>() else { return None };
         if race_data.goal.custom != bot_goal.is_custom() { return None }
-        if let (Goal::StandardRuleset, Some(_)) = (bot_goal, &race_data.opened_by) { return None }
+        if let (Goal::StandardRuleset | Goal::Crosskeys2025, Some(_)) = (bot_goal, &race_data.opened_by) { return None }
         Some(bot_goal)
     }
 
@@ -237,6 +238,7 @@ impl Goal {
             Self::Cc7 => series == Series::Standard && event == "7cc",
             Self::CoOpS3 => series == Series::CoOp && event == "3",
             Self::CopaDoBrasil => series == Series::CopaDoBrasil && event == "1",
+            Self::Crosskeys2025 => series == Series::Crosskeys && event == "2025",
             Self::LeagueS8 => series == Series::League && event == "8",
             Self::MixedPoolsS2 => series == Series::MixedPools && event == "2",
             Self::MixedPoolsS3 => series == Series::MixedPools && event == "3",
@@ -272,6 +274,7 @@ impl Goal {
             | Self::Cc7
             | Self::CoOpS3
             | Self::CopaDoBrasil
+            | Self::Crosskeys2025
             | Self::LeagueS8
             | Self::MixedPoolsS2
             | Self::MixedPoolsS3
@@ -301,6 +304,7 @@ impl Goal {
             Self::Cc7 => "Standard Tournament Season 7 Challenge Cup",
             Self::CoOpS3 => "Co-op Tournament Season 3",
             Self::CopaDoBrasil => "Copa do Brasil",
+            Self::Crosskeys2025 => "ALttP Randomizer Crosskeys 2025",
             Self::LeagueS8 => "League Season 8",
             Self::MixedPoolsS2 => "2nd Mixed Pools Tournament",
             Self::MixedPoolsS3 => "3rd Mixed Pools Tournament",
@@ -331,6 +335,7 @@ impl Goal {
         match self {
             | Self::Cc7
             | Self::CoOpS3
+            | Self::Crosskeys2025
             | Self::LeagueS8
             | Self::MixedPoolsS2
             | Self::MixedPoolsS3
@@ -374,6 +379,7 @@ impl Goal {
             Self::TournoiFrancoS5 => Some(draft::Kind::TournoiFrancoS5),
             | Self::CoOpS3
             | Self::CopaDoBrasil
+            | Self::Crosskeys2025
             | Self::LeagueS8
             | Self::MixedPoolsS2
             | Self::MixedPoolsS3
@@ -397,6 +403,7 @@ impl Goal {
     /// See the [`PrerollMode`] docs.
     pub(crate) fn preroll_seeds(&self, event: Option<(Series, &str)>) -> PrerollMode {
         match self {
+            | Self::Crosskeys2025
             | Self::Sgl2023
             | Self::Sgl2024
             | Self::TriforceBlitz
@@ -469,6 +476,8 @@ impl Goal {
                 | Self::CoOpS3
                 | Self::StandardRuleset
                     => if official_race { UnlockSpoilerLog::Never } else { UnlockSpoilerLog::After },
+                | Self::Crosskeys2025
+                    => UnlockSpoilerLog::Never
             }
         }
     }
@@ -503,6 +512,7 @@ impl Goal {
             Self::TriforceBlitzProgressionSpoiler => VersionedBranch::Latest { branch: rando::Branch::DevBlitz },
             Self::WeTryToBeBetterS1 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 0, 11) },
             Self::WeTryToBeBetterS2 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 2, 0) },
+            Self::Crosskeys2025 => panic!("randomizer version for this goal is unused"),
             Self::PicRs2 | Self::Rsl => panic!("randomizer version for this goal must be parsed from RSL script"),
         }
     }
@@ -513,6 +523,7 @@ impl Goal {
             Self::Cc7 => None, // settings draft
             Self::CoOpS3 => Some(coop::s3_settings()),
             Self::CopaDoBrasil => Some(br::s1_settings()),
+            Self::Crosskeys2025 => None, // per-race settings
             Self::LeagueS8 => Some(league::s8_settings()),
             Self::MixedPoolsS2 => Some(mp::s2_settings()),
             Self::MixedPoolsS3 => Some(mp::s3_settings()),
@@ -566,6 +577,8 @@ impl Goal {
                 ctx.say("!seed draft: Pick the settings here in the chat.").await?;
                 ctx.say("!seed <setting> <value> <setting> <value>... (e.g. !seed deku open camc off): Pick a set of draftable settings without doing a full draft. Use “!settings” for a list of available settings.").await?;
             }
+            | Self::Crosskeys2025
+                => ctx.say("!seed base: The tournament's base settings.").await?,
             Self::MultiworldS3 => {
                 ctx.say("!seed base: The settings used for the qualifier and tiebreaker asyncs.").await?;
                 ctx.say("!seed random: Simulate a settings draft with both teams picking randomly. The settings are posted along with the seed.").await?;
@@ -808,6 +821,12 @@ impl Goal {
                 };
                 SeedCommandParseResult::Regular { settings: s::resolve_s7_draft_settings(&settings), unlock_spoiler_log, language: English, article: "a", description: format!("seed with {}", s::display_s7_draft_picks(&settings)) }
             }
+            Self::Crosskeys2025 => match args {
+                [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
+                [arg] if arg == "base" => SeedCommandParseResult::Alttpr,
+                [_] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I don't recognize that preset" }),
+                [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn't quite understand that" },
+            },
             Self::MultiworldS3 | Self::MultiworldS4 | Self::MultiworldS5 => {
                 let available_settings = match self {
                     Self::MultiworldS3 => mw::S3_SETTINGS,
@@ -1186,6 +1205,7 @@ enum DraftCommandParseResult {
 }
 
 pub(crate) enum SeedCommandParseResult {
+    Alttpr,
     Regular {
         settings: seed::Settings,
         unlock_spoiler_log: UnlockSpoilerLog,
@@ -1407,6 +1427,108 @@ impl GlobalState {
             }
             Ok::<_, mpsc::error::SendError<_>>(())
         });
+        update_rx
+    }
+
+    pub(crate) fn roll_crosskeys2025_seed(self: Arc<Self>, ctx: RaceContext<GlobalState>, _delay_until: Option<DateTime<Utc>>, cal_event: cal::Event) -> mpsc::Receiver<SeedRollUpdate> {
+        let (update_tx, update_rx) = mpsc::channel(128);
+        let update_tx2 = update_tx.clone();
+        tokio::spawn(async move {
+            let teams = cal_event.race.teams();
+            let team_rows = sqlx::query!("SELECT all_dungeons_ok, flute_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, pb_ok, zw_ok FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _).fetch_all(&ctx.global_state.db_pool).await?;
+
+            let crosskeys_options = CrosskeysRaceOptions {
+                all_dungeons_ok: team_rows.iter().all(|row| row.all_dungeons_ok),
+                flute_ok: team_rows.iter().all(|row| row.flute_ok),
+                inverted_ok: team_rows.iter().all(|row| row.inverted_ok),
+                keydrop_ok: team_rows.iter().all(|row| row.keydrop_ok),
+                mirror_scroll_ok: team_rows.iter().all(|row| row.mirror_scroll_ok),
+                pb_ok: team_rows.iter().all(|row| row.pb_ok),
+                zw_ok: team_rows.iter().all(|row| row.zw_ok),
+            };
+            let crosskeys_meta = CrosskeysMeta {
+                bps: true,
+                name: cal_event.race.id.to_string(),
+                race: true,
+                skip_playthrough: true,
+                spoiler: "none",
+                suppress_rom: true,
+            };
+            let mut crosskeys_yaml = CrosskeysYaml {
+                placements: HashMap::default(),
+                settings: HashMap::default(),
+                start_inventory: HashMap::default(),
+                meta: crosskeys_meta,
+            };
+
+            let keydrop_mode = if crosskeys_options.keydrop_ok { "keys" } else { "none" };
+            let pottery_mode = if crosskeys_options.keydrop_ok { "keys" } else { "none" };
+            let flute_mode = if crosskeys_options.flute_ok { "active" } else { "normal" };
+            let goal = if crosskeys_options.all_dungeons_ok { "dungeons" } else { "crystals" };
+            let mirrorscroll = if crosskeys_options.mirror_scroll_ok { 1 } else { 0 };
+            let world_state = if crosskeys_options.inverted_ok { "inverted" } else { "open" };
+            let pseudoboots = if crosskeys_options.pb_ok { 1 } else { 0 };
+            let skullwoods = if crosskeys_options.zw_ok { "followlinked" } else { "original" };
+
+            let crosskeys_settings = CrosskeysSetting {
+                accessibility: "locations",
+                bigkeyshuffle: 1,
+                compassshuffle: 1,
+                crystals_ganon: "7",
+                crystals_gt: "7",
+                dropshuffle: keydrop_mode,
+                flute_mode: flute_mode,
+                goal: goal,
+                item_functionality: "normal",
+                key_logic_algorithm: "partial",
+                keyshuffle: "wild",
+                linked_drops: "unset",
+                mapshuffle: 1,
+                mirrorscroll: mirrorscroll,
+                mode: world_state,
+                pottery: pottery_mode,
+                pseudoboots: pseudoboots,
+                shuffle: "crossed",
+                shuffletavern: 0,
+                skullwoods: skullwoods,
+            };
+
+            if crosskeys_options.zw_ok {
+                let crosskeys_placements = CrosskeysPlacements {
+                    pinball_room: "Small Key (Skull Woods)",
+                };
+                crosskeys_yaml.placements.insert(1, crosskeys_placements);
+            }
+
+            if crosskeys_options.flute_ok {
+                let starting_flute = &["Ocarina (Activated)"];
+                crosskeys_yaml.start_inventory.insert(1, starting_flute);
+            }
+
+            crosskeys_yaml.settings.insert(1, crosskeys_settings);
+            let yaml_file = tempfile::Builder::new().prefix("alttpr_").suffix(".yml").tempfile().at_unknown()?;
+            let yaml_path = yaml_file.path();
+            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(serde_yml::to_string(&crosskeys_yaml)?.as_bytes()).await.at(&yaml_file)?;
+            Command::new(PYTHON).arg("../alttpr/DungeonRandomizer.py").arg("--customizer").arg(yaml_path).arg("--outputpath").arg("/var/www/midos.house/seed").check("DungeonRandomizer.py").await?;
+            update_tx.send(SeedRollUpdate::Done {
+                seed: seed::Data {
+                    file_hash: None,
+                    files: Some(seed::Files::AlttprDoorRando {
+                        race_id: cal_event.race.id
+                    }),
+                    progression_spoiler: false,
+                    password: None,
+                },
+                rsl_preset: None,
+                unlock_spoiler_log: UnlockSpoilerLog::Never
+            }).await.allow_unreceived();
+            Ok(())
+        }.then(|res| async move {
+            match res {
+                Ok(()) => {}
+                Err(e) => update_tx2.send(SeedRollUpdate::Error(e)).await.allow_unreceived(),
+            }
+        }));
         update_rx
     }
 
@@ -1845,10 +1967,11 @@ pub(crate) enum RollError {
     #[error(transparent)] RandoVersion(#[from] rando::VersionParseError),
     #[error(transparent)] Reqwest(#[from] reqwest::Error),
     #[error(transparent)] RslScriptPath(#[from] rsl::ScriptPathError),
-    #[cfg(unix)] #[error(transparent)] Sql(#[from] sqlx::Error),
+    #[error(transparent)] Sql(#[from] sqlx::Error),
     #[error(transparent)] Utf8(#[from] std::string::FromUtf8Error),
     #[error(transparent)] Wheel(#[from] wheel::Error),
     #[cfg(unix)] #[error(transparent)] Xdg(#[from] xdg::BaseDirectoriesError),
+    #[error(transparent)] Yml(#[from] serde_yml::Error),
     #[error("{display}")]
     Cloned {
         debug: String,
@@ -1986,6 +2109,9 @@ impl SeedRollUpdate {
                                 is_dev, uuid, cal_event.race.id as _,
                             ).execute(db_pool).await.to_racetime()?;
                         }
+                        seed::Files::AlttprDoorRando { .. } => {
+                            // race_id is already the primary key of this table, we can do nothing here
+                        }
                         seed::Files::TfbSotd { .. } => unimplemented!("Triforce Blitz seed of the day not supported for official races"),
                     }
                     if let Some([hash1, hash2, hash3, hash4, hash5]) = extra.file_hash {
@@ -1995,6 +2121,7 @@ impl SeedRollUpdate {
                         ).execute(db_pool).await.to_racetime()?;
                         if let Some(preset) = rsl_preset {
                             match seed.files.as_ref().expect("received seed with no files") {
+                                seed::Files::AlttprDoorRando { .. } => unreachable!(), // ALTTPR Mystery not supported
                                 seed::Files::MidosHouse { file_stem, .. } => {
                                     sqlx::query!(
                                         "INSERT INTO rsl_seeds (room, file_stem, preset, hash1, hash2, hash3, hash4, hash5) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
@@ -2016,6 +2143,12 @@ impl SeedRollUpdate {
                     }
                 }
                 let seed_url = match seed.files.as_ref().expect("received seed with no files") {
+                    seed::Files::AlttprDoorRando { race_id } => {
+                        let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
+                        // TODO need to link to patch URL here
+                        patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{race_id}.bps"));
+                        patcher_url.to_string()
+                    }  
                     seed::Files::MidosHouse { file_stem, .. } => format!("{}/seed/{file_stem}", base_uri()),
                     seed::Files::OotrWeb { id, .. } => format!("https://ootrandomizer.com/seed/get?id={id}"),
                     seed::Files::TriforceBlitz { is_dev: false, uuid } => format!("https://www.triforceblitz.com/seed/{uuid}"),
@@ -2120,7 +2253,7 @@ impl SeedRollUpdate {
                                     cmd.arg(tracker_room_name);
                                 }
                                 cmd.check("ootrmwd create-tournament-room").await.to_racetime()?;
-                                ctx.say(format!("{reply_to}, your Mido's House Multiworld room named “{mw_room_name}” is now open.")).await?;
+                                ctx.say(format!("{reply_to}, your Hyrule Town Hall Multiworld room named “{mw_room_name}” is now open.")).await?;
                                 if let Some(tracker_room_name) = tracker_room_name {
                                     let mut all_notified = true;
                                     for restream in restreams.values() {
@@ -2131,12 +2264,12 @@ impl SeedRollUpdate {
                                         }
                                     }
                                     if !all_notified {
-                                        FENHL.create_dm_channel(&*ctx.global_state.discord_ctx.read().await).await.to_racetime()?.say(&*ctx.global_state.discord_ctx.read().await, format!("auto-tracker room for {reply_to}: `{tracker_room_name}`")).await.to_racetime()?;
+                                        ADMIN_USER.create_dm_channel(&*ctx.global_state.discord_ctx.read().await).await.to_racetime()?.say(&*ctx.global_state.discord_ctx.read().await, format!("auto-tracker room for {reply_to}: `{tracker_room_name}`")).await.to_racetime()?;
                                     }
                                 }
                                 mw_rooms_created += 1;
                             } else {
-                                ctx.say(format!("Sorry {reply_to}, there was an error creating your Mido's House Multiworld room. Please create one manually.")).await?;
+                                ctx.say(format!("Sorry {reply_to}, there was an error creating your Hyrule Town Hall Multiworld room. Please create one manually.")).await?;
                             }
                         }
                     }
@@ -2154,9 +2287,9 @@ impl SeedRollUpdate {
                     eprintln!("seed rolling failed {num_retries} times, no sample error recorded");
                 }
                 ctx.say(if let French = language {
-                    format!("Désolé @entrants, le randomizer a rapporté une erreur {num_retries} fois de suite donc je vais laisser tomber. Veuillez réessayer et, si l'erreur persiste, essayer de roll une seed de votre côté et contacter Fenhl.")
+                    format!("Désolé @entrants, le randomizer a rapporté une erreur {num_retries} fois de suite donc je vais laisser tomber. Veuillez réessayer et, si l'erreur persiste, essayer de roll une seed de votre côté et contacter TreZc0_.")
                 } else {
-                    format!("Sorry @entrants, the randomizer reported an error {num_retries} times, so I'm giving up on rolling the seed. Please try again. If this error persists, please report it to Fenhl.")
+                    format!("Sorry @entrants, the randomizer reported an error {num_retries} times, so I'm giving up on rolling the seed. Please try again. If this error persists, please report it to TreZc0_.")
                 }).await?; //TODO for official races, explain that retrying is done using !seed
                 lock!(@write state = state; *state = RaceState::Init);
             }
@@ -2165,7 +2298,7 @@ impl SeedRollUpdate {
                 if let Environment::Production = Environment::default() {
                     wheel::night_report(&format!("{}/error", night_path()), Some(&format!("seed roll error: {e} ({e:?})"))).await.to_racetime()?;
                 }
-                ctx.say("Sorry @entrants, something went wrong while rolling the seed. Please report this error to Fenhl and if necessary roll the seed manually.").await?;
+                ctx.say("Sorry @entrants, something went wrong while rolling the seed. Please report this error to TreZc0_ and if necessary roll the seed manually.").await?;
             }
             #[cfg(unix)] Self::Message(msg) => ctx.say(msg).await?,
         }
@@ -2234,6 +2367,12 @@ async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl
         password = extra.password.filter(|_| show_password).map(|password| format_password(password).to_string()).unwrap_or_default(),
         newline = if extra.file_hash.is_some() || extra.password.is_some() && show_password { "\n" } else { "" },
         seed_url = match seed.files.as_ref().expect("received seed with no files") {
+                seed::Files::AlttprDoorRando { race_id } => {
+                let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
+                // TODO need to link to patch URL here
+                patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{race_id}.bps"));
+                patcher_url.to_string()
+            }
             seed::Files::MidosHouse { file_stem, .. } => format!("{}/seed/{file_stem}", base_uri()),
             seed::Files::OotrWeb { id, .. } => format!("https://ootrandomizer.com/seed/get?id={id}"),
             seed::Files::TriforceBlitz { is_dev: false, uuid } => format!("https://www.triforceblitz.com/seed/{uuid}"),
@@ -2247,6 +2386,64 @@ async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl
 struct Breaks {
     duration: Duration,
     interval: Duration,
+}
+
+struct CrosskeysRaceOptions {
+    all_dungeons_ok: bool,
+    flute_ok: bool,
+    inverted_ok: bool,
+    keydrop_ok: bool,
+    mirror_scroll_ok: bool,
+    pb_ok: bool,
+    zw_ok: bool,
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct CrosskeysYaml {
+    placements: HashMap<u8, CrosskeysPlacements>,
+    settings: HashMap<u8, CrosskeysSetting>,
+    start_inventory: HashMap<u8, &'static [&'static str]>,
+    meta: CrosskeysMeta
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct CrosskeysPlacements {
+    #[serde(rename = "Skull Woods - Pinball Room")]
+    pinball_room: &'static str,
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct CrosskeysSetting {
+    accessibility: &'static str,
+    bigkeyshuffle: u8,
+    compassshuffle: u8,
+    crystals_ganon: &'static str,
+    crystals_gt: &'static str,
+    dropshuffle: &'static str,
+    flute_mode: &'static str,
+    goal: &'static str,
+    item_functionality: &'static str,
+    key_logic_algorithm: &'static str,
+    keyshuffle: &'static str,
+    linked_drops: &'static str,
+    mapshuffle: u8,
+    mirrorscroll: u8,
+    mode: &'static str,
+    pottery: &'static str,
+    pseudoboots: u8,
+    shuffle: &'static str,
+    shuffletavern: u8,
+    skullwoods: &'static str,
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct CrosskeysMeta {
+    bps: bool,
+    name: String,
+    race: bool,
+    skip_playthrough: bool,
+    spoiler: &'static str,
+    suppress_rom: bool
 }
 
 impl Breaks {
@@ -2572,6 +2769,12 @@ impl Handler {
         self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_seed(preroll, true, delay_until, version, settings, unlock_spoiler_log), language, article, description).await;
     }
 
+    async fn roll_crosskeys2025_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str, description: String) {
+        let official_start = cal_event.start().expect("handling room for official race without start time");
+        let delay_until = official_start - TimeDelta::minutes(10);
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2025_seed(ctx.clone(), Some(delay_until), cal_event), language, article, description).await;
+    }
+
     async fn roll_rsl_seed(&self, ctx: &RaceContext<GlobalState>, preset: rsl::VersionedPreset, world_count: u8, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
         let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
@@ -2609,6 +2812,7 @@ impl Handler {
                 RaceState::Rolled(seed::Data { files: Some(ref files), .. }) => if self.official_data.as_ref().is_none_or(|official_data| !official_data.cal_event.is_private_async_part()) {
                     if let UnlockSpoilerLog::Progression | UnlockSpoilerLog::After = goal.unlock_spoiler_log(self.is_official(), false /* we may try to unlock a log that's already unlocked, but other than that, this assumption doesn't break anything */) {
                         match files {
+                            seed::Files::AlttprDoorRando { .. } => unreachable!(),
                             seed::Files::MidosHouse { file_stem, locked_spoiler_log_path } => if let Some(locked_spoiler_log_path) = locked_spoiler_log_path {
                                 lock!(@write seed_metadata = ctx.global_state.seed_metadata; seed_metadata.remove(&**file_stem));
                                 fs::rename(locked_spoiler_log_path, Path::new(seed::DIR).join(format!("{file_stem}_Spoiler.json"))).await.to_racetime()?;
@@ -2961,6 +3165,7 @@ impl RaceHandler<GlobalState> for Handler {
                                     }),
                                 ],
                             ).await?,
+                            Goal::Crosskeys2025 => unreachable!("attempted to handle a user-opened Crosskeys2025 room"),
                             Goal::LeagueS8 => ctx.send_message(
                                 "Welcome! This is a practice room for League Season 8. Learn more about the event at https://midos.house/event/league/8",
                                 true,
@@ -3618,7 +3823,7 @@ impl RaceHandler<GlobalState> for Handler {
             cleaned_up: false,
             official_data, high_seed_name, low_seed_name, fpa_enabled,
         };
-        if let Some(OfficialRaceData { ref event, ref restreams, .. }) = this.official_data {
+        if let Some(OfficialRaceData { ref event, ref restreams, ref cal_event, .. }) = this.official_data {
             if !restreams.is_empty() {
                 let restreams_text = restreams.iter().map(|(video_url, state)| format!("in {} at {video_url}", state.language.expect("preset restreams should have languages assigned"))).join(" and "); // don't use English.join_str since racetime.gg parses the comma as part of the URL
                 for restreamer in restreams.values().flat_map(|RestreamState { restreamer_racetime_id, .. }| restreamer_racetime_id) {
@@ -3706,6 +3911,10 @@ impl RaceHandler<GlobalState> for Handler {
                             | Goal::TournoiFrancoS4
                             | Goal::TournoiFrancoS5
                                 => unreachable!("should have draft state set"),
+                            | Goal::Crosskeys2025
+                                // TODO: Don't propogate this error, handle the failed seed roll either here or below
+                                // TODO: Don't pass the description in here: generate it from the settings
+                                => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a", format!("Crosskeys Tournament 2025 Seed")).await,
                             Goal::NineDaysOfSaws => unreachable!("9dos series has concluded"),
                             Goal::PicRs2 => this.roll_rsl_seed(ctx, rsl::VersionedPreset::Fenhl {
                                 version: Some((Version::new(2, 3, 8), 10)),
@@ -4142,6 +4351,11 @@ impl RaceHandler<GlobalState> for Handler {
                     } else {
                         let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
                         match goal.parse_seed_command(&mut transaction, &ctx.global_state, self.is_official(), cmd_name.to_ascii_lowercase() == "spoilerseed", &args).await.to_racetime()? {
+                            SeedCommandParseResult::Alttpr => {
+                                // TODO THIS NEEDS TO BE IMPLEMENTED -- call door rando .py and roll seed with arguments
+                                Command::new("echo").args(["hello", "world"]).check("echo").await.to_racetime()?;
+                                unimplemented!()
+                            }
                             SeedCommandParseResult::Regular { settings, unlock_spoiler_log, language, article, description } => {
                                 let event_id = self.official_data.as_ref().map(|OfficialRaceData { event, .. }| (event.series, &*event.event));
                                 self.roll_seed(ctx, goal.preroll_seeds(event_id), goal.rando_version(event_id), settings, unlock_spoiler_log, language, article, description).await
@@ -4400,6 +4614,7 @@ impl RaceHandler<GlobalState> for Handler {
                     | Goal::Cc7
                     | Goal::CoOpS3
                     | Goal::CopaDoBrasil
+                    | Goal::Crosskeys2025
                     | Goal::LeagueS8
                     | Goal::MixedPoolsS2
                     | Goal::MixedPoolsS3
@@ -5015,8 +5230,8 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                                 if let Some(channel) = event.discord_organizer_channel {
                                     channel.say(&*ctx, &msg).await?;
                                 } else {
-                                    // DM Fenhl
-                                    FENHL.create_dm_channel(&*ctx).await?.say(&*ctx, &msg).await?;
+                                    // DM Admin
+                                    ADMIN_USER.create_dm_channel(&*ctx).await?.say(&*ctx, &msg).await?;
                                 }
                                 for team in cal_event.active_teams() {
                                     for member in team.members(&mut transaction).await? {
@@ -5042,8 +5257,8 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                                         } else if let Some(channel) = event.discord_organizer_channel {
                                             channel.say(&*ctx, msg).await?;
                                         } else {
-                                            // DM Fenhl
-                                            FENHL.create_dm_channel(&*ctx).await?.say(&*ctx, msg).await?;
+                                            // DM Admin
+                                            ADMIN_USER.create_dm_channel(&*ctx).await?.say(&*ctx, msg).await?;
                                         }
                                     }
                                 }

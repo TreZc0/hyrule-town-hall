@@ -284,7 +284,7 @@ pub(crate) async fn list(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf:
         for notification in Notification::get(&mut transaction, &me).await? {
             notifications.push(notification.into_html(&mut transaction, &me, csrf, ctx.errors().collect_vec(), TeamInviteSource::Notifications).await?);
         }
-        page(transaction, &Some(me), &uri, PageStyle { kind: PageKind::Notifications, ..PageStyle::default() }, "Notifications — Mido's House", html! {
+        page(transaction, &Some(me), &uri, PageStyle { kind: PageKind::Notifications, ..PageStyle::default() }, "Notifications — Hyrule Town Hall", html! {
             h1 : "Notifications";
             @if notifications.is_empty() {
                 p : "You have no notifications.";
@@ -297,9 +297,9 @@ pub(crate) async fn list(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf:
             }
         }).await?
     } else {
-        page(transaction, &me, &uri, PageStyle { kind: PageKind::Notifications, ..PageStyle::default() }, "Notifications — Mido's House", html! {
+        page(transaction, &me, &uri, PageStyle { kind: PageKind::Notifications, ..PageStyle::default() }, "Notifications — Hyrule Town Hall", html! {
             p {
-                a(href = uri!(auth::login(Some(uri!(notifications))))) : "Sign in or create a Mido's House account";
+                a(href = uri!(auth::login(Some(uri!(notifications))))) : "Sign in or create a Hyrule Town Hall account";
                 : " to view your notifications.";
             }
         }).await?

@@ -76,10 +76,12 @@ serde_json_inner = { package = "serde_json", version = "1", features = [
 serde_json = { package = "serde_json_path_to_error", version = "0.1" }
 serde_plain = "1"
 serde_with = { version = "3", features = ["json"] }
+serde_yml = "0.0.12"
 serenity = { version = "0.12.4", default-features = false, features = ["client", "gateway", "model", "rustls_backend", "temp_cache"] }
 serenity-utils = { git = "https://github.com/fenhl/serenity-utils", branch = "main" }
 smart-default = "0.7.1"
 sqlx = { version = "0.8.3", default-features = false, features = ["chrono", "json", "macros", "postgres", "runtime-tokio", "tls-rustls-ring-webpki", "uuid"] }
+tempfile = "3.19.1"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "net", "parking_lot", "process", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["io"] }

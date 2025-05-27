@@ -316,7 +316,7 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
     } else if me.as_ref().is_some_and(|me| me.id == user.id) {
         if let Some(racetime_user) = racetime_user {
             if let Some(racetime_user) = User::from_racetime(&mut *transaction, &racetime_user.id).await? {
-                let fenhl = User::from_id(&mut *transaction, Id::from(14571800683221815449_u64)).await?.ok_or(PageError::FenhlUserData)?;
+                let trez = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::TrezUserData)?;
                 html! {
                     p {
                         @let racetime = racetime_user.racetime.expect("racetime.gg user without racetime.gg ID");
@@ -328,10 +328,10 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
                                 : discriminator;
                             }
                         }
-                        : " which belongs to a different Mido's House account. ";
+                        : " which belongs to a different Hyrule Town Hall account. ";
                         @if racetime_user.discord.is_some() {
-                            : "That Mido's House account is also connected to a Discord account. If you would like to merge your accounts, please contact ";
-                            : fenhl;
+                            : "That Hyrule Town Hall account is also connected to a Discord account. If you would like to merge your accounts, please contact ";
+                            : trez;
                             : ".";
                         } else {
                             span { //HACK fix button styling (nth-child)
@@ -351,9 +351,9 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
                                 : discriminator;
                             }
                         }
-                        : " which does not belong to a Mido's House account. ";
+                        : " which does not belong to a Hyrule Town Hall account. ";
                         span { //HACK fix button styling (nth-child)
-                            a(class = "button", href = uri!(crate::auth::register_racetime)) : "Add this racetime.gg account to your Mido's House account";
+                            a(class = "button", href = uri!(crate::auth::register_racetime)) : "Add this racetime.gg account to your Hyrule Town Hall account";
                         }
                     }
                 }
@@ -393,7 +393,7 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
     } else if me.as_ref().is_some_and(|me| me.id == user.id) {
         if let Some(discord_user) = discord_user {
             if let Some(discord_user) = User::from_discord(&mut *transaction, discord_user.id).await? {
-                let fenhl = User::from_id(&mut *transaction, Id::from(14571800683221815449_u64)).await?.ok_or(PageError::FenhlUserData)?;
+                let trez = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::TrezUserData)?;
                 html! {
                     p {
                         @let discord = discord_user.discord.expect("Discord user without Discord ID");
@@ -413,10 +413,10 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
                                 }
                             }
                         }
-                        : " which belongs to a different Mido's House account. ";
+                        : " which belongs to a different Hyrule Town Hall account. ";
                         @if discord_user.racetime.is_some() {
-                            : "That Mido's House account is also connected to a racetime.gg account. If you would like to merge your accounts, please contact ";
-                            : fenhl;
+                            : "That Hyrule Town Hall account is also connected to a racetime.gg account. If you would like to merge your accounts, please contact ";
+                            : trez;
                             : ".";
                         } else {
                             span { //HACK fix button styling (nth-child)
@@ -441,9 +441,9 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
                                 : ")";
                             }
                         }
-                        : " which does not belong to a Mido's House account. ";
+                        : " which does not belong to a Hyrule Town Hall account. ";
                         span { //HACK fix button styling (nth-child)
-                            a(class = "button", href = uri!(crate::auth::register_discord)) : "Add this Discord account to your Mido's House account";
+                            a(class = "button", href = uri!(crate::auth::register_discord)) : "Add this Discord account to your Hyrule Town Hall account";
                         }
                     }
                 }
@@ -458,7 +458,7 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
     } else {
         html! {}
     };
-    Ok(page(transaction, &me, &uri, PageStyle { kind: if me.as_ref().is_some_and(|me| *me == user) { PageKind::MyProfile } else { PageKind::Other }, ..PageStyle::default() }, &format!("{} — Mido's House", user.display_name()), html! {
+    Ok(page(transaction, &me, &uri, PageStyle { kind: if me.as_ref().is_some_and(|me| *me == user) { PageKind::MyProfile } else { PageKind::Other }, ..PageStyle::default() }, &format!("{} — Hyrule Town Hall", user.display_name()), html! {
         h1 {
             bdi : user.display_name();
         }
@@ -475,7 +475,7 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
             }
         }
         p {
-            : "Mido's House user ID: ";
+            : "Hyrule Town Hall user ID: ";
             code : user.id.to_string();
         }
         : racetime;

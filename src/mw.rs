@@ -3,11 +3,11 @@ use crate::prelude::*;
 #[rocket::get("/mw")]
 pub(crate) async fn index(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
     let transaction = pool.begin().await?;
-    page(transaction, &me, &uri, PageStyle { kind: PageKind::Center, mw_footer: true, ..PageStyle::default() }, "Mido's House Multiworld", html! {
-        h1 : "Mido's House Multiworld";
+    page(transaction, &me, &uri, PageStyle { kind: PageKind::Center, mw_footer: true, ..PageStyle::default() }, "HTH Multiworld", html! {
+        h1 : "HTH Multiworld";
         img(class = "banner icon", src = static_url!("mw.png"));
         p {
-            : "Mido's House Multiworld is a tool that can be used to play ";
+            : "HTH Multiworld is a tool that can be used to play ";
             a(href = "https://wiki.ootrandomizer.com/index.php?title=Multiworld") : "multiworld";
             : " seeds of the ";
             a(href = "https://ootrandomizer.com/") : "Ocarina of Time randomizer";
@@ -55,9 +55,9 @@ pub(crate) async fn index(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_
 #[rocket::get("/mw/platforms")]
 pub(crate) async fn platforms(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
     let transaction = pool.begin().await?;
-    page(transaction, &me, &uri, PageStyle { kind: PageKind::Center, mw_footer: true, ..PageStyle::default() }, "platform support — Mido's House Multiworld", html! {
+    page(transaction, &me, &uri, PageStyle { kind: PageKind::Center, mw_footer: true, ..PageStyle::default() }, "platform support — HTH Multiworld", html! {
         h1 {
-            a(href = uri!(index)) : "Mido's House Multiworld";
+            a(href = uri!(index)) : "HTH Multiworld";
             : " platform support status";
         }
         table {
@@ -119,7 +119,7 @@ pub(crate) async fn platforms(pool: &State<PgPool>, me: Option<User>, uri: Origi
                 td(colspan = "3") {
                     : "Not planned. Project64-EM is a modified version of Project64 created by the ";
                     a(href = "https://ootmm.com/") : "OoTMM";
-                    : " community which removes the plugin system used by Mido's House Multiworld and replaces it with a different one. Note that Mido's House Multiworld does not support OoTMM — please follow ";
+                    : " community which removes the plugin system used by HTH Multiworld and replaces it with a different one. Note that HTH Multiworld does not support OoTMM — please follow ";
                     a(href = "https://ootmm.com/multiplayer") : "the OoTMM multiplayer setup guide";
                     : " instead.";
                 }
@@ -147,9 +147,9 @@ pub(crate) async fn platforms(pool: &State<PgPool>, me: Option<User>, uri: Origi
 #[rocket::get("/mw/install/macos")]
 pub(crate) async fn install_macos(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
     let transaction = pool.begin().await?;
-    page(transaction, &me, &uri, PageStyle { mw_footer: true, ..PageStyle::default() }, "macOS install instructions — Mido's House Multiworld", html! {
+    page(transaction, &me, &uri, PageStyle { mw_footer: true, ..PageStyle::default() }, "macOS install instructions — HTH Multiworld", html! {
         h1 {
-            a(href = uri!(index)) : "Mido's House Multiworld";
+            a(href = uri!(index)) : "HTH Multiworld";
             : " install instructions for macOS";
         }
         p : "You will need administrator permissions.";

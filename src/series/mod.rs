@@ -39,12 +39,14 @@ pub(crate) mod sgl;
 pub(crate) mod soh;
 pub(crate) mod tfb;
 pub(crate) mod wttbb;
+pub(crate) mod xkeys;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence)]
 pub(crate) enum Series {
     BattleRoyale,
     CoOp,
     CopaDoBrasil,
+    Crosskeys,
     League,
     MixedPools,
     Mq,
@@ -67,6 +69,7 @@ impl Series {
             Self::BattleRoyale => "ohko",
             Self::CoOp => "coop",
             Self::CopaDoBrasil => "br",
+            Self::Crosskeys => "xkeys",
             Self::League => "league",
             Self::MixedPools => "mp",
             Self::Mq => "mq",
@@ -89,6 +92,7 @@ impl Series {
             Self::BattleRoyale => "Battle Royale",
             Self::CoOp => "Co-op Tournaments",
             Self::CopaDoBrasil => "Copa do Brasil",
+            Self::Crosskeys => "Crosskeys Tournaments",
             Self::League => "League",
             Self::MixedPools => "Mixed Pools Tournaments",
             Self::Mq => "12 MQ Tournaments",

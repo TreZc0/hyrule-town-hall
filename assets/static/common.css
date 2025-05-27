@@ -543,8 +543,12 @@ footer,
 
 @media (prefers-color-scheme: dark) {
     body {
-        background-color: black;
-        color: white;
+        background-color: #2C2C2C;
+        color: #E4E4E4;
+    }
+
+    nav > a {
+        color: #A8DADC;
     }
 
     .button-row .popover-wrapper > button,

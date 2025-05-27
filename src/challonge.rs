@@ -14,7 +14,7 @@ impl fmt::Display for ImportSkipReason {
             Self::Exists => write!(f, "already exists"),
             Self::Player1 => write!(f, "no player 1"),
             Self::Player2 => write!(f, "no player 2"),
-            Self::UnknownTeam(id) => write!(f, "Challonge team ID {id} is not associated with a Mido's House team"),
+            Self::UnknownTeam(id) => write!(f, "Challonge team ID {id} is not associated with a Hyrule Town Hall team"),
         }
     }
 }

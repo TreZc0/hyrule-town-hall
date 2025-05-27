@@ -526,7 +526,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, me: O
                 : form_field("teammate", &mut errors, html! {
                     label(for = "teammate") : "Teammate:";
                     input(type = "text", name = "teammate", value? = defaults.teammate_text().as_deref());
-                    label(class = "help") : "(Enter your teammate's Mido's House user ID. It can be found on their profile page.)"; //TODO add JS-based user search?
+                    label(class = "help") : "(Enter your teammate's Hyrule Town Hall user ID. It can be found on their profile page.)"; //TODO add JS-based user search?
                 });
             }, errors, "Enter");
         }
@@ -535,7 +535,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, me: O
             : header;
             article {
                 p {
-                    a(href = uri!(auth::login(Some(uri!(enter::get(data.series, &*data.event, defaults.my_role(), defaults.teammate())))))) : "Sign in or create a Mido's House account";
+                    a(href = uri!(auth::login(Some(uri!(enter::get(data.series, &*data.event, defaults.my_role(), defaults.teammate())))))) : "Sign in or create a Hyrule Town Hall account";
                     : " to enter this race.";
                 }
             }
@@ -582,7 +582,7 @@ pub(crate) async fn find_team_form(mut transaction: Transaction<'_, Postgres>, m
         Some(html! {
             article {
                 p {
-                    a(href = uri!(auth::login(Some(uri!(event::find_team(data.series, &*data.event)))))) : "Sign in or create a Mido's House account";
+                    a(href = uri!(auth::login(Some(uri!(event::find_team(data.series, &*data.event)))))) : "Sign in or create a Hyrule Town Hall account";
                     : " to add yourself to this list.";
                 }
             }

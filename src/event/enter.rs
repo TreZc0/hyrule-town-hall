@@ -2,7 +2,7 @@ use {
     lazy_regex::Regex,
     serde_with::DeserializeAs,
     crate::{
-        discord_bot::FENHL,
+        discord_bot::ADMIN_USER,
         event::{
             Data,
             DataError,
@@ -103,12 +103,30 @@ pub(crate) enum Requirement {
     Rules {
         document: Option<Url>,
     },
+    /// For Crosskeys, opt in to or out of "All Dungeons" as a goal
+    AllDungeonsOk,
     /// For Tournoi Francophone-style settings drafts, opt in to or out of hard settings
     HardSettingsOk,
+    /// For Crosskeys, opt in to or out of hovering being allowed
+    HoveringOk,
+    /// For Crosskeys, opt in to or out of "Inverted" as a world state
+    InvertedOk,
+    /// For Crosskeys, opt in to or out of starting with an activate flute.
+    FluteOk,
+    /// For Crosskeys, opt in to or out of "Keydrop" as an item setting
+    KeydropOk,
+    /// For Crosskeys, opt in to or out of mirror scroll
+    MirrorScrollOk,
     /// For Tournoi Francophone-style settings drafts, opt in to or out of Master Quest
     MqOk,
+    /// For Crosskeys, opt in to or out of waiving the tournament required stream delay.
+    NoDelayOk,
     /// For RSL-style weights drafts, opt into RSL-Lite weights
     LiteOk,
+    /// For Crosskeys, opt in to or out of pseudoboots
+    PbOk,
+    /// For Crosskeys, opt in to or out of playing with ZW (formerly Zelgawoods).
+    ZwOk,
     /// Must agree to be restreamed
     RestreamConsent {
         #[serde(default)]
@@ -181,9 +199,18 @@ impl Requirement {
             Self::TextField2 { .. } => Some(false),
             Self::YesNo { .. } => Some(false),
             Self::Rules { .. } => Some(false),
+            Self::AllDungeonsOk { .. } => Some(false),
+            Self::FluteOk { .. } => Some(false),
             Self::HardSettingsOk { .. } => Some(false),
-            Self::MqOk { .. } => Some(false),
+            Self::HoveringOk { .. } => Some(false),
+            Self::InvertedOk { .. } => Some(false),
+            Self::KeydropOk { .. } => Some(false),
             Self::LiteOk { .. } => Some(false),
+            Self::MirrorScrollOk { .. } => Some(false),
+            Self::MqOk { .. } => Some(false),
+            Self::NoDelayOk { .. } => Some(false),
+            Self::PbOk { .. } => Some(false),
+            Self::ZwOk { .. } => Some(false),
             Self::RestreamConsent { .. } => Some(false),
             Self::Qualifier { .. } => Some(false),
             Self::TripleQualifier { .. } => Some(false),
@@ -235,7 +262,7 @@ impl Requirement {
         Ok(match self {
             Self::RaceTime => {
                 let mut html_content = html! {
-                    : "Connect a racetime.gg account to your Mido's House account";
+                    : "Connect a racetime.gg account to your Hyrule Town Hall account";
                 };
                 if !is_checked.unwrap() {
                     //TODO offer to merge accounts like on profile
@@ -277,7 +304,7 @@ impl Requirement {
             }
             Self::Discord => {
                 let mut html_content = html! {
-                    : "Connect a Discord account to your Mido's House account";
+                    : "Connect a Discord account to your Hyrule Town Hall account";
                 };
                 if !is_checked.unwrap() {
                     //TODO offer to merge accounts like on profile
@@ -312,7 +339,7 @@ impl Requirement {
             }
             Self::Challonge => {
                 let mut html_content = html! {
-                    : "Connect a Challonge account to your Mido's House account";
+                    : "Connect a Challonge account to your Hyrule Town Hall account";
                 };
                 if !is_checked.unwrap() {
                     html_content = html! {
@@ -326,7 +353,7 @@ impl Requirement {
             }
             Self::StartGG { optional: false } => {
                 let mut html_content = html! {
-                    : "Connect a start.gg account to your Mido's House account";
+                    : "Connect a start.gg account to your Hyrule Town Hall account";
                 };
                 if !is_checked.unwrap() {
                     html_content = html! {
@@ -344,7 +371,7 @@ impl Requirement {
                     @if is_checked.unwrap() {
                         : "Enter with your connected start.gg account"; //TODO show name and link to profile
                     } else {
-                        a(href = uri!(crate::auth::startgg_login(Some(redirect_uri)))) : "Connect a start.gg account to your Mido's House account";
+                        a(href = uri!(crate::auth::startgg_login(Some(redirect_uri)))) : "Connect a start.gg account to your Hyrule Town Hall account";
                     }
                 };
                 let no_checked = defaults.field_value("startgg_radio").is_some_and(|value| value == "no");
@@ -439,6 +466,40 @@ impl Requirement {
                     }),
                 }
             }
+            Self::AllDungeonsOk => {
+                let yes_checked = defaults.field_value("all_dungeons_ok").is_some_and(|value| value == "yes");
+                let no_checked = defaults.field_value("all_dungeons_ok").is_some_and(|value| value == "no");
+                RequirementStatus {
+                    blocks_submit: false,
+                    html_content: Box::new(move |errors| html! {
+                        : form_field("all_dungeons_ok", errors, html! {
+                            label(for = "all_dungeons_ok") : "Opt-in for All Dungeons goal?";
+                            br;
+                            input(id = "all_dungeons_ok-yes", type = "radio", name = "all_dungeons_ok", value = "yes", checked? = yes_checked);
+                            label(for = "all_dungeons_ok-yes") : "Yes";
+                            input(id = "all_dungeons_ok-no", type = "radio", name = "all_dungeons_ok", value = "no", checked? = no_checked);
+                            label(for = "all_dungeons_ok-no") : "No";
+                        });
+                    }),
+                }
+            }
+            Self::FluteOk => {
+                let yes_checked = defaults.field_value("flute_ok").is_some_and(|value| value == "yes");
+                let no_checked = defaults.field_value("flute_ok").is_some_and(|value| value == "no");
+                RequirementStatus {
+                    blocks_submit: false,
+                    html_content: Box::new(move |errors| html! {
+                        : form_field("flute_ok", errors, html! {
+                            label(for = "flute_ok") : "Opt-in for starting with an activated flute?";
+                            br;
+                            input(id = "flute_ok-yes", type = "radio", name = "flute_ok", value = "yes", checked? = yes_checked);
+                            label(for = "flute_ok-yes") : "Yes";
+                            input(id = "flute_ok-no", type = "radio", name = "flute_ok", value = "no", checked? = no_checked);
+                            label(for = "flute_ok-no") : "No";
+                        });
+                    }),
+                }
+            }
             Self::HardSettingsOk => {
                 let yes_checked = defaults.field_value("hard_settings_ok").is_some_and(|value| value == "yes");
                 let no_checked = defaults.field_value("hard_settings_ok").is_some_and(|value| value == "no");
@@ -452,6 +513,91 @@ impl Requirement {
                             label(for = "hard_settings_ok-yes") : "Yes";
                             input(id = "hard_settings_ok-no", type = "radio", name = "hard_settings_ok", value = "no", checked? = no_checked);
                             label(for = "hard_settings_ok-no") : "No";
+                        });
+                    }),
+                }
+            }
+            Self::HoveringOk => {
+                let yes_checked = defaults.field_value("hover_ok").is_some_and(|value| value == "yes");
+                let no_checked = defaults.field_value("hover_ok").is_some_and(|value| value == "no");
+                RequirementStatus {
+                    blocks_submit: false,
+                    html_content: Box::new(move |errors| html! {
+                        : form_field("hover_ok", errors, html! {
+                            label(for = "hover_ok") : "Allow hovering in your races (with opponent consent)?";
+                            br;
+                            input(id = "hover_ok-yes", type = "radio", name = "hover_ok", value = "yes", checked? = yes_checked);
+                            label(for = "hover_ok-yes") : "Yes";
+                            input(id = "hover_ok-no", type = "radio", name = "hover_ok", value = "no", checked? = no_checked);
+                            label(for = "hover_ok-no") : "No";
+                        });
+                    }),
+                }
+            }
+            Self::InvertedOk => {
+                let yes_checked = defaults.field_value("inverted_ok").is_some_and(|value| value == "yes");
+                let no_checked = defaults.field_value("inverted_ok").is_some_and(|value| value == "no");
+                RequirementStatus {
+                    blocks_submit: false,
+                    html_content: Box::new(move |errors| html! {
+                        : form_field("inverted_ok", errors, html! {
+                            label(for = "inverted_ok") : "Opt-in for Inverted world state?";
+                            br;
+                            input(id = "inverted_ok-yes", type = "radio", name = "inverted_ok", value = "yes", checked? = yes_checked);
+                            label(for = "inverted_ok-yes") : "Yes";
+                            input(id = "inverted_ok-no", type = "radio", name = "inverted_ok", value = "no", checked? = no_checked);
+                            label(for = "inverted_ok-no") : "No";
+                        });
+                    }),
+                }
+            }
+            Self::KeydropOk => {
+                let yes_checked = defaults.field_value("keydrop_ok").is_some_and(|value| value == "yes");
+                let no_checked = defaults.field_value("keydrop_ok").is_some_and(|value| value == "no");
+                RequirementStatus {
+                    blocks_submit: false,
+                    html_content: Box::new(move |errors| html! {
+                        : form_field("keydrop_ok", errors, html! {
+                            label(for = "keydrop_ok") : "Opt-in for keydrop?";
+                            br;
+                            input(id = "keydrop_ok-yes", type = "radio", name = "keydrop_ok", value = "yes", checked? = yes_checked);
+                            label(for = "keydrop_ok-yes") : "Yes";
+                            input(id = "keydrop_ok-no", type = "radio", name = "keydrop_ok", value = "no", checked? = no_checked);
+                            label(for = "keydrop_ok-no") : "No";
+                        });
+                    }),
+                }
+            }
+            Self::LiteOk => {
+                let yes_checked = defaults.field_value("lite_ok").is_some_and(|value| value == "yes");
+                let no_checked = defaults.field_value("lite_ok").is_some_and(|value| value == "no");
+                RequirementStatus {
+                    blocks_submit: false,
+                    html_content: Box::new(move |errors| html! {
+                        : form_field("lite_ok", errors, html! {
+                            label(for = "lite_ok") : "Allow RSL-Lite?";
+                            br;
+                            input(id = "lite_ok-yes", type = "radio", name = "lite_ok", value = "yes", checked? = yes_checked);
+                            label(for = "lite_ok-yes") : "Yes";
+                            input(id = "lite_ok-no", type = "radio", name = "lite_ok", value = "no", checked? = no_checked);
+                            label(for = "lite_ok-no") : "No";
+                        });
+                    }),
+                }
+            }
+            Self::MirrorScrollOk => {
+                let yes_checked = defaults.field_value("mirror_scroll_ok").is_some_and(|value| value == "yes");
+                let no_checked = defaults.field_value("mirror_scroll_ok").is_some_and(|value| value == "no");
+                RequirementStatus {
+                    blocks_submit: false,
+                    html_content: Box::new(move |errors| html! {
+                        : form_field("mirror_scroll_ok", errors, html! {
+                            label(for = "mirror_scroll_ok") : "Opt-in for mirror scroll?";
+                            br;
+                            input(id = "mirror_scroll_ok-yes", type = "radio", name = "mirror_scroll_ok", value = "yes", checked? = yes_checked);
+                            label(for = "mirror_scroll_ok-yes") : "Yes";
+                            input(id = "mirror_scroll_ok-no", type = "radio", name = "mirror_scroll_ok", value = "no", checked? = no_checked);
+                            label(for = "mirror_scroll_ok-no") : "No";
                         });
                     }),
                 }
@@ -473,19 +619,54 @@ impl Requirement {
                     }),
                 }
             }
-            Self::LiteOk => {
-                let yes_checked = defaults.field_value("lite_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("lite_ok").is_some_and(|value| value == "no");
+            Self::NoDelayOk => {
+                let yes_checked = defaults.field_value("no_delay_ok").is_some_and(|value| value == "yes");
+                let no_checked = defaults.field_value("no_delay_ok").is_some_and(|value| value == "no");
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
-                        : form_field("lite_ok", errors, html! {
-                            label(for = "lite_ok") : "Allow RSL-Lite?";
+                        : form_field("no_delay_ok", errors, html! {
+                            label(for = "no_delay_ok") : "Opt-in for no stream delay?";
                             br;
-                            input(id = "lite_ok-yes", type = "radio", name = "lite_ok", value = "yes", checked? = yes_checked);
-                            label(for = "lite_ok-yes") : "Yes";
-                            input(id = "lite_ok-no", type = "radio", name = "lite_ok", value = "no", checked? = no_checked);
-                            label(for = "lite_ok-no") : "No";
+                            input(id = "no_delay_ok-yes", type = "radio", name = "no_delay_ok", value = "yes", checked? = yes_checked);
+                            label(for = "no_delay_ok-yes") : "Yes";
+                            input(id = "no_delay_ok-no", type = "radio", name = "no_delay_ok", value = "no", checked? = no_checked);
+                            label(for = "no_delay_ok-no") : "No";
+                        });
+                    }),
+                }
+            }
+            Self::PbOk => {
+                let yes_checked = defaults.field_value("pb_ok").is_some_and(|value| value == "yes");
+                let no_checked = defaults.field_value("pb_ok").is_some_and(|value| value == "no");
+                RequirementStatus {
+                    blocks_submit: false,
+                    html_content: Box::new(move |errors| html! {
+                        : form_field("pb_ok", errors, html! {
+                            label(for = "pb_ok") : "Opt-in for pseudoboots?";
+                            br;
+                            input(id = "pb_ok-yes", type = "radio", name = "pb_ok", value = "yes", checked? = yes_checked);
+                            label(for = "pb_ok-yes") : "Yes";
+                            input(id = "pb_ok-no", type = "radio", name = "pb_ok", value = "no", checked? = no_checked);
+                            label(for = "pb_ok-no") : "No";
+                        });
+                    }),
+                }
+            }
+            Self::ZwOk => {
+                let yes_checked = defaults.field_value("zw_ok").is_some_and(|value| value == "yes");
+                let no_checked = defaults.field_value("zw_ok").is_some_and(|value| value == "no");
+                RequirementStatus {
+                    blocks_submit: false,
+                    html_content: Box::new(move |errors| html! {
+                        : form_field("zw_ok", errors, html! {
+                            // TODO: Maybe add a link here explaining ZW?
+                            label(for = "zw_ok") : "Opt-in for ZW?";
+                            br;
+                            input(id = "zw_ok-yes", type = "radio", name = "zw_ok", value = "yes", checked? = yes_checked);
+                            label(for = "zw_ok-yes") : "Yes";
+                            input(id = "zw_ok-no", type = "radio", name = "zw_ok", value = "no", checked? = no_checked);
+                            label(for = "zw_ok-no") : "No";
                         });
                     }),
                 }
@@ -703,15 +884,42 @@ impl Requirement {
             Self::Rules { .. } => if !value.confirm {
                 form_ctx.push_error(form::Error::validation("This field is required.").with_name("confirm"));
             },
+            Self::AllDungeonsOk => if value.all_dungeons_ok.is_none() {
+                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("all_dungeons_ok"));
+            },
+            Self::FluteOk => if value.flute_ok.is_none() {
+                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("flute_ok"));
+            },
             Self::HardSettingsOk => if value.hard_settings_ok.is_none() {
                 form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("hard_settings_ok"));
             },
-            Self::MqOk => if value.mq_ok.is_none() {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("mq_ok"));
+            Self::HoveringOk => if value.hover_ok.is_none() {
+                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("hover_ok"));
+            },
+            Self::InvertedOk => if value.inverted_ok.is_none() {
+                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("inverted_ok"));
+            },
+            Self::KeydropOk => if value.keydrop_ok.is_none() {
+                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("keydrop_ok"));
             },
             Self::LiteOk => if value.lite_ok.is_none() {
                 form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("lite_ok"));
             },
+            Self::MirrorScrollOk => if value.mirror_scroll_ok.is_none() {
+                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("mirror_scroll_ok"));
+            },
+            Self::MqOk => if value.mq_ok.is_none() {
+                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("mq_ok"));
+            },
+            Self::NoDelayOk => if value.no_delay_ok.is_none() {
+                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("no_delay_ok"));
+            },
+            Self::PbOk => if value.pb_ok.is_none() {
+                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("pb_ok"));
+            }
+            Self::ZwOk => if value.zw_ok.is_none() {
+                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("zw_ok"));
+            }
             Self::RestreamConsent { optional: false, .. } => if !value.restream_consent {
                 form_ctx.push_error(form::Error::validation("Restream consent is required to enter this event.").with_name("restream_consent"));
             },
@@ -741,7 +949,7 @@ impl Requirement {
             Self::External { .. } => form_ctx.push_error(form::Error::validation("Please complete event entry via the external method.")),
             _ => if !self.is_checked(transaction, http_client, discord_ctx, me, data).await?.unwrap_or(false) {
                 form_ctx.push_error(form::Error::validation(match self {
-                    Self::RaceTime => Cow::Borrowed("A racetime.gg account is required to enter this event. Go to your Mido's House profile and select “Connect a racetime.gg account”."), //TODO direct link?
+                    Self::RaceTime => Cow::Borrowed("A racetime.gg account is required to enter this event. Go to your Hyrule Town Hall profile and select “Connect a racetime.gg account”."), //TODO direct link?
                     Self::RaceTimeInvite { error_text, .. } => if me.racetime.is_some() {
                         if let Some(error_text) = error_text {
                             Cow::Owned(error_text.clone())
@@ -749,10 +957,10 @@ impl Requirement {
                             Cow::Borrowed("This is an invitational event and it looks like you're not invited.")
                         }
                     } else {
-                        Cow::Borrowed("This event uses an invite list of racetime.gg users. Go to your Mido's House profile and select “Connect a racetime.gg account” to check whether you're invited.") //TODO direct link?
+                        Cow::Borrowed("This event uses an invite list of racetime.gg users. Go to your Hyrule Town Hall profile and select “Connect a racetime.gg account” to check whether you're invited.") //TODO direct link?
                     },
                     Self::Twitch => Cow::Borrowed("A Twitch account is required to enter this event. Go to the “Twitch & connections” section of your racetime.gg settings to connect one."), //TODO direct link?
-                    Self::Discord => Cow::Borrowed("A Discord account is required to enter this event. Go to your Mido's House profile and select “Connect a Discord account”."), //TODO direct link?
+                    Self::Discord => Cow::Borrowed("A Discord account is required to enter this event. Go to your Hyrule Town Hall profile and select “Connect a Discord account”."), //TODO direct link?
                     Self::DiscordGuild { .. } => Cow::Borrowed("You must join the event's Discord server to enter."), //TODO invite link?
                     Self::Challonge => Cow::Borrowed("A Challonge account is required to enter this event."), //TODO link to /login/challonge
                     Self::QualifierPlacement { .. } => Cow::Borrowed("You have not secured a qualifying placement."), //TODO different message if the player has overqualified or overqualifying due to opt-outs is still possible
@@ -762,9 +970,18 @@ impl Requirement {
                     | Self::TextField2 { .. }
                     | Self::YesNo { .. }
                     | Self::Rules { .. }
+                    | Self::AllDungeonsOk
+                    | Self::FluteOk
+                    | Self::HoveringOk
                     | Self::HardSettingsOk
-                    | Self::MqOk
+                    | Self::InvertedOk
+                    | Self::KeydropOk
                     | Self::LiteOk
+                    | Self::MirrorScrollOk
+                    | Self::MqOk
+                    | Self::NoDelayOk
+                    | Self::PbOk
+                    | Self::ZwOk
                     | Self::RestreamConsent { .. }
                     | Self::Qualifier { .. }
                     | Self::TripleQualifier { .. }
@@ -826,9 +1043,18 @@ pub(crate) struct EnterForm {
     restream_consent: bool,
     restream_consent_radio: Option<BoolRadio>,
     yes_no: Option<BoolRadio>,
+    all_dungeons_ok: Option<BoolRadio>,
+    flute_ok: Option<BoolRadio>,
     hard_settings_ok: Option<BoolRadio>,
-    mq_ok: Option<BoolRadio>,
+    hover_ok: Option<BoolRadio>,
+    inverted_ok: Option<BoolRadio>,
+    keydrop_ok: Option<BoolRadio>,
     lite_ok: Option<BoolRadio>,
+    mq_ok: Option<BoolRadio>,
+    mirror_scroll_ok: Option<BoolRadio>,
+    no_delay_ok: Option<BoolRadio>,
+    pb_ok: Option<BoolRadio>,
+    zw_ok: Option<BoolRadio>,
     #[field(default = String::new())]
     text_field: String,
     #[field(default = String::new())]
@@ -957,7 +1183,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                             html! {
                                 article {
                                     p {
-                                        a(href = uri!(auth::login(Some(uri!(get(data.series, &*data.event, defaults.my_role(), defaults.teammate())))))) : "Sign in or create a Mido's House account";
+                                        a(href = uri!(auth::login(Some(uri!(get(data.series, &*data.event, defaults.my_role(), defaults.teammate())))))) : "Sign in or create a Hyrule Town Hall account";
                                         : " to enter";
                                         @if data.show_opt_out {
                                             : " or opt out of";
@@ -973,7 +1199,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                                 article {
                                     p {
                                         : "This is an invitational event. ";
-                                        a(href = uri!(auth::login(Some(uri!(get(data.series, &*data.event, defaults.my_role(), defaults.teammate())))))) : "Sign in or create a Mido's House account";
+                                        a(href = uri!(auth::login(Some(uri!(get(data.series, &*data.event, defaults.my_role(), defaults.teammate())))))) : "Sign in or create a Hyrule Town Hall account";
                                         : " to see if you're invited.";
                                     }
                                 }
@@ -1081,7 +1307,7 @@ fn enter_form_step2<'a, 'b: 'a, 'c: 'a, 'd: 'a>(mut transaction: Transaction<'a,
                             input(id = "mw_impl-bizhawk_co_op", type = "radio", name = "mw_impl", value = "bizhawk_co_op", checked? = defaults.mw_impl() == Some(mw::Impl::BizHawkCoOp));
                             label(for = "mw_impl-bizhawk_co_op") : "bizhawk-co-op";
                             input(id = "mw_impl-midos_house", type = "radio", name = "mw_impl", value = "midos_house", checked? = defaults.mw_impl() == Some(mw::Impl::MidosHouse));
-                            label(for = "mw_impl-midos_house") : "Mido's House Multiworld";
+                            label(for = "mw_impl-midos_house") : "HTH Multiworld";
                         });
                     }
                     : form_field("restream_consent_radio", &mut errors, html! {
@@ -1138,7 +1364,7 @@ pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Clie
                         form.context.push_error(form::Error::validation("The deadline to enter this event has passed."));
                     } else if requirements.is_empty() {
                         if data.is_single_race() {
-                            form.context.push_error(form::Error::validation("Signups for this event are not handled by Mido's House."));
+                            form.context.push_error(form::Error::validation("Signups for this event are not handled by Hyrule Town Hall."));
                         }
                     } else {
                         for requirement in requirements {
@@ -1177,7 +1403,7 @@ pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Clie
                 if form.context.errors().next().is_none() {
                     let id = Id::<Teams>::new(&mut transaction).await?;
                     sqlx::query!(
-                        "INSERT INTO teams (id, series, event, plural_name, restream_consent, text_field, text_field2, yes_no, hard_settings_ok, mq_ok, lite_ok, mw_impl) VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9, $10, $11)",
+                        "INSERT INTO teams (id, series, event, plural_name, restream_consent, text_field, text_field2, yes_no, all_dungeons_ok, flute_ok, hard_settings_ok, hover_ok, inverted_ok, keydrop_ok, lite_ok, mirror_scroll_ok, mq_ok, no_delay_ok, pb_ok, zw_ok, mw_impl) VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)",
                         id as _,
                         series as _,
                         event,
@@ -1185,9 +1411,18 @@ pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Clie
                         value.text_field,
                         value.text_field2,
                         value.yes_no == Some(BoolRadio::Yes),
+                        value.all_dungeons_ok == Some(BoolRadio::Yes),
+                        value.flute_ok == Some(BoolRadio::Yes),
                         value.hard_settings_ok == Some(BoolRadio::Yes),
-                        value.mq_ok == Some(BoolRadio::Yes),
+                        value.hover_ok == Some(BoolRadio::Yes),
+                        value.inverted_ok == Some(BoolRadio::Yes),
+                        value.keydrop_ok == Some(BoolRadio::Yes),
                         value.lite_ok == Some(BoolRadio::Yes),
+                        value.mirror_scroll_ok == Some(BoolRadio::Yes),
+                        value.mq_ok == Some(BoolRadio::Yes),
+                        value.no_delay_ok == Some(BoolRadio::Yes),
+                        value.pb_ok  == Some(BoolRadio::Yes),
+                        value.zw_ok  == Some(BoolRadio::Yes),
                         value.mw_impl as _,
                     ).execute(&mut *transaction).await?;
                     sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'created', 'none')", id as _, me.id as _).execute(&mut *transaction).await?;
@@ -1221,7 +1456,7 @@ pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Clie
                                 if let Some(organizer_channel) = data.discord_organizer_channel {
                                     organizer_channel.say(&*discord_ctx, msg).await?;
                                 } else {
-                                    FENHL.create_dm_channel(&*discord_ctx).await?.say(&*discord_ctx, msg).await?;
+                                    ADMIN_USER.create_dm_channel(&*discord_ctx).await?.say(&*discord_ctx, msg).await?;
                                 }
                             } else {
                                 //TODO enter event on start.gg anonymously (probably registerForTournament)
@@ -1235,7 +1470,7 @@ pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Clie
                                 if let Some(organizer_channel) = data.discord_organizer_channel {
                                     organizer_channel.say(&*discord_ctx, msg).await?;
                                 } else {
-                                    FENHL.create_dm_channel(&*discord_ctx).await?.say(&*discord_ctx, msg).await?;
+                                    ADMIN_USER.create_dm_channel(&*discord_ctx).await?.say(&*discord_ctx, msg).await?;
                                 }
                             }
                             //TODO record participant's entrant ID for the singleton start.gg event as team.startgg_id
@@ -1312,7 +1547,7 @@ pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Clie
                 if form.context.errors().next().is_none() {
                     let id = Id::<Teams>::new(&mut transaction).await?;
                     sqlx::query!(
-                        "INSERT INTO teams (id, series, event, name, restream_consent, text_field, text_field2, yes_no, hard_settings_ok, mq_ok, lite_ok, mw_impl) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+                    "INSERT INTO teams (id, series, event, name, restream_consent, text_field, text_field2, yes_no, all_dungeons_ok, flute_ok, hard_settings_ok, hover_ok, inverted_ok, keydrop_ok, lite_ok, mirror_scroll_ok, mq_ok, no_delay_ok, pb_ok, zw_ok, mw_impl) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)",
                         id as _,
                         series as _,
                         event,
@@ -1321,9 +1556,18 @@ pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Clie
                         value.text_field,
                         value.text_field2,
                         value.yes_no == Some(BoolRadio::Yes),
+                        value.all_dungeons_ok == Some(BoolRadio::Yes),
+                        value.flute_ok == Some(BoolRadio::Yes),
                         value.hard_settings_ok == Some(BoolRadio::Yes),
-                        value.mq_ok == Some(BoolRadio::Yes),
+                        value.hover_ok == Some(BoolRadio::Yes),
+                        value.inverted_ok == Some(BoolRadio::Yes),
+                        value.keydrop_ok == Some(BoolRadio::Yes),
                         value.lite_ok == Some(BoolRadio::Yes),
+                        value.mirror_scroll_ok == Some(BoolRadio::Yes),
+                        value.mq_ok == Some(BoolRadio::Yes),
+                        value.no_delay_ok == Some(BoolRadio::Yes),
+                        value.pb_ok  == Some(BoolRadio::Yes),
+                        value.zw_ok  == Some(BoolRadio::Yes),
                         value.mw_impl as _,
                     ).execute(&mut *transaction).await?;
                     sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'created', $3)", id as _, me.id as _, Role::from(my_role.expect("validated")) as _).execute(&mut *transaction).await?;
@@ -1384,7 +1628,7 @@ pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Clie
                                     }
                                 } else {
                                     //TODO only check if Requirement::Discord is present
-                                    form.context.push_error(form::Error::validation("This Mido's House account is not associated with a Discord account.").with_name(format!("roles[{}]", member.id)));
+                                    form.context.push_error(form::Error::validation("This Hyrule Town Hall account is not associated with a Discord account.").with_name(format!("roles[{}]", member.id)));
                                 }
                                 if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams, team_members WHERE
                                     id = team
@@ -1397,7 +1641,7 @@ pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Clie
                                 }
                                 users.push(user);
                             } else {
-                                form.context.push_error(form::Error::validation("This racetime.gg account is not associated with a Mido's House account.").with_name(format!("roles[{}]", member.id)));
+                                form.context.push_error(form::Error::validation("This racetime.gg account is not associated with a Hyrule Town Hall account.").with_name(format!("roles[{}]", member.id)));
                                 all_accounts_exist = false;
                             }
                             if team_config.has_distinct_roles() {
@@ -1481,7 +1725,7 @@ pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Clie
                     return Ok(if value.step2 {
                         let id = Id::<Teams>::new(&mut transaction).await?;
                         sqlx::query!(
-                            "INSERT INTO teams (id, series, event, name, racetime_slug, restream_consent, text_field, text_field2, yes_no, hard_settings_ok, mq_ok, lite_ok, mw_impl) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+                            "INSERT INTO teams (id, series, event, name, racetime_slug, restream_consent, text_field, text_field2, yes_no,all_dungeons_ok, flute_ok, hard_settings_ok, hover_ok, inverted_ok, keydrop_ok, lite_ok, mirror_scroll_ok, mq_ok, no_delay_ok, pb_ok, zw_ok, mw_impl) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
                             id as _,
                             series as _,
                             event,
@@ -1491,9 +1735,18 @@ pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Clie
                             value.text_field,
                             value.text_field2,
                             value.yes_no == Some(BoolRadio::Yes),
+                            value.all_dungeons_ok == Some(BoolRadio::Yes),
+                            value.flute_ok == Some(BoolRadio::Yes),
                             value.hard_settings_ok == Some(BoolRadio::Yes),
-                            value.mq_ok == Some(BoolRadio::Yes),
+                            value.hover_ok == Some(BoolRadio::Yes),
+                            value.inverted_ok == Some(BoolRadio::Yes),
+                            value.keydrop_ok == Some(BoolRadio::Yes),
                             value.lite_ok == Some(BoolRadio::Yes),
+                            value.mirror_scroll_ok == Some(BoolRadio::Yes),
+                            value.mq_ok == Some(BoolRadio::Yes),
+                            value.no_delay_ok == Some(BoolRadio::Yes),
+                            value.pb_ok  == Some(BoolRadio::Yes),
+                            value.zw_ok  == Some(BoolRadio::Yes),
                             value.mw_impl as _,
                         ).execute(&mut *transaction).await?;
                         for ((user, role), startgg_id) in users.into_iter().zip_eq(roles).zip_eq(startgg_ids) {

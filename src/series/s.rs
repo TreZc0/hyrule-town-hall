@@ -635,7 +635,7 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                         img(src = static_url!("event/s/8-qualifier-schedule.png"), style = "max-width: 100%; max-height: 100vh;");
                     }
                     p {
-                        strong : "Note: Qualifiers will be force-started at the designated starting time. Any participant who is not ready at that time will be removed from the race. Race rooms will be automatically opened 1 hour before the scheduled start time by the Mido's House bot. Mido will then provide a seed 15 minutes before the race is due to start.";
+                        strong : "Note: Qualifiers will be force-started at the designated starting time. Any participant who is not ready at that time will be removed from the race. Race rooms will be automatically opened 1 hour before the scheduled start time by the Hyrule Town Hall bot. Mido will then provide a seed 15 minutes before the race is due to start.";
                     }
                     h2(id = "brackets") : "Brackets";
                     p {
@@ -647,7 +647,7 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                     }
                     p : "If a player decides to opt out of the bracket phase of the tournament, their spot will go to the next person in line. This means that players ranked outside of the top 32 or 96 may still qualify for one of the tournaments, depending on players dropping out before the next phase begins. If you qualify for the main tournament, you cannot opt out to play in the Challenge Cup.";
                     p {
-                        strong : "To opt in for the tournament, you are required to have a Mido's House account.";
+                        strong : "To opt in for the tournament, you are required to have a Hyrule Town Hall account.";
                         br;
                         : "The progress of the bracket will be organized on ";
                         a(href = "https://www.start.gg/tournament/ocarina-of-time-randomizer-standard-tournament-season-8/event/main-tournament") : "start.gg";
@@ -682,7 +682,7 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                     }
                     h3(id = "scheduling") : "Scheduling";
                     p {
-                        : "Matches will be organized via the Mido's House bot. To schedule your match, please use the ";
+                        : "Matches will be organized via the Hyrule Town Hall bot. To schedule your match, please use the ";
                         code : "/schedule";
                         : " command in your scheduling thread. A race room will automatically be opened 30 minutes before the designated time of the race. Mido will automatically roll the seed 15 minutes before the race is due to start. Unless the Fair Play Agreement (FPA) command has been utilized, the result will be automatically processed and posted in the #s8-results channel (after a 20-minute delay to avoid spoiling spectators).";
                     }
@@ -841,7 +841,7 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                         : " matches per day, unless a third is being requested by a full set of volunteers.";
                     }
                     p : "While most streams will have either dual language restreams or just English coverage, there might be matches only covered in a single language, especially in the earlier stages of the tournament.";
-                    p : "Racers may deny a restream of their match. This needs to be done at least 24 hours in advance through the Mido's House event status page. From Winner's bracket semifinals and Lower bracket round 6 onwards (as applicable), ZeldaSpeedRuns, The Silver Gauntlets, and their international partners reserve the right to restream the matches for their respective tournaments.";
+                    p : "Racers may deny a restream of their match. This needs to be done at least 24 hours in advance through the Hyrule Town Hall event status page. From Winner's bracket semifinals and Lower bracket round 6 onwards (as applicable), ZeldaSpeedRuns, The Silver Gauntlets, and their international partners reserve the right to restream the matches for their respective tournaments.";
                     p : "Beyond this pre-approval, the following rules apply: If a race cannot be covered by the pre-approved channel for a given language, other channels are welcome to request permission to restream in the #s8-restream-planning channel, and will be approved on a case-by-case basis given participants also consent. If a channel is interested in covering one or more races in a language not listed above, please also reach out in the #s8-restream-planning channel to ask for restream permission. Note that we will only allow a low number of additional channels per language. In all cases, restreams must be scheduled at least 24 hours in advance, to ensure that racers and volunteers have appropriate notice. We reserve the right to restream all semifinals and finals matches.";
                     h2(id = "special-thanks") : "Special Thanks";
                     p : "We appreciate all of the time and input the community as a whole has provided gearing up for this season. Nevertheless, we would like to extend a special thanks to the following individuals and groups for working with us to help make S8 work smoothly:";
@@ -859,7 +859,7 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                     }
                     p {
                         strong : "Fenhl";
-                        : ", who, in addition to helping organize the tournament, has ensured Mido's House is prepared to make this tournament more convenient for yourselves and us as organizers while maintaining security features. They have also kept us informed on important developer updates, and guided the team on presets and special generator knowledge we might not have known otherwise!";
+                        : ", who, in addition to helping organize the tournament, has ensured Hyrule Town Hall is prepared to make this tournament more convenient for yourselves and us as organizers while maintaining security features. They have also kept us informed on important developer updates, and guided the team on presets and special generator knowledge we might not have known otherwise!";
                     }
                     p {
                         strong : "Race Mods";

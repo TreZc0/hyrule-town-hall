@@ -160,9 +160,9 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             }
             #[cfg(unix)] Subcommand::PrepareStop { async_proto: false, .. } => {
                 while let Some(update) = Option::<PrepareStopUpdate>::read(&mut sock).await? {
-                    println!("{} preparing to stop Mido's House: {update}", Utc::now().format("%Y-%m-%d %H:%M:%S"));
+                    println!("{} preparing to stop HTH: {update}", Utc::now().format("%Y-%m-%d %H:%M:%S"));
                 }
-                println!("{} preparing to stop Mido's House: done", Utc::now().format("%Y-%m-%d %H:%M:%S"));
+                println!("{} preparing to stop HTH: done", Utc::now().format("%Y-%m-%d %H:%M:%S"));
             }
             #[cfg(unix)] Subcommand::PrepareStop { async_proto: true, .. } => {
                 let mut stdout = stdout();
@@ -175,9 +175,9 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
                 println!("{} {update:#?}", Utc::now().format("%Y-%m-%d %H:%M:%S"));
             },
             #[cfg(unix)] Subcommand::UpdateRegionalVc { .. } => {
-                println!("{} Mido's House: updating regional voice chat", Utc::now().format("%Y-%m-%d %H:%M:%S"));
+                println!("{} HTH: updating regional voice chat", Utc::now().format("%Y-%m-%d %H:%M:%S"));
                 u8::read(&mut sock).await?;
-                println!("{} Mido's House: done updating regional voice chat", Utc::now().format("%Y-%m-%d %H:%M:%S"));
+                println!("{} HTH: done updating regional voice chat", Utc::now().format("%Y-%m-%d %H:%M:%S"));
             }
         }
     } else {
