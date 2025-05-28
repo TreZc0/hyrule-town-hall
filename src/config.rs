@@ -33,7 +33,7 @@ pub(crate) struct Config {
 impl Config {
     pub(crate) async fn load() -> Result<Self> {
         #[cfg(unix)] {
-            if let Some(config_path) = BaseDirectories::new()?.find_config_file("midos-house.json") {
+            if let Some(config_path) = BaseDirectories::new().find_config_file("midos-house.json") {
                 let buf = fs::read(config_path).await?;
                 Ok(serde_json::from_slice(&buf)?)
             } else {

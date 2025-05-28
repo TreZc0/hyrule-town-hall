@@ -111,76 +111,84 @@ pub(crate) const S3_SETTINGS: [Setting; 28] = [
 ];
 
 pub(crate) const S4_SETTINGS: [Setting; 27] = [
-    Setting { name: "camc", display: "CAMC", default: "on", default_display: "CAMC", other: &[("off", false, "no CAMC")], description: "camc: on (défaut) ou off" },
-    Setting { name: "start-weirdegg", display: "start & weird egg", default: "random-skip", default_display: "random start & Skip Child Zelda", other: &[("vanilla-shuffle", false, "vanilla start & shuffled weird egg")], description: "start-weirdegg: random-skip (défaut: random start & Skip Child Zelda) ou vanilla-shuffle (vanilla start & shuffled weird egg)" },
-    Setting { name: "keysy", display: "keysy", default: "off", default_display: "dungeon small keys not removed", other: &[("on", false, "small keysy")], description: "keysy: off (défaut) ou on" },
-    Setting { name: "deku", display: "open Deku", default: "closed", default_display: "closed Deku", other: &[("open", false, "open Deku")], description: "deku: closed (défaut) ou open" },
-    Setting { name: "card", display: "Gerudo card", default: "vanilla", default_display: "vanilla Gerudo card", other: &[("shuffle", false, "shuffled Gerudo card")], description: "card: vanilla (défaut) ou shuffle" },
-    Setting { name: "ocarina", display: "ocarina", default: "startwith", default_display: "start with ocarina", other: &[("shuffle", false, "shuffled ocarinas & free scarecrow")], description: "ocarina: startwith (défaut) ou shuffle (shuffled ocarinas & free scarecrow)" },
-    Setting { name: "chubags", display: "bombchu drops", default: "off", default_display: "no bombchu bag", other: &[("on", false, "bombchu bag")], description: "chubags: off (défaut) ou on" },
-    Setting { name: "cows", display: "cows", default: "off", default_display: "no cowsanity", other: &[("on", false, "cowsanity")], description: "cows: off (défaut) ou on" },
-    Setting { name: "shops", display: "shops", default: "off", default_display: "no shopsanity", other: &[("random", false, "shopsanity random & wallet full")], description: "shops: off (défaut) ou random (shopsanity random & wallet full)" },
-    Setting { name: "scrubs", display: "scrubs", default: "off", default_display: "no scrubsanity", other: &[("affordable", false, "scrubsanity affordable")], description: "scrubs: off (défaut) ou affordable" },
-    Setting { name: "skulls", display: "tokens", default: "off", default_display: "no tokensanity", other: &[("dungeons", false, "tokensanity dungeon"), ("overworld", true, "tokensanity overworld"), ("all", true, "tokensanity all")], description: "skulls: off (défaut), dungeons, overworld (difficile) ou all (difficile)" },
-    Setting { name: "boss-er", display: "boss ER", default: "off", default_display: "no boss ER", other: &[("on", false, "boss ER")], description: "boss-er: off (défaut) ou on" },
-    Setting { name: "bridge", display: "rainbow bridge", default: "6meds", default_display: "6 medallions bridge", other: &[("4meds-meds", false, "4 medallions bridge (GBK 6 meds)"), ("4meds-dungeons", false, "4 medallions bridge (GBK 6 dungeons)"), ("5meds-meds", false, "5 medallions bridge (GBK 6 meds)"), ("5meds-dungeons", false, "5 medallions bridge (GBK 6 dungeons)"), ("1stones", false, "1 stone bridge"), ("2stones", false, "2 stones bridge"), ("3stones", false, "3 stones bridge"), ("vanilla", false, "vanilla bridge"), ("5dungeons", false, "5 dungeons bridge"), ("6dungeons", false, "6 dungeons bridge"), ("7dungeons", false, "7 dungeons bridge"), ("8dungeons", false, "8 dungeons bridge"), ("9dungeons", false, "9 dungeons bridge"), ("1precompleted", false, "1 pre-completed dungeon"), ("2precompleted", false, "2 pre-completed dungeons"), ("3precompleted", false, "3 pre-completed dungeons")], description: "bridge: <4–6>meds (GBK 6 meds, défaut: 6), <1–3>stones (3 stones, GBK 6 rewards), vanilla (GBK 6 meds), <5–9>dungeons, <1-3>precompleted (9 rewards, map/compass gives info)" },
-    Setting { name: "bosskeys", display: "boss keys", default: "dungeon", default_display: "own dungeon boss keys", other: &[("anywhere", false, "boss keys anywhere")], description: "bosskeys: dungeon (défaut) ou anywhere" },
-    Setting { name: "warps", display: "warps/owls", default: "off", default_display: "vanilla warps", other: &[("on", false, "shuffled warps")], description: "warps: off (défaut) ou on" },
-    Setting { name: "dot", display: "Door of Time", default: "open", default_display: "open Door of Time", other: &[("closed", false, "closed Door of Time")], description: "dot: open (défaut) ou closed" },
-    Setting { name: "fountain", display: "fountain", default: "closed", default_display: "closed fountain", other: &[("open", false, "open fountain")], description: "fountain: closed (défaut) ou open" },
-    Setting { name: "1major", display: "1 major item per dungeon", default: "off", default_display: "no major items per dungeon restriction", other: &[("on", false, "1 major item per dungeon")], description: "1major: off (défaut) ou on" },
-    Setting { name: "dungeon-er", display: "dungeon ER", default: "off", default_display: "no dungeon ER", other: &[("on", false, "dungeon ER")], description: "dungeon-er: off (défaut), on ou mixed" },
-    Setting { name: "songs", display: "songs", default: "songs", default_display: "songs on songs", other: &[("anywhere", false, "songsanity anywhere"), ("dungeon", true, "songsanity dungeon rewards")], description: "songs: songs (défaut), anywhere ou dungeon (difficile)" },
-    Setting { name: "souls", display: "enemy souls", default: "off", default_display: "no enemy souls", other: &[("bosses", false, "boss souls"), ("all-anywhere", true, "all enemy souls (anywhere)"), ("all-regional", true, "all enemy souls (regional)")], description: "souls: off (défaut), bosses, all-anywhere (difficile) ou all-regional (difficile)" },
-    Setting { name: "itempool", display: "item pool", default: "balanced", default_display: "balanced item pool", other: &[("minimal", true, "minimal item pool"), ("scarce", true, "scarce item pool")], description: "itempool: balanced (défaut), minimal (difficile) ou scarce (difficile)" },
-    Setting { name: "shortcuts", display: "shortcuts", default: "off", default_display: "no shortcuts", other: &[("random", true, "random shortcuts")], description: "shortcuts: off (défaut) ou on (difficile)" },
-    Setting { name: "keysanity", display: "keysanity", default: "off", default_display: "own dungeon small keys", other: &[("on", true, "small keys anywhere"), ("keyrings-anywhere", true, "keyrings anywhere"), ("keyrings-regional", true, "keyrings regional")], description: "keysanity: off (défaut), on (difficile), keyrings-anywhere (difficile) ou keyrings-regional (difficile)" },
-    Setting { name: "trials", display: "trials", default: "0", default_display: "0 trials", other: &[("random", true, "random trials")], description: "trials: 0 (défaut) ou random (difficile)" },
-    Setting { name: "mixed-er", display: "mixed ER", default: "off", default_display: "no mixed ER", other: &[("on", true, "mixed ER")], description: "mixed-er: off (défaut) ou on (difficile: intérieurs et grottos mixés)" },
-    Setting { name: "reachable", display: "reachable locations", default: "all", default_display: "all locations reachable", other: &[("required", true, "required only")], description: "reachable: all (défaut) ou required (difficile)" },
+    Setting { name: "camc", display: "CAMC", default: "on", default_display: "CAMC", other: &[("off", false, "no CAMC")], description: "camc: on (default) or off" },
+    Setting { name: "start-weirdegg", display: "start & weird egg", default: "random-skip", default_display: "random start & Skip Child Zelda", other: &[("vanilla-shuffle", false, "vanilla start & shuffled weird egg")], description: "start-weirdegg: random-skip (default: random start & Skip Child Zelda) or vanilla-shuffle (vanilla start & shuffled weird egg)" },
+    Setting { name: "keysy", display: "keysy", default: "off", default_display: "dungeon small keys not removed", other: &[("on", false, "small keysy")], description: "keysy: off (default) or on" },
+    Setting { name: "deku", display: "open Deku", default: "closed", default_display: "closed Deku", other: &[("open", false, "open Deku")], description: "deku: closed (default) or open" },
+    Setting { name: "card", display: "Gerudo card", default: "vanilla", default_display: "vanilla Gerudo card", other: &[("shuffle", false, "shuffled Gerudo card")], description: "card: vanilla (default) or shuffle" },
+    Setting { name: "ocarina", display: "ocarina", default: "startwith", default_display: "start with ocarina", other: &[("shuffle", false, "shuffled ocarinas & free scarecrow")], description: "ocarina: startwith (default) or shuffle (shuffled ocarinas & free scarecrow)" },
+    Setting { name: "chubags", display: "bombchu drops", default: "off", default_display: "no bombchu bag", other: &[("on", false, "bombchu bag")], description: "chubags: off (default) or on" },
+    Setting { name: "cows", display: "cows", default: "off", default_display: "no cowsanity", other: &[("on", false, "cowsanity")], description: "cows: off (default) or on" },
+    Setting { name: "shops", display: "shops", default: "off", default_display: "no shopsanity", other: &[("random", false, "shopsanity random & wallet full")], description: "shops: off (default) or random (shopsanity random & wallet full)" },
+    Setting { name: "scrubs", display: "scrubs", default: "off", default_display: "no scrubsanity", other: &[("affordable", false, "scrubsanity affordable")], description: "scrubs: off (default) or affordable" },
+    Setting { name: "skulls", display: "tokens", default: "off", default_display: "no tokensanity", other: &[("dungeons", false, "tokensanity dungeon"), ("overworld", true, "tokensanity overworld"), ("all", true, "tokensanity all")], description: "skulls: off (default), dungeons, overworld (hardcore), or all (hardcore)" },
+    Setting { name: "boss-er", display: "boss ER", default: "off", default_display: "no boss ER", other: &[("on", false, "boss ER")], description: "boss-er: off (default) or on" },
+    Setting { name: "bridge", display: "rainbow bridge", default: "6meds", default_display: "6 medallions bridge", other: &[("4meds-meds", false, "4 medallions bridge (GBK 6 meds)"), ("4meds-dungeons", false, "4 medallions bridge (GBK 6 dungeons)"), ("5meds-meds", false, "5 medallions bridge (GBK 6 meds)"), ("5meds-dungeons", false, "5 medallions bridge (GBK 6 dungeons)"), ("1stones", false, "1 stone bridge"), ("2stones", false, "2 stones bridge"), ("3stones", false, "3 stones bridge"), ("vanilla", false, "vanilla bridge"), ("5dungeons", false, "5 dungeons bridge"), ("6dungeons", false, "6 dungeons bridge"), ("7dungeons", false, "7 dungeons bridge"), ("8dungeons", false, "8 dungeons bridge"), ("9dungeons", false, "9 dungeons bridge"), ("1precompleted", false, "1 pre-completed dungeon"), ("2precompleted", false, "2 pre-completed dungeons"), ("3precompleted", false, "3 pre-completed dungeons")], description: "bridge: <4–6>meds (GBK 6 meds, default: 6), <1–3>stones (3 stones, GBK 6 rewards), vanilla (GBK 6 meds), <5–9>dungeons, <1-3>precompleted (9 rewards, map/compass gives info)" },
+    Setting { name: "bosskeys", display: "boss keys", default: "dungeon", default_display: "own dungeon boss keys", other: &[("anywhere", false, "boss keys anywhere")], description: "bosskeys: dungeon (default) or anywhere" },
+    Setting { name: "warps", display: "warps/owls", default: "off", default_display: "vanilla warps", other: &[("on", false, "shuffled warps")], description: "warps: off (default) or on" },
+    Setting { name: "dot", display: "Door of Time", default: "open", default_display: "open Door of Time", other: &[("closed", false, "closed Door of Time")], description: "dot: open (default) or closed" },
+    Setting { name: "fountain", display: "fountain", default: "closed", default_display: "closed fountain", other: &[("open", false, "open fountain")], description: "fountain: closed (default) or open" },
+    Setting { name: "1major", display: "1 major item per dungeon", default: "off", default_display: "no major items per dungeon restriction", other: &[("on", false, "1 major item per dungeon")], description: "1major: off (default) or on" },
+    Setting { name: "dungeon-er", display: "dungeon ER", default: "off", default_display: "no dungeon ER", other: &[("on", false, "dungeon ER")], description: "dungeon-er: off (default), on, or mixed" },
+    Setting { name: "songs", display: "songs", default: "songs", default_display: "songs on songs", other: &[("anywhere", false, "songsanity anywhere"), ("dungeon", true, "songsanity dungeon rewards")], description: "songs: songs (default), anywhere, or dungeon (hardcore)" },
+    Setting { name: "souls", display: "enemy souls", default: "off", default_display: "no enemy souls", other: &[("bosses", false, "boss souls"), ("all-anywhere", true, "all enemy souls (anywhere)"), ("all-regional", true, "all enemy souls (regional)")], description: "souls: off (default), bosses, all-anywhere (hardcore), or all-regional (hardcore)" },
+    Setting { name: "itempool", display: "item pool", default: "balanced", default_display: "balanced item pool", other: &[("minimal", true, "minimal item pool"), ("scarce", true, "scarce item pool")], description: "itempool: balanced (default), minimal (hardcore), or scarce (hardcore)" },
+    Setting { name: "shortcuts", display: "shortcuts", default: "off", default_display: "no shortcuts", other: &[("random", true, "random shortcuts")], description: "shortcuts: off (default) or on (hardcore)" },
+    Setting { name: "keysanity", display: "keysanity", default: "off", default_display: "own dungeon small keys", other: &[("on", true, "small keys anywhere"), ("keyrings-anywhere", true, "keyrings anywhere"), ("keyrings-regional", true, "keyrings regional")], description: "keysanity: off (default), on (hardcore), keyrings-anywhere (hardcore), or keyrings-regional (hardcore)" },
+    Setting { name: "trials", display: "trials", default: "0", default_display: "0 trials", other: &[("random", true, "random trials")], description: "trials: 0 (default) or random (hardcore)" },
+    Setting { name: "mixed-er", display: "mixed ER", default: "off", default_display: "no mixed ER", other: &[("on", true, "mixed ER")], description: "mixed-er: off (default) or on (hardcore: intérieurs et grottos mixés)" },
+    Setting { name: "reachable", display: "reachable locations", default: "all", default_display: "all locations reachable", other: &[("required", true, "required only")], description: "reachable: all (default) or required (hardcore)" },
 ];
 
 pub(crate) const S5_SETTINGS: [Setting; 30] = [
-    Setting { name: "camc", display: "CAMC", default: "on", default_display: "CAMC", other: &[("off", false, "no CAMC")], description: "camc: on (défaut) ou off" },
-    Setting { name: "start-weirdegg", display: "start & weird egg", default: "random-skip", default_display: "random start & Skip Child Zelda", other: &[("vanilla-shuffle", false, "vanilla start & shuffled weird egg")], description: "start-weirdegg: random-skip (défaut: random start & Skip Child Zelda) ou vanilla-shuffle (vanilla start & shuffled weird egg)" },
-    Setting { name: "keysy", display: "keysy", default: "off", default_display: "dungeon small keys not removed", other: &[("on", false, "small keysy")], description: "keysy: off (défaut) ou on" },
-    Setting { name: "deku", display: "open Deku", default: "closed", default_display: "closed Deku", other: &[("open", false, "open Deku")], description: "deku: closed (défaut) ou open" },
-    Setting { name: "card", display: "Gerudo card", default: "vanilla", default_display: "vanilla Gerudo card", other: &[("shuffle", false, "shuffled Gerudo card")], description: "card: vanilla (défaut) ou shuffle" },
-    Setting { name: "ocarina", display: "ocarina", default: "startwith", default_display: "start with ocarina", other: &[("shuffle", false, "shuffled ocarinas & free scarecrow")], description: "ocarina: startwith (défaut) ou shuffle (shuffled ocarinas & free scarecrow)" },
-    Setting { name: "chubags", display: "bombchu drops", default: "off", default_display: "no bombchu bag", other: &[("on", false, "bombchu bag")], description: "chubags: off (défaut) ou on" },
-    Setting { name: "dungeon-er", display: "dungeon ER", default: "off", default_display: "no dungeon ER", other: &[("on", false, "dungeon ER")], description: "dungeon-er: off (défaut), on ou mixed" },
-    Setting { name: "songs", display: "songs", default: "songs", default_display: "songs on songs", other: &[("anywhere", false, "songsanity anywhere"), ("dungeon", false, "songsanity dungeon rewards")], description: "songs: songs (défaut), anywhere ou dungeon" },
-    Setting { name: "cows", display: "cows", default: "off", default_display: "no cowsanity", other: &[("on", false, "cowsanity")], description: "cows: off (défaut) ou on" },
-    Setting { name: "shops", display: "shops", default: "off", default_display: "no shopsanity", other: &[("4", false, "shopsanity 4 & wallet full")], description: "shops: off (défaut) ou 4 (shopsanity 4 & wallet full)" },
-    Setting { name: "scrubs", display: "scrubs", default: "off", default_display: "no scrubsanity", other: &[("affordable", false, "scrubsanity affordable")], description: "scrubs: off (défaut) ou affordable" },
-    Setting { name: "skulls", display: "tokens", default: "off", default_display: "no tokensanity", other: &[("dungeons", false, "tokensanity dungeon"), ("overworld", true, "tokensanity overworld"), ("all", true, "tokensanity all")], description: "skulls: off (défaut), dungeons, overworld (difficile) ou all (difficile)" },
-    Setting { name: "bosskeys", display: "boss keys", default: "dungeon", default_display: "own dungeon boss keys", other: &[("anywhere", false, "boss keys anywhere")], description: "bosskeys: dungeon (défaut) ou anywhere" },
-    Setting { name: "warps", display: "warps/owls", default: "off", default_display: "vanilla warps", other: &[("on", false, "shuffled warps")], description: "warps: off (défaut) ou on" },
-    Setting { name: "dot", display: "Door of Time", default: "open", default_display: "open Door of Time", other: &[("closed", false, "closed Door of Time")], description: "dot: open (défaut) ou closed" },
-    Setting { name: "fountain", display: "fountain", default: "closed", default_display: "closed fountain", other: &[("open", false, "open fountain")], description: "fountain: closed (défaut) ou open" },
-    Setting { name: "1major", display: "1 major item per dungeon", default: "off", default_display: "no major items per dungeon restriction", other: &[("on", false, "1 major item per dungeon")], description: "1major: off (défaut) ou on" },
-    Setting { name: "souls", display: "enemy souls", default: "off", default_display: "no enemy souls", other: &[("bosses", false, "boss souls"), ("all-anywhere", true, "all enemy souls (anywhere)"), ("all-regional", true, "all enemy souls (regional)")], description: "souls: off (défaut), bosses, all-anywhere (difficile) ou all-regional (difficile)" },
-    Setting { name: "th", display: "Triforce Hunt", default: "off", default_display: "no Triforce Hunt", other: &[("on", false, "Triforce Hunt (between 50 and 100)")], description: "th (Triforce Hunt): off (défaut) ou on (entre 50 et 100)" },
-    Setting { name: "boss-er", display: "boss ER", default: "off", default_display: "no boss ER", other: &[("on", false, "boss ER")], description: "boss-er: off (défaut) ou on" },
-    Setting { name: "frogs", display: "frog song shuffle", default: "off", default_display: "no frog song shuffle", other: &[("on", false, "frog song shuffle")], description: "frogs: off (défaut) ou on" },
-    Setting { name: "bridge", display: "rainbow bridge", default: "6meds", default_display: "6 medallions bridge", other: &[("4meds-meds", false, "4 medallions bridge (GBK 6 meds)"), ("4meds-dungeons", false, "4 medallions bridge (GBK 6 dungeons)"), ("5meds-meds", false, "5 medallions bridge (GBK 6 meds)"), ("5meds-dungeons", false, "5 medallions bridge (GBK 6 dungeons)"), ("1stones", false, "1 stone bridge"), ("2stones", false, "2 stones bridge"), ("3stones", false, "3 stones bridge"), ("vanilla", false, "vanilla bridge"), ("5dungeons", false, "5 dungeons bridge"), ("6dungeons", false, "6 dungeons bridge"), ("7dungeons", false, "7 dungeons bridge"), ("8dungeons", false, "8 dungeons bridge"), ("9dungeons", false, "9 dungeons bridge"), ("1precompleted", false, "1 pre-completed dungeon"), ("2precompleted", false, "2 pre-completed dungeons"), ("3precompleted", false, "3 pre-completed dungeons")], description: "bridge: <4–6>meds (GBK 6 meds, défaut: 6), <1–3>stones (3 stones, GBK 6 rewards), vanilla (GBK 6 meds), <5–9>dungeons, <1-3>precompleted (9 rewards, map/compass gives info)" },
-    Setting { name: "mixed-er", display: "mixed ER", default: "off", default_display: "no mixed ER", other: &[("on", true, "mixed ER")], description: "mixed-er: off (défaut) ou on (difficile: intérieurs et grottos mixés)" },
-    Setting { name: "keysanity", display: "keysanity", default: "off", default_display: "own dungeon small keys", other: &[("on", true, "small keys anywhere"), ("keyrings-anywhere", true, "keyrings anywhere"), ("keyrings-regional", true, "keyrings regional")], description: "keysanity: off (défaut), on (difficile), keyrings-anywhere (difficile) ou keyrings-regional (difficile)" },
-    Setting { name: "trials", display: "trials", default: "0", default_display: "0 trials", other: &[("random", true, "random trials")], description: "trials: 0 (défaut) ou random (difficile)" },
-    Setting { name: "itempool", display: "item pool", default: "balanced", default_display: "balanced item pool", other: &[("minimal", true, "minimal item pool"), ("scarce", true, "scarce item pool")], description: "itempool: balanced (défaut), minimal (difficile) ou scarce (difficile)" },
-    Setting { name: "pots", display: "pot shuffle", default: "off", default_display: "no pot shuffle", other: &[("all", true, "pot shuffle")], description: "pots: off (défaut) ou all (difficile)" },
-    Setting { name: "crates", display: "crate shuffle", default: "off", default_display: "no crate shuffle", other: &[("all", true, "crate shuffle")], description: "crates: off (défaut) ou all (difficile)" },
-    Setting { name: "reachable", display: "reachable locations", default: "all", default_display: "all locations reachable", other: &[("required", true, "required only")], description: "reachable: all (défaut) ou required (difficile)" },
+    Setting { name: "camc", display: "CAMC", default: "on", default_display: "CAMC", other: &[("off", false, "no CAMC")], description: "camc: on (default) or off" },
+    Setting { name: "start-weirdegg", display: "start & weird egg", default: "random-skip", default_display: "random start & Skip Child Zelda", other: &[("vanilla-shuffle", false, "vanilla start & shuffled weird egg")], description: "start-weirdegg: random-skip (default: random start & Skip Child Zelda) or vanilla-shuffle (vanilla start & shuffled weird egg)" },
+    Setting { name: "keysy", display: "keysy", default: "off", default_display: "dungeon small keys not removed", other: &[("on", false, "small keysy")], description: "keysy: off (default) or on" },
+    Setting { name: "deku", display: "open Deku", default: "closed", default_display: "closed Deku", other: &[("open", false, "open Deku")], description: "deku: closed (default) or open" },
+    Setting { name: "card", display: "Gerudo card", default: "vanilla", default_display: "vanilla Gerudo card", other: &[("shuffle", false, "shuffled Gerudo card")], description: "card: vanilla (default) or shuffle" },
+    Setting { name: "ocarina", display: "ocarina", default: "startwith", default_display: "start with ocarina", other: &[("shuffle", false, "shuffled ocarinas & free scarecrow")], description: "ocarina: startwith (default) or shuffle (shuffled ocarinas & free scarecrow)" },
+    Setting { name: "chubags", display: "bombchu drops", default: "off", default_display: "no bombchu bag", other: &[("on", false, "bombchu bag")], description: "chubags: off (default) or on" },
+    Setting { name: "dungeon-er", display: "dungeon ER", default: "off", default_display: "no dungeon ER", other: &[("on", false, "dungeon ER")], description: "dungeon-er: off (default), on, or mixed" },
+    Setting { name: "songs", display: "songs", default: "songs", default_display: "songs on songs", other: &[("anywhere", false, "songsanity anywhere"), ("dungeon", false, "songsanity dungeon rewards")], description: "songs: songs (default), anywhere, or dungeon" },
+    Setting { name: "cows", display: "cows", default: "off", default_display: "no cowsanity", other: &[("on", false, "cowsanity")], description: "cows: off (default) or on" },
+    Setting { name: "shops", display: "shops", default: "off", default_display: "no shopsanity", other: &[("4", false, "shopsanity 4 & wallet full")], description: "shops: off (default) or 4 (shopsanity 4 & wallet full)" },
+    Setting { name: "scrubs", display: "scrubs", default: "off", default_display: "no scrubsanity", other: &[("affordable", false, "scrubsanity affordable")], description: "scrubs: off (default) or affordable" },
+    Setting { name: "skulls", display: "tokens", default: "off", default_display: "no tokensanity", other: &[("dungeons", false, "tokensanity dungeon"), ("overworld", true, "tokensanity overworld"), ("all", true, "tokensanity all")], description: "skulls: off (default), dungeons, overworld (hardcore), or all (hardcore)" },
+    Setting { name: "bosskeys", display: "boss keys", default: "dungeon", default_display: "own dungeon boss keys", other: &[("anywhere", false, "boss keys anywhere")], description: "bosskeys: dungeon (default) or anywhere" },
+    Setting { name: "warps", display: "warps/owls", default: "off", default_display: "vanilla warps", other: &[("on", false, "shuffled warps")], description: "warps: off (default) or on" },
+    Setting { name: "dot", display: "Door of Time", default: "open", default_display: "open Door of Time", other: &[("closed", false, "closed Door of Time")], description: "dot: open (default) or closed" },
+    Setting { name: "fountain", display: "fountain", default: "closed", default_display: "closed fountain", other: &[("open", false, "open fountain")], description: "fountain: closed (default) or open" },
+    Setting { name: "1major", display: "1 major item per dungeon", default: "off", default_display: "no major items per dungeon restriction", other: &[("on", false, "1 major item per dungeon")], description: "1major: off (default) or on" },
+    Setting { name: "souls", display: "enemy souls", default: "off", default_display: "no enemy souls", other: &[("bosses", false, "boss souls"), ("all-anywhere", true, "all enemy souls (anywhere)"), ("all-regional", true, "all enemy souls (regional)")], description: "souls: off (default), bosses, all-anywhere (hardcore), or all-regional (hardcore)" },
+    Setting { name: "th", display: "Triforce Hunt", default: "off", default_display: "no Triforce Hunt", other: &[("on", false, "Triforce Hunt (between 50 and 100)")], description: "th (Triforce Hunt): off (default) or on (entre 50 et 100)" },
+    Setting { name: "boss-er", display: "boss ER", default: "off", default_display: "no boss ER", other: &[("on", false, "boss ER")], description: "boss-er: off (default) or on" },
+    Setting { name: "frogs", display: "frog song shuffle", default: "off", default_display: "no frog song shuffle", other: &[("on", false, "frog song shuffle")], description: "frogs: off (default) or on" },
+    Setting { name: "bridge", display: "rainbow bridge", default: "6meds", default_display: "6 medallions bridge", other: &[("4meds-meds", false, "4 medallions bridge (GBK 6 meds)"), ("4meds-dungeons", false, "4 medallions bridge (GBK 6 dungeons)"), ("5meds-meds", false, "5 medallions bridge (GBK 6 meds)"), ("5meds-dungeons", false, "5 medallions bridge (GBK 6 dungeons)"), ("1stones", false, "1 stone bridge"), ("2stones", false, "2 stones bridge"), ("3stones", false, "3 stones bridge"), ("vanilla", false, "vanilla bridge"), ("5dungeons", false, "5 dungeons bridge"), ("6dungeons", false, "6 dungeons bridge"), ("7dungeons", false, "7 dungeons bridge"), ("8dungeons", false, "8 dungeons bridge"), ("9dungeons", false, "9 dungeons bridge"), ("1precompleted", false, "1 pre-completed dungeon"), ("2precompleted", false, "2 pre-completed dungeons"), ("3precompleted", false, "3 pre-completed dungeons")], description: "bridge: <4–6>meds (GBK 6 meds, default: 6), <1–3>stones (3 stones, GBK 6 rewards), vanilla (GBK 6 meds), <5–9>dungeons, <1-3>precompleted (9 rewards, map/compass gives info)" },
+    Setting { name: "mixed-er", display: "mixed ER", default: "off", default_display: "no mixed ER", other: &[("on", true, "mixed ER")], description: "mixed-er: off (default) or on (hardcore: intérieurs et grottos mixés)" },
+    Setting { name: "keysanity", display: "keysanity", default: "off", default_display: "own dungeon small keys", other: &[("on", true, "small keys anywhere"), ("keyrings-anywhere", true, "keyrings anywhere"), ("keyrings-regional", true, "keyrings regional")], description: "keysanity: off (default), on (hardcore), keyrings-anywhere (hardcore), or keyrings-regional (hardcore)" },
+    Setting { name: "trials", display: "trials", default: "0", default_display: "0 trials", other: &[("random", true, "random trials")], description: "trials: 0 (default) or random (hardcore)" },
+    Setting { name: "itempool", display: "item pool", default: "balanced", default_display: "balanced item pool", other: &[("minimal", true, "minimal item pool"), ("scarce", true, "scarce item pool")], description: "itempool: balanced (default), minimal (hardcore), or scarce (hardcore)" },
+    Setting { name: "pots", display: "pot shuffle", default: "off", default_display: "no pot shuffle", other: &[("all", true, "pot shuffle")], description: "pots: off (default) or all (hardcore)" },
+    Setting { name: "crates", display: "crate shuffle", default: "off", default_display: "no crate shuffle", other: &[("all", true, "crate shuffle")], description: "crates: off (default) or all (hardcore)" },
+    Setting { name: "reachable", display: "reachable locations", default: "all", default_display: "all locations reachable", other: &[("required", true, "required only")], description: "reachable: all (default) or required (hardcore)" },
 ];
 
 pub(crate) fn display_draft_picks(language: Language, all_settings: &[Setting], picks: &draft::Picks) -> String {
     let mut picks_display = Vec::default();
     if picks.get("mq_ok").map(|mq_ok| &**mq_ok).unwrap_or("no") == "ok" || picks.get("mq_dungeons_count").map(|mq_dungeons_count| &**mq_dungeons_count).unwrap_or("0") != "0" {
         let mq_dungeons_count = picks.get("mq_dungeons_count").map(|mq_dungeons_count| &**mq_dungeons_count).unwrap_or("0");
-        picks_display.push(if mq_dungeons_count == "1" {
-            Cow::Borrowed("1 donjon MQ")
+        picks_display.push(if let French = language {
+            if mq_dungeons_count == "1" {
+                Cow::Borrowed("1 donjon MQ")
+            } else {
+                Cow::Owned(format!("{mq_dungeons_count} donjons MQ"))
+            }
         } else {
-            Cow::Owned(format!("{mq_dungeons_count} donjons MQ"))
+            if mq_dungeons_count == "1" {
+                Cow::Borrowed("1 MQ dungeon")
+            } else {
+                Cow::Owned(format!("{mq_dungeons_count} MQ dungeons"))
+            }
         });
     }
     picks_display.extend(all_settings.iter()
@@ -188,13 +196,25 @@ pub(crate) fn display_draft_picks(language: Language, all_settings: &[Setting], 
             ("mixed-er", "on") => if picks.get("dungeon-er").map(|dungeon_er| &**dungeon_er).unwrap_or("off") == "off" {
                 Cow::Borrowed(display)
             } else if picks.get("mixed-dungeons").map(|mixed_dungeons| &**mixed_dungeons).unwrap_or("separate") == "mixed" {
-                Cow::Borrowed("mixed ER (donjons inclus)")
+                if let French = language {
+                    Cow::Borrowed("mixed ER (donjons inclus)")
+                } else {
+                    Cow::Borrowed("mixed ER (including dungeons)")
+                }
             } else {
-                Cow::Borrowed("mixed ER (donjons non inclus)")
+                if let French = language {
+                    Cow::Borrowed("mixed ER (donjons non inclus)")
+                } else {
+                    Cow::Borrowed("mixed ER (not including dungeons)")
+                }
             },
             (_, _) => Cow::Borrowed(display),
         })));
-    language.join_str_opt(picks_display).unwrap_or_else(|| format!("settings de base"))
+    language.join_str_opt(picks_display).unwrap_or_else(|| if let French = language {
+        format!("settings de base")
+    } else {
+        format!("base settings")
+    })
 }
 
 pub(crate) fn resolve_s3_draft_settings(picks: &draft::Picks) -> seed::Settings {
@@ -812,6 +832,7 @@ pub(crate) fn resolve_s5_draft_settings(picks: &draft::Picks) -> seed::Settings 
     let triforce_count = rng().random_range(50..=100);
     collect![
         format!("user_message") => json!("Tournoi Francophone Saison 5"),
+        format!("password_lock") => json!(true),
         format!("reachable_locations") => match reachable {
             "all" => json!("all"),
             "required" => json!("beatable"),

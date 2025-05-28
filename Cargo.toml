@@ -96,7 +96,7 @@ serde_urlencoded = "0.7.1"
 [target.'cfg(unix)'.dependencies]
 async-proto = { version = "0.25", features = ["chrono", "serde_json", "serenity", "uuid"] }
 openssl = { version = "0.10", features = ["vendored"] }
-xdg = "2"
+xdg = "3"
 
 [target.'cfg(windows)'.dependencies]
 directories = "6"

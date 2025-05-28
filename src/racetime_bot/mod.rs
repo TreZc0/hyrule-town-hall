@@ -1890,9 +1890,9 @@ async fn roll_seed_locally(delay_until: Option<DateTime<Utc>>, version: Versione
         }
     };
     #[cfg(unix)] {
-        settings.insert(format!("rom"), json!(BaseDirectories::new()?.find_data_file(Path::new("midos-house").join("oot-ntscu-1.0.z64")).ok_or(RollError::RomPath)?));
+        settings.insert(format!("rom"), json!(BaseDirectories::new().find_data_file(Path::new("midos-house").join("oot-ntscu-1.0.z64")).ok_or(RollError::RomPath)?));
         if settings.get("language").and_then(|language| language.as_str()).is_some_and(|language| matches!(language, "french" | "german")) {
-            settings.insert(format!("pal_rom"), json!(BaseDirectories::new()?.find_data_file(Path::new("midos-house").join("oot-pal-1.0.z64")).ok_or(RollError::RomPath)?));
+            settings.insert(format!("pal_rom"), json!(BaseDirectories::new().find_data_file(Path::new("midos-house").join("oot-pal-1.0.z64")).ok_or(RollError::RomPath)?));
         }
     }
     settings.insert(format!("create_patch_file"), json!(true));
@@ -2294,9 +2294,9 @@ impl SeedRollUpdate {
                 lock!(@write state = state; *state = RaceState::Init);
             }
             Self::Error(e) => {
-                eprintln!("seed roll error: {e} ({e:?})");
+                eprintln!("seed roll error in https://{}{}: {e} ({e:?})", racetime_host(), ctx.data().await.url);
                 if let Environment::Production = Environment::default() {
-                    wheel::night_report(&format!("{}/error", night_path()), Some(&format!("seed roll error: {e} ({e:?})"))).await.to_racetime()?;
+                    wheel::night_report(&format!("{}/error", night_path()), Some(&format!("seed roll error in https://{}{}: {e} ({e:?})", racetime_host(), ctx.data().await.url))).await.to_racetime()?;
                 }
                 ctx.say("Sorry @entrants, something went wrong while rolling the seed. Please report this error to TreZc0_ and if necessary roll the seed manually.").await?;
             }
@@ -2530,7 +2530,7 @@ impl Handler {
                         return true
                     }
                 }
-                if let RaceStatusValue::Finished | RaceStatusValue::Cancelled = race_data.status.value { return !existing_state.cleaned_up }
+                if let RaceStatusValue::Finished | RaceStatusValue::Cancelled = race_data.status.value { return !existing_state.cleaned_up && race_data.ended_at.is_none_or(|ended_at| Utc::now() - ended_at < TimeDelta::hours(1)) }
             } else {
                 if let RaceStatusValue::Finished | RaceStatusValue::Cancelled = race_data.status.value { return false }
             }
@@ -5283,7 +5283,13 @@ async fn handle_rooms(global_state: Arc<GlobalState>, racetime_config: &ConfigRa
     let mut last_crash = Instant::now();
     let mut wait_time = Duration::from_secs(1);
     loop {
-        match racetime::Bot::new_with_host(global_state.host_info.clone(), CATEGORY, &racetime_config.client_id, &racetime_config.client_secret, global_state.clone()).await {
+        match racetime::BotBuilder::new(CATEGORY, &racetime_config.client_id, &racetime_config.client_secret)
+            .state(global_state.clone())
+            .host(global_state.host_info.clone())
+            .user_agent(concat!("MidosHouse/", env!("CARGO_PKG_VERSION"), " (https://github.com/midoshouse/midos.house)"))
+            .scan_races_every(Duration::from_secs(5))
+            .build().await
+        {
             Ok(bot) => {
                 lock!(@write extra_room_tx = global_state.extra_room_tx; *extra_room_tx = bot.extra_room_sender());
                 let () = bot.run_until::<Handler, _, _>(shutdown).await?;

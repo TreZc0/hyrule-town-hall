@@ -115,7 +115,6 @@ pub(crate) enum VersionedPreset {
 pub(crate) enum ScriptPathError {
     #[error(transparent)] Git(#[from] git2::Error),
     #[error(transparent)] Wheel(#[from] wheel::Error),
-    #[cfg(unix)] #[error(transparent)] Xdg(#[from] xdg::BaseDirectoriesError),
     #[cfg(unix)]
     #[error("RSL script not found")]
     NotFound,
@@ -168,9 +167,9 @@ impl VersionedPreset {
             #[cfg(unix)] {
                 match self {
                     Self::Fenhl { version: None, .. } => Cow::Borrowed(Path::new("/opt/git/github.com/fenhl/plando-random-settings/main")),
-                    Self::Fenhl { version: Some((base, supplementary)), .. } => Cow::Owned(BaseDirectories::new()?.find_data_file(Path::new("midos-house").join(format!("rsl-dev-fenhl-{base}-{supplementary}"))).ok_or(ScriptPathError::NotFound)?),
-                    Self::Xopar { version: None, .. } | Self::XoparCustom { version: None, .. } => Cow::Owned(BaseDirectories::new()?.find_data_file("fenhl/rslbot/plando-random-settings").ok_or(ScriptPathError::NotFound)?),
-                    Self::Xopar { version: Some(version), .. } | Self::XoparCustom { version: Some(version), .. } => Cow::Owned(BaseDirectories::new()?.find_data_file(Path::new("midos-house").join(format!("rsl-{version}"))).ok_or(ScriptPathError::NotFound)?),
+                    Self::Fenhl { version: Some((base, supplementary)), .. } => Cow::Owned(BaseDirectories::new().find_data_file(Path::new("midos-house").join(format!("rsl-dev-fenhl-{base}-{supplementary}"))).ok_or(ScriptPathError::NotFound)?),
+                    Self::Xopar { version: None, .. } | Self::XoparCustom { version: None, .. } => Cow::Owned(BaseDirectories::new().find_data_file("fenhl/rslbot/plando-random-settings").ok_or(ScriptPathError::NotFound)?),
+                    Self::Xopar { version: Some(version), .. } | Self::XoparCustom { version: Some(version), .. } => Cow::Owned(BaseDirectories::new().find_data_file(Path::new("midos-house").join(format!("rsl-{version}"))).ok_or(ScriptPathError::NotFound)?),
                 }
             }
             #[cfg(windows)] {
@@ -212,7 +211,7 @@ impl VersionedPreset {
                     cmd.arg(&*path).check("git clone").await?;
                     let rsl_data_dir = path.join("data");
                     fs::create_dir_all(&rsl_data_dir).await?;
-                    fs::copy(BaseDirectories::new()?.find_data_file(Path::new("midos-house").join("oot-ntscu-1.0.z64")).ok_or(ScriptPathError::RomPath)?, rsl_data_dir.join("oot-ntscu-1.0.z64")).await?; //TODO decompress?
+                    fs::copy(BaseDirectories::new().find_data_file(Path::new("midos-house").join("oot-ntscu-1.0.z64")).ok_or(ScriptPathError::RomPath)?, rsl_data_dir.join("oot-ntscu-1.0.z64")).await?; //TODO decompress?
                 }
                 #[cfg(not(unix))] { unimplemented!("clone RSL script repo on Windows") } //TODO
             }

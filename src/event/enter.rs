@@ -1004,6 +1004,7 @@ pub(crate) enum Error {
     #[error(transparent)] Reqwest(#[from] reqwest::Error),
     #[error(transparent)] Serenity(#[from] serenity::Error),
     #[error(transparent)] Sql(#[from] sqlx::Error),
+    #[error(transparent)] StartGG(#[from] startgg::Error),
     #[error(transparent)] Wheel(#[from] wheel::Error),
     #[error("event has a discordGuild entry requirement but no Discord guild")]
     DiscordGuild,
@@ -1347,7 +1348,7 @@ pub(crate) async fn get(pool: &State<PgPool>, http_client: &State<reqwest::Clien
 }
 
 #[rocket::post("/event/<series>/<event>/enter", data = "<form>")]
-pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, EnterForm>>) -> Result<RedirectOrContent, StatusOrError<Error>> {
+pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, EnterForm>>) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
@@ -1443,23 +1444,30 @@ pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Clie
                             let discord_ctx = discord_ctx.read().await;
                             if !optional || value.startgg_radio == Some(BoolRadio::Yes) {
                                 //TODO enter event on start.gg with user ID
-                                // probably generateRegistrationToken (requires OAuth?)
-                                // and then use the token in registerForTournament
+                                // this is currently not possible to automate, see conversation ending at <https://discord.com/channels/339548254704369677/541015301618401301/1346621619787006083> for details
                                 // temporary workaround until this is automated:
-                                let msg = MessageBuilder::default()
-                                    .mention_user(&me)
-                                    .push(" signed up for ")
-                                    .push_safe(&data.display_name)
-                                    .push(" with start.gg user ID ")
-                                    .push_mono_safe(&me.startgg_id.as_ref().expect("checked by requirement").0)
-                                    .build();
-                                if let Some(organizer_channel) = data.discord_organizer_channel {
-                                    organizer_channel.say(&*discord_ctx, msg).await?;
+                                let startgg_id = me.startgg_id.as_ref().expect("checked by requirement");
+                                let mut msg = MessageBuilder::default();
+                                msg.mention_user(&me);
+                                msg.push(" signed up for ");
+                                msg.push_safe(&data.display_name);
+                                let startgg_token = if Environment::default().is_dev() { &config.startgg_dev } else { &config.startgg_production };
+                                let response = startgg::query_cached::<startgg::UserSlugQuery>(http_client, startgg_token, startgg::user_slug_query::Variables { id: startgg_id.clone() }).await?;
+                                if let startgg::user_slug_query::ResponseData { user: Some(startgg::user_slug_query::UserSlugQueryUser { discriminator: Some(slug) }) } = response {
+                                    msg.push(" with start.gg user slug ");
+                                    msg.push_mono_safe(slug);
                                 } else {
-                                    ADMIN_USER.create_dm_channel(&*discord_ctx).await?.say(&*discord_ctx, msg).await?;
+                                    msg.push(" with start.gg user ID ");
+                                    msg.push_mono_safe(&startgg_id.0);
+                                }
+                                if let Some(organizer_channel) = data.discord_organizer_channel {
+                                    organizer_channel.say(&*discord_ctx, msg.build()).await?;
+                                } else {
+                                    ADMIN_USER.create_dm_channel(&*discord_ctx).await?.say(&*discord_ctx, msg.build()).await?;
                                 }
                             } else {
-                                //TODO enter event on start.gg anonymously (probably registerForTournament)
+                                //TODO enter event on start.gg anonymously
+                                // this is currently not possible to automate, see conversation ending at <https://discord.com/channels/339548254704369677/541015301618401301/1346621619787006083> for details
                                 // temporary workaround until this is automated:
                                 let msg = MessageBuilder::default()
                                     .mention_user(&me)

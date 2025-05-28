@@ -341,8 +341,7 @@ impl<'a> Data<'a> {
             (Series::TriforceBlitz, "4coop") => from_file!("../../assets/event/tfb/chests-4coop-8.2.64-blitz.87.json"),
             (Series::WeTryToBeBetter, "1") => from_file!("../../assets/event/scrubs/chests-5-7.1.198.json"),
             (Series::WeTryToBeBetter, "2") => from_file!("../../assets/event/wttbb/chests-2-8.2.json"),
-            (series, event) => {
-                wheel::night_report(&format!("{}/chestsError", night_path()), Some(&format!("no chest appearances specified for {}/{event}, using random chests", series.slug()))).await?;
+            (_series, _event) => {
                 ChestAppearances::random()
             }
         })

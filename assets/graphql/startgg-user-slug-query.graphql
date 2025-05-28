@@ -1,0 +1,5 @@
+query UserSlugQuery($id: ID!) {
+  user(id: $id) {
+    discriminator
+  }
+}
