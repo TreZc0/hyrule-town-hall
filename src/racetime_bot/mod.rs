@@ -2763,12 +2763,12 @@ impl Handler {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(10);
         let teams = cal_event.race.teams();
-        let team_rows = sqlx::query!("SELECT all_dungeons_ok, flute_ok, hovering_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _).fetch_all(&ctx.global_state.db_pool).expect("Database read failed").await;
+        let team_rows = sqlx::query!("SELECT all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _).fetch_all(&ctx.global_state.db_pool).expect("Database read failed").await;
 
         let crosskeys_options = CrosskeysRaceOptions {
             all_dungeons_ok: team_rows.iter().all(|row| row.all_dungeons_ok),
             flute_ok: team_rows.iter().all(|row| row.flute_ok),
-            hovering_ok: team_rows.iter().all(|row| row.hovering_ok),
+            hovering_ok: team_rows.iter().all(|row| row.hover_ok),
             inverted_ok: team_rows.iter().all(|row| row.inverted_ok),
             keydrop_ok: team_rows.iter().all(|row| row.keydrop_ok),
             mirror_scroll_ok: team_rows.iter().all(|row| row.mirror_scroll_ok),
