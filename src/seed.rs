@@ -1,6 +1,7 @@
 use {
     futures::stream::Stream,
     hyper::header::{
+        ACCESS_CONTROL_ALLOW_ORIGIN,
         CONTENT_DISPOSITION,
         LINK,
     },
@@ -357,6 +358,7 @@ pub(crate) enum GetResponse {
     Patch {
         inner: NamedFile,
         content_disposition: Header<'static>,
+        access_control_allow_origin: Header<'static>,
     },
     Spoiler {
         inner: RawJson<Vec<u8>>,
@@ -387,6 +389,10 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>,
     Ok(match suffix {
         Some(suffix @ ("bps" | "zpf" | "zpfz")) => {
             let path = Path::new(DIR).join(format!("{file_stem}.{suffix}"));
+            let access_control = match suffix {
+                "bps" => "https://alttprpatch.synack.live/",
+                _ => "null"
+            };
             GetResponse::Patch {
                 inner: match NamedFile::open(&path).await {
                     Ok(file) => file,
@@ -394,6 +400,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>,
                     Err(e) => return Err(e).at(path).map_err(|e| StatusOrError::Err(GetError::Wheel(e))),
                 },
                 content_disposition: Header::new(CONTENT_DISPOSITION.as_str(), "attachment"),
+                access_control_allow_origin: Header::new(ACCESS_CONTROL_ALLOW_ORIGIN.as_str(), access_control)
             }
         }
         Some("json") => if let Some(file_stem) = file_stem.strip_suffix("_Progression") {

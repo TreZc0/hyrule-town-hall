@@ -1430,22 +1430,10 @@ impl GlobalState {
         update_rx
     }
 
-    pub(crate) fn roll_crosskeys2025_seed(self: Arc<Self>, ctx: RaceContext<GlobalState>, _delay_until: Option<DateTime<Utc>>, cal_event: cal::Event) -> mpsc::Receiver<SeedRollUpdate> {
+    pub(crate) fn roll_crosskeys2025_seed(self: Arc<Self>, _delay_until: Option<DateTime<Utc>>, cal_event: cal::Event, crosskeys_options: CrosskeysRaceOptions) -> mpsc::Receiver<SeedRollUpdate> {
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
         tokio::spawn(async move {
-            let teams = cal_event.race.teams();
-            let team_rows = sqlx::query!("SELECT all_dungeons_ok, flute_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, pb_ok, zw_ok FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _).fetch_all(&ctx.global_state.db_pool).await?;
-
-            let crosskeys_options = CrosskeysRaceOptions {
-                all_dungeons_ok: team_rows.iter().all(|row| row.all_dungeons_ok),
-                flute_ok: team_rows.iter().all(|row| row.flute_ok),
-                inverted_ok: team_rows.iter().all(|row| row.inverted_ok),
-                keydrop_ok: team_rows.iter().all(|row| row.keydrop_ok),
-                mirror_scroll_ok: team_rows.iter().all(|row| row.mirror_scroll_ok),
-                pb_ok: team_rows.iter().all(|row| row.pb_ok),
-                zw_ok: team_rows.iter().all(|row| row.zw_ok),
-            };
             let crosskeys_meta = CrosskeysMeta {
                 bps: true,
                 name: cal_event.race.id.to_string(),
@@ -1509,7 +1497,7 @@ impl GlobalState {
             let yaml_file = tempfile::Builder::new().prefix("alttpr_").suffix(".yml").tempfile().at_unknown()?;
             let yaml_path = yaml_file.path();
             tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(serde_yml::to_string(&crosskeys_yaml)?.as_bytes()).await.at(&yaml_file)?;
-            Command::new(PYTHON).arg("../alttpr/DungeonRandomizer.py").arg("--customizer").arg(yaml_path).arg("--outputpath").arg("/var/www/midos.house/seed").check("DungeonRandomizer.py").await?;
+            Command::new(PYTHON).current_dir("../alttpr").arg("DungeonRandomizer.py").arg("--customizer").arg(yaml_path).arg("--outputpath").arg("/var/www/midos.house/seed").check("DungeonRandomizer.py").await?;
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
                     file_hash: None,
@@ -2391,9 +2379,11 @@ struct Breaks {
 struct CrosskeysRaceOptions {
     all_dungeons_ok: bool,
     flute_ok: bool,
+    hovering_ok: bool,
     inverted_ok: bool,
     keydrop_ok: bool,
     mirror_scroll_ok: bool,
+    no_delay_ok: bool,
     pb_ok: bool,
     zw_ok: bool,
 }
@@ -2769,10 +2759,28 @@ impl Handler {
         self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_seed(preroll, true, delay_until, version, settings, unlock_spoiler_log), language, article, description).await;
     }
 
-    async fn roll_crosskeys2025_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str, description: String) {
+    async fn roll_crosskeys2025_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(10);
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2025_seed(ctx.clone(), Some(delay_until), cal_event), language, article, description).await;
+        let teams = cal_event.race.teams();
+        let team_rows = sqlx::query!("SELECT all_dungeons_ok, flute_ok, hovering_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _).fetch_all(&ctx.global_state.db_pool).expect("Database read failed").await;
+
+        let crosskeys_options = CrosskeysRaceOptions {
+            all_dungeons_ok: team_rows.iter().all(|row| row.all_dungeons_ok),
+            flute_ok: team_rows.iter().all(|row| row.flute_ok),
+            hovering_ok: team_rows.iter().all(|row| row.hovering_ok),
+            inverted_ok: team_rows.iter().all(|row| row.inverted_ok),
+            keydrop_ok: team_rows.iter().all(|row| row.keydrop_ok),
+            mirror_scroll_ok: team_rows.iter().all(|row| row.mirror_scroll_ok),
+            no_delay_ok: team_rows.iter().all(|row| row.no_delay_ok),
+            pb_ok: team_rows.iter().all(|row| row.pb_ok),
+            zw_ok: team_rows.iter().all(|row| row.zw_ok),
+        };
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2025_seed(Some(delay_until), cal_event, crosskeys_options), language, article, self.build_description_from_crosskeys_options(crosskeys_options)).await;
+    }
+
+    fn build_description_from_crosskeys_options(&self, _crosskeys_options: CrosskeysRaceOptions) -> String {
+        return format!("Crosskeys Tournament 2025 Seed");
     }
 
     async fn roll_rsl_seed(&self, ctx: &RaceContext<GlobalState>, preset: rsl::VersionedPreset, world_count: u8, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
@@ -3914,7 +3922,7 @@ impl RaceHandler<GlobalState> for Handler {
                             | Goal::Crosskeys2025
                                 // TODO: Don't propogate this error, handle the failed seed roll either here or below
                                 // TODO: Don't pass the description in here: generate it from the settings
-                                => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a", format!("Crosskeys Tournament 2025 Seed")).await,
+                                => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await,
                             Goal::NineDaysOfSaws => unreachable!("9dos series has concluded"),
                             Goal::PicRs2 => this.roll_rsl_seed(ctx, rsl::VersionedPreset::Fenhl {
                                 version: Some((Version::new(2, 3, 8), 10)),
