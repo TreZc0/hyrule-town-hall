@@ -2380,11 +2380,11 @@ struct Breaks {
 pub(crate) struct CrosskeysRaceOptions {
     all_dungeons_ok: bool,
     flute_ok: bool,
-    hovering_ok: bool,
+    _hovering_ok: bool,
     inverted_ok: bool,
     keydrop_ok: bool,
     mirror_scroll_ok: bool,
-    no_delay_ok: bool,
+    _no_delay_ok: bool,
     pb_ok: bool,
     zw_ok: bool,
 }
