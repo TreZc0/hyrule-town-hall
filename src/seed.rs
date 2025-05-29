@@ -390,7 +390,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>,
         Some(suffix @ ("bps" | "zpf" | "zpfz")) => {
             let path = Path::new(DIR).join(format!("{file_stem}.{suffix}"));
             let access_control = match suffix {
-                "bps" => "https://alttprpatch.synack.live/",
+                "bps" => "*",
                 _ => "null"
             };
             GetResponse::Patch {
