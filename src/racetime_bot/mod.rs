@@ -2376,7 +2376,8 @@ struct Breaks {
     interval: Duration,
 }
 
-struct CrosskeysRaceOptions {
+#[derive(Clone, Copy)]
+pub(crate) struct CrosskeysRaceOptions {
     all_dungeons_ok: bool,
     flute_ok: bool,
     hovering_ok: bool,
