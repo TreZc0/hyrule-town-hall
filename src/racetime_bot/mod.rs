@@ -2769,11 +2769,11 @@ impl Handler {
         let crosskeys_options = CrosskeysRaceOptions {
             all_dungeons_ok: team_rows.iter().all(|row| row.all_dungeons_ok),
             flute_ok: team_rows.iter().all(|row| row.flute_ok),
-            hovering_ok: team_rows.iter().all(|row| row.hover_ok),
+            _hovering_ok: team_rows.iter().all(|row| row.hover_ok),
             inverted_ok: team_rows.iter().all(|row| row.inverted_ok),
             keydrop_ok: team_rows.iter().all(|row| row.keydrop_ok),
             mirror_scroll_ok: team_rows.iter().all(|row| row.mirror_scroll_ok),
-            no_delay_ok: team_rows.iter().all(|row| row.no_delay_ok),
+            _no_delay_ok: team_rows.iter().all(|row| row.no_delay_ok),
             pb_ok: team_rows.iter().all(|row| row.pb_ok),
             zw_ok: team_rows.iter().all(|row| row.zw_ok),
         };
