@@ -1481,7 +1481,7 @@ impl GlobalState {
                 skullwoods: skullwoods,
             };
 
-            if crosskeys_options.zw_ok {
+            if !crosskeys_options.zw_ok {
                 let crosskeys_placements = CrosskeysPlacements {
                     pinball_room: "Small Key (Skull Woods)",
                 };
