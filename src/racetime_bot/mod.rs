@@ -1431,13 +1431,14 @@ impl GlobalState {
         update_rx
     }
 
-    pub(crate) fn roll_crosskeys2025_seed(self: Arc<Self>, _delay_until: Option<DateTime<Utc>>, cal_event: cal::Event, crosskeys_options: CrosskeysRaceOptions) -> mpsc::Receiver<SeedRollUpdate> {
+    pub(crate) fn roll_crosskeys2025_seed(self: Arc<Self>, _delay_until: Option<DateTime<Utc>>, crosskeys_options: CrosskeysRaceOptions) -> mpsc::Receiver<SeedRollUpdate> {
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
         tokio::spawn(async move {
+            let uuid = Uuid::new_v4();
             let crosskeys_meta = CrosskeysMeta {
                 bps: true,
-                name: cal_event.race.id.to_string(),
+                name: uuid.to_string(),
                 race: true,
                 skip_playthrough: true,
                 spoiler: "none",
@@ -1503,7 +1504,7 @@ impl GlobalState {
                 seed: seed::Data {
                     file_hash: None,
                     files: Some(seed::Files::AlttprDoorRando {
-                        uuid: Uuid::new_v4()
+                        uuid: uuid
                     }),
                     progression_spoiler: false,
                     password: None,
@@ -2830,7 +2831,7 @@ impl Handler {
         let delay_until = official_start - TimeDelta::minutes(10);
 
         let crosskeys_options = CrosskeysRaceOptions::for_race(ctx.global_state.db_pool.clone(), cal_event.race.clone()).await;
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2025_seed(Some(delay_until), cal_event, crosskeys_options), language, article, crosskeys_options.as_seed_options_str()).await;
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2025_seed(Some(delay_until), crosskeys_options), language, article, crosskeys_options.as_seed_options_str()).await;
         ctx.say(format!("@entrants Remember: this race will be played with {}!",
                                     crosskeys_options.as_race_options_str()
                                 )).await.expect("failed to send race options");
