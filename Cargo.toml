@@ -87,7 +87,7 @@ tokio = { version = "1", features = ["fs", "net", "parking_lot", "process", "syn
 tokio-util = { version = "0.7", features = ["io"] }
 typemap_rev = "0.3"
 url = { version = "2", features = ["serde"] }
-uuid = "1"
+uuid = {version = "1.17.0", features = ["v4"]}
 wheel = { git = "https://github.com/fenhl/wheel", branch = "rocket-forms", features = ["chrono", "racetime", "reqwest", "rocket", "serde_json"] }
 yup-oauth2 = "12"
 mhstatus = { git = "https://github.com/midoshouse/status.midos.house", branch = "main" }

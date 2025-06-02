@@ -1,6 +1,7 @@
 use {
     futures::stream::Stream,
     hyper::header::{
+        ACCESS_CONTROL_ALLOW_ORIGIN,
         CONTENT_DISPOSITION,
         LINK,
     },
@@ -83,7 +84,7 @@ pub(crate) struct Data {
 #[cfg_attr(unix, derive(Protocol))]
 pub(crate) enum Files {
     AlttprDoorRando {
-        race_id: Id<Races>
+        uuid: Uuid,
     },
     MidosHouse {
         file_stem: Cow<'static, str>,
@@ -116,6 +117,7 @@ impl Data {
         web_gen_time: Option<DateTime<Utc>>,
         is_tfb_dev: bool,
         tfb_uuid: Option<Uuid>,
+        xkeys_uuid: Option<Uuid>,
         hash1: Option<HashIcon>,
         hash2: Option<HashIcon>,
         hash3: Option<HashIcon>,
@@ -131,16 +133,17 @@ impl Data {
                 _ => unreachable!("only some hash icons present, should be prevented by SQL constraint"),
             },
             password: password.map(|pw| pw.chars().map(|note| note.try_into().expect("invalid ocarina note in password, should be prevented by SQL constraint")).collect_vec().try_into().expect("invalid password length, should be prevented by SQL constraint")),
-            files: match (file_stem, locked_spoiler_log_path, web_id, web_gen_time, tfb_uuid) {
-                (_, _, _, _, Some(uuid)) => Some(Files::TriforceBlitz { is_dev: is_tfb_dev, uuid }),
-                (Some(file_stem), _, Some(id), Some(gen_time), None) => Some(Files::OotrWeb { id, gen_time, file_stem: Cow::Owned(file_stem) }),
-                (Some(file_stem), locked_spoiler_log_path, Some(id), None, None) => Some(if let Some(first_start) = [start, async_start1, async_start2, async_start3].into_iter().filter_map(identity).min() {
+            files: match (file_stem, locked_spoiler_log_path, web_id, web_gen_time, tfb_uuid, xkeys_uuid) {
+                (_, _, _, _, Some(uuid), None) => Some(Files::TriforceBlitz { is_dev: is_tfb_dev, uuid }),
+                (Some(file_stem), _, Some(id), Some(gen_time), None, None) => Some(Files::OotrWeb { id, gen_time, file_stem: Cow::Owned(file_stem) }),
+                (Some(file_stem), locked_spoiler_log_path, Some(id), None, None, None) => Some(if let Some(first_start) = [start, async_start1, async_start2, async_start3].into_iter().filter_map(identity).min() {
                     Files::OotrWeb { id, gen_time: first_start - TimeDelta::days(1), file_stem: Cow::Owned(file_stem) }
                 } else {
                     Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }
                 }),
-                (Some(file_stem), locked_spoiler_log_path, None, _, None) => Some(Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }),
-                (None, _, _, _, None) => None,
+                (Some(file_stem), locked_spoiler_log_path, None, _, None, None) => Some(Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }),
+                (_, _, _, _, _, Some(uuid)) => Some(Files::AlttprDoorRando { uuid: uuid }),
+                (None, _, _, _, None, None) => None,
             },
             progression_spoiler,
         }
@@ -251,10 +254,10 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
     //TODO show seed password when appropriate
     let extra = seed.extra(now).await?;
     let mut seed_links = match seed.files {
-        Some(Files::AlttprDoorRando { race_id, .. }) => {
+        Some(Files::AlttprDoorRando { uuid }) => {
             let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
             // TODO need to link to patch URL here
-            patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{race_id}.bps"));
+            patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{uuid}.bps"));
             Some(html! {
                 a(href = patcher_url.to_string()) : "View";
             })
@@ -357,6 +360,7 @@ pub(crate) enum GetResponse {
     Patch {
         inner: NamedFile,
         content_disposition: Header<'static>,
+        access_control_allow_origin: Header<'static>,
     },
     Spoiler {
         inner: RawJson<Vec<u8>>,
@@ -387,6 +391,10 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>,
     Ok(match suffix {
         Some(suffix @ ("bps" | "zpf" | "zpfz")) => {
             let path = Path::new(DIR).join(format!("{file_stem}.{suffix}"));
+            let access_control = match suffix {
+                "bps" => "*",
+                _ => "null"
+            };
             GetResponse::Patch {
                 inner: match NamedFile::open(&path).await {
                     Ok(file) => file,
@@ -394,6 +402,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>,
                     Err(e) => return Err(e).at(path).map_err(|e| StatusOrError::Err(GetError::Wheel(e))),
                 },
                 content_disposition: Header::new(CONTENT_DISPOSITION.as_str(), "attachment"),
+                access_control_allow_origin: Header::new(ACCESS_CONTROL_ALLOW_ORIGIN.as_str(), access_control)
             }
         }
         Some("json") => if let Some(file_stem) = file_stem.strip_suffix("_Progression") {

@@ -756,6 +756,7 @@ impl Goal {
                                 None,
                                 false,
                                 None,
+                                None,
                                 row.hash1,
                                 row.hash2,
                                 row.hash3,
@@ -1430,22 +1431,10 @@ impl GlobalState {
         update_rx
     }
 
-    pub(crate) fn roll_crosskeys2025_seed(self: Arc<Self>, ctx: RaceContext<GlobalState>, _delay_until: Option<DateTime<Utc>>, cal_event: cal::Event) -> mpsc::Receiver<SeedRollUpdate> {
+    pub(crate) fn roll_crosskeys2025_seed(self: Arc<Self>, _delay_until: Option<DateTime<Utc>>, cal_event: cal::Event, crosskeys_options: CrosskeysRaceOptions) -> mpsc::Receiver<SeedRollUpdate> {
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
         tokio::spawn(async move {
-            let teams = cal_event.race.teams();
-            let team_rows = sqlx::query!("SELECT all_dungeons_ok, flute_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, pb_ok, zw_ok FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _).fetch_all(&ctx.global_state.db_pool).await?;
-
-            let crosskeys_options = CrosskeysRaceOptions {
-                all_dungeons_ok: team_rows.iter().all(|row| row.all_dungeons_ok),
-                flute_ok: team_rows.iter().all(|row| row.flute_ok),
-                inverted_ok: team_rows.iter().all(|row| row.inverted_ok),
-                keydrop_ok: team_rows.iter().all(|row| row.keydrop_ok),
-                mirror_scroll_ok: team_rows.iter().all(|row| row.mirror_scroll_ok),
-                pb_ok: team_rows.iter().all(|row| row.pb_ok),
-                zw_ok: team_rows.iter().all(|row| row.zw_ok),
-            };
             let crosskeys_meta = CrosskeysMeta {
                 bps: true,
                 name: cal_event.race.id.to_string(),
@@ -1493,7 +1482,7 @@ impl GlobalState {
                 skullwoods: skullwoods,
             };
 
-            if crosskeys_options.zw_ok {
+            if !crosskeys_options.zw_ok {
                 let crosskeys_placements = CrosskeysPlacements {
                     pinball_room: "Small Key (Skull Woods)",
                 };
@@ -1509,12 +1498,12 @@ impl GlobalState {
             let yaml_file = tempfile::Builder::new().prefix("alttpr_").suffix(".yml").tempfile().at_unknown()?;
             let yaml_path = yaml_file.path();
             tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(serde_yml::to_string(&crosskeys_yaml)?.as_bytes()).await.at(&yaml_file)?;
-            Command::new(PYTHON).arg("../alttpr/DungeonRandomizer.py").arg("--customizer").arg(yaml_path).arg("--outputpath").arg("/var/www/midos.house/seed").check("DungeonRandomizer.py").await?;
+            Command::new(PYTHON).current_dir("../alttpr").arg("DungeonRandomizer.py").arg("--customizer").arg(yaml_path).arg("--outputpath").arg("/var/www/midos.house/seed").check("DungeonRandomizer.py").await?;
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
                     file_hash: None,
                     files: Some(seed::Files::AlttprDoorRando {
-                        race_id: cal_event.race.id
+                        uuid: Uuid::new_v4()
                     }),
                     progression_spoiler: false,
                     password: None,
@@ -2109,8 +2098,11 @@ impl SeedRollUpdate {
                                 is_dev, uuid, cal_event.race.id as _,
                             ).execute(db_pool).await.to_racetime()?;
                         }
-                        seed::Files::AlttprDoorRando { .. } => {
-                            // race_id is already the primary key of this table, we can do nothing here
+                        seed::Files::AlttprDoorRando { uuid } => {
+                            sqlx::query!(
+                                "UPDATE races SET xkeys_uuid = $1 WHERE id = $2",
+                                uuid, cal_event.race.id as _,
+                            ).execute(db_pool).await.to_racetime()?;
                         }
                         seed::Files::TfbSotd { .. } => unimplemented!("Triforce Blitz seed of the day not supported for official races"),
                     }
@@ -2143,10 +2135,10 @@ impl SeedRollUpdate {
                     }
                 }
                 let seed_url = match seed.files.as_ref().expect("received seed with no files") {
-                    seed::Files::AlttprDoorRando { race_id } => {
+                    seed::Files::AlttprDoorRando { uuid } => {
                         let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
                         // TODO need to link to patch URL here
-                        patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{race_id}.bps"));
+                        patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{uuid}.bps"));
                         patcher_url.to_string()
                     }  
                     seed::Files::MidosHouse { file_stem, .. } => format!("{}/seed/{file_stem}", base_uri()),
@@ -2367,10 +2359,10 @@ async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl
         password = extra.password.filter(|_| show_password).map(|password| format_password(password).to_string()).unwrap_or_default(),
         newline = if extra.file_hash.is_some() || extra.password.is_some() && show_password { "\n" } else { "" },
         seed_url = match seed.files.as_ref().expect("received seed with no files") {
-                seed::Files::AlttprDoorRando { race_id } => {
+                seed::Files::AlttprDoorRando { uuid } => {
                 let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
                 // TODO need to link to patch URL here
-                patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{race_id}.bps"));
+                patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{uuid}.bps"));
                 patcher_url.to_string()
             }
             seed::Files::MidosHouse { file_stem, .. } => format!("{}/seed/{file_stem}", base_uri()),
@@ -2388,14 +2380,78 @@ struct Breaks {
     interval: Duration,
 }
 
-struct CrosskeysRaceOptions {
+#[derive(Clone, Copy)]
+pub(crate) struct CrosskeysRaceOptions {
     all_dungeons_ok: bool,
     flute_ok: bool,
+    hovering_ok: bool,
     inverted_ok: bool,
     keydrop_ok: bool,
     mirror_scroll_ok: bool,
+    no_delay_ok: bool,
     pb_ok: bool,
     zw_ok: bool,
+}
+
+impl CrosskeysRaceOptions {
+    pub(crate) fn as_seed_options_str(&self) -> String {
+        let mut res = Vec::new();
+        if self.all_dungeons_ok  {
+            res.push("goal of all dungeons");
+        }
+        if self.flute_ok {
+            res.push("starting activated flute");
+        }
+        if self.inverted_ok {
+            res.push("inverted world state");
+        }
+        if self.keydrop_ok {
+            res.push("enemy and pot keydrop");
+        }
+        if self.mirror_scroll_ok {
+            res.push("starting mirror scroll");
+        }
+        if self.pb_ok {
+            res.push("starting pseudoboots");
+        }
+        if self.zw_ok {
+            res.push("zw enabled");
+        }
+        English.join_str_opt(res).unwrap_or_else(|| format!("base settings"))
+    }
+
+    pub(crate) fn as_race_options_str(&self) -> String {
+        let mut res = Vec::new();
+        if self.hovering_ok {
+            res.push("hovering allowed");
+        } else {
+            res.push("hovering NOT allowed");
+        }
+
+        if self.no_delay_ok {
+            res.push("no stream delay");
+        } else {
+            res.push("ten minute stream delay");
+        }
+        English.join_str_opt(res).unwrap()
+    }
+
+    pub(crate) async fn for_race(db_pool: PgPool, race: Race) -> Self {
+        let teams = race.teams();
+        let team_rows = sqlx::query!("SELECT all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _).fetch_all(&db_pool).await.expect("Database read failed");
+        CrosskeysRaceOptions {
+            all_dungeons_ok: team_rows.iter().all(|row| row.all_dungeons_ok),
+            flute_ok: team_rows.iter().all(|row| row.flute_ok),
+            hovering_ok: team_rows.iter().all(|row| row.hover_ok),
+            inverted_ok: team_rows.iter().all(|row| row.inverted_ok),
+            keydrop_ok: team_rows.iter().all(|row| row.keydrop_ok),
+            mirror_scroll_ok: team_rows.iter().all(|row| row.mirror_scroll_ok),
+            no_delay_ok: team_rows.iter().all(|row| row.no_delay_ok),
+            pb_ok: team_rows.iter().all(|row| row.pb_ok),
+            zw_ok: team_rows.iter().all(|row| row.zw_ok),
+        }
+    }
+    
 }
 
 #[derive(Clone, Serialize)]
@@ -2769,10 +2825,15 @@ impl Handler {
         self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_seed(preroll, true, delay_until, version, settings, unlock_spoiler_log), language, article, description).await;
     }
 
-    async fn roll_crosskeys2025_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str, description: String) {
+    async fn roll_crosskeys2025_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(10);
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2025_seed(ctx.clone(), Some(delay_until), cal_event), language, article, description).await;
+
+        let crosskeys_options = CrosskeysRaceOptions::for_race(ctx.global_state.db_pool.clone(), cal_event.race.clone()).await;
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2025_seed(Some(delay_until), cal_event, crosskeys_options), language, article, crosskeys_options.as_seed_options_str()).await;
+        ctx.say(format!("@entrants Remember: this race will be played with {}!",
+                                    crosskeys_options.as_race_options_str()
+                                )).await.expect("failed to send race options");
     }
 
     async fn roll_rsl_seed(&self, ctx: &RaceContext<GlobalState>, preset: rsl::VersionedPreset, world_count: u8, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
@@ -3030,17 +3091,22 @@ impl RaceHandler<GlobalState> for Handler {
                         });
                     }
                 }
-                let fpa_enabled = match data.status.value {
-                    RaceStatusValue::Invitational => {
-                        ctx.say(if let French = goal.language() {
-                            "Le FPA est activé pour cette race. Les joueurs pourront utiliser !fpa pendant la race pour signaler d'un problème technique de leur côté. Les race monitors doivent activer les notifications en cliquant sur l'icône de cloche 🔔 sous le chat."
-                        } else {
-                            "Fair play agreement is active for this official race. Entrants may use the !fpa command during the race to notify of a crash. Race monitors (if any) should enable notifications using the bell 🔔 icon below chat."
-                        }).await?; //TODO different message for monitorless FPA?
-                        true
+                let fpa_enabled = match goal {
+                    Goal::Crosskeys2025 => false,
+                    _ => {
+                        match data.status.value {
+                            RaceStatusValue::Invitational => {
+                                ctx.say(if let French = goal.language() {
+                                    "Le FPA est activé pour cette race. Les joueurs pourront utiliser !fpa pendant la race pour signaler d'un problème technique de leur côté. Les race monitors doivent activer les notifications en cliquant sur l'icône de cloche 🔔 sous le chat."
+                                } else {
+                                    "Fair play agreement is active for this official race. Entrants may use the !fpa command during the race to notify of a crash. Race monitors (if any) should enable notifications using the bell 🔔 icon below chat."
+                                }).await?; //TODO different message for monitorless FPA?
+                                true
+                            }
+                            RaceStatusValue::Open => false,
+                            _ => data.entrants.len() < 10, // guess based on entrant count, assuming an open race for 10 or more
+                        }
                     }
-                    RaceStatusValue::Open => false,
-                    _ => data.entrants.len() < 10, // guess based on entrant count, assuming an open race for 10 or more
                 };
                 (
                     cal_event.race.seed.clone(),
@@ -3912,9 +3978,7 @@ impl RaceHandler<GlobalState> for Handler {
                             | Goal::TournoiFrancoS5
                                 => unreachable!("should have draft state set"),
                             | Goal::Crosskeys2025
-                                // TODO: Don't propogate this error, handle the failed seed roll either here or below
-                                // TODO: Don't pass the description in here: generate it from the settings
-                                => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a", format!("Crosskeys Tournament 2025 Seed")).await,
+                                => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await,
                             Goal::NineDaysOfSaws => unreachable!("9dos series has concluded"),
                             Goal::PicRs2 => this.roll_rsl_seed(ctx, rsl::VersionedPreset::Fenhl {
                                 version: Some((Version::new(2, 3, 8), 10)),

@@ -2271,6 +2271,12 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             transaction = msg_ctx.into_transaction();
         }
     }
+    if let racetime_bot::Goal::Crosskeys2025 = racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event") {
+        let crosskeys_options = racetime_bot::CrosskeysRaceOptions::for_race( ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone(),race.clone()).await;
+        content.push_line("");
+        content.push_line("");
+        content.push(format!("@This race will be played with {} as settings.\n\nThis race will be played with {}.", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str()));
+    }
     race.scheduling_thread = Some(if let Some(ChannelType::Forum) = scheduling_channel.to_channel(ctx).await?.guild().map(|c| c.kind) {
         scheduling_channel.create_forum_post(ctx, CreateForumPost::new(
             title,
