@@ -1338,17 +1338,14 @@ impl GlobalState {
         clean_shutdown: Arc<Mutex<CleanShutdown>>,
         seed_cache_tx: watch::Sender<()>,
         seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>,
-    ) -> Arc<Self> {
-        let this = Arc::new(Self {
+    ) -> Self {
+        Self {
             host_info: racetime::HostInfo {
                 hostname: Cow::Borrowed(racetime_host()),
                 ..racetime::HostInfo::default()
             },
-            discord_ctx: discord_ctx.clone(),
-            new_room_lock, racetime_config, extra_room_tx, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, clean_shutdown, seed_cache_tx, seed_metadata,
-        });
-        discord_ctx.read().await.data.write().await.insert::<Self>(this.clone());
-        this
+            new_room_lock, racetime_config, extra_room_tx, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, discord_ctx, clean_shutdown, seed_cache_tx, seed_metadata,
+        }
     }
 
     pub(crate) fn roll_seed(self: Arc<Self>, preroll: PrerollMode, allow_web: bool, delay_until: Option<DateTime<Utc>>, version: VersionedBranch, mut settings: seed::Settings, unlock_spoiler_log: UnlockSpoilerLog) -> mpsc::Receiver<SeedRollUpdate> {

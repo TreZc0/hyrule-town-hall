@@ -518,9 +518,10 @@ fn parse_timestamp(timestamp: &str) -> Option<DateTime<Utc>> {
         .and_then(|timestamp| Utc.timestamp_opt(timestamp, 0).single())
 }
 
-pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, db_pool: PgPool, http_client: reqwest::Client, config: Config, new_room_lock: Arc<Mutex<()>>, extra_room_tx: Arc<RwLock<mpsc::Sender<String>>>, clean_shutdown: Arc<Mutex<CleanShutdown>>, shutdown: rocket::Shutdown) -> serenity_utils::Builder {
+pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global_state: Arc<GlobalState>, db_pool: PgPool, http_client: reqwest::Client, config: Config, new_room_lock: Arc<Mutex<()>>, extra_room_tx: Arc<RwLock<mpsc::Sender<String>>>, clean_shutdown: Arc<Mutex<CleanShutdown>>, shutdown: rocket::Shutdown) -> serenity_utils::Builder {
     discord_builder
         .error_notifier(ErrorNotifier::User(ADMIN_USER)) //TODO also print to stderr and/or report to night
+        .data::<GlobalState>(global_state)
         .data::<DbPool>(db_pool)
         .data::<HttpClient>(http_client)
         .data::<RacetimeHost>(racetime::HostInfo {
