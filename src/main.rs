@@ -231,7 +231,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
         let racetime_config = if Environment::default().is_dev() { &config.racetime_bot_dev } else { &config.racetime_bot_production }.clone();
         let startgg_token = if Environment::default().is_dev() { &config.startgg_dev } else { &config.startgg_production };
         let (seed_cache_tx, seed_cache_rx) = watch::channel(());
-        let global_state = Arc::new(racetime_bot::GlobalState::new(
+        let global_state = racetime_bot::GlobalState::new(
             new_room_lock.clone(),
             racetime_config,
             extra_room_tx,
@@ -245,7 +245,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             clean_shutdown.clone(),
             seed_cache_tx,
             seed_metadata,
-        ).await);
+        ).await;
         #[cfg(unix)] let unix_listener = unix_socket::listen(rocket.shutdown(), clean_shutdown, global_state.clone());
         let racetime_task = tokio::spawn(racetime_bot::main(config.clone(), rocket.shutdown(), global_state, seed_cache_rx)).map(|res| match res {
             Ok(Ok(())) => Ok(()),

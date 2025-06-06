@@ -1319,6 +1319,10 @@ pub(crate) struct GlobalState {
     seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>,
 }
 
+impl TypeMapKey for GlobalState {
+    type Value = Arc<Self>;
+}
+
 impl GlobalState {
     pub(crate) async fn new(
         new_room_lock: Arc<Mutex<()>>,
@@ -1334,14 +1338,17 @@ impl GlobalState {
         clean_shutdown: Arc<Mutex<CleanShutdown>>,
         seed_cache_tx: watch::Sender<()>,
         seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>,
-    ) -> Self {
-        Self {
+    ) -> Arc<Self> {
+        let this = Arc::new(Self {
             host_info: racetime::HostInfo {
                 hostname: Cow::Borrowed(racetime_host()),
                 ..racetime::HostInfo::default()
             },
-            new_room_lock, racetime_config, extra_room_tx, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, discord_ctx, clean_shutdown, seed_cache_tx, seed_metadata,
-        }
+            discord_ctx: discord_ctx.clone(),
+            new_room_lock, racetime_config, extra_room_tx, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, clean_shutdown, seed_cache_tx, seed_metadata,
+        });
+        discord_ctx.read().await.data.write().await.insert::<Self>(this.clone());
+        this
     }
 
     pub(crate) fn roll_seed(self: Arc<Self>, preroll: PrerollMode, allow_web: bool, delay_until: Option<DateTime<Utc>>, version: VersionedBranch, mut settings: seed::Settings, unlock_spoiler_log: UnlockSpoilerLog) -> mpsc::Receiver<SeedRollUpdate> {
@@ -1431,7 +1438,7 @@ impl GlobalState {
         update_rx
     }
 
-    pub(crate) fn roll_crosskeys2025_seed(self: Arc<Self>, _delay_until: Option<DateTime<Utc>>, crosskeys_options: CrosskeysRaceOptions) -> mpsc::Receiver<SeedRollUpdate> {
+    pub(crate) fn roll_crosskeys2025_seed(self: Arc<Self>, crosskeys_options: CrosskeysRaceOptions) -> mpsc::Receiver<SeedRollUpdate> {
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
         tokio::spawn(async move {
@@ -2437,9 +2444,9 @@ impl CrosskeysRaceOptions {
         English.join_str_opt(res).unwrap()
     }
 
-    pub(crate) async fn for_race(db_pool: PgPool, race: Race) -> Self {
+    pub(crate) async fn for_race(db_pool: &PgPool, race: &Race) -> Self {
         let teams = race.teams();
-        let team_rows = sqlx::query!("SELECT all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _).fetch_all(&db_pool).await.expect("Database read failed");
+        let team_rows = sqlx::query!("SELECT all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _).fetch_all(db_pool).await.expect("Database read failed");
         CrosskeysRaceOptions {
             all_dungeons_ok: team_rows.iter().all(|row| row.all_dungeons_ok),
             flute_ok: team_rows.iter().all(|row| row.flute_ok),
@@ -2830,8 +2837,8 @@ impl Handler {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(10);
 
-        let crosskeys_options = CrosskeysRaceOptions::for_race(ctx.global_state.db_pool.clone(), cal_event.race.clone()).await;
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2025_seed(Some(delay_until), crosskeys_options), language, article, crosskeys_options.as_seed_options_str()).await;
+        let crosskeys_options = CrosskeysRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race).await;
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2025_seed(crosskeys_options), language, article, crosskeys_options.as_seed_options_str()).await;
         ctx.say(format!("@entrants Remember: this race will be played with {}!",
                                     crosskeys_options.as_race_options_str()
                                 )).await.expect("failed to send race options");
@@ -4773,7 +4780,7 @@ impl RaceHandler<GlobalState> for Handler {
     }
 }
 
-pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, discord_ctx: &DiscordCtx, host_info: &racetime::HostInfo, client_id: &str, client_secret: &str, extra_room_tx: &RwLock<mpsc::Sender<String>>, http_client: &reqwest::Client, clean_shutdown: Arc<Mutex<CleanShutdown>>, cal_event: &cal::Event, event: &event::Data<'_>) -> Result<Option<(bool, String)>, Error> {
+pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, discord_ctx: &DiscordCtx, host_info: &racetime::HostInfo, client_id: &str, client_secret: &str, extra_room_tx: &RwLock<mpsc::Sender<String>>, http_client: &reqwest::Client, clean_shutdown: Arc<Mutex<CleanShutdown>>, cal_event: &cal::Event, event: &event::Data<'static>) -> Result<Option<(bool, String)>, Error> {
     let room_url = match cal_event.should_create_room(&mut *transaction, event).await.to_racetime()? {
         cal::RaceHandleMode::None => return Ok(None),
         cal::RaceHandleMode::Notify => Err("please get your equipment and report to the tournament room"),
@@ -4910,10 +4917,12 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                     let room = OpenRoom::Discord { id: cal_event.race.id.into(), kind: cal_event.kind };
                     assert!(clean_shutdown.open_rooms.insert(room.clone()));
                     clean_shutdown.updates.send(CleanShutdownUpdate::RoomOpened(room)).allow_unreceived();
+                    let discord_ctx = discord_ctx.clone();
                     let cal_event = cal_event.clone();
+                    let event = event.clone();
                     tokio::spawn(async move {
                         println!("Discord race handler started");
-                        let res = tokio::spawn(crate::discord_bot::handle_race()).await;
+                        let res = tokio::spawn(crate::discord_bot::handle_race(discord_ctx, cal_event.clone(), event)).await;
                         lock!(clean_shutdown = task_clean_shutdown; {
                             let room = OpenRoom::Discord { id: cal_event.race.id.into(), kind: cal_event.kind };
                             assert!(clean_shutdown.open_rooms.remove(&room));
@@ -4922,12 +4931,19 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                                 clean_shutdown.updates.send(CleanShutdownUpdate::Empty).allow_unreceived();
                             }
                         });
-                        if let Ok(()) = res {
-                            println!("Discord race handler stopped");
-                        } else {
-                            eprintln!("Discord race handler panicked");
-                            if let Environment::Production = Environment::default() {
-                                let _ = wheel::night_report(&format!("{}/error", night_path()), Some("Discord race handler panicked")).await;
+                        match res {
+                            Ok(Ok(())) => println!("Discord race handler stopped"),
+                            Ok(Err(e)) => {
+                                eprintln!("Discord race handler errored: {e} ({e:?})");
+                                if let Environment::Production = Environment::default() {
+                                    let _ = wheel::night_report(&format!("{}/error", night_path()), Some("Discord race handler errored: {e} ({e:?})")).await;
+                                }
+                            }
+                            Err(_) => {
+                                eprintln!("Discord race handler panicked");
+                                if let Environment::Production = Environment::default() {
+                                    let _ = wheel::night_report(&format!("{}/error", night_path()), Some("Discord race handler panicked")).await;
+                                }
                             }
                         }
                     });

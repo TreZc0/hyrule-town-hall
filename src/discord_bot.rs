@@ -1,5 +1,9 @@
 use {
-    serenity::all::{
+    crate::{
+        config::ConfigRaceTime,
+        prelude::*,
+        racetime_bot::{CleanShutdown, CrosskeysRaceOptions, GlobalState},
+    }, serenity::all::{
         CacheHttp,
         Content,
         CreateAllowedMentions,
@@ -12,22 +16,12 @@ use {
         CreateMessage,
         CreateThread,
         EditRole,
-    },
-    serenity_utils::{
+    }, serenity_utils::{
         builder::ErrorNotifier,
         handler::HandlerMethods as _,
-    },
-    sqlx::{
-        Database,
-        Decode,
-        Encode,
-        types::Json,
-    },
-    crate::{
-        config::ConfigRaceTime,
-        prelude::*,
-        racetime_bot::CleanShutdown,
-    },
+    }, sqlx::{
+        types::Json, Database, Decode, Encode
+    }
 };
 
 pub(crate) const ADMIN_USER: UserId = UserId::new(82783364175630336); // TreZ
@@ -2272,10 +2266,10 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
         }
     }
     if let racetime_bot::Goal::Crosskeys2025 = racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event") {
-        let crosskeys_options = racetime_bot::CrosskeysRaceOptions::for_race( ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone(),race.clone()).await;
+        let crosskeys_options = CrosskeysRaceOptions::for_race(ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"), race).await;
         content.push_line("");
         content.push_line("");
-        content.push(format!("@This race will be played with {} as settings.\n\nThis race will be played with {}.", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str()));
+        content.push(format!("This race will be played with {} as settings.\n\nThis race will be played with {}.", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str()));
     }
     race.scheduling_thread = Some(if let Some(ChannelType::Forum) = scheduling_channel.to_channel(ctx).await?.guild().map(|c| c.kind) {
         scheduling_channel.create_forum_post(ctx, CreateForumPost::new(
@@ -2292,7 +2286,86 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
     Ok(transaction)
 }
 
-pub(crate) async fn handle_race() {
+pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, event: event::Data<'_>) -> Result<(),Error > {
+    // This is a temporary implementation. It checks the race and sees if a seed is rolled. 
+    // If it is not, it rolls a seed and adds it to the database.
+    // If it is, it pulls the seed from the database instead.
+    // It posts in the event.discord_organizer_channel channel a link to the seed, the player who is playing in the async, and gives admin instructions.
+    // Use previous mechanisms (async channels/etc) to manage race manually. 
+    // If the race is the second half, remind admin in the message to post the race result when it's over and report it on start.gg
+    // Set "notified" on the race to avoid this being called again.
+
+    // This explicitly only handles asyncs for the crosskeys tournament. This should be remoed and replaced with something generic.
+    let discord_ctx = discord_ctx.clone();
+    let cal_event = cal_event.clone();
+    let event = event.clone();
+
+    let mut transaction = {
+        let discord_data = discord_ctx.data.read().await;
+        discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
+    };
+
+    // There is already a seed rolled. Access that seed instead.
+    let (uuid, second_half) = match cal_event.race.seed.files {
+        // Seed already exists, get the message appropriately.
+        Some(seed::Files::AlttprDoorRando { uuid}) => (uuid, true),
+        Some(_) => unimplemented!("Haven't implemented asyncs for non-door rando yet"),
+        // Roll a seed and put it in the database before returning the message.
+        None => {
+            let discord_data = discord_ctx.data.read().await;
+            let global_state = discord_data.get::<GlobalState>().expect("Global State missing from Discord context");
+            let crosskeys_options = CrosskeysRaceOptions::for_race(&global_state.db_pool, &cal_event.race).await;
+            let mut updates = global_state.clone().roll_crosskeys2025_seed(crosskeys_options);
+
+            // Loop until we get an update saying the seed data is done rolling.
+            let seed = loop {
+                match updates.recv().await {
+                    Some(racetime_bot::SeedRollUpdate::Done { seed, .. }) => break seed,
+                    Some(racetime_bot::SeedRollUpdate::Error(e)) => panic!("error rolling seed: {e} ({e:?})"),
+                    None => panic!(),
+                    _ => {}
+                }
+            };
+
+            let uuid = match seed.files {
+                Some(seed::Files::AlttprDoorRando { uuid}) => uuid,
+                _ => unimplemented!("handle what happens here?")
+            };
+
+            sqlx::query!("UPDATE races SET xkeys_uuid = $1 WHERE id = $2",uuid, cal_event.race.id as _,).execute(&mut *transaction).await?;
+            (uuid, false)
+        }
+    };
+
+    let seed_url =  {
+        let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("Couldn't parse URL");
+        patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{uuid}.bps"));
+        patcher_url.to_string()
+    };
+
+    for team in cal_event.active_teams() {
+        let mut content = MessageBuilder::default();
+        content.push("Async starting for ");
+        content.mention_team(&mut transaction, event.discord_guild, team).await?;
+        content.push(format!("Seed URL is {}. Please work them in their async channel to run the race.",seed_url));
+        if second_half {
+            content.push_line("");
+            content.push_line("");
+            content.push("This is the second half of the async. When it is done, please post the outcome in race results and on start.gg");
+        }
+        let msg = content.build();
+        if let Some(channel) = event.discord_organizer_channel {
+            channel.say(&discord_ctx, msg).await?;
+        } else {
+            // DM Ad
+            ADMIN_USER.create_dm_channel(&discord_ctx).await?.say(&discord_ctx, msg).await?;
+        }
+    }
+    sqlx::query!("UPDATE races SET notified = TRUE WHERE id = $1", cal_event.race.id as _).execute(&mut *transaction).await?;
+    transaction.commit().await?;
+    Ok(())
+    // Leave the TODO below for posterity.
+
     //TODO start Discord race handler (in DMs for private async parts, in scheduling thread for public ones):
     // * post seed 15 minutes before start
     // * reminder to go live for public async parts
