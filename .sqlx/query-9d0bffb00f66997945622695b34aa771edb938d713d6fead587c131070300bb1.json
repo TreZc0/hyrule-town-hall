@@ -1,0 +1,70 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok FROM teams WHERE id = ANY($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "all_dungeons_ok",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "flute_ok",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "hover_ok",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "inverted_ok",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "keydrop_ok",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "mirror_scroll_ok",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "no_delay_ok",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "pb_ok",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "zw_ok",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9d0bffb00f66997945622695b34aa771edb938d713d6fead587c131070300bb1"
+}

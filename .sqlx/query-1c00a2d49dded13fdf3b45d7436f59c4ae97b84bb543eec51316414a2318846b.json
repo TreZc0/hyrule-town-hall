@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n            series AS \"series: Series\",\n            event,\n            challonge_match,\n            league_id,\n            sheet_timestamp,\n            startgg_event,\n            startgg_set AS \"startgg_set: startgg::ID\",\n            speedgaming_id,\n            game,\n            team1 AS \"team1: Id<Teams>\",\n            team2 AS \"team2: Id<Teams>\",\n            team3 AS \"team3: Id<Teams>\",\n            p1,\n            p2,\n            p3,\n            p1_discord AS \"p1_discord: PgSnowflake<UserId>\",\n            p2_discord AS \"p2_discord: PgSnowflake<UserId>\",\n            p1_racetime,\n            p2_racetime,\n            p1_twitch,\n            p2_twitch,\n            total,\n            finished,\n            phase,\n            round,\n            scheduling_thread AS \"scheduling_thread: PgSnowflake<ChannelId>\",\n            draft_state AS \"draft_state: Json<Draft>\",\n            start,\n            async_start1,\n            async_start2,\n            async_start3,\n            end_time,\n            async_end1,\n            async_end2,\n            async_end3,\n            room,\n            async_room1,\n            async_room2,\n            async_room3,\n            schedule_updated_at,\n            fpa_invoked,\n            breaks_used,\n            file_stem,\n            locked_spoiler_log_path,\n            web_id,\n            web_gen_time,\n            is_tfb_dev,\n            tfb_uuid,\n            hash1 AS \"hash1: HashIcon\",\n            hash2 AS \"hash2: HashIcon\",\n            hash3 AS \"hash3: HashIcon\",\n            hash4 AS \"hash4: HashIcon\",\n            hash5 AS \"hash5: HashIcon\",\n            seed_password,\n            video_url,\n            restreamer,\n            video_url_fr,\n            restreamer_fr,\n            video_url_de,\n            restreamer_de,\n            video_url_pt,\n            restreamer_pt,\n            last_edited_by AS \"last_edited_by: Id<Users>\",\n            last_edited_at,\n            ignored,\n            schedule_locked,\n            notified\n        FROM races WHERE id = $1",
+  "query": "SELECT\n            series AS \"series: Series\",\n            event,\n            challonge_match,\n            league_id,\n            sheet_timestamp,\n            startgg_event,\n            startgg_set AS \"startgg_set: startgg::ID\",\n            speedgaming_id,\n            game,\n            team1 AS \"team1: Id<Teams>\",\n            team2 AS \"team2: Id<Teams>\",\n            team3 AS \"team3: Id<Teams>\",\n            p1,\n            p2,\n            p3,\n            p1_discord AS \"p1_discord: PgSnowflake<UserId>\",\n            p2_discord AS \"p2_discord: PgSnowflake<UserId>\",\n            p1_racetime,\n            p2_racetime,\n            p1_twitch,\n            p2_twitch,\n            total,\n            finished,\n            phase,\n            round,\n            scheduling_thread AS \"scheduling_thread: PgSnowflake<ChannelId>\",\n            draft_state AS \"draft_state: Json<Draft>\",\n            start,\n            async_start1,\n            async_start2,\n            async_start3,\n            end_time,\n            async_end1,\n            async_end2,\n            async_end3,\n            room,\n            async_room1,\n            async_room2,\n            async_room3,\n            schedule_updated_at,\n            fpa_invoked,\n            breaks_used,\n            file_stem,\n            locked_spoiler_log_path,\n            web_id,\n            web_gen_time,\n            is_tfb_dev,\n            tfb_uuid,\n            xkeys_uuid,\n            hash1 AS \"hash1: HashIcon\",\n            hash2 AS \"hash2: HashIcon\",\n            hash3 AS \"hash3: HashIcon\",\n            hash4 AS \"hash4: HashIcon\",\n            hash5 AS \"hash5: HashIcon\",\n            seed_password,\n            video_url,\n            restreamer,\n            video_url_fr,\n            restreamer_fr,\n            video_url_de,\n            restreamer_de,\n            video_url_pt,\n            restreamer_pt,\n            last_edited_by AS \"last_edited_by: Id<Users>\",\n            last_edited_at,\n            ignored,\n            schedule_locked,\n            notified\n        FROM races WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -245,6 +245,11 @@
       },
       {
         "ordinal": 48,
+        "name": "xkeys_uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 49,
         "name": "hash1: HashIcon",
         "type_info": {
           "Custom": {
@@ -289,7 +294,7 @@
         }
       },
       {
-        "ordinal": 49,
+        "ordinal": 50,
         "name": "hash2: HashIcon",
         "type_info": {
           "Custom": {
@@ -334,7 +339,7 @@
         }
       },
       {
-        "ordinal": 50,
+        "ordinal": 51,
         "name": "hash3: HashIcon",
         "type_info": {
           "Custom": {
@@ -379,7 +384,7 @@
         }
       },
       {
-        "ordinal": 51,
+        "ordinal": 52,
         "name": "hash4: HashIcon",
         "type_info": {
           "Custom": {
@@ -424,7 +429,7 @@
         }
       },
       {
-        "ordinal": 52,
+        "ordinal": 53,
         "name": "hash5: HashIcon",
         "type_info": {
           "Custom": {
@@ -469,72 +474,72 @@
         }
       },
       {
-        "ordinal": 53,
+        "ordinal": 54,
         "name": "seed_password",
         "type_info": "Bpchar"
       },
       {
-        "ordinal": 54,
+        "ordinal": 55,
         "name": "video_url",
         "type_info": "Text"
       },
       {
-        "ordinal": 55,
+        "ordinal": 56,
         "name": "restreamer",
         "type_info": "Text"
       },
       {
-        "ordinal": 56,
+        "ordinal": 57,
         "name": "video_url_fr",
         "type_info": "Text"
       },
       {
-        "ordinal": 57,
+        "ordinal": 58,
         "name": "restreamer_fr",
         "type_info": "Text"
       },
       {
-        "ordinal": 58,
+        "ordinal": 59,
         "name": "video_url_de",
         "type_info": "Text"
       },
       {
-        "ordinal": 59,
+        "ordinal": 60,
         "name": "restreamer_de",
         "type_info": "Text"
       },
       {
-        "ordinal": 60,
+        "ordinal": 61,
         "name": "video_url_pt",
         "type_info": "Text"
       },
       {
-        "ordinal": 61,
+        "ordinal": 62,
         "name": "restreamer_pt",
         "type_info": "Text"
       },
       {
-        "ordinal": 62,
+        "ordinal": 63,
         "name": "last_edited_by: Id<Users>",
         "type_info": "Int8"
       },
       {
-        "ordinal": 63,
+        "ordinal": 64,
         "name": "last_edited_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 64,
+        "ordinal": 65,
         "name": "ignored",
         "type_info": "Bool"
       },
       {
-        "ordinal": 65,
+        "ordinal": 66,
         "name": "schedule_locked",
         "type_info": "Bool"
       },
       {
-        "ordinal": 66,
+        "ordinal": 67,
         "name": "notified",
         "type_info": "Bool"
       }
@@ -609,10 +614,11 @@
       true,
       true,
       true,
+      true,
       false,
       false,
       false
     ]
   },
-  "hash": "a8a705e0937b9a322178e41e057fb93bcd7ac95180ba9f44687e94c91dea4891"
+  "hash": "1c00a2d49dded13fdf3b45d7436f59c4ae97b84bb543eec51316414a2318846b"
 }
