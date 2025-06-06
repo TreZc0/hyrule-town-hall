@@ -2405,7 +2405,7 @@ impl CrosskeysRaceOptions {
     pub(crate) fn as_seed_options_str(&self) -> String {
         let mut res = Vec::new();
         if self.all_dungeons_ok  {
-            res.push("goal of all dungeons");
+            res.push("a goal of all dungeons");
         }
         if self.flute_ok {
             res.push("starting activated flute");
@@ -2431,15 +2431,15 @@ impl CrosskeysRaceOptions {
     pub(crate) fn as_race_options_str(&self) -> String {
         let mut res = Vec::new();
         if self.hovering_ok {
-            res.push("hovering allowed");
+            res.push("hovering and moldorm bouncing ALLOWED");
         } else {
-            res.push("hovering NOT allowed");
+            res.push("hovering and moldorm bouncing BANNED");
         }
 
         if self.no_delay_ok {
             res.push("no stream delay");
         } else {
-            res.push("ten minute stream delay");
+            res.push("stream delay(10m)");
         }
         English.join_str_opt(res).unwrap()
     }
@@ -2838,7 +2838,7 @@ impl Handler {
         let delay_until = official_start - TimeDelta::minutes(10);
 
         let crosskeys_options = CrosskeysRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race).await;
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2025_seed(crosskeys_options), language, article, crosskeys_options.as_seed_options_str()).await;
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2025_seed(crosskeys_options), language, article, format!("seed with {}", crosskeys_options.as_seed_options_str())).await;
         ctx.say(format!("@entrants Remember: this race will be played with {}!",
                                     crosskeys_options.as_race_options_str()
                                 )).await.expect("failed to send race options");
