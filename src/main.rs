@@ -224,16 +224,16 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Arc::clone(&seed_metadata),
             ootr_api_client.clone(),
         ).await?;
-        let new_room_lock: std::sync::Arc<T, A> = Arc::default();
+        let new_room_lock = Arc::default();
         let extra_room_tx = Arc::new(RwLock::new(mpsc::channel(1).0));
-        let clean_shutdown: std::sync::Arc<T, A> = Arc::default();
+        let clean_shutdown = Arc::default();
         let racetime_config = if Environment::default().is_dev() { &config.racetime_bot_dev } else { &config.racetime_bot_production }.clone();
         let startgg_token = if Environment::default().is_dev() { &config.startgg_dev } else { &config.startgg_production };
         let (seed_cache_tx, seed_cache_rx) = watch::channel(());
         let global_state = Arc::new(racetime_bot::GlobalState::new(
-            new_room_lock.clone(),
+            Arc::clone(&new_room_lock),
             racetime_config,
-            extra_room_tx,
+            extra_room_tx.clone(),
             db_pool.clone(),
             http_client.clone(),
             insecure_http_client,
@@ -241,7 +241,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             startgg_token.clone(),
             ootr_api_client,
             discord_builder.ctx_fut.clone(),
-            clean_shutdown.clone(),
+            Arc::clone(&clean_shutdown),
             seed_cache_tx,
             seed_metadata,
         ).await);
