@@ -1230,19 +1230,19 @@ impl Event {
                 kind: EventKind::Normal,
             })
         }
-        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE async_room1 IS NULL AND async_start1 IS NOT NULL AND async_start1 > NOW() AND async_start1 <= NOW() + TIME '00:30:00'"#).fetch_all(&mut **transaction).await? {
+        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE async_room1 IS NULL AND notified IS NOT TRUE AND async_start1 IS NOT NULL AND async_start1 > NOW() AND async_start1 <= NOW() + TIME '00:30:00'"#).fetch_all(&mut **transaction).await? {
             events.push(Self {
                 race: Race::from_id(&mut *transaction, http_client, id).await?,
                 kind: EventKind::Async1,
             });
         }
-        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE async_room2 IS NULL AND async_start2 IS NOT NULL AND async_start2 > NOW() AND async_start2 <= NOW() + TIME '00:30:00'"#).fetch_all(&mut **transaction).await? {
+        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE async_room2 IS NULL AND notified IS NOT TRUE AND async_start2 IS NOT NULL AND async_start2 > NOW() AND async_start2 <= NOW() + TIME '00:30:00'"#).fetch_all(&mut **transaction).await? {
             events.push(Self {
                 race: Race::from_id(&mut *transaction, http_client, id).await?,
                 kind: EventKind::Async2,
             });
         }
-        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE async_room3 IS NULL AND async_start3 IS NOT NULL AND async_start3 > NOW() AND async_start3 <= NOW() + TIME '00:30:00'"#).fetch_all(&mut **transaction).await? {
+        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE async_room3 IS NULL AND notified IS NOT TRUE AND async_start3 IS NOT NULL AND async_start3 > NOW() AND async_start3 <= NOW() + TIME '00:30:00'"#).fetch_all(&mut **transaction).await? {
             events.push(Self {
                 race: Race::from_id(&mut *transaction, http_client, id).await?,
                 kind: EventKind::Async3,
