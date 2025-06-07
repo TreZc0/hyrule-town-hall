@@ -2348,7 +2348,7 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         let mut content = MessageBuilder::default();
         content.push("Async starting for ");
         content.mention_team(&mut transaction, event.discord_guild, team).await?;
-        content.push(format!(". Seed URL is {}. Please work them in their async channel to run the race.",seed_url));
+        content.push(format!(". Seed URL is {}. Please work with them in their async channel to run the race.",seed_url));
         if second_half {
             content.push_line("");
             content.push_line("");
