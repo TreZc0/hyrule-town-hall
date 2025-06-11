@@ -271,16 +271,16 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
                 "zpfz"
             } else {
                 "zpf"
-            }), target = "_blank") : "Patch File";
+            })) : "Patch File";
             @if spoiler_logs {
                 @match extra.spoiler_status {
                     SpoilerStatus::Unlocked(spoiler_file_name) => {
                         : " • ";
-                        a(href = format!("/seed/{spoiler_file_name}"), target = "_blank") : "Spoiler Log";
+                        a(href = format!("/seed/{spoiler_file_name}")) : "Spoiler Log";
                     }
                     SpoilerStatus::Progression => {
                         : " • ";
-                        a(href = format!("/seed/{file_stem}_Progression.json"), target = "_blank") : "Progression Spoiler";
+                        a(href = format!("/seed/{file_stem}_Progression.json")) : "Progression Spoiler";
                     }
                     SpoilerStatus::Locked | SpoilerStatus::NotFound => {}
                 }
@@ -291,7 +291,7 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
                 format!("https://dev.triforceblitz.com/seeds/{uuid}")
             } else {
                 format!("https://www.triforceblitz.com/seed/{uuid}")
-            }, target = "_blank") : "View";
+            }) : "View";
         }),
         Some(Files::TfbSotd { ordinal, .. }) => Some(html! {
             a(href = format!("https://www.triforceblitz.com/seed/daily/{ordinal}"), target = "_blank") : "View";
