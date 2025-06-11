@@ -63,7 +63,7 @@ nav h1 {
 
 .mini-logo {
   margin-left: 5px;
-  display: grid;
+  display: none;
   grid-template-columns: 16px 16px;
   direction: ltr;
 }

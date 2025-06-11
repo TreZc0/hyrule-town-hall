@@ -244,8 +244,8 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                         }
                     }
                     p {
-                        : "Special thanks to Maplestar for some of the chest icons used in the original logo";
-                        span(class = "mini_logo") {
+                        : "Special thanks to Maplestar for some of the chest icons used in the original logo, and to Xopar and shirosoluna for some of the seed hash icons!";
+                        span(class = "mini-logo") {
                             @for chest in style.chests.0 {
                                 img(class = format!("chest chest-{}", char::from(chest.texture)), src = match chest.texture {
                                     ChestTexture::Normal => static_url!("chest/n.png"),
