@@ -258,11 +258,11 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
             let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
             patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{uuid}.bps"));
             Some(html! {
-                a(href = patcher_url.to_string()) : "View";
+                a(href = patcher_url.to_string(), target = "_blank") : "View";
             })
         }
         Some(Files::OotrWeb { id, gen_time, .. }) if gen_time > now - WEB_TIMEOUT => Some(html! {
-            a(href = format!("https://ootrandomizer.com/seed/get?id={id}")) : "View";
+            a(href = format!("https://ootrandomizer.com/seed/get?id={id}"), target = "_blank") : "View";
         }),
         Some(Files::OotrWeb { ref file_stem, .. } | Files::MidosHouse { ref file_stem, .. }) => Some(html! {
             a(href = format!("/seed/{file_stem}.{}", if let Some(world_count) = extra.world_count {
@@ -271,16 +271,16 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
                 "zpfz"
             } else {
                 "zpf"
-            })) : "Patch File";
+            }), target = "_blank") : "Patch File";
             @if spoiler_logs {
                 @match extra.spoiler_status {
                     SpoilerStatus::Unlocked(spoiler_file_name) => {
                         : " • ";
-                        a(href = format!("/seed/{spoiler_file_name}")) : "Spoiler Log";
+                        a(href = format!("/seed/{spoiler_file_name}"), target = "_blank") : "Spoiler Log";
                     }
                     SpoilerStatus::Progression => {
                         : " • ";
-                        a(href = format!("/seed/{file_stem}_Progression.json")) : "Progression Spoiler";
+                        a(href = format!("/seed/{file_stem}_Progression.json"), target = "_blank") : "Progression Spoiler";
                     }
                     SpoilerStatus::Locked | SpoilerStatus::NotFound => {}
                 }
@@ -291,10 +291,10 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
                 format!("https://dev.triforceblitz.com/seeds/{uuid}")
             } else {
                 format!("https://www.triforceblitz.com/seed/{uuid}")
-            }) : "View";
+            }, target = "_blank") : "View";
         }),
         Some(Files::TfbSotd { ordinal, .. }) => Some(html! {
-            a(href = format!("https://www.triforceblitz.com/seed/daily/{ordinal}")) : "View";
+            a(href = format!("https://www.triforceblitz.com/seed/daily/{ordinal}"), target = "_blank") : "View";
         }),
         None => None,
     };
