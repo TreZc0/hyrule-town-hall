@@ -229,13 +229,13 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                         : "hosted by ";
                         : trez;
                         : " • ";
-                        a(href = "https://fenhl.net/disc") : "disclaimer"; //TODO
+                        a(href = "https://fenhl.net/disc", target = "_blank") : "disclaimer"; //TODO
                         : " • ";
-                        a(href = "https://hthstatus.zeldaspeedruns.com/") : "status";
+                        a(href = "https://hthstatus.zeldaspeedruns.com/", target = "_blank") : "status";
                         : " • ";
                         a(href = uri!(api::graphql_playground)) : "API";
                         : " • ";
-                        a(href = "https://github.com/trezc0/midos.house") {
+                        a(href = "https://github.com/trezc0/midos.house", target = "_blank") {
                             @if style.mw_footer {
                                 : "website source code";
                             } else {

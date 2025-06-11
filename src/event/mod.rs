@@ -580,7 +580,7 @@ impl<'a> Data<'a> {
                     }
                 };
                 @let practice_seed_button = practice_seed_url.map(|url| html! {
-                    a(class = "button", href = url) {
+                    a(class = "button", href = url, target = "_blank") {
                         : favicon(&Url::parse("https://ootrandomizer.com/").unwrap()); //TODO adjust based on seed host
                         @if practice_race_url.is_some() {
                             : "Roll Seed";
@@ -590,7 +590,7 @@ impl<'a> Data<'a> {
                     }
                 });
                 @let practice_race_button = practice_race_url.map(|url| html! {
-                    a(class = "button", href = url.to_string()) {
+                    a(class = "button", href = url.to_string(), target = "_blank") {
                         : favicon(&url);
                         @if practice_seed_button.is_some() {
                             : "Start Race";
@@ -619,13 +619,13 @@ impl<'a> Data<'a> {
                     }
                 }
                 @if let Some(ref video_url) = self.video_url {
-                    a(class = "button", href = video_url.to_string()) {
+                    a(class = "button", href = video_url.to_string(), target = "_blank") {
                         : favicon(video_url);
                         : "Watch";
                     }
                 }
                 @if let Some(ref url) = self.url {
-                    a(class = "button", href = url.to_string()) {
+                    a(class = "button", href = url.to_string(), target = "_blank") {
                         : favicon(url);
                         @match url.host_str() {
                             Some("racetime.gg" | "racetime.midos.house") => : "Race Room";
@@ -635,7 +635,7 @@ impl<'a> Data<'a> {
                     }
                 }
                 @if let Some(ref discord_invite_url) = self.discord_invite_url {
-                    a(class = "button", href = discord_invite_url.to_string()) {
+                    a(class = "button", href = discord_invite_url.to_string(), target = "_blank") {
                         : favicon(discord_invite_url);
                         : "Discord Server";
                     }
