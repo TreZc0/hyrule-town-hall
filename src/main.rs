@@ -93,7 +93,7 @@ impl Environment {
     fn base_uri(&self) -> rocket::http::uri::Absolute<'static> {
         match self {
             Self::Production => uri!("https://hth.zeldaspeedruns.com"),
-            Self::Dev => uri!("https://hth.zeldaspeedruns.com"),
+            Self::Dev => uri!("https://hthdev.zeldaspeedruns.com"),
             Self::Local => uri!("http://localhost:24814"),
         }
     }
