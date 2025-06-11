@@ -453,7 +453,7 @@ async fn new_event(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> P
     let trez = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::TrezUserData(2))?;
     page(transaction, &me, &uri, PageStyle::default(), "New Event — Hyrule Town Hall", html! {
         p {
-            : "If you are planning a tournament, community race, or other event for the Ocarina of Time randomizer community, or if you would like Hyrule Town Hall to archive data about a past event you organized, please contact ";
+            : "If you are planning a tournament, community race, or other event for the Zelda Speedrunning or randomizer community, or if you would like Hyrule Town Hall to archive data about a past event you organized, please contact ";
             : trez;
             : " to determine the specific needs of the event.";
         }

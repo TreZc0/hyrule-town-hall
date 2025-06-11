@@ -164,6 +164,7 @@ textarea,
   border: 1px solid var(--border);
   padding: 8px;
   font: unset;
+  color: var(--text-primary);
 }
 
 [popover] {
@@ -263,6 +264,11 @@ textarea {
   width: 100%;
   resize: vertical;
 }
+
+footer {
+  margin: 10px;
+}
+
 .footer,
 .dimmed {
   color: var(--text-muted);
