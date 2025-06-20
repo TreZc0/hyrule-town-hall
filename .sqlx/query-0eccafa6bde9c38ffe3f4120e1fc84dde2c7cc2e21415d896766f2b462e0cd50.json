@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id: Id<Races>\" FROM races WHERE async_room2 IS NULL AND notified IS NOT TRUE AND async_start2 IS NOT NULL AND async_start2 > NOW() AND async_start2 <= NOW() + TIME '00:30:00'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Races>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0eccafa6bde9c38ffe3f4120e1fc84dde2c7cc2e21415d896766f2b462e0cd50"
+}
