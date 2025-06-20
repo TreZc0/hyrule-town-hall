@@ -108,6 +108,7 @@ pub(crate) enum PageKind {
 
 pub(crate) struct PageStyle {
     pub(crate) kind: PageKind,
+    #[allow(unused)] // HTH fork uses different logo
     pub(crate) chests: ChestAppearances,
     pub(crate) mw_footer: bool,
 }
@@ -239,26 +240,6 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                                 : "website source code";
                             } else {
                                 : "source code";
-                            }
-                        }
-                    }
-                    p {
-                        : "Special thanks to Maplestar for some of the chest icons used in the original logo, and to Xopar and shirosoluna for some of the seed hash icons!";
-                        span(class = "mini-logo") {
-                            @for chest in style.chests.0 {
-                                img(class = format!("chest chest-{}", char::from(chest.texture)), src = match chest.texture {
-                                    ChestTexture::Normal => static_url!("chest/n.png"),
-                                    ChestTexture::OldMajor => static_url!("chest/m.png"),
-                                    ChestTexture::Major => static_url!("chest/i.png"),
-                                    ChestTexture::SmallKeyOld => static_url!("chest/k.png"),
-                                    ChestTexture::SmallKey1500 => static_url!("chest/y.png"),
-                                    ChestTexture::SmallKey1751 => static_url!("chest/a.png"),
-                                    ChestTexture::BossKey => static_url!("chest/b.png"),
-                                    ChestTexture::Token => static_url!("chest/s.png"),
-                                    ChestTexture::Invisible => static_url!("chest/d.png"),
-                                    ChestTexture::Heart => static_url!("chest/h.png"),
-                                    ChestTexture::Bombchu => static_url!("chest/c.png"),
-                                });
                             }
                         }
                     }
