@@ -1622,7 +1622,7 @@ async fn add_event_races(transaction: &mut Transaction<'_, Postgres>, discord_ct
 
 #[rocket::get("/calendar")]
 pub(crate) async fn index_help(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
-    page(pool.begin().await?, &me, &uri, PageStyle::default(), "Calendar — MHyrule Town Hall", html! {
+    page(pool.begin().await?, &me, &uri, PageStyle::default(), "Calendar — Hyrule Town Hall", html! {
         p {
             : "A calendar of all races across all events can be found at ";
             code : uri!(base_uri(), index);
