@@ -21,6 +21,7 @@ use {
             self,
             Notification,
         },
+        legal,
         racetime_bot::SeedMetadata,
         prelude::*,
     },
@@ -229,9 +230,7 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                         : "hosted by ";
                         : trez;
                         : " • ";
-                        a(href = "https://fenhl.net/disc") : "disclaimer"; //TODO
-                        : " • ";
-                        a(href = "https://hthstatus.zeldaspeedruns.com/") : "status";
+                        a(href = uri!(legal::legal_disclaimer)) : "Legal";
                         : " • ";
                         a(href = uri!(api::graphql_playground)) : "API";
                         : " • ";
@@ -600,6 +599,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::configure::post,
         favicon::favicon_ico,
         favicon::favicon_png,
+        legal::legal_disclaimer,
         crate::mw::index,
         crate::mw::platforms,
         crate::mw::install_macos,
