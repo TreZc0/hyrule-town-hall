@@ -86,6 +86,12 @@ pub(crate) async fn platforms(pool: &State<PgPool>, me: Option<User>, uri: Origi
                 }
             }
             tr {
+                th : "SummerCart64";
+                td(colspan = "3") {
+                    a(href = "https://github.com/midoshouse/ootr-multiworld/issues/53") : "Planned";
+                }
+            }
+            tr {
                 th : "Wii Virtual Console";
                 td(colspan = "3") : "Would require a modification to Virtual Console itself. The “Multiworld 2.0” project claims to have solved this issue but has not shared any details out of concerns for competitive integrity.";
             }
@@ -134,7 +140,9 @@ pub(crate) async fn platforms(pool: &State<PgPool>, me: Option<User>, uri: Origi
         p {
             : "*EverDrive support is currently experimental and requires ";
             a(href = "https://ootrandomizer.com/generatorDev?version=devFenhl_") : "Fenhl's branch of the randomizer";
-            : ".";
+            : ". See ";
+            a(href = "https://github.com/OoTRandomizer/OoT-Randomizer/issues/2042") : "the tracking issue";
+            : " for progress updates.";
         }
         p {
             : "If your operating system, console, or emulator is not listed here, please ";

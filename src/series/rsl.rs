@@ -15,6 +15,8 @@ use {
     },
 };
 
+static REPO_LOCK: LazyLock<Mutex<()>> = LazyLock::new(Mutex::default);
+
 #[derive(Debug, Default, Clone, Copy, Sequence, sqlx::Type)]
 #[sqlx(type_name = "rsl_preset", rename_all = "lowercase")]
 #[cfg_attr(unix, derive(Protocol))]
@@ -182,14 +184,16 @@ impl VersionedPreset {
         if fs::exists(&path).await? {
             if !self.is_version_locked() {
                 // update the RSL script
-                let repo = Repository::open(&path)?; //TODO migrate to gix
-                let mut origin = repo.find_remote("origin")?;
-                let branch_name = match self {
-                    Self::Xopar { .. } | Self::XoparCustom { .. } => "release",
-                    Self::Fenhl { .. } => "dev-fenhl",
-                };
-                origin.fetch(&[branch_name], None, None)?;
-                repo.reset(&repo.find_branch(&format!("origin/{branch_name}"), BranchType::Remote)?.into_reference().peel_to_commit()?.into_object(), ResetType::Hard, None)?;
+                lock!(rsl_repo_lock = REPO_LOCK; { // git is not reentrant
+                    let repo = Repository::open(&path)?; //TODO migrate to gix
+                    let mut origin = repo.find_remote("origin")?;
+                    let branch_name = match self {
+                        Self::Xopar { .. } | Self::XoparCustom { .. } => "release",
+                        Self::Fenhl { .. } => "dev-fenhl",
+                    };
+                    origin.fetch(&[branch_name], None, None)?;
+                    repo.reset(&repo.find_branch(&format!("origin/{branch_name}"), BranchType::Remote)?.into_reference().peel_to_commit()?.into_object(), ResetType::Hard, None)?;
+                });
             }
         } else {
             if self.is_version_locked() {

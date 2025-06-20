@@ -810,3 +810,25 @@ pub(crate) fn s4_settings() -> seed::Settings {
         format!("ice_trap_appearance") => json!("junk_only"),
     ]
 }
+
+pub(crate) fn async_rules(data: &Data<'_>) -> RawHtml<String> {
+    html! {
+        p : "Rules:";
+        p {
+            : "Welcome to the tiebreaker round of the ";
+            : data;
+            : "!";
+        }
+        p : "Here you can request the seed to play your async. Please follow the instructions correctly as well as make sure to know the process of asyncs:";
+        ul {
+            li : "No streaming allowed.";
+            li : "Unlisted upload on youtube required.";
+            li : "No breaks (it's a big hassle to enforce breaks and make sure people don't forget them).";
+            li : "15 min FPA where needed.";
+            li : "You must start the race within 15 minutes of obtaining the seed and submit your time within 10 minutes of finishing.";
+            li : "If you obtain a seed but do not submit a finish time, it will count as a forfeit.";
+        }
+        p : "To submit the result, please also use the Mido's House website.";
+        p : "Good luck and have fun!";
+    }
+}

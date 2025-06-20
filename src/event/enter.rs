@@ -179,7 +179,7 @@ impl Requirement {
         Ok(match self {
             Self::RaceTime => Some(me.racetime.is_some()),
             Self::RaceTimeInvite { invites, .. } => Some(me.racetime.as_ref().is_some_and(|racetime| invites.contains(&racetime.id))),
-            Self::Twitch => Some(if let Some(racetime_user_data) = me.racetime_user_data(http_client).await? {
+            Self::Twitch => Some(if let Some(Some(racetime_user_data)) = me.racetime_user_data(http_client).await? {
                 racetime_user_data.twitch_channel.is_some()
             } else {
                 false
@@ -1586,30 +1586,30 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
             }
             team_config => {
                 let racetime_team = if let Some(ref racetime_team) = value.racetime_team {
-                    if let Some(ref racetime) = me.racetime {
-                        if let Some(user) = racetime_bot::user_data(http_client, &racetime.id).await? {
-                            if user.teams.iter().any(|team| team.slug == *racetime_team) {
-                                let team = http_client.get(format!("https://{}/team/{racetime_team}/data", racetime_host()))
-                                    .send().await?
-                                    .detailed_error_for_status().await?
-                                    .json_with_text_in_error::<mw::RaceTimeTeamData>().await?;
-                                let expected_size = team_config.roles().len();
-                                if team.members.len() != expected_size {
-                                    form.context.push_error(form::Error::validation(format!("Teams for this event must have exactly {expected_size} members, but this team has {}", team.members.len())))
-                                }
-                                //TODO get each team member's Mido's House account for displaying in step 2
-                                Some(team)
-                            } else {
-                                form.context.push_error(form::Error::validation("This racetime.gg team does not exist or you're not in it.").with_name("racetime_team"));
-                                None
+                    match me.racetime_user_data(http_client).await? {
+                        Some(Some(user)) => if user.teams.iter().any(|team| team.slug == *racetime_team) {
+                            let team = http_client.get(format!("https://{}/team/{racetime_team}/data", racetime_host()))
+                                .send().await?
+                                .detailed_error_for_status().await?
+                                .json_with_text_in_error::<mw::RaceTimeTeamData>().await?;
+                            let expected_size = team_config.roles().len();
+                            if team.members.len() != expected_size {
+                                form.context.push_error(form::Error::validation(format!("Teams for this event must have exactly {expected_size} members, but this team has {}", team.members.len())))
                             }
+                            //TODO get each team member's Mido's House account for displaying in step 2
+                            Some(team)
                         } else {
+                            form.context.push_error(form::Error::validation("This racetime.gg team does not exist or you're not in it.").with_name("racetime_team"));
+                            None
+                        },
+                        Some(None) => {
                             form.context.push_error(form::Error::validation("Your racetime.gg profile is not public. Please connect a Twitch or Patreon account to your racetime.gg account or participate in a recorded race."));
                             None
                         }
-                    } else {
-                        form.context.push_error(form::Error::validation("A racetime.gg account is required to enter this event. Go to your profile and select “Connect a racetime.gg account”.")); //TODO direct link?
-                        None
+                        None => {
+                            form.context.push_error(form::Error::validation("A racetime.gg account is required to enter this event. Go to your profile and select “Connect a racetime.gg account”.")); //TODO direct link?
+                            None
+                        }
                     }
                 } else {
                     form.context.push_error(form::Error::validation("This field is required.").with_name("racetime_team"));

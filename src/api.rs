@@ -138,7 +138,7 @@ impl Guard for ShowRestreamConsent<'_> {
             if event.organizers(&mut *db).await?.contains(me) || event.restreamers(&mut *db).await?.contains(me) {
                 Ok(())
             } else {
-                Err("Only event organizers and restreamers can view restream consent info.".into())
+                Err("Only event organizers and restream coordinators can view restream consent info.".into())
             }
         })
     }
@@ -161,7 +161,7 @@ impl Guard for EditRace {
             if event.organizers(&mut *db).await?.contains(me) || event.restreamers(&mut *db).await?.contains(me) {
                 Ok(())
             } else {
-                Err("Only archivists, event organizers, and restreamers can edit races.".into())
+                Err("Only archivists, event organizers, and restream coordinators can edit races.".into())
             }
         })
     }
@@ -574,7 +574,7 @@ pub(crate) async fn entrants_csv(db_pool: &State<PgPool>, http_client: &State<re
                 csv.serialize(Row {
                     id: member.id,
                     display_name: member.display_name(),
-                    twitch_display_name: member.racetime_user_data(http_client).await?.and_then(|racetime_user_data| racetime_user_data.twitch_display_name),
+                    twitch_display_name: member.racetime_user_data(http_client).await?.and_then(identity).and_then(|racetime_user_data| racetime_user_data.twitch_display_name),
                     discord_display_name: member.discord.as_ref().map(|discord| &*discord.display_name),
                     discord_discriminator: member.discord.as_ref().and_then(|discord| discord.username_or_discriminator.as_ref().right()).copied(),
                     racetime_id: member.racetime.as_ref().map(|racetime| &*racetime.id),

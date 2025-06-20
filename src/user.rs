@@ -252,14 +252,10 @@ impl User {
         }
     }
 
-    pub(crate) async fn racetime_user_data(&self, http_client: &reqwest::Client) -> wheel::Result<Option<racetime::model::UserProfile>> {
+    /// Returns `Some(None)` if the user data can't be accessed. This may be because the user ID does not exist, or because the user profile is not public, see https://github.com/racetimeGG/racetime-app/blob/5892f8f80eb1bd9619244becc48bbc4607b76844/racetime/models/user.py#L274-L296
+    pub(crate) async fn racetime_user_data(&self, http_client: &reqwest::Client) -> wheel::Result<Option<Option<racetime::model::UserProfile>>> {
         Ok(if let Some(ref racetime) = self.racetime {
-            Some(
-                http_client.get(format!("https://{}/user/{}/data", racetime_host(), racetime.id))
-                    .send().await?
-                    .detailed_error_for_status().await?
-                    .json_with_text_in_error().await?
-            )
+            Some(racetime_bot::user_data(http_client, &racetime.id).await?)
         } else {
             None
         })
@@ -291,8 +287,7 @@ impl PartialEq for User {
 impl Eq for User {}
 
 #[rocket::get("/user/<id>")]
-pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, racetime_user: Option<RaceTimeUser>, discord_user: Option<DiscordUser>, id: Result<Id<Users>, <Id<Users> as FromParam<'_>>::Error>) -> Result<RawHtml<String>, StatusOrError<PageError>> {
-    let Ok(id) = id else { return Err(StatusOrError::Status(Status::NotFound)) }; // https://github.com/rwf2/Rocket/issues/2880
+pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, racetime_user: Option<RaceTimeUser>, discord_user: Option<DiscordUser>, id: Id<Users>) -> Result<RawHtml<String>, StatusOrError<PageError>> {
     let mut transaction = pool.begin().await?;
     let user = if let Some(user) = User::from_id(&mut *transaction, id).await? {
         user
@@ -387,7 +382,7 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
                         }
                     }
                 }
-                //TODO if this may be outdated, link to racetime.gg login page for refreshing
+                //TODO if this may be outdated, link to Discord login page for refreshing
             }
         }
     } else if me.as_ref().is_some_and(|me| me.id == user.id) {

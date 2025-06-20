@@ -829,7 +829,24 @@ pub(crate) fn resolve_s5_draft_settings(picks: &draft::Picks) -> seed::Settings 
     if mixed_dungeons == "mixed" {
         mix_entrance_pools.push("Dungeon");
     }
-    let triforce_count = rng().random_range(50..=100);
+    let mut triforce_count = 30;
+    if one_major == "on" { triforce_count -= 10 }
+    if keysanity == "on" { triforce_count -= 5 }
+    if keysy == "on" { triforce_count += 5 }
+    if let "overworld" | "all" = skulls { triforce_count += 5 }
+    if cows == "on" { triforce_count += 5 }
+    if shops == "4" { triforce_count += 10 }
+    if scrubs == "affordable" { triforce_count += 10 }
+    if let "minimal" | "scarce" = itempool { triforce_count += 10 }
+    if pots == "all" { triforce_count += 15 }
+    if crates == "all" { triforce_count += 10 }
+    match souls {
+        "bosses" => triforce_count -= 5,
+        "all-regional" => triforce_count -= 10,
+        "all-anywhere" => triforce_count -= 25,
+        _ => {}
+    }
+    let triforce_count = triforce_count.clamp(1, 45);
     collect![
         format!("user_message") => json!("Tournoi Francophone Saison 5"),
         format!("password_lock") => json!(true),
@@ -843,13 +860,13 @@ pub(crate) fn resolve_s5_draft_settings(picks: &draft::Picks) -> seed::Settings 
             "off" => json!(false),
             _ => unreachable!(),
         },
-        format!("triforce_count_per_world") => json!((triforce_count as f32 * match itempool {
+        format!("triforce_count_per_world") => json!(triforce_count),
+        format!("triforce_goal_per_world") => json!((triforce_count as f32 / match itempool {
             "balanced" => 1.5,
             "scarce" => 1.25,
             "minimal" => 1.0,
             _ => unreachable!(),
-        }).round() as u8),
-        format!("triforce_goal_per_world") => json!(triforce_count),
+        }).round().max(1.0) as u8),
         format!("bridge") => match bridge {
             "4meds-meds" | "4meds-dungeons" | "5meds-meds" | "5meds-dungeons" | "6meds" => json!("medallions"),
             "1stones" | "2stones" | "3stones" => json!("stones"),
@@ -1043,7 +1060,7 @@ pub(crate) fn resolve_s5_draft_settings(picks: &draft::Picks) -> seed::Settings 
             "add_locations":         [
                 { "location": "Sheik in Kakariko", "types": ["always"] },
                 { "location": "Deku Tree GS Basement Back Room", "types": ["always"] },
-                { "location": "Deku Theater Skull Mask", "types": ["always"] },
+                { "location": "DMC Deku Scrub", "types": ["always"] },
             ],
             "remove_locations":      [
                 { "location": "Song from Royal Familys Tomb", "types": ["sometimes"] },
@@ -1052,15 +1069,11 @@ pub(crate) fn resolve_s5_draft_settings(picks: &draft::Picks) -> seed::Settings 
                 { "location": "Sheik in Crater", "types": ["sometimes"] },
                 { "location": "Sheik at Colossus", "types": ["sometimes"] },
                 { "location": "Ice Cavern Iron Boots Chest", "types": ["sometimes"] },
-                { "location": "GF HBA 1500 Points", "types": ["sometimes"] },
                 { "location": "GC Maze Left Chest", "types": ["sometimes"] },
                 { "location": "GV Chest", "types": ["sometimes"] },
                 { "location": "HC Great Fairy Reward", "types": ["sometimes"] },
                 { "location": "OGC Great Fairy Reward", "types": ["sometimes"] },
-                { "location": "Water Temple River Chest", "types": ["sometimes"] },
                 { "location": "Gerudo Training Ground Maze Path Final Chest", "types": ["sometimes"] },
-                { "location": "Spirit Temple Silver Gauntlets Chest", "types": ["sometimes"] },
-                { "location": "Spirit Temple Mirror Shield Chest", "types": ["sometimes"] },
             ],
             "add_items":             [],
             "remove_items":          [
@@ -1074,7 +1087,7 @@ pub(crate) fn resolve_s5_draft_settings(picks: &draft::Picks) -> seed::Settings 
             "use_default_goals":     true,
             "distribution":          {
                 "trial":      {"order":  1, "weight": 0.0, "fixed":   0, "copies": 2},
-                "entrance":   {"order":  2, "weight": 0.0, "fixed":   0, "copies": 2},
+                "entrance":   {"order":  2, "weight": 0.0, "fixed":   4, "copies": 2},
                 "always":     {"order":  3, "weight": 0.0, "fixed":   0, "copies": 2},
                 "barren":     {"order":  4, "weight": 0.0, "fixed":   3, "copies": 2},
                 "goal":       {"order":  5, "weight": 0.0, "fixed":   5, "copies": 2},

@@ -81,7 +81,7 @@ pub(crate) enum MatchSource<'a> {
         community: Option<&'a str>,
         tournament: &'a str,
     },
-    League, //TODO automatically scan for new matches and create scheduling threads
+    League,
     StartGG(&'a str),
 }
 
@@ -565,7 +565,7 @@ impl<'a> Data<'a> {
                 @let practice_seed_url = self.single_settings.is_some().then(|| uri!(practice_seed(self.series, &*self.event)));
                 @let practice_race_url = if_chain! {
                     if let Some(goal) = racetime_bot::Goal::for_event(self.series, &self.event);
-                    if goal.is_custom(); //TODO also support non-custom goals, needs either a list of the internal goal IDs or an adjustment to the startrace page's GET parameter parsing
+                    if goal.is_custom(); //TODO also support non-custom goals, see https://github.com/racetimeGG/racetime-app/issues/215
                     then {
                         let mut practice_url = Url::parse(&format!("https://{}/{}/startrace", racetime_host(), racetime_bot::CATEGORY))?;
                         practice_url
@@ -1078,6 +1078,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User
                                     }
                                     @match data.series {
                                         Series::CoOp => : coop::async_rules(async_kind);
+                                        Series::MixedPools => : mp::async_rules(&data);
                                         Series::Multiworld => : mw::async_rules(&data, async_kind);
                                         _ => {}
                                     }
@@ -2000,29 +2001,38 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, discord_ctx: &State<RwFut
                     if let Some(sum) = times.iter().take(players.len()).try_fold(Duration::default(), |acc, &time| Some(acc + time?)) {
                         message.push(" finished with a time of ");
                         message.push(English.format_duration(sum / u32::try_from(players.len()).expect("too many players in team"), true));
-                        message.push_line('!');
+                        message.push('!');
                     } else {
-                        message.push_line(" did not finish.");
+                        message.push(" did not finish.");
                     }
-                    if players.len() > 1 {
-                        for (i, ((player, time), vod)) in players.into_iter().zip(&times).zip(&vods).enumerate() {
-                            if let Some(player) = User::from_id(&mut *transaction, player).await? {
-                                message.mention_user(&player);
-                            } else {
-                                message.push("player ");
-                                message.push((i + 1).to_string());
-                            }
-                            message.push(": ");
-                            if let Some(time) = *time {
-                                message.push(English.format_duration(time, false));
-                            } else {
-                                message.push("DNF");
-                            }
-                            if vod.is_empty() {
-                                message.push_line("");
-                            } else {
-                                message.push(' ');
-                                message.push_line_safe(vod);
+                    match players.into_iter().zip(&times).zip(&vods).exactly_one() {
+                        Ok(((_, _), vod)) => if vod.is_empty() {
+                            message.push_line("");
+                        } else {
+                            message.push(' ');
+                            message.push_line_safe(vod);
+                        },
+                        Err(data) => {
+                            message.push_line("");
+                            for (i, ((player, time), vod)) in data.enumerate() {
+                                if let Some(player) = User::from_id(&mut *transaction, player).await? {
+                                    message.mention_user(&player);
+                                } else {
+                                    message.push("player ");
+                                    message.push((i + 1).to_string());
+                                }
+                                message.push(": ");
+                                if let Some(time) = *time {
+                                    message.push(English.format_duration(time, false));
+                                } else {
+                                    message.push("DNF");
+                                }
+                                if vod.is_empty() {
+                                    message.push_line("");
+                                } else {
+                                    message.push(' ');
+                                    message.push_line_safe(vod);
+                                }
                             }
                         }
                     }

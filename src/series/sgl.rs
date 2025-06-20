@@ -57,6 +57,16 @@ impl RestreamMatch {
     }
 }
 
+impl fmt::Display for RestreamMatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.title.is_empty() {
+            write!(f, "{}", self.players.iter().map(|player| &player.streaming_from).format(" vs "))
+        } else {
+            self.title.fmt(f)
+        }
+    }
+}
+
 #[derive(Clone, Deserialize)]
 pub(crate) struct RestreamChannel {
     pub(crate) language: Language,
@@ -74,7 +84,7 @@ impl Player {
         Ok(match entrant {
             Entrant::MidosHouseTeam(team) => if_chain! {
                 if let Ok(member) = team.members(transaction).await?.into_iter().exactly_one();
-                if let Some(user_data) = member.racetime_user_data(http_client).await?;
+                if let Some(Some(user_data)) = member.racetime_user_data(http_client).await?;
                 if let Some(twitch_name) = user_data.twitch_name;
                 then {
                     twitch_name.to_ascii_lowercase() == self.streaming_from.to_ascii_lowercase()

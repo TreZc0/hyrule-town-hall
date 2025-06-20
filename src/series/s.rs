@@ -196,10 +196,10 @@ impl WeeklyKind {
 }
 
 // Make sure to keep the following in sync with each other and the rando_version and single_settings database entries:
-pub(crate) const WEEKLY_RANDO_VERSION: VersionedBranch = VersionedBranch::Pinned { version: ootr_utils::Version::from_branch(ootr_utils::Branch::DevFenhl, 8, 2, 76, 6) };
+pub(crate) const WEEKLY_RANDO_VERSION: VersionedBranch = VersionedBranch::Pinned { version: ootr_utils::Version::from_dev(8, 3, 15) };
 pub(crate) const WEEKLY_PREROLL_MODE: PrerollMode = PrerollMode::Medium;
 pub(crate) fn weekly_chest_appearances() -> ChestAppearances {
-    static WEIGHTS: LazyLock<Vec<(ChestAppearances, usize)>> = LazyLock::new(|| serde_json::from_str(include_str!("../../assets/event/s/chests-w-8.2.76-fenhl.5.json")).expect("failed to parse chest weights"));
+    static WEIGHTS: LazyLock<Vec<(ChestAppearances, usize)>> = LazyLock::new(|| serde_json::from_str(include_str!("../../assets/event/s/chests-w-8.3.12.json")).expect("failed to parse chest weights"));
 
     WEIGHTS.choose_weighted(&mut rng(), |(_, weight)| *weight).expect("failed to choose random chest textures").0
 }
@@ -210,7 +210,7 @@ fn long_weekly_settings() -> RawHtml<String> {
             : "Settings are typically changed once every 2 or 4 weeks and posted in ";
             a(href = "https://discord.com/channels/274180765816848384/512053754015645696") : "#standard-announcements";
             : " on Discord. Current settings starting with the Kokiri weekly on ";
-            : format_datetime(Utc.with_ymd_and_hms(2025, 5, 10, 22, 00, 00).single().expect("wrong hardcoded datetime"), DateTimeFormat { long: false, running_text: true });
+            : format_datetime(Utc.with_ymd_and_hms(2025, 6, 7, 22, 00, 00).single().expect("wrong hardcoded datetime"), DateTimeFormat { long: false, running_text: true });
             : " are as follows:";
         }
         ul {
@@ -218,12 +218,10 @@ fn long_weekly_settings() -> RawHtml<String> {
                 a(href = uri!(event::info(Series::Standard, "8"))) : "S8";
                 : " Base";
             }
-            li : "6 Medallion Bridge (GBK removed)";
-            li : "Dungeon ER + Boss ER";
-            li : "Open Deku";
+            li : "AD Bridge (9 Dungeon Rewards; Gbk removed)";
+            li : "2 Precompleted Dungeons (Shadow/Spirit medallion)";
+            li : "Start with Light medallion";
             li : "Random Spawns (both ages)";
-            li : "Start with Lens + FW";
-            li : "Start with Max Rupees";
             li : "Free Scarecrow's Song";
             li : "Preplanted Beans";
             li : "Ruto on F1";
@@ -231,45 +229,57 @@ fn long_weekly_settings() -> RawHtml<String> {
             li : "TCG requires Lens + Magic";
             li : "Key Appearance Matches Dungeons (cosmetic)";
             li {
-                : "Additional Tricks Enabled:";
-                ul {
-                    li : "DC Armos Push for Gold Skulltula";
-                    li : "Deku Basement Web with Bow";
-                }
-            }
-            li {
                 : "Hint Distribution:";
                 ul {
                     li : "30/40/50 Skull House";
                     li : "5 Always";
                     li : "5 Path";
                     li : "3 Important Check";
-                    li : "3 Entrance";
-                    li : "2 Sometimes";
                     li : "2 Dual";
+                    li : "4 Sometimes";
+                    li : "HC Storms & HF Cow disabled";
                 }
-                strong : "Note:";
-                : " Boss Entrances have been added into the hintable entrance pool.";
+            }
+            li {
+                : "Sometimes Hints added back into pool:";
+                ul {
+                    li : "Royal Family Tomb (dual)";
+                    li : "Ice Cavern (dual)";
+                }
+            }
+            li {
+                : "Sometimes Hints removed from pool:";
+                ul {
+                    li : "Royal Family Tomb Torches";
+                    li : "Ice Cavern Final Chest";
+                    li : "IGC Shadow Trial 2";
+                    li : "IGC Spirit Trial (dual)";
+                }
             }
         }
     }
 }
 pub(crate) fn weekly_settings() -> seed::Settings {
     collect![
-        format!("user_message") => json!("Standard Weekly (2025-05-10)"),
+        format!("user_message") => json!("Standard Weekly (2025-06-07)"),
+        format!("bridge") => json!("dungeons"),
         format!("trials") => json!(0),
         format!("shuffle_ganon_bosskey") => json!("remove"),
-        format!("open_deku") => json!(true),
-        format!("open_forest") => json!(true),
-        format!("require_gohma") => json!(false),
+        format!("open_forest") => json!("closed_deku"),
         format!("open_kakariko") => json!("open"),
         format!("open_door_of_time") => json!(true),
         format!("gerudo_fortress") => json!("fast"),
         format!("starting_age") => json!("random"),
-        format!("shuffle_dungeon_entrances") => json!("simple"),
-        format!("shuffle_bosses") => json!("full"),
-        format!("shuffle_child_spawn") => json!("balanced"),
-        format!("shuffle_adult_spawn") => json!("balanced"),
+        format!("empty_dungeons_mode") => json!("rewards"),
+        format!("empty_dungeons_rewards") => json!([
+            "Shadow Medallion",
+            "Spirit Medallion",
+        ]),
+        format!("spawn_positions") => json!([
+            "child",
+            "adult",
+        ]),
+        format!("free_bombchu_drops") => json!(false),
         format!("adult_trade_start") => json!([
             "Prescription",
             "Eyeball Frog",
@@ -277,7 +287,6 @@ pub(crate) fn weekly_settings() -> seed::Settings {
             "Claim Check",
         ]),
         format!("shuffle_mapcompass") => json!("startwith"),
-        format!("free_bombchu_drops") => json!(false),
         format!("disabled_locations") => json!([
             "Deku Theater Mask of Truth",
         ]),
@@ -298,26 +307,21 @@ pub(crate) fn weekly_settings() -> seed::Settings {
             "logic_lens_spirit",
             "logic_lens_gtg",
             "logic_lens_castle",
-            "logic_dc_scarecrow_gs",
-            "logic_deku_b1_webs_with_bow",
         ]),
         format!("starting_equipment") => json!([
             "deku_shield",
         ]),
         format!("starting_inventory") => json!([
             "ocarina",
-            "farores_wind",
-            "lens",
             "zeldas_letter",
         ]),
         format!("start_with_consumables") => json!(true),
-        format!("start_with_rupees") => json!(true),
         format!("skip_reward_from_rauru") => json!(true),
         format!("no_escape_sequence") => json!(true),
         format!("no_guard_stealth") => json!(true),
         format!("no_epona_race") => json!(true),
         format!("skip_some_minigame_phases") => json!(true),
-        format!("free_scarecrow") => json!(true),
+        format!("scarecrow_behavior") => json!("free"),
         format!("fast_bunny_hood") => json!(true),
         format!("plant_beans") => json!(true),
         format!("ruto_already_f1_jabu") => json!(true),
@@ -325,6 +329,9 @@ pub(crate) fn weekly_settings() -> seed::Settings {
         format!("chicken_count") => json!(3),
         format!("big_poe_count") => json!(1),
         format!("hint_dist") => json!("weekly"),
+        format!("plandomized_locations") => json!({
+            "ToT Reward from Rauru": "Light Medallion",
+        }),
         format!("misc_hints") => json!([
             "altar",
             "ganondorf",
@@ -335,13 +342,8 @@ pub(crate) fn weekly_settings() -> seed::Settings {
         ]),
         format!("correct_chest_appearances") => json!("both"),
         format!("correct_potcrate_appearances") => json!("off"),
+        format!("key_appearance_match_dungeon") => json!(true),
         format!("potcrate_textures_specific") => json!([]),
-        format!("clearer_item_models") => json!([
-            "keys",
-            "keyrings",
-            "silver_rupee_pouches",
-            "warp_songs",
-        ]),
         format!("blue_fire_arrows") => json!(true),
         format!("tcg_requires_lens") => json!(true),
         format!("junk_ice_traps") => json!("off"),

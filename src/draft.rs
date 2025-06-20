@@ -123,7 +123,7 @@ impl BanSettings {
 #[derive(Clone)]
 pub(crate) struct DraftSettingChoice {
     pub(crate) name: &'static str,
-    pub(crate) display: &'static str,
+    pub(crate) display: Cow<'static, str>,
 }
 
 #[derive(Clone)]
@@ -420,7 +420,7 @@ impl Draft {
                                         (if n < 4 { "Major Settings" } else { "Minor Settings" }, s::S7_SETTINGS.into_iter()
                                             .filter(|&s::Setting { name, major, .. }| major == (n < 4) && !self.settings.contains_key(name))
                                             .map(|setting @ s::Setting { name, display, other, .. }| DraftSetting {
-                                                options: other.iter().map(|&(name, display, _)| DraftSettingChoice { name, display }).collect(),
+                                                options: other.iter().map(|&(name, display, _)| DraftSettingChoice { name, display: display.into() }).collect(),
                                                 description: Cow::Owned(setting.description()),
                                                 name, display,
                                             })
@@ -532,7 +532,7 @@ impl Draft {
                                     } else {
                                         weights.weights.get_mut(setting.name).unwrap().remove(*name);
                                     }
-                                    if !weights.weights.into_values().any(|weight| weight.into_values().any(|value| value > 0)) {
+                                    if weights.weights.into_values().all(|weight| weight.into_values().any(|value| value > 0)) {
                                         options.push((name, display));
                                     }
                                 }
@@ -540,7 +540,7 @@ impl Draft {
                                     multi_options_settings.push(DraftSetting {
                                         name: setting.name,
                                         display: setting.display,
-                                        options: options.iter().map(|(name, display)| DraftSettingChoice { name, display }).collect(),
+                                        options: options.iter().map(|(name, display)| DraftSettingChoice { name, display: format!("{}: {display}", setting.display).into() }).collect(),
                                         description: Cow::Owned(format!("{}: {}", setting.name, English.join_str_with("or", options.into_nonempty_iter().map(|(name, _)| name)))),
                                     });
                                 }
@@ -552,7 +552,7 @@ impl Draft {
                                             .filter(|&rsl::ForceOffSetting { name, lite, .. }| !self.settings.contains_key(name) && (!is_lite || lite))
                                             .map(|rsl::ForceOffSetting { name, display, .. }|
                                                 DraftSetting {
-                                                    options: vec![DraftSettingChoice { name: "banned", display }],
+                                                    options: vec![DraftSettingChoice { name: "banned", display: display.into() }],
                                                     description: Cow::Owned(format!("{name}: banned")),
                                                     name, display,
                                                 }
@@ -560,11 +560,12 @@ impl Draft {
                                             .collect()),
                                         ("“50/50” Settings", rsl::FIFTY_FIFTY_SETTINGS.into_iter()
                                             .filter(|&rsl::MultiOptionSetting { name, options, .. }| !self.settings.contains_key(name) && (!is_lite || options.iter().any(|(_, _, lite, _)| *lite)))
-                                            .map(|rsl::MultiOptionSetting { name, display, options, .. }|
+                                            .map(|rsl::MultiOptionSetting { name, display: setting_display, options, .. }|
                                                 DraftSetting {
-                                                    options: options.iter().filter(|(_, _, lite, _)| !is_lite || *lite).map(|(name, display, _, _)| DraftSettingChoice { name, display }).collect(),
+                                                    display: setting_display,
+                                                    options: options.iter().filter(|(_, _, lite, _)| !is_lite || *lite).map(|(name, display, _, _)| DraftSettingChoice { name, display: format!("{setting_display}: {display}").into() }).collect(),
                                                     description: Cow::Owned(format!("{name}: {}", English.join_str_with("or", options.iter().try_into_nonempty_iter().expect("has at least one option").map(|(name, _, _, _)| name)))),
-                                                    name, display,
+                                                    name,
                                                 }
                                             )
                                             .collect()),
@@ -780,8 +781,8 @@ impl Draft {
                                         ("All Settings", mw::S3_SETTINGS.iter().copied()
                                             .filter(|&mw::Setting { name, .. }| !self.settings.contains_key(name))
                                             .map(|mw::Setting { name, display, default, default_display, other, description }| DraftSetting {
-                                                options: iter::once(DraftSettingChoice { name: default, display: default_display })
-                                                    .chain(other.iter().map(|&(name, display)| DraftSettingChoice { name, display }))
+                                                options: iter::once(DraftSettingChoice { name: default, display: default_display.into() })
+                                                    .chain(other.iter().map(|&(name, display)| DraftSettingChoice { name, display: display.into() }))
                                                     .collect(),
                                                 description: Cow::Borrowed(description),
                                                 name, display,
@@ -952,16 +953,16 @@ impl Draft {
                                                 if name == "camc" && self.settings.get("special_csmc").map(|special_csmc| &**special_csmc).unwrap_or("no") == "yes" {
                                                     DraftSetting {
                                                         options: vec![
-                                                            DraftSettingChoice { name: "both", display: "chest size & texture match contents" },
-                                                            DraftSettingChoice { name: "off", display: "vanilla chest appearances" },
+                                                            DraftSettingChoice { name: "both", display: "chest size & texture match contents".into() },
+                                                            DraftSettingChoice { name: "off", display: "vanilla chest appearances".into() },
                                                         ],
                                                         description: Cow::Borrowed("camc (Chest Appearance Matches Contents): both (default: size & texture) or off"),
                                                         name, display,
                                                     }
                                                 } else {
                                                     DraftSetting {
-                                                        options: iter::once(DraftSettingChoice { name: default, display: default_display })
-                                                            .chain(other.iter().map(|&(name, display)| DraftSettingChoice { name, display }))
+                                                        options: iter::once(DraftSettingChoice { name: default, display: default_display.into() })
+                                                            .chain(other.iter().map(|&(name, display)| DraftSettingChoice { name, display: display.into() }))
                                                             .collect(),
                                                         description: Cow::Borrowed(description),
                                                         name, display,
@@ -1125,8 +1126,8 @@ impl Draft {
                                         ("All Settings", mw::S5_SETTINGS.iter().copied()
                                             .filter(|&mw::Setting { name, .. }| !self.settings.contains_key(name))
                                             .map(|mw::Setting { name, display, default, default_display, other, description }| DraftSetting {
-                                                options: iter::once(DraftSettingChoice { name: default, display: default_display })
-                                                    .chain(other.iter().map(|&(name, display)| DraftSettingChoice { name, display }))
+                                                options: iter::once(DraftSettingChoice { name: default, display: default_display.into() })
+                                                    .chain(other.iter().map(|&(name, display)| DraftSettingChoice { name, display: display.into() }))
                                                     .collect(),
                                                 description: Cow::Borrowed(description),
                                                 name, display,
@@ -1303,6 +1304,9 @@ impl Draft {
                                 let (hard_settings, classic_settings) = all_settings.iter()
                                     .filter(|&&fr::Setting { name, .. }| !self.settings.contains_key(name) && match name {
                                         "keysy" => self.settings.get("keysanity").is_none_or(|keysanity| keysanity == "off"),
+                                        "1major" if kind == Kind::TournoiFrancoS5 => self.settings.get("th").is_none_or(|th| th == "off") && self.settings.get("souls").is_none_or(|souls| souls == "off"),
+                                        "souls" if kind == Kind::TournoiFrancoS5 => self.settings.get("1major").is_none_or(|one_major| one_major == "off"),
+                                        "th" if kind == Kind::TournoiFrancoS5 => self.settings.get("1major").is_none_or(|one_major| one_major == "off"),
                                         "keysanity" => self.settings.get("keysy").is_none_or(|keysy| keysy == "off"),
                                         _ => true,
                                     })
@@ -1389,8 +1393,8 @@ impl Draft {
                                         };
                                         (!other.is_empty()).then(|| (is_hard, DraftSetting {
                                             display: if display == "enemy souls" && !hard_settings_ok { "boss souls" } else { display },
-                                            options: can_ban.then(|| DraftSettingChoice { name: default, display: default_display }).into_iter()
-                                                .chain(other.into_iter().map(|(name, _, display)| DraftSettingChoice { name, display }))
+                                            options: can_ban.then(|| DraftSettingChoice { name: default, display: default_display.into() }).into_iter()
+                                                .chain(other.into_iter().map(|(name, _, display)| DraftSettingChoice { name, display: display.into() }))
                                                 .collect(),
                                             description: Cow::Borrowed(description),
                                             name,
@@ -1721,7 +1725,7 @@ impl Draft {
                                     MessageContext::Discord { transaction, guild_id, team, .. } => MessageBuilder::default()
                                         .mention_team(transaction, Some(*guild_id), team).await?
                                         .push(if team.name_is_plural() { " have picked " } else { " has picked " })
-                                        .push(option.display)
+                                        .push(&*option.display)
                                         .push('.')
                                         .build(),
                                 })
@@ -1969,7 +1973,7 @@ impl Draft {
                                     MessageContext::Discord { transaction, guild_id, team, .. } => MessageBuilder::default()
                                         .mention_team(transaction, Some(*guild_id), team).await?
                                         .push(if team.name_is_plural() { " have picked " } else { " has picked " })
-                                        .push(option.display)
+                                        .push(&*option.display)
                                         .push('.')
                                         .build(),
                                 })
@@ -2224,7 +2228,7 @@ impl Draft {
                                     MessageContext::Discord { transaction, guild_id, team, .. } => MessageBuilder::default()
                                         .mention_team(transaction, Some(*guild_id), team).await?
                                         .push(if team.name_is_plural() { " have picked " } else { " has picked " })
-                                        .push(option.display)
+                                        .push(&*option.display)
                                         .push('.')
                                         .build(),
                                 })
@@ -2476,7 +2480,7 @@ impl Draft {
                                     MessageContext::Discord { transaction, guild_id, team, .. } => MessageBuilder::default()
                                         .mention_team(transaction, Some(*guild_id), team).await?
                                         .push(if team.name_is_plural() { " have picked " } else { " has picked " })
-                                        .push(option.display)
+                                        .push(&*option.display)
                                         .push('.')
                                         .build(),
                                 })
@@ -2722,7 +2726,7 @@ impl Draft {
                                     MessageContext::Discord { transaction, guild_id, team, .. } => MessageBuilder::default()
                                         .mention_team(transaction, Some(*guild_id), team).await?
                                         .push(if team.name_is_plural() { " have banned " } else { " has banned " })
-                                        .push(option.display)
+                                        .push(&*option.display)
                                         .push('.')
                                         .build(),
                                 })
@@ -3060,14 +3064,14 @@ impl Draft {
                                         MessageBuilder::default()
                                             .mention_team(transaction, Some(*guild_id), team).await?
                                             .push(if is_default { " a banni " } else { " a choisi " })
-                                            .push(if is_default { match setting.name { "camc" => "no CAMC", "souls" if !hard_settings_ok => "boss souls", _ => setting.display } } else { option.display })
+                                            .push(if is_default { match setting.name { "camc" => "no CAMC", "souls" if !hard_settings_ok => "boss souls", _ => setting.display } } else { &option.display })
                                             .push('.')
                                             .build()
                                     } else {
                                         MessageBuilder::default()
                                             .mention_team(transaction, Some(*guild_id), team).await?
                                             .push(if is_default { " has banned " } else { " has picked " })
-                                            .push(if is_default { match setting.name { "camc" => "no CAMC", "souls" if !hard_settings_ok => "boss souls", _ => setting.display } } else { option.display })
+                                            .push(if is_default { match setting.name { "camc" => "no CAMC", "souls" if !hard_settings_ok => "boss souls", _ => setting.display } } else { &option.display })
                                             .push('.')
                                             .build()
                                     },

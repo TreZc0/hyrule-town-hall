@@ -165,7 +165,7 @@ pub(crate) fn format_datetime<Z: TimeZone>(datetime: DateTime<Z>, format: DateTi
         (true, true) => "%-I%p %Z",
     }).to_string();
     html! {
-        //TODO once https://github.com/DJDavid98/SledgeHammerTime is out of beta and https://github.com/DJDavid98/SledgeHammerTime/issues/2 is fixed, format as a link, e.g. https://hammertime.cyou/?t=1723402800.000
+        //TODO once https://github.com/WentTheFox/SledgeHammerTime is out of beta and https://github.com/WentTheFox/SledgeHammerTime/issues/2 is fixed, format as a link, e.g. https://hammertime.cyou/?t=1723402800.000
         span(class = "datetime", data_timestamp = datetime.timestamp_millis(), data_long = format.long.to_string()) {
             : utc.format("%A, %B %-d, %Y, %H:%M UTC").to_string();
             @if format.running_text {

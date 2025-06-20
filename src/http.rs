@@ -470,6 +470,19 @@ async fn not_found(request: &Request<'_>) -> PageResult {
     }).await
 }
 
+#[rocket::catch(422)]
+async fn unprocessable_content(request: &Request<'_>) -> Result<(Status, RawHtml<String>), PageError> {
+    let pool = request.guard::<&State<PgPool>>().await.expect("missing database pool");
+    let me = request.guard::<User>().await.succeeded();
+    let uri = request.guard::<Origin<'_>>().await.succeeded().unwrap_or_else(|| Origin(uri!(index)));
+    Ok((Status::NotFound, page(pool.begin().await?, &me, &uri, PageStyle { kind: PageKind::Banner, chests: ChestAppearances::INVISIBLE, ..PageStyle::default() }, "Not Found — Mido's House", html! {
+        div(style = "flex-grow: 0;") {
+            h1 : "Error 404: Not Found";
+        }
+        img(style = "flex-grow: 1;", class = "banner nearest-neighbor", src = "https://i.imgur.com/i4lJkiq.png");
+    }).await?))
+}
+
 #[rocket::catch(500)]
 async fn internal_server_error(request: &Request<'_>) -> PageResult {
     if let Environment::Production = Environment::default() {
@@ -571,13 +584,16 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::opt_out_post,
         event::request_async,
         event::submit_async,
+        event::practice_seed,
+        event::volunteer,
         event::enter::get,
         event::enter::post,
         event::teams::get,
-        event::practice_seed,
-        event::volunteer,
         event::configure::get,
         event::configure::post,
+        event::configure::restreamers_get,
+        event::configure::add_restreamer,
+        event::configure::remove_restreamer,
         favicon::favicon_ico,
         favicon::favicon_png,
         legal::legal_disclaimer,
@@ -593,6 +609,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
     .register("/", rocket::catchers![
         bad_request,
         not_found,
+        unprocessable_content,
         internal_server_error,
         bad_gateway,
         fallback_catcher,

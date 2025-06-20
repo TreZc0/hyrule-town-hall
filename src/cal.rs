@@ -906,7 +906,7 @@ impl Race {
             match entrant {
                 Entrant::MidosHouseTeam(team) => for (member, role) in team.members_roles(&mut *transaction).await? {
                     if event.team_config.role_is_racing(role) {
-                        if let Some(twitch_name) = member.racetime_user_data(http_client).await?.and_then(|racetime_user_data| racetime_user_data.twitch_name) {
+                        if let Some(twitch_name) = member.racetime_user_data(http_client).await?.and_then(identity).and_then(|racetime_user_data| racetime_user_data.twitch_name) {
                             channels.push(Cow::Owned(twitch_name));
                         } else {
                             return Ok(None)
@@ -924,7 +924,7 @@ impl Race {
                 }
                 Entrant::Discord { twitch_username: None, racetime_id: None, id } => if_chain! {
                     if let Some(user) = User::from_discord(&mut **transaction, *id).await?;
-                    if let Some(racetime_user_data) = user.racetime_user_data(http_client).await?;
+                    if let Some(Some(racetime_user_data)) = user.racetime_user_data(http_client).await?;
                     if let Some(twitch_name) = racetime_user_data.twitch_name;
                     then {
                         channels.push(Cow::Owned(twitch_name));
@@ -1564,13 +1564,13 @@ async fn add_event_races(transaction: &mut Transaction<'_, Postgres>, discord_ct
                         ),
                     },
                 };
-                cal_event.push(Summary::new(if let Some(game) = race.game {
+                cal_event.push(Summary::new(ics::escape_text(if let Some(game) = race.game {
                     format!("{summary_prefix}, game {game}")
                 } else {
                     summary_prefix
-                }));
+                })));
                 cal_event.push(dtstart(start));
-                cal_event.push(dtend(race_event.end().unwrap_or_else(|| start + match event.series {
+                cal_event.push(dtend(race_event.end().filter(|_| !race_event.is_private_async_part() || race.cal_events().all(|event| event.end().is_some())).unwrap_or_else(|| start + match event.series {
                     Series::TriforceBlitz => TimeDelta::hours(2),
                     Series::BattleRoyale | Series::Crosskeys => TimeDelta::hours(2) + TimeDelta::minutes(30),
                     Series::CoOp | Series::MixedPools | Series::Scrubs | Series::SpeedGaming | Series::WeTryToBeBetter => TimeDelta::hours(3),
@@ -2478,7 +2478,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                 .detailed_error_for_status().await?
                                 .json_with_text_in_error::<league::Schedule>().await?;
                             for match_data in schedule.matches {
-                                if match_data.id <= 502 { continue } // seasons 5 to 7
+                                if match_data.id <= 938 { continue } // seasons 5 to 8
                                 let mut new_race = Race {
                                     id: Id::dummy(),
                                     series: event.series,
@@ -2594,7 +2594,9 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                             let msg = MessageBuilder::default()
                                                 .push("could not find any races matching SpeedGaming match ")
                                                 .push_mono(restream_match.id.to_string())
-                                                //TODO describe match
+                                                .push(" (")
+                                                .push_safe(restream_match.to_string())
+                                                .push(')')
                                                 //TODO instructions for how to fix?
                                                 .build();
                                             let notification = organizer_channel.say(&*discord_ctx.read().await, msg).await?;
@@ -2614,8 +2616,9 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                             let msg = MessageBuilder::default()
                                                 .push("found multiple races matching SpeedGaming match ")
                                                 .push_mono(restream_match.id.to_string())
-                                                //TODO describe match
-                                                .push(", please select one to assign it to:")
+                                                .push(" (")
+                                                .push_safe(restream_match.to_string())
+                                                .push("), please select one to assign it to:")
                                                 .build();
                                             let mut options = Vec::with_capacity(races.size_hint().0);
                                             for (_, race) in races {
@@ -3031,7 +3034,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
         form.context.push_error(form::Error::validation("This race is not part of this event."));
     }
     if !me.is_archivist && !event.organizers(&mut transaction).await?.contains(&me) && !event.restreamers(&mut transaction).await?.contains(&me) {
-        form.context.push_error(form::Error::validation("You must be an organizer, restreamer, or archivist to edit this race. If you would like to become an archivist, please contact TreZ on Discord."));
+        form.context.push_error(form::Error::validation("You must be an organizer, restream coordinator, or archivist to edit this race. If you would like to be a restream coordinator for this event, please contact the organizers. If you would like to become an archivist, please contact TreZ on Discord."));
     }
     Ok(if let Some(ref value) = form.value {
         let mut valid_room_urls = HashMap::new();

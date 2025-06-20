@@ -171,7 +171,6 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
     } else if losing_time.time_window(&winning_time).is_some_and(|time_window| time_window <= event.retime_window) {
         if let Some(organizer_channel) = event.discord_organizer_channel {
             let mut msg = MessageBuilder::default();
-            //TODO mention organizer role
             msg.push("race finished as a draw: <");
             msg.push(winning_room.to_string());
             if winning_room != losing_room {
@@ -323,7 +322,6 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                 } else {
                     if let Some(organizer_channel) = event.discord_organizer_channel {
                         let mut msg = MessageBuilder::default();
-                        //TODO mention organizer role
                         msg.push("failed to report race result to start.gg: <https://");
                         msg.push(racetime_host());
                         msg.push(&ctx.data().await.url);
@@ -441,7 +439,6 @@ impl Handler {
             }
             if let Some(organizer_channel) = event.discord_organizer_channel {
                 organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, MessageBuilder::default()
-                    //TODO mention organizer role
                     .push("first half of async finished")
                     .push(if fpa_invoked { " with FPA call" } else if event.manual_reporting_with_breaks && breaks_used { " with breaks" } else { "" })
                     .push(": <https://")
@@ -454,7 +451,6 @@ impl Handler {
         } else if fpa_invoked {
             if let Some(organizer_channel) = event.discord_organizer_channel {
                 let mut msg = MessageBuilder::default();
-                //TODO mention organizer role
                 msg.push("race finished with FPA call: <https://");
                 msg.push(racetime_host());
                 msg.push(&ctx.data().await.url);
@@ -479,7 +475,6 @@ impl Handler {
         } else if event.manual_reporting_with_breaks && breaks_used {
             if let Some(organizer_channel) = event.discord_organizer_channel {
                 let mut msg = MessageBuilder::default();
-                //TODO mention organizer role
                 msg.push("race finished with breaks: <https://");
                 msg.push(racetime_host());
                 msg.push(&ctx.data().await.url);
