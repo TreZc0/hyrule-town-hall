@@ -169,6 +169,15 @@ pub(crate) struct SignupsTeam {
     hard_settings_ok: bool,
     mq_ok: bool,
     lite_ok: bool,
+    all_dungeons_ok: bool,
+    flute_ok: bool,
+    hover_ok: bool,
+    inverted_ok: bool,
+    keydrop_ok: bool,
+    mirror_scroll_ok: bool,
+    no_delay_ok: bool,
+    pb_ok: bool,
+    zw_ok: bool,
 }
 
 pub(crate) struct Cache {
@@ -434,6 +443,15 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     hard_settings_ok: false,
                     mq_ok: false,
                     lite_ok: false,
+                    all_dungeons_ok: false,
+                    flute_ok: false,
+                    hover_ok: false,
+                    inverted_ok: false,
+                    keydrop_ok: false,
+                    mirror_scroll_ok: false,
+                    no_delay_ok: false,
+                    pb_ok: false,
+                    zw_ok: false,
                 });
             }
             signups
@@ -526,6 +544,15 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     hard_settings_ok: false,
                     mq_ok: false,
                     lite_ok: false,
+                    all_dungeons_ok: false,
+                    flute_ok: false,
+                    hover_ok: false,
+                    inverted_ok: false,
+                    keydrop_ok: false,
+                    mirror_scroll_ok: false,
+                    no_delay_ok: false,
+                    pb_ok: false,
+                    zw_ok: false,
                 }).collect()
         }
         QualifierKind::None | QualifierKind::Rank | QualifierKind::Single { .. } => {
@@ -536,11 +563,20 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 lite_ok: bool,
                 pieces: Option<i16>,
                 qualified: bool,
+                all_dungeons_ok: bool,
+                flute_ok: bool,
+                hover_ok: bool,
+                inverted_ok: bool,
+                keydrop_ok: bool,
+                mirror_scroll_ok: bool,
+                no_delay_ok: bool,
+                pb_ok: bool,
+                zw_ok: bool,
             }
 
             let teams = if let QualifierKind::Rank = qualifier_kind {
                 // teams are manually ranked so include ones that haven't submitted qualifier asyncs
-                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", plural_name, hard_settings_ok, mq_ok, lite_ok, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams WHERE
+                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", plural_name, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams WHERE
                     series = $1
                     AND event = $2
                     AND NOT resigned
@@ -565,12 +601,21 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                         hard_settings_ok: row.hard_settings_ok,
                         mq_ok: row.mq_ok,
                         lite_ok: row.lite_ok,
+                        all_dungeons_ok: row.all_dungeons_ok,
+                        flute_ok: row.flute_ok,
+                        hover_ok: row.hover_ok,
+                        inverted_ok: row.inverted_ok,
+                        keydrop_ok: row.keydrop_ok,
+                        mirror_scroll_ok: row.mirror_scroll_ok,
+                        no_delay_ok: row.no_delay_ok,
+                        pb_ok: row.pb_ok,
+                        zw_ok: row.zw_ok,
                         pieces: None,
                         qualified: false,
                     })
                     .try_collect::<Vec<_>>().await?
             } else {
-                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", plural_name, submitted IS NOT NULL AS "qualified!", pieces, hard_settings_ok, mq_ok, lite_ok, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams LEFT OUTER JOIN async_teams ON (id = team) WHERE
+                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", plural_name, submitted IS NOT NULL AS "qualified!", pieces, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams LEFT OUTER JOIN async_teams ON (id = team) WHERE
                     series = $1
                     AND event = $2
                     AND NOT resigned
@@ -597,6 +642,15 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                         hard_settings_ok: row.hard_settings_ok,
                         mq_ok: row.mq_ok,
                         lite_ok: row.lite_ok,
+                        all_dungeons_ok: row.all_dungeons_ok,
+                        flute_ok: row.flute_ok,
+                        hover_ok: row.hover_ok,
+                        inverted_ok: row.inverted_ok,
+                        keydrop_ok: row.keydrop_ok,
+                        mirror_scroll_ok: row.mirror_scroll_ok,
+                        no_delay_ok: row.no_delay_ok,
+                        pb_ok: row.pb_ok,
+                        zw_ok: row.zw_ok,
                         pieces: row.pieces,
                         qualified: row.qualified,
                     })
@@ -631,6 +685,15 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     hard_settings_ok: team.hard_settings_ok,
                     mq_ok: team.mq_ok,
                     lite_ok: team.lite_ok,
+                    all_dungeons_ok: team.all_dungeons_ok,
+                    flute_ok: team.flute_ok,
+                    hover_ok: team.hover_ok,
+                    inverted_ok: team.inverted_ok,
+                    keydrop_ok: team.keydrop_ok,
+                    mirror_scroll_ok: team.mirror_scroll_ok,
+                    no_delay_ok: team.no_delay_ok,
+                    pb_ok: team.pb_ok,
+                    zw_ok: team.zw_ok,
                     members,
                 });
             }
@@ -859,6 +922,35 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
             });
         }
     }
+    if data.series == Series::Crosskeys {
+        column_headers.push(html! {
+            th : "All Dungeons OK";
+        });
+        column_headers.push(html! {
+            th : "Flute OK";
+        });
+        column_headers.push(html! {
+            th : "Inverted OK";
+        });
+        column_headers.push(html! {
+            th : "Keydrop OK";
+        });
+        column_headers.push(html! {
+            th : "Mirror Scroll OK";
+        });
+        column_headers.push(html! {
+            th : "Pseudoboots OK";
+        });
+        column_headers.push(html! {
+            th : "ZW OK";
+        });
+        column_headers.push(html! {
+            th : "Hovering OK";
+        });
+        column_headers.push(html! {
+            th : "No Delay OK";
+        });
+    }
     if show_restream_consent {
         column_headers.push(html! {
             th : "Restream Consent";
@@ -887,7 +979,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                         }
                     }
                 } else {
-                    @for (signup_idx, SignupsTeam { team, members, qualification, hard_settings_ok, mq_ok, lite_ok }) in signups.into_iter().enumerate() {
+                    @for (signup_idx, SignupsTeam { team, members, qualification, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok }) in signups.into_iter().enumerate() {
                         @let is_dimmed = match qualifier_kind {
                             QualifierKind::None => false,
                             QualifierKind::Rank => false, // unknown cutoff
@@ -1157,6 +1249,54 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                         }
                                     }
                                 }
+                            }
+                            @if data.series == Series::Crosskeys {
+                                td {
+                                    @if (all_dungeons_ok) {
+                                        : "✓";
+                                    }
+                                }
+                                td {
+                                    @if (flute_ok) {
+                                        : "✓";
+                                    }
+                                }
+                                td {
+                                    @if (inverted_ok) {
+                                        : "✓";
+                                    }
+                                }
+                                td {
+                                    @if (keydrop_ok) {
+                                        : "✓";
+                                    }
+                                }
+                                td {
+                                    @if (mirror_scroll_ok) {
+                                        : "✓";
+                                    }
+                                }
+                                td {
+                                    @if (pb_ok) {
+                                        : "✓";
+                                    }
+                                }
+                                td {
+                                    @if (zw_ok) {
+                                        : "✓";
+                                    }
+                                }
+                                td {
+                                    @if (hover_ok) {
+                                        : "✓";
+                                    }
+                                }
+                                td {
+                                    @if (no_delay_ok) {
+                                        : "✓";
+                                    }
+                                }
+
                             }
                             @if show_restream_consent {
                                 td {
