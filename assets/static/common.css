@@ -238,22 +238,21 @@ table {
   margin: 8px 0;
   border-collapse: collapse;
 }
-table,
-th,
-td {
+table, th, td {
   border: 1px solid var(--border);
   text-align: center;
 }
-th,
-td {
+th,td {
   padding: 8px;
+}
+tbody > tr:nth-child(odd) {
+  background: var(--bg-surface);
 }
 tbody > tr:hover {
   background-color: rgba(59, 90, 130, 0.2);
 }
 
-article,
-form {
+article, form {
   border: 1px solid var(--border);
   margin: 8px;
   padding: 8px;
@@ -269,8 +268,7 @@ footer {
   margin: 10px;
 }
 
-.footer,
-.dimmed {
+.footer, .dimmed {
   color: var(--text-muted);
 }
 

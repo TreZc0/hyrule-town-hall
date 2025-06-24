@@ -924,31 +924,31 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
     }
     if data.series == Series::Crosskeys {
         column_headers.push(html! {
-            th : "All Dungeons OK";
+            th : "All Dungeons";
         });
         column_headers.push(html! {
-            th : "Flute OK";
+            th : "Flute";
         });
         column_headers.push(html! {
-            th : "Inverted OK";
+            th : "Inverted";
         });
         column_headers.push(html! {
-            th : "Keydrop OK";
+            th : "Keydrop";
         });
         column_headers.push(html! {
-            th : "Mirror Scroll OK";
+            th : "Mirror Scroll";
         });
         column_headers.push(html! {
-            th : "Pseudoboots OK";
+            th : "Pseudoboots";
         });
         column_headers.push(html! {
-            th : "ZW OK";
+            th : "ZW";
         });
         column_headers.push(html! {
-            th : "Hovering OK";
+            th : "Hovering";
         });
         column_headers.push(html! {
-            th : "No Delay OK";
+            th : "No Delay";
         });
     }
     if show_restream_consent {
