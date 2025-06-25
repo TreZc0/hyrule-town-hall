@@ -169,6 +169,7 @@ textarea,
 
 input[type="text"] {
   margin: 0 5px;
+  padding: 2px;
 }
 
 [popover] {
