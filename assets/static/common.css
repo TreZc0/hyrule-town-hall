@@ -167,9 +167,9 @@ textarea,
   color: var(--text-primary);
 }
 
-input[type="text"] {
-  margin: 0 5px;
-  padding: 2px;
+input[type="text"], input[type="number"], select {
+  margin: 0 5px !important;
+  padding: 2px !important;
 }
 
 [popover] {
