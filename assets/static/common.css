@@ -167,6 +167,10 @@ textarea,
   color: var(--text-primary);
 }
 
+input[type="text"] {
+  margin: 0 5px;
+}
+
 [popover] {
   all: unset;
   position: fixed;

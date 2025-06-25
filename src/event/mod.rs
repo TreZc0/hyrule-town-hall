@@ -39,9 +39,9 @@ impl SignupStatus {
 pub(crate) enum Role {
     /// For solo events.
     None,
-    /// Player 1 of 2. “Runner” in Pictionary.
+    /// Player 1 of 2. 'Runner' in Pictionary.
     Sheikah,
-    /// Player 2 of 2. “Pilot” in Pictionary.
+    /// Player 2 of 2. 'Pilot' in Pictionary.
     Gerudo,
     /// Player 1 of 3.
     Power,
@@ -488,6 +488,17 @@ impl<'a> Data<'a> {
         Ok(None)
     }
 
+    pub(crate) async fn has_role_bindings(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<bool, Error> {
+        let count = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) FROM role_bindings WHERE series = $1 AND event = $2"#,
+            self.series as _,
+            &self.event
+        )
+        .fetch_one(&mut **transaction)
+        .await?;
+        Ok(count.unwrap_or(0) > 0)
+    }
+
     pub(crate) async fn header(&self, transaction: &mut Transaction<'_, Postgres>, me: Option<&User>, tab: Tab, is_subpage: bool) -> Result<RawHtml<String>, Error> {
         let signed_up = if let Some(me) = me {
             sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams, team_members WHERE
@@ -612,7 +623,7 @@ impl<'a> Data<'a> {
                         button(popovertarget = "practice-menu") : "Practice ⯆";
                     }
                 }
-                @if matches!(self.series, Series::League | Series::TriforceBlitz) && !self.is_ended() {
+                @if self.has_role_bindings(transaction).await? && !self.is_ended() {
                     @if let Tab::Volunteer = tab {
                         a(class = "button selected", href? = is_subpage.then(|| uri!(volunteer(self.series, &*self.event)))) : "Volunteer";
                     } else {
