@@ -2112,11 +2112,10 @@ pub(crate) async fn volunteer(pool: &State<PgPool>, me: Option<User>, uri: Origi
                     div(class = "role-binding") {
                         h4 : &binding.role_type_name;
                         p {
-                            : "Needed: ";
                             : binding.min_count;
                             : " - ";
                             : binding.max_count;
-                            : " volunteers";
+                            : " volunteers are picked for every restreamed race.";
                         }
                         @if let Some(request) = my_request {
                             p {
@@ -2135,7 +2134,7 @@ pub(crate) async fn volunteer(pool: &State<PgPool>, me: Option<User>, uri: Origi
                                     label(for = "notes") : "Notes (optional):";
                                     textarea(name = "notes", rows = "3");
                                 });
-                            }, errors, &format!("Apply for {}", binding.role_type_name));
+                            }, errors, &format!("Apply for {} role", binding.role_type_name));
                         }
                     }
                 }

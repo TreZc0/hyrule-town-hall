@@ -1,10 +1,11 @@
 use crate::{
-    cal::{self, Entrant, Entrants, Race},
+    cal::{self, Entrant, Entrants, Race, RaceSchedule},
     event::{Data, Tab},
     form::{EmptyForm, button_form, form_field, full_form},
     http::{PageError, StatusOrError},
     id::{RoleBindings, RoleRequests, RoleTypes, Signups},
     prelude::*,
+    time::format_datetime,
     user::User,
 };
 
@@ -305,6 +306,40 @@ impl RoleRequest {
         .await?
         .unwrap_or(false))
     }
+
+    pub(crate) async fn pending_for_event(
+        pool: &mut Transaction<'_, Postgres>,
+        series: Series,
+        event: &str,
+    ) -> sqlx::Result<Vec<Self>> {
+        sqlx::query_as!(
+            Self,
+            r#"
+                SELECT 
+                    rr.id AS "id: Id<RoleRequests>",
+                    rr.role_binding_id AS "role_binding_id: Id<RoleBindings>",
+                    rr.user_id AS "user_id: Id<Users>",
+                    rr.status AS "status: RoleRequestStatus",
+                    rr.notes,
+                    rr.created_at,
+                    rr.updated_at,
+                    rb.series AS "series: Series",
+                    rb.event,
+                    rb.min_count,
+                    rb.max_count,
+                    rt.name AS "role_type_name"
+                FROM role_requests rr
+                JOIN role_bindings rb ON rr.role_binding_id = rb.id
+                JOIN role_types rt ON rb.role_type_id = rt.id
+                WHERE rb.series = $1 AND rb.event = $2 AND rr.status = 'pending'
+                ORDER BY rt.name, rr.created_at
+            "#,
+            series as _,
+            event
+        )
+        .fetch_all(&mut **pool)
+        .await
+    }
 }
 
 impl Signup {
@@ -409,7 +444,7 @@ async fn roles_page(
             let role_bindings =
                 RoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
             let pending_requests =
-                RoleRequest::for_event(&mut transaction, data.series, &data.event).await?;
+                RoleRequest::pending_for_event(&mut transaction, data.series, &data.event).await?;
             let all_role_types = RoleType::all(&mut transaction).await?;
 
             html! {
@@ -956,6 +991,19 @@ async fn volunteer_page(
             .filter(|req| req.user_id == me.id)
             .collect::<Vec<_>>();
 
+        // Get upcoming races for this event
+        let all_races = Race::for_event(&mut transaction, &reqwest::Client::new(), &data).await?;
+        let upcoming_races: Vec<_> = all_races
+            .into_iter()
+            .filter(|race| !race.is_ended())
+            .collect();
+
+        // Get my approved roles
+        let my_approved_roles: Vec<_> = my_requests
+            .iter()
+            .filter(|req| matches!(req.status, RoleRequestStatus::Approved))
+            .collect();
+
         html! {
             h2 : "Volunteer for Roles";
             p : "Apply to volunteer for roles in this event.";
@@ -969,11 +1017,11 @@ async fn volunteer_page(
                     div(class = "role-binding") {
                         h4 : binding.role_type_name;
                         p {
-                            : "Required: ";
+                            : "Selected per restream: ";
                             : binding.min_count;
                             : " - ";
                             : binding.max_count;
-                            : " volunteers per match";
+                            : " volunteers";
                         }
                         @if let Some(request) = my_request {
                             p {
@@ -996,6 +1044,79 @@ async fn volunteer_page(
                         }
                     }
                 }
+            }
+
+            @if !my_approved_roles.is_empty() && !upcoming_races.is_empty() {
+                h3 : "Sign Up for Matches";
+                p : "You are approved for the following roles. Click on a match to sign up as a volunteer:";
+                
+                @for role in my_approved_roles {
+                    div(class = "approved-role") {
+                        h4 : role.role_type_name;
+                        p : "You are approved for this role.";
+                        
+                        @if upcoming_races.is_empty() {
+                            p : "No upcoming matches available for signup.";
+                        } else {
+                            h5 : "Upcoming Matches:";
+                            ul {
+                                @for race in &upcoming_races {
+                                    li {
+                                        a(href = uri!(match_signup_page_get(data.series, &*data.event, race.id))) {
+                                            : format!("{} {} {}",
+                                                race.phase.as_deref().unwrap_or(""),
+                                                race.round.as_deref().unwrap_or(""),
+                                                match &race.entrants {
+                                                    Entrants::Two([team1, team2]) => format!("{} vs {}",
+                                                        match team1 {
+                                                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                            Entrant::Named { name, .. } => name.clone(),
+                                                            Entrant::Discord { .. } => "Discord User".to_string(),
+                                                        },
+                                                        match team2 {
+                                                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                            Entrant::Named { name, .. } => name.clone(),
+                                                            Entrant::Discord { .. } => "Discord User".to_string(),
+                                                        }
+                                                    ),
+                                                    Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                                                        match team1 {
+                                                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                            Entrant::Named { name, .. } => name.clone(),
+                                                            Entrant::Discord { .. } => "Discord User".to_string(),
+                                                        },
+                                                        match team2 {
+                                                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                            Entrant::Named { name, .. } => name.clone(),
+                                                            Entrant::Discord { .. } => "Discord User".to_string(),
+                                                        },
+                                                        match team3 {
+                                                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                            Entrant::Named { name, .. } => name.clone(),
+                                                            Entrant::Discord { .. } => "Discord User".to_string(),
+                                                        }
+                                                    ),
+                                                    _ => "Unknown entrants".to_string(),
+                                                }
+                                            );
+                                            @match race.schedule {
+                                                RaceSchedule::Unscheduled => : " (Unscheduled)";
+                                                RaceSchedule::Live { start, .. } => {
+                                                    : " - ";
+                                                    : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                                }
+                                                RaceSchedule::Async { .. } => : " (Async)";
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if !my_approved_roles.is_empty() && upcoming_races.is_empty() {
+                h3 : "No Upcoming Matches";
+                p : "You are approved for roles, but there are no upcoming matches available for signup.";
             }
         }
     } else {

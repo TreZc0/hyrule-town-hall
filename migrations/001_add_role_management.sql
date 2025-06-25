@@ -1,3 +1,7 @@
+-- Create enum types for status fields
+CREATE TYPE role_request_status AS ENUM ('pending', 'approved', 'rejected');
+CREATE TYPE volunteer_signup_status AS ENUM ('pending', 'confirmed', 'declined');
+
 CREATE TABLE role_types (
     id SERIAL PRIMARY KEY,
     name VARCHAR(50) NOT NULL UNIQUE
@@ -23,7 +27,7 @@ CREATE TABLE role_requests (
     id SERIAL PRIMARY KEY,
     role_binding_id INTEGER NOT NULL REFERENCES role_bindings(id) ON DELETE CASCADE,
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+    status role_request_status NOT NULL DEFAULT 'pending',
     notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -35,7 +39,7 @@ CREATE TABLE signups (
     race_id BIGINT NOT NULL REFERENCES races(id) ON DELETE CASCADE,
     role_binding_id INTEGER NOT NULL REFERENCES role_bindings(id) ON DELETE CASCADE,
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'declined')),
+    status volunteer_signup_status NOT NULL DEFAULT 'pending',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(race_id, role_binding_id, user_id)
