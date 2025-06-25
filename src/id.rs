@@ -55,6 +55,38 @@ impl Table for Users {
     }
 }
 
+pub(crate) enum RoleTypes {}
+
+impl Table for RoleTypes {
+    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
+        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM role_types WHERE id = $1) AS "exists!""#, id as i32)
+    }
+}
+
+pub(crate) enum RoleBindings {}
+
+impl Table for RoleBindings {
+    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
+        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM role_bindings WHERE id = $1) AS "exists!""#, id as i32)
+    }
+}
+
+pub(crate) enum RoleRequests {}
+
+impl Table for RoleRequests {
+    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
+        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM role_requests WHERE id = $1) AS "exists!""#, id as i32)
+    }
+}
+
+pub(crate) enum Signups {}
+
+impl Table for Signups {
+    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
+        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM signups WHERE id = $1) AS "exists!""#, id as i32)
+    }
+}
+
 #[derive(Derivative, Deserialize, Serialize)]
 #[cfg_attr(unix, derive(Protocol), async_proto(where(T: Sync)))]
 #[derivative(Debug(bound = ""), Clone(bound = ""), Copy(bound = ""), PartialEq(bound = ""), Eq(bound = ""), Hash(bound = ""), PartialOrd(bound = ""), Ord(bound = ""))]

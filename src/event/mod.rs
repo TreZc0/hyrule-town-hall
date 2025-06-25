@@ -18,6 +18,7 @@ use {
 pub(crate) mod configure;
 pub(crate) mod enter;
 pub(crate) mod teams;
+pub(crate) mod roles;
 
 #[derive(Debug, Clone, Copy, sqlx::Type)]
 #[sqlx(type_name = "signup_status", rename_all = "snake_case")]
@@ -647,6 +648,11 @@ impl<'a> Data<'a> {
                         } else {
                             a(class = "button", href = uri!(configure::get(self.series, &*self.event))) : "Configure";
                         }
+                        @if let Tab::Roles = tab {
+                            a(class = "button selected", href? = is_subpage.then(|| uri!(roles::get(self.series, &*self.event)))) : "Roles";
+                        } else {
+                            a(class = "button", href = uri!(roles::get(self.series, &*self.event))) : "Roles";
+                        }
                     }
                 }
             }
@@ -673,6 +679,7 @@ pub(crate) enum Tab {
     FindTeam,
     Volunteer,
     Configure,
+    Roles,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -2070,37 +2077,71 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, ootr_api_client: &State<
 }
 
 #[rocket::get("/event/<series>/<event>/volunteer")]
-pub(crate) async fn volunteer(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, series: Series, event: &str) -> Result<RawHtml<String>, StatusOrError<Error>> {
+pub(crate) async fn volunteer(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let header = data.header(&mut transaction, me.as_ref(), Tab::Volunteer, false).await?;
-    let content = match data.series {
-        Series::League => html! {
-            @let chuckles = User::from_id(&mut *transaction, Id::from(3480396938053963767_u64)).await?.ok_or(Error::OrganizerUserData)?;
-            article {
-                p {
-                    : "If you or an organised restream team want to restream matches, please complete ";
-                    a(href = "https://forms.gle/eCJsvdE7CQY7Wofp6") : "this form";
-                    : " (only one person from the team needs to complete it), then DM ";
-                    : chuckles;
-                    : " on Discord.";
+    
+    let content = if let Some(ref me) = me {
+        let role_bindings = roles::RoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
+        let my_requests = roles::RoleRequest::for_event(&mut transaction, data.series, &data.event).await?
+            .into_iter()
+            .filter(|req| req.user_id == me.id)
+            .collect::<Vec<_>>();
+        
+        if role_bindings.is_empty() {
+            html! {
+                p : "No volunteer roles are currently available for this event.";
+            }
+        } else {
+            html! {
+                h3 : "Available Roles";
+                @for binding in &role_bindings {
+                    @let my_request = my_requests.iter().find(|req| req.role_binding_id == binding.id);
+                    div(class = "role-binding") {
+                        h4 : &binding.role_type_name;
+                        p {
+                            : "Needed: ";
+                            : binding.min_count;
+                            : " - ";
+                            : binding.max_count;
+                            : " volunteers";
+                        }
+                        @if let Some(request) = my_request {
+                            p {
+                                : "Your application: ";
+                                : match request.status {
+                                    roles::RoleRequestStatus::Pending => "Pending",
+                                    roles::RoleRequestStatus::Approved => "Approved",
+                                    roles::RoleRequestStatus::Rejected => "Rejected",
+                                };
+                            }
+                        } else {
+                            @let mut errors = Vec::new();
+                            : full_form(uri!(roles::apply_for_role(data.series, &*data.event)), csrf.as_ref(), html! {
+                                input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                : form_field("notes", &mut errors, html! {
+                                    label(for = "notes") : "Notes (optional):";
+                                    textarea(name = "notes", rows = "3");
+                                });
+                            }, errors, &format!("Apply for {}", binding.role_type_name));
+                        }
+                    }
                 }
             }
-        },
-        Series::TriforceBlitz => html! {
-            article {
-                p {
-                    : "If you are interested in restreaming, commentating, or tracking a race for this tournament, please contact ";
-                    : User::from_id(&mut *transaction, Id::from(13528320435736334110_u64)).await?.ok_or(Error::OrganizerUserData)?;
-                    : ".";
-                }
-                p : "If a race already has a restream, you can volunteer through that channel's Discord.";
+        }
+    } else {
+        html! {
+            p {
+                a(href = uri!(auth::login(Some(uri!(volunteer(series, event)))))) : "Sign in";
+                : " to volunteer for this event.";
             }
-        },
-        _ => unimplemented!(), //TODO ask other events' organizers if they want to show the Volunteer tab
+        }
     };
-    Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &data.display_name, html! {
+    
+    Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Volunteer — {}", data.display_name), html! {
         : header;
+        h2 : "Volunteer";
         : content;
     }).await?)
 }
