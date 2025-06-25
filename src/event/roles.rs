@@ -995,7 +995,23 @@ async fn volunteer_page(
         let all_races = Race::for_event(&mut transaction, &reqwest::Client::new(), &data).await?;
         let upcoming_races: Vec<_> = all_races
             .into_iter()
-            .filter(|race| !race.is_ended())
+            .filter(|race| {
+                match race.schedule {
+                    RaceSchedule::Unscheduled => false, 
+                    RaceSchedule::Live { end, .. } => {
+                        end.is_none_or(|end_time| end_time > Utc::now())
+                    }
+                    RaceSchedule::Async { start1, start2, start3, end1, end2, end3, .. } => {
+                        let has_started = start1.is_some() || start2.is_some() || start3.is_some();
+                        let is_finished = match race.entrants {
+                            Entrants::Two(_) => end1.is_some() && end2.is_some(),
+                            Entrants::Three(_) => end1.is_some() && end2.is_some() && end3.is_some(),
+                            _ => false,
+                        };
+                        has_started && !is_finished
+                    }
+                }
+            })
             .collect();
 
         // Get my approved roles
@@ -1101,9 +1117,13 @@ async fn volunteer_page(
                                             );
                                             @match race.schedule {
                                                 RaceSchedule::Unscheduled => : " (Unscheduled)";
-                                                RaceSchedule::Live { start, .. } => {
+                                                RaceSchedule::Live { end, .. } => {
                                                     : " - ";
-                                                    : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                                    @if let Some(end) = end {
+                                                        : format_datetime(end, DateTimeFormat { long: false, running_text: false });
+                                                    } else {
+                                                        : "(not yet ended)";
+                                                    }
                                                 }
                                                 RaceSchedule::Async { .. } => : " (Async)";
                                             }
