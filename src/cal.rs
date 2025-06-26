@@ -23,6 +23,7 @@ use {
     crate::{
         discord_bot,
         event::Tab,
+        event::roles::{Signup, VolunteerSignupStatus},
         prelude::*,
         sheets,
     },
@@ -1991,7 +1992,6 @@ pub(crate) async fn race_table(
     };
     let has_buttons = options.can_create || options.can_edit;
     let now = Utc::now();
-    let show_volunteer_column = approved_role_binding_ids.is_some() && races.iter().any(|race| !race.is_ended());
     Ok(html! {
         table {
             thead {
@@ -2035,9 +2035,7 @@ pub(crate) async fn race_table(
                             }
                         }
                     }
-                    @if show_volunteer_column {
-                        th : "Volunteer";
-                    }
+                    th : "Volunteers";
                 }
             }
             tbody {
@@ -2182,6 +2180,24 @@ pub(crate) async fn race_table(
                                 @for room in race.rooms() {
                                     a(class = "favicon", title = "race room", href = room.to_string(), target = "_blank") : favicon(&room);
                                 }
+                                // Volunteer button for upcoming live races
+                                @let is_upcoming_live = match race.schedule {
+                                    RaceSchedule::Live { end, .. } => end.is_none(),
+                                    _ => false,
+                                };
+                                @if is_upcoming_live {
+                                    @if let (Some(user), Some(approved_roles)) = (user, approved_role_binding_ids) {
+                                        @let scheduled = match race.schedule {
+                                            RaceSchedule::Unscheduled => false,
+                                            RaceSchedule::Live { end, .. } => end.is_none_or(|end_time| end_time > Utc::now()),
+                                            RaceSchedule::Async { .. } => false, // asyncs not eligible
+                                        };
+                                        @let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
+                                        @if scheduled && all_teams_consented && !approved_roles.is_empty() {
+                                            a(class = "button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id))) : "Volunteer";
+                                        }
+                                    }
+                                }
                             }
                         }
                         @if has_seeds {
@@ -2218,23 +2234,57 @@ pub(crate) async fn race_table(
                                 }
                             }
                         }
-                        @if show_volunteer_column {
-                            td {
-                                // Only show the volunteer button for upcoming live races
-                                @let is_upcoming_live = match race.schedule {
-                                    RaceSchedule::Live { end, .. } => end.is_none(),
-                                    _ => false,
-                                };
-                                @if is_upcoming_live {
-                                    @if let (Some(user), Some(approved_roles)) = (user, approved_role_binding_ids) {
-                                        @let scheduled = match race.schedule {
-                                            RaceSchedule::Unscheduled => false,
-                                            RaceSchedule::Live { end, .. } => end.is_none_or(|end_time| end_time > Utc::now()),
-                                            RaceSchedule::Async { .. } => false, // asyncs not eligible
-                                        };
-                                        @let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
-                                        @if scheduled && all_teams_consented && !approved_roles.is_empty() {
-                                            a(class = "button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id))) : "Volunteer";
+                        td {
+                            @match race.schedule {
+                                RaceSchedule::Live { .. } => {
+                                    @let signups = Signup::for_race(&mut *transaction, race.id).await?;
+                                    @let pending_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Pending)).collect::<Vec<_>>();
+                                    @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
+                                    
+                                    @if !pending_signups.is_empty() && confirmed_signups.is_empty() {
+                                        : "pending";
+                                    } else if signups.is_empty() {
+                                        : "no volunteers";
+                                    } else {
+                                        @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
+                                        @for binding in role_bindings {
+                                            @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                                            @if !binding_signups.is_empty() {
+                                                : binding.role_type_name;
+                                                : ": ";
+                                                @for (i, signup) in binding_signups.iter().enumerate() {
+                                                    @if i > 0 { : ", "; }
+                                                    @let user = User::from_id(&mut **transaction, signup.user_id).await?;
+                                                    : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                                }
+                                                br;
+                                            }
+                                        }
+                                    }
+                                }
+                                RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {
+                                    // Empty for async and unscheduled races
+                                }
+                            }
+                            
+                            // For past races, show volunteers if there was a restream
+                            @if race.is_ended() && !race.video_urls.is_empty() {
+                                @let signups = Signup::for_race(&mut *transaction, race.id).await?;
+                                @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
+                                
+                                @if !confirmed_signups.is_empty() {
+                                    @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
+                                    @for binding in role_bindings {
+                                        @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                                        @if !binding_signups.is_empty() {
+                                            : binding.role_type_name;
+                                            : ": ";
+                                            @for (i, signup) in binding_signups.iter().enumerate() {
+                                                @if i > 0 { : ", "; }
+                                                @let user = User::from_id(&mut **transaction, signup.user_id).await?;
+                                                : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                            }
+                                            br;
                                         }
                                     }
                                 }
