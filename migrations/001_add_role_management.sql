@@ -30,8 +30,7 @@ CREATE TABLE role_requests (
     status role_request_status NOT NULL DEFAULT 'pending',
     notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(role_binding_id, user_id)
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE signups (
@@ -41,8 +40,7 @@ CREATE TABLE signups (
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     status volunteer_signup_status NOT NULL DEFAULT 'pending',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(race_id, role_binding_id, user_id)
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_role_bindings_series_event ON role_bindings(series, event);
