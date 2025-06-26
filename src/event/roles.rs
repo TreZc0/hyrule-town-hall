@@ -277,22 +277,6 @@ impl RoleRequest {
         Ok(())
     }
 
-    pub(crate) async fn exists_for_user(
-        pool: &mut Transaction<'_, Postgres>,
-        role_binding_id: Id<RoleBindings>,
-        user_id: Id<Users>,
-    ) -> sqlx::Result<bool> {
-        Ok(sqlx::query_scalar!(
-            r#"SELECT EXISTS (SELECT 1 FROM role_requests
-                   WHERE role_binding_id = $1 AND user_id = $2)"#,
-            role_binding_id as _,
-            user_id as _
-        )
-        .fetch_one(&mut **pool)
-        .await?
-        .unwrap_or(false))
-    }
-
     pub(crate) async fn approved_for_user(
         pool: &mut Transaction<'_, Postgres>,
         role_binding_id: Id<RoleBindings>,
@@ -301,6 +285,22 @@ impl RoleRequest {
         Ok(sqlx::query_scalar!(
             r#"SELECT EXISTS (SELECT 1 FROM role_requests
                    WHERE role_binding_id = $1 AND user_id = $2 AND status = 'approved')"#,
+            role_binding_id as _,
+            user_id as _
+        )
+        .fetch_one(&mut **pool)
+        .await?
+        .unwrap_or(false))
+    }
+
+    pub(crate) async fn active_for_user(
+        pool: &mut Transaction<'_, Postgres>,
+        role_binding_id: Id<RoleBindings>,
+        user_id: Id<Users>,
+    ) -> sqlx::Result<bool> {
+        Ok(sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM role_requests
+                   WHERE role_binding_id = $1 AND user_id = $2 AND status IN ('pending', 'approved'))"#,
             role_binding_id as _,
             user_id as _
         )
@@ -441,7 +441,7 @@ impl Signup {
         Ok(())
     }
 
-    pub(crate) async fn exists_for_user(
+    pub(crate) async fn active_for_user(
         pool: &mut Transaction<'_, Postgres>,
         race_id: Id<Races>,
         role_binding_id: Id<RoleBindings>,
@@ -449,7 +449,7 @@ impl Signup {
     ) -> sqlx::Result<bool> {
         Ok(sqlx::query_scalar!(
             r#"SELECT EXISTS (SELECT 1 FROM signups
-                   WHERE race_id = $1 AND role_binding_id = $2 AND user_id = $3)"#,
+                   WHERE race_id = $1 AND role_binding_id = $2 AND user_id = $3 AND status IN ('pending', 'confirmed'))"#,
             race_id as _,
             role_binding_id as _,
             user_id as _
@@ -992,7 +992,7 @@ pub(crate) async fn apply_for_role(
                 Some(value.notes.clone())
             };
 
-            if RoleRequest::exists_for_user(&mut transaction, value.role_binding_id, me.id).await? {
+            if RoleRequest::active_for_user(&mut transaction, value.role_binding_id, me.id).await? {
                 form.context.push_error(form::Error::validation(
                     "You have already applied for this role",
                 ));
@@ -1052,7 +1052,7 @@ async fn volunteer_page(
         let my_requests = RoleRequest::for_event(&mut transaction, data.series, &data.event)
             .await?
             .into_iter()
-            .filter(|req| req.user_id == me.id && !matches!(req.status, RoleRequestStatus::Aborted))
+            .filter(|req| req.user_id == me.id)
             .collect::<Vec<_>>();
 
         // Get my approved roles
@@ -1096,6 +1096,7 @@ async fn volunteer_page(
                 h3 : "Available Roles";
                 @for binding in role_bindings {
                     @let my_request = my_requests.iter().find(|req| req.role_binding_id == binding.id);
+                    @let has_active_request = my_request.map_or(false, |req| matches!(req.status, RoleRequestStatus::Pending | RoleRequestStatus::Approved));
                     div(class = "role-binding") {
                         h4 : binding.role_type_name;
                         p {
@@ -1131,7 +1132,8 @@ async fn volunteer_page(
                                     : withdraw_button;
                                 }
                             }
-                        } else {
+                        }
+                        @if !has_active_request {
                             @let mut errors = Vec::new();
                             : full_form(uri!(apply_for_role(data.series, &*data.event)), csrf, html! {
                                 input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
@@ -1306,7 +1308,7 @@ pub(crate) async fn signup_for_match(
             ));
         }
 
-        if Signup::exists_for_user(&mut transaction, race_id, value.role_binding_id, me.id).await? {
+        if Signup::active_for_user(&mut transaction, race_id, value.role_binding_id, me.id).await? {
             form.context.push_error(form::Error::validation(
                 "You have already signed up for this role in this match",
             ));
@@ -1599,7 +1601,8 @@ async fn match_signup_page(
                             .collect::<Vec<_>>();
 
                         @if my_approved_roles.iter().any(|req| req.role_binding_id == binding.id) {
-                            @if !role_signups.iter().any(|s| s.user_id == me.id) {
+                            @let has_active_signup = role_signups.iter().any(|s| s.user_id == me.id && matches!(s.status, VolunteerSignupStatus::Pending | VolunteerSignupStatus::Confirmed));
+                            @if !has_active_signup {
                                 @let errors = Vec::new();
                                 @let max_reached = confirmed_signups.len() as i32 >= binding.max_count;
                                 @let is_async = matches!(race.schedule, RaceSchedule::Async { .. });
@@ -1642,7 +1645,7 @@ async fn match_signup_page(
                             h5 : "Current Signups:";
                             ul {
                                 @for signup in &role_signups {
-                                    @if !matches!(signup.status, VolunteerSignupStatus::Confirmed | VolunteerSignupStatus::Aborted) {
+                                    @if !matches!(signup.status, VolunteerSignupStatus::Confirmed) {
                                         @let user = User::from_id(&mut *transaction, signup.user_id).await?;
                                         li {
                                             : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
