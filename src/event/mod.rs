@@ -1943,7 +1943,7 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, discord_ctx: &State<RwFut
             } else if let Some(time) = parse_duration(&value.time1, DurationUnit::Hours) {
                 Some(time)
             } else {
-                form.context.push_error(form::Error::validation("Duration must be formatted like “1:23:45” or “1h 23m 45s”.").with_name("time1"));
+                form.context.push_error(form::Error::validation("Duration must be formatted like '1:23:45' or '1h 23m 45s'.").with_name("time1"));
                 None
             },
             if value.time2.is_empty() {
@@ -1951,7 +1951,7 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, discord_ctx: &State<RwFut
             } else if let Some(time) = parse_duration(&value.time2, DurationUnit::Hours) {
                 Some(time)
             } else {
-                form.context.push_error(form::Error::validation("Duration must be formatted like “1:23:45” or “1h 23m 45s”.").with_name("time2"));
+                form.context.push_error(form::Error::validation("Duration must be formatted like '1:23:45' or '1h 23m 45s'.").with_name("time2"));
                 None
             },
             if value.time3.is_empty() {
@@ -1959,7 +1959,7 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, discord_ctx: &State<RwFut
             } else if let Some(time) = parse_duration(&value.time3, DurationUnit::Hours) {
                 Some(time)
             } else {
-                form.context.push_error(form::Error::validation("Duration must be formatted like “1:23:45” or “1h 23m 45s”.").with_name("time3"));
+                form.context.push_error(form::Error::validation("Duration must be formatted like '1:23:45' or '1h 23m 45s'.").with_name("time3"));
                 None
             },
         ];
@@ -2085,73 +2085,4 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, ootr_api_client: &State<
     let web_version = ootr_api_client.can_roll_on_web(None, &version, world_count, UnlockSpoilerLog::Now).await.ok_or(StatusOrError::Status(Status::NotFound))?;
     let id = Arc::clone(ootr_api_client).roll_practice_seed(web_version, false, settings).await?;
     Ok(Redirect::to(format!("https://ootrandomizer.com/seed/get?id={id}")))
-}
-
-#[rocket::get("/event/<series>/<event>/volunteer")]
-pub(crate) async fn volunteer(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str) -> Result<RawHtml<String>, StatusOrError<Error>> {
-    let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    let header = data.header(&mut transaction, me.as_ref(), Tab::Volunteer, false).await?;
-    
-    let content = if let Some(ref me) = me {
-        let role_bindings = roles::RoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
-        let my_requests = roles::RoleRequest::for_event(&mut transaction, data.series, &data.event).await?
-            .into_iter()
-            .filter(|req| req.user_id == me.id)
-            .collect::<Vec<_>>();
-        
-        if role_bindings.is_empty() {
-            html! {
-                p : "No volunteer roles are currently available for this event.";
-            }
-        } else {
-            html! {
-                h3 : "Available Roles";
-                @for binding in &role_bindings {
-                    @let my_request = my_requests.iter().find(|req| req.role_binding_id == binding.id);
-                    div(class = "role-binding") {
-                        h4 : &binding.role_type_name;
-                        p {
-                            : binding.min_count;
-                            : " - ";
-                            : binding.max_count;
-                            : " volunteers are picked for every restreamed race.";
-                        }
-                        @if let Some(request) = my_request {
-                            p {
-                                : "Your application: ";
-                                : match request.status {
-                                    roles::RoleRequestStatus::Pending => "Pending",
-                                    roles::RoleRequestStatus::Approved => "Approved",
-                                    roles::RoleRequestStatus::Rejected => "Rejected",
-                                };
-                            }
-                        } else {
-                            @let mut errors = Vec::new();
-                            : full_form(uri!(roles::apply_for_role(data.series, &*data.event)), csrf.as_ref(), html! {
-                                input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                : form_field("notes", &mut errors, html! {
-                                    label(for = "notes") : "Notes (optional):";
-                                    textarea(name = "notes", rows = "3");
-                                });
-                            }, errors, &format!("Apply for {} role", binding.role_type_name));
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        html! {
-            p {
-                a(href = uri!(auth::login(Some(uri!(volunteer(series, event)))))) : "Sign in";
-                : " to volunteer for this event.";
-            }
-        }
-    };
-    
-    Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Volunteer — {}", data.display_name), html! {
-        : header;
-        h2 : "Volunteer";
-        : content;
-    }).await?)
 }
