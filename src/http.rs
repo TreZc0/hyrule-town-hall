@@ -347,14 +347,7 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
         @if races.is_empty() {
             i : "(none currently)";
         } else {
-            @if let Some(ref me) = me {
-                let my_approved_roles = event::roles::RoleRequest::for_event(&mut transaction, Series::default(), "").await
-                    .map(|reqs| reqs.into_iter().filter(|req| req.user_id == me.id && matches!(req.status, event::roles::RoleRequestStatus::Approved)).map(|req| req.role_binding_id).collect::<Vec<_>>())
-                    .unwrap_or_default();
-                : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, None, cal::RaceTableOptions { game_count: false, show_multistreams: true, can_create: false, can_edit: me.is_archivist, show_restream_consent: false, challonge_import_ctx: None }, &races, Some(me), Some(&my_approved_roles)).await?;
-            } else {
-                : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, None, cal::RaceTableOptions { game_count: false, show_multistreams: true, can_create: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: None }, &races, None, None).await?;
-            }
+            : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, None, cal::RaceTableOptions { game_count: false, show_multistreams: true, can_create: false, can_edit: me.as_ref().is_some_and(|me| me.is_archivist), show_restream_consent: false, challonge_import_ctx: None }, &races, me.as_ref(), None).await?;
         }
     };
     Ok(page(transaction, &me, &uri, PageStyle { kind: PageKind::Index, chests, ..PageStyle::default() }, "Hyrule Town Hall", page_content).await?)
