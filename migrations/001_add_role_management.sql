@@ -1,6 +1,6 @@
 -- Create enum types for status fields
-CREATE TYPE role_request_status AS ENUM ('pending', 'approved', 'rejected');
-CREATE TYPE volunteer_signup_status AS ENUM ('pending', 'confirmed', 'declined');
+CREATE TYPE role_request_status AS ENUM ('pending', 'approved', 'rejected', 'aborted');
+CREATE TYPE volunteer_signup_status AS ENUM ('pending', 'confirmed', 'declined', 'aborted');
 
 CREATE TABLE role_types (
     id SERIAL PRIMARY KEY,

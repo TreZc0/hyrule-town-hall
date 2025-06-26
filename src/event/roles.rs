@@ -61,6 +61,7 @@ pub(crate) enum RoleRequestStatus {
     Pending,
     Approved,
     Rejected,
+    Aborted,
 }
 
 #[derive(Debug, Clone, Copy, sqlx::Type)]
@@ -69,6 +70,7 @@ pub(crate) enum VolunteerSignupStatus {
     Pending,
     Confirmed,
     Declined,
+    Aborted,
 }
 
 #[derive(Debug, Clone)]
@@ -340,6 +342,37 @@ impl RoleRequest {
         .fetch_all(&mut **pool)
         .await
     }
+
+    pub(crate) async fn from_id(
+        pool: &mut Transaction<'_, Postgres>,
+        id: Id<RoleRequests>,
+    ) -> sqlx::Result<Option<Self>> {
+        sqlx::query_as!(
+            Self,
+            r#"
+                SELECT 
+                    rr.id AS "id: Id<RoleRequests>",
+                    rr.role_binding_id AS "role_binding_id: Id<RoleBindings>",
+                    rr.user_id AS "user_id: Id<Users>",
+                    rr.status AS "status: RoleRequestStatus",
+                    rr.notes,
+                    rr.created_at,
+                    rr.updated_at,
+                    rb.series AS "series: Series",
+                    rb.event,
+                    rb.min_count,
+                    rb.max_count,
+                    rt.name AS "role_type_name"
+                FROM role_requests rr
+                JOIN role_bindings rb ON rr.role_binding_id = rb.id
+                JOIN role_types rt ON rb.role_type_id = rt.id
+                WHERE rr.id = $1
+            "#,
+            id as _
+        )
+        .fetch_optional(&mut **pool)
+        .await
+    }
 }
 
 impl Signup {
@@ -424,6 +457,37 @@ impl Signup {
         .fetch_one(&mut **pool)
         .await?
         .unwrap_or(false))
+    }
+
+    pub(crate) async fn from_id(
+        pool: &mut Transaction<'_, Postgres>,
+        id: Id<Signups>,
+    ) -> sqlx::Result<Option<Self>> {
+        sqlx::query_as!(
+            Self,
+            r#"
+                SELECT 
+                    s.id AS "id: Id<Signups>",
+                    s.race_id AS "race_id: Id<Races>",
+                    s.role_binding_id AS "role_binding_id: Id<RoleBindings>",
+                    s.user_id AS "user_id: Id<Users>",
+                    s.status AS "status: VolunteerSignupStatus",
+                    s.created_at,
+                    s.updated_at,
+                    rb.series AS "series: Series",
+                    rb.event,
+                    rb.min_count,
+                    rb.max_count,
+                    rt.name AS "role_type_name"
+                FROM signups s
+                JOIN role_bindings rb ON s.role_binding_id = rb.id
+                JOIN role_types rt ON rb.role_type_id = rt.id
+                WHERE s.id = $1
+            "#,
+            id as _
+        )
+        .fetch_optional(&mut **pool)
+        .await
     }
 }
 
@@ -988,7 +1052,7 @@ async fn volunteer_page(
         let my_requests = RoleRequest::for_event(&mut transaction, data.series, &data.event)
             .await?
             .into_iter()
-            .filter(|req| req.user_id == me.id)
+            .filter(|req| req.user_id == me.id && !matches!(req.status, RoleRequestStatus::Aborted))
             .collect::<Vec<_>>();
 
         // Get my approved roles
@@ -1048,6 +1112,23 @@ async fn volunteer_page(
                                     RoleRequestStatus::Pending => : "Pending";
                                     RoleRequestStatus::Approved => : "Approved";
                                     RoleRequestStatus::Rejected => : "Rejected";
+                                    RoleRequestStatus::Aborted => : "Aborted";
+                                }
+                            }
+                            @if matches!(request.status, RoleRequestStatus::Pending) {
+                                @let errors = Vec::new();
+                                div(class = "button-row") {
+                                    @let (errors, withdraw_button) = button_form_ext(
+                                        uri!(withdraw_role_request(data.series, &*data.event)),
+                                        csrf,
+                                        errors,
+                                        html! {
+                                            input(type = "hidden", name = "request_id", value = request.id.to_string());
+                                        },
+                                        "Withdraw Application"
+                                    );
+                                    : errors;
+                                    : withdraw_button;
                                 }
                             }
                         } else {
@@ -1540,7 +1621,7 @@ async fn match_signup_page(
                                     html! {
                                         input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
                                     },
-                                    &format!("Sign up as {}", binding.role_type_name),
+                                    &format!("Sign up for {}", binding.role_type_name),
                                     disabled
                                 );
                                 : errors;
@@ -1561,7 +1642,7 @@ async fn match_signup_page(
                             h5 : "Current Signups:";
                             ul {
                                 @for signup in &role_signups {
-                                    @if !matches!(signup.status, VolunteerSignupStatus::Confirmed) {
+                                    @if !matches!(signup.status, VolunteerSignupStatus::Confirmed | VolunteerSignupStatus::Aborted) {
                                         @let user = User::from_id(&mut *transaction, signup.user_id).await?;
                                         li {
                                             : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
@@ -1572,8 +1653,25 @@ async fn match_signup_page(
                                                 VolunteerSignupStatus::Pending => "Pending",
                                                 VolunteerSignupStatus::Confirmed => "Confirmed",
                                                 VolunteerSignupStatus::Declined => "Declined",
+                                                VolunteerSignupStatus::Aborted => "Aborted",
                                             };
                                             : ")";
+                                            @if signup.user_id == me.id && matches!(signup.status, VolunteerSignupStatus::Pending) {
+                                                @let errors = Vec::new();
+                                                div(class = "button-row") {
+                                                    @let (errors, withdraw_button) = button_form_ext(
+                                                        uri!(withdraw_signup(data.series, &*data.event, race_id)),
+                                                        csrf,
+                                                        errors,
+                                                        html! {
+                                                            input(type = "hidden", name = "signup_id", value = signup.id.to_string());
+                                                        },
+                                                        "Withdraw"
+                                                    );
+                                                    : errors;
+                                                    : withdraw_button;
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1627,4 +1725,169 @@ pub(crate) async fn match_signup_page_get(
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let ctx = Context::default();
     Ok(match_signup_page(transaction, me, &uri, csrf.as_ref(), data, race_id, ctx).await?)
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct WithdrawSignupForm {
+    #[field(default = String::new())]
+    csrf: String,
+    signup_id: Id<Signups>,
+}
+
+#[rocket::post("/event/<series>/<event>/races/<race_id>/withdraw-signup", data = "<form>")]
+pub(crate) async fn withdraw_signup(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    race_id: Id<Races>,
+    form: Form<Contextual<'_, WithdrawSignupForm>>,
+) -> Result<RedirectOrContent, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    Ok(if let Some(ref value) = form.value {
+        // Verify the signup exists and belongs to the current user
+        let signup = Signup::from_id(&mut transaction, value.signup_id).await?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+        if signup.user_id != me.id {
+            form.context.push_error(form::Error::validation(
+                "You can only withdraw your own signups",
+            ));
+        }
+
+        if signup.race_id != race_id {
+            form.context.push_error(form::Error::validation(
+                "Invalid signup for this race",
+            ));
+        }
+
+        // Only allow withdrawing pending signups
+        if !matches!(signup.status, VolunteerSignupStatus::Pending) {
+            form.context.push_error(form::Error::validation(
+                "You can only withdraw pending signups",
+            ));
+        }
+
+        if form.context.errors().next().is_some() {
+            RedirectOrContent::Content(
+                match_signup_page(
+                    transaction,
+                    Some(me),
+                    &uri,
+                    csrf.as_ref(),
+                    data,
+                    race_id,
+                    form.context,
+                )
+                .await?,
+            )
+        } else {
+            // Update the signup status to Aborted
+            Signup::update_status(&mut transaction, value.signup_id, VolunteerSignupStatus::Aborted).await?;
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(series, event, race_id))))
+        }
+    } else {
+        RedirectOrContent::Content(
+            match_signup_page(
+                transaction,
+                Some(me),
+                &uri,
+                csrf.as_ref(),
+                data,
+                race_id,
+                form.context,
+            )
+            .await?,
+        )
+    })
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct WithdrawRoleRequestForm {
+    #[field(default = String::new())]
+    csrf: String,
+    request_id: Id<RoleRequests>,
+}
+
+#[rocket::post("/event/<series>/<event>/withdraw-role-request", data = "<form>")]
+pub(crate) async fn withdraw_role_request(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, WithdrawRoleRequestForm>>,
+) -> Result<RedirectOrContent, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    Ok(if let Some(ref value) = form.value {
+        // Verify the role request exists and belongs to the current user
+        let request = RoleRequest::from_id(&mut transaction, value.request_id).await?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+        if request.user_id != me.id {
+            form.context.push_error(form::Error::validation(
+                "You can only withdraw your own role requests",
+            ));
+        }
+
+        if request.series != series || request.event != event {
+            form.context.push_error(form::Error::validation(
+                "Invalid role request for this event",
+            ));
+        }
+
+        // Only allow withdrawing pending role requests
+        if !matches!(request.status, RoleRequestStatus::Pending) {
+            form.context.push_error(form::Error::validation(
+                "You can only withdraw pending role requests",
+            ));
+        }
+
+        if form.context.errors().next().is_some() {
+            RedirectOrContent::Content(
+                volunteer_page(
+                    transaction,
+                    Some(me),
+                    &uri,
+                    csrf.as_ref(),
+                    data,
+                    form.context,
+                )
+                .await?,
+            )
+        } else {
+            // Update the role request status to Aborted
+            RoleRequest::update_status(&mut transaction, value.request_id, RoleRequestStatus::Aborted).await?;
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(volunteer_page_get(series, event))))
+        }
+    } else {
+        RedirectOrContent::Content(
+            volunteer_page(
+                transaction,
+                Some(me),
+                &uri,
+                csrf.as_ref(),
+                data,
+                form.context,
+            )
+            .await?,
+        )
+    })
 }
