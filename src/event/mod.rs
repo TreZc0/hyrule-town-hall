@@ -625,9 +625,9 @@ impl<'a> Data<'a> {
                 }
                 @if self.has_role_bindings(transaction).await? && !self.is_ended() {
                     @if let Tab::Volunteer = tab {
-                        a(class = "button selected", href? = is_subpage.then(|| uri!(volunteer(self.series, &*self.event)))) : "Volunteer";
+                        a(class = "button selected", href? = is_subpage.then(|| uri!(roles::volunteer_page_get(self.series, &*self.event)))) : "Volunteer";
                     } else {
-                        a(class = "button", href = uri!(volunteer(self.series, &*self.event))) : "Volunteer";
+                        a(class = "button", href = uri!(roles::volunteer_page_get(self.series, &*self.event))) : "Volunteer";
                     }
                 }
                 @if let Some(ref video_url) = self.video_url {
