@@ -1601,7 +1601,7 @@ async fn match_signup_page(
                     RaceSchedule::Unscheduled => : "Unscheduled";
                     RaceSchedule::Live { start, .. } => {
                         : "Scheduled for ";
-                        : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                        : format_datetime(start, DateTimeFormat { long: true, running_text: false });
                     }
                     RaceSchedule::Async { .. } => : "Async Race";
                 }
