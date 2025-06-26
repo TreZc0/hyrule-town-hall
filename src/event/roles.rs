@@ -1465,15 +1465,6 @@ async fn match_signup_page(
                                     li {
                                         @let user = User::from_id(&mut *transaction, signup.user_id).await?;
                                         : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
-                                        : " - ";
-                                        : signup.role_type_name;
-                                        : " (";
-                                        : match signup.status {
-                                            VolunteerSignupStatus::Pending => "Pending",
-                                            VolunteerSignupStatus::Confirmed => "Confirmed",
-                                            VolunteerSignupStatus::Declined => "Declined",
-                                        };
-                                        : ")";
                                     }
                                 }
                             }

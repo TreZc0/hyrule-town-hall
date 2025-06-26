@@ -2268,11 +2268,11 @@ pub(crate) async fn race_table(
                             }
                             
                             @if race.is_ended() && !race.video_urls.is_empty() {
-                                @let signups = Signup::for_race(&mut **transaction, race.id).await?;
+                                @let signups = Signup::for_race(&mut *transaction, race.id).await?;
                                 @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
                                 
                                 @if !confirmed_signups.is_empty() {
-                                    @let role_bindings = event::roles::RoleBinding::for_event(&mut **transaction, race.series, &race.event).await?;
+                                    @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
                                     @for binding in role_bindings {
                                         @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
                                         @if !binding_signups.is_empty() {
