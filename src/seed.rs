@@ -305,7 +305,7 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
                     : seed_links;
                     : " • ";
                 }
-                a(class = "button", href = add_hash_url.to_string()) : "Add Hash";
+                a(class = "clean_button", href = add_hash_url.to_string()) : "Add Hash";
             });
         }
     }
