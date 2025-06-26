@@ -1,7 +1,7 @@
 use crate::{
     cal::{self, Entrant, Entrants, Race, RaceSchedule},
     event::{Data, Tab},
-    form::{EmptyForm, button_form, form_field, full_form, full_form_disabled},
+    form::{EmptyForm, button_form_ext_disabled, form_field, full_form},
     http::{PageError, StatusOrError},
     id::{RoleBindings, RoleRequests, RoleTypes, Signups},
     prelude::*,
@@ -1489,11 +1489,31 @@ async fn match_signup_page(
                                         : " - ";
                                         @let errors = Vec::new();
                                         div(class = "button-row") {
-                                            @let (errors, confirm_button) = button_form(uri!(manage_roster(data.series, &*data.event, race_id)), csrf, errors, "Confirm");
+                                            @let (errors, confirm_button) = button_form_ext_disabled(
+                                                uri!(manage_roster(data.series, &*data.event, race_id)), 
+                                                csrf, 
+                                                errors, 
+                                                html! {
+                                                    input(type = "hidden", name = "signup_id", value = signup.id.to_string());
+                                                    input(type = "hidden", name = "action", value = "confirm");
+                                                },
+                                                "Confirm",
+                                                false
+                                            );
                                             : errors;
                                             : confirm_button;
                                             @let errors = Vec::new();
-                                            @let (errors, decline_button) = button_form(uri!(manage_roster(data.series, &*data.event, race_id)), csrf, errors, "Decline");
+                                            @let (errors, decline_button) = button_form_ext_disabled(
+                                                uri!(manage_roster(data.series, &*data.event, race_id)), 
+                                                csrf, 
+                                                errors, 
+                                                html! {
+                                                    input(type = "hidden", name = "signup_id", value = signup.id.to_string());
+                                                    input(type = "hidden", name = "action", value = "decline");
+                                                },
+                                                "Decline",
+                                                false
+                                            );
                                             : errors;
                                             : decline_button;
                                         }
@@ -1523,16 +1543,18 @@ async fn match_signup_page(
                                 } else {
                                     None
                                 };
-                                : full_form_disabled(
+                                @let (errors, signup_button) = button_form_ext_disabled(
                                     uri!(signup_for_match(data.series, &*data.event, race_id)),
                                     csrf,
+                                    errors,
                                     html! {
                                         input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
                                     },
-                                    errors,
-                                    &format!("Sign up for {}", binding.role_type_name),
+                                    &format!("Sign up as {}", binding.role_type_name),
                                     disabled
                                 );
+                                : errors;
+                                : signup_button;
                                 @if let Some(reason) = reason {
                                     p(class = "disabled-reason") : reason;
                                 }
