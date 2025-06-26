@@ -64,8 +64,8 @@ pub(crate) enum RoleRequestStatus {
 }
 
 #[derive(Debug, Clone, Copy, sqlx::Type)]
-#[sqlx(type_name = "signup_status", rename_all = "lowercase")]
-pub(crate) enum SignupStatus {
+#[sqlx(type_name = "volunteer_signup_status", rename_all = "lowercase")]
+pub(crate) enum VolunteerSignupStatus {
     Pending,
     Confirmed,
     Declined,
@@ -110,7 +110,7 @@ pub(crate) struct Signup {
     pub(crate) race_id: Id<Races>,
     pub(crate) role_binding_id: Id<RoleBindings>,
     pub(crate) user_id: Id<Users>,
-    pub(crate) status: SignupStatus,
+    pub(crate) status: VolunteerSignupStatus,
     pub(crate) created_at: DateTime<Utc>,
     pub(crate) updated_at: DateTime<Utc>,
     pub(crate) series: Series,
@@ -355,7 +355,7 @@ impl Signup {
                     s.race_id AS "race_id: Id<Races>",
                     s.role_binding_id AS "role_binding_id: Id<RoleBindings>",
                     s.user_id AS "user_id: Id<Users>",
-                    s.status AS "status: SignupStatus",
+                    s.status AS "status: VolunteerSignupStatus",
                     s.created_at,
                     s.updated_at,
                     rb.series AS "series: Series",
@@ -396,7 +396,7 @@ impl Signup {
     pub(crate) async fn update_status(
         pool: &mut Transaction<'_, Postgres>,
         id: Id<Signups>,
-        status: SignupStatus,
+        status: VolunteerSignupStatus,
     ) -> sqlx::Result<()> {
         sqlx::query!(
             r#"UPDATE signups SET status = $1, updated_at = NOW() WHERE id = $2"#,
@@ -1330,8 +1330,8 @@ pub(crate) async fn manage_roster(
             )
         } else {
             let status = match value.action.as_str() {
-                "confirm" => SignupStatus::Confirmed,
-                "decline" => SignupStatus::Declined,
+                "confirm" => VolunteerSignupStatus::Confirmed,
+                "decline" => VolunteerSignupStatus::Declined,
                 _ => {
                     form.context
                         .push_error(form::Error::validation("Invalid action"));
@@ -1453,8 +1453,8 @@ async fn match_signup_page(
                         }
 
                         @let role_signups = signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
-                        @let confirmed_signups = role_signups.iter().filter(|s| matches!(s.status, SignupStatus::Confirmed)).collect::<Vec<_>>();
-                        @let pending_signups = role_signups.iter().filter(|s| matches!(s.status, SignupStatus::Pending)).collect::<Vec<_>>();
+                        @let confirmed_signups = role_signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
+                        @let pending_signups = role_signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Pending)).collect::<Vec<_>>();
 
                         h5 : "Confirmed Volunteers";
                         @if confirmed_signups.is_empty() {
@@ -1469,9 +1469,9 @@ async fn match_signup_page(
                                         : signup.role_type_name;
                                         : " (";
                                         : match signup.status {
-                                            SignupStatus::Pending => "Pending",
-                                            SignupStatus::Confirmed => "Confirmed",
-                                            SignupStatus::Declined => "Declined",
+                                            VolunteerSignupStatus::Pending => "Pending",
+                                            VolunteerSignupStatus::Confirmed => "Confirmed",
+                                            VolunteerSignupStatus::Declined => "Declined",
                                         };
                                         : ")";
                                     }
@@ -1554,7 +1554,9 @@ async fn match_signup_page(
                                     disabled
                                 );
                                 : errors;
-                                : signup_button;
+                                div(class = "button-row") {
+                                    : signup_button;
+                                }
                                 @if let Some(reason) = reason {
                                     p(class = "disabled-reason") : reason;
                                 }
@@ -1576,9 +1578,9 @@ async fn match_signup_page(
                                         : signup.role_type_name;
                                         : " (";
                                         : match signup.status {
-                                            SignupStatus::Pending => "Pending",
-                                            SignupStatus::Confirmed => "Confirmed",
-                                            SignupStatus::Declined => "Declined",
+                                            VolunteerSignupStatus::Pending => "Pending",
+                                            VolunteerSignupStatus::Confirmed => "Confirmed",
+                                            VolunteerSignupStatus::Declined => "Declined",
                                         };
                                         : ")";
                                     }
