@@ -2024,11 +2024,11 @@ pub(crate) async fn race_table(
                             @if options.can_create {
                                 @if let Some(event) = event {
                                     @match event.match_source() {
-                                        MatchSource::Manual | MatchSource::Challonge { .. } => a(class = "button", href = uri!(create_race(races[0].series, &*races[0].event, _)), target = "_blank") : "New Race";
-                                        //MatchSource::Challonge { .. } => a(class = "button", href = uri!(import_races(races[0].series, &*races[0].event))) : "Import"; // disabled due to Challonge pagination bug
+                                        MatchSource::Manual | MatchSource::Challonge { .. } => a(class = "clean_button", href = uri!(create_race(races[0].series, &*races[0].event, _)), target = "_blank") : "New Race";
+                                        //MatchSource::Challonge { .. } => a(class = "clean_button", href = uri!(import_races(races[0].series, &*races[0].event))) : "Import"; // disabled due to Challonge pagination bug
                                         MatchSource::League => {}
                                         MatchSource::StartGG(_) => @if !event.auto_import {
-                                            a(class = "button", href = uri!(import_races(races[0].series, &*races[0].event))) : "Import";
+                                            a(class = "clean_button", href = uri!(import_races(races[0].series, &*races[0].event))) : "Import";
                                         }
                                     }
                                 }
@@ -2208,7 +2208,7 @@ pub(crate) async fn race_table(
                                     // hide seed if unfinished async
                                     //TODO show to the team that played the 1st async half
                                     @if event.single_settings.is_none() && race.single_settings(&mut *transaction).await?.is_some() {
-                                        a(class = "button", href = uri!(practice_seed(event.series, &*event.event, race.id))) {
+                                        a(class = "clean_button", href = uri!(practice_seed(event.series, &*event.event, race.id))) {
                                             : favicon(&Url::parse("https://ootrandomizer.com/").unwrap()); //TODO adjust based on seed host
                                             : "Practice";
                                         }
@@ -2230,7 +2230,7 @@ pub(crate) async fn race_table(
                         @if has_buttons {
                             td {
                                 @if options.can_edit {
-                                    a(class = "button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
+                                    a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
                                 }
                             }
                         }
