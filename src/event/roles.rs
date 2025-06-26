@@ -1002,7 +1002,7 @@ async fn volunteer_page(
         let upcoming_races: Vec<_> = all_races
             .into_iter()
             .filter(|race| {
-                match race.schedule {
+                let scheduled = match race.schedule {
                     RaceSchedule::Unscheduled => false, 
                     RaceSchedule::Live { end, .. } => {
                         end.is_none_or(|end_time| end_time > Utc::now())
@@ -1016,7 +1016,9 @@ async fn volunteer_page(
                         };
                         has_started && !is_finished
                     }
-                }
+                };
+                let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
+                scheduled && all_teams_consented
             })
             .collect();
 
@@ -1061,23 +1063,6 @@ async fn volunteer_page(
                     }
                 }
             }
-
-            @if my_approved_roles.is_empty() {
-                h3 : "DEBUG: No approved roles";
-            }
-
-            @if upcoming_races.is_empty() {
-                h3 : "DEBUG: No upcoming races";
-            }
-
-            @if !upcoming_races.is_empty() {
-                h3 : "DEBUG: upcoming races exist";
-            }
-
-            @if !my_approved_roles.is_empty() {
-                h3 : "DEBUG: approved roles exist";
-            }
-
 
             @if !my_approved_roles.is_empty() && !upcoming_races.is_empty() {
                 h3 : "Sign Up for Matches";

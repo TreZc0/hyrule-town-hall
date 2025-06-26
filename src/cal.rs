@@ -26,6 +26,7 @@ use {
         prelude::*,
         sheets,
     },
+    crate::id::RoleBindings,
 };
 pub(crate) use mhstatus::EventKind;
 
@@ -1626,7 +1627,7 @@ pub(crate) async fn index_help(pool: &State<PgPool>, me: Option<User>, uri: Orig
         p {
             : "A calendar of all races across all events can be found at ";
             code : uri!(base_uri(), index);
-            : " — by pasting this link into most calendar apps' “subscribe” feature instead of downloading it, you can get automatic updates as races are scheduled:";
+            : " — by pasting this link into most calendar apps' \"subscribe\" feature instead of downloading it, you can get automatic updates as races are scheduled:";
         }
         ul {
             li {
@@ -1640,7 +1641,7 @@ pub(crate) async fn index_help(pool: &State<PgPool>, me: Option<User>, uri: Orig
                 kbd : "S";
                 : " or select File → New Calendar Subscription";
             }
-            li : "In Mozilla Thunderbird, select New Calendar → On the Network. Paste the link into the “Location” field and click “Find Calendars”, then “Properties”. Enable “Read Only” and click “OK”, then “Subscribe”.";
+            li : "In Mozilla Thunderbird, select New Calendar → On the Network. Paste the link into the \"Location\" field and click \"Find Calendars\", then \"Properties\". Enable \"Read Only\" and click \"OK\", then \"Subscribe\".";
         }
         //p : "You can also find calendar links for individual events on their pages."; //TODO
     }).await
@@ -1953,6 +1954,8 @@ pub(crate) async fn race_table(
     event: Option<&event::Data<'_>>,
     options: RaceTableOptions<'_>,
     races: &[Race],
+    user: Option<&User>,
+    approved_role_binding_ids: Option<&[Id<RoleBindings>]>,
 ) -> Result<RawHtml<String>, Error> {
     let mut event_cache = HashMap::new();
     if let Some(event) = event {
@@ -2031,6 +2034,7 @@ pub(crate) async fn race_table(
                             }
                         }
                     }
+                    th : "Volunteer";
                 }
             }
             tbody {
@@ -2211,6 +2215,27 @@ pub(crate) async fn race_table(
                                 }
                             }
                         }
+                        td {
+                            @if let (Some(user), Some(approved_roles)) = (user, approved_role_binding_ids) {
+                                @let scheduled = match race.schedule {
+                                    RaceSchedule::Unscheduled => false,
+                                    RaceSchedule::Live { end, .. } => end.is_none_or(|end_time| end_time > Utc::now()),
+                                    RaceSchedule::Async { start1, start2, start3, end1, end2, end3, .. } => {
+                                        let has_started = start1.is_some() || start2.is_some() || start3.is_some();
+                                        let is_finished = match race.entrants {
+                                            Entrants::Two(_) => end1.is_some() && end2.is_some(),
+                                            Entrants::Three(_) => end1.is_some() && end2.is_some() && end3.is_some(),
+                                            _ => false,
+                                        };
+                                        has_started && !is_finished
+                                    }
+                                };
+                                @let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
+                                @if scheduled && all_teams_consented && !approved_roles.is_empty() {
+                                    a(class = "button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id))) : "Volunteer";
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2255,7 +2280,7 @@ pub(crate) async fn import_races_form(mut transaction: Transaction<'_, Postgres>
                     }
                 }
             } else {
-                let table = race_table(&mut transaction, discord_ctx, http_client, &uri, Some(&event), RaceTableOptions { game_count: true, show_multistreams: false, can_create: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: Some(ctx.clone()) }, &races).await?;
+                let table = race_table(&mut transaction, discord_ctx, http_client, &uri, Some(&event), RaceTableOptions { game_count: true, show_multistreams: false, can_create: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: Some(ctx.clone()) }, &races, None, None).await?;
                 let errors = ctx.errors().collect_vec();
                 full_form(uri!(import_races_post(event.series, &*event.event)), csrf, html! {
                     p : "The following races will be imported:";
@@ -2321,7 +2346,7 @@ pub(crate) async fn import_races_form(mut transaction: Transaction<'_, Postgres>
                     }
                 }
             } else {
-                let table = race_table(&mut transaction, discord_ctx, http_client, &uri, Some(&event), RaceTableOptions { game_count: true, show_multistreams: false, can_create: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: None }, &races).await?;
+                let table = race_table(&mut transaction, discord_ctx, http_client, &uri, Some(&event), RaceTableOptions { game_count: true, show_multistreams: false, can_create: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: None }, &races, None, None).await?;
                 let errors = ctx.errors().collect_vec();
                 full_form(uri!(import_races_post(event.series, &*event.event)), csrf, html! {
                     p : "The following races will be imported:";
@@ -2791,7 +2816,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                             th {
                                 : "Restreamer";
                                 br;
-                                small(style = "font-weight: normal;") : "racetime.gg profile URL, racetime.gg user ID, or Hyrule Town Hall user ID. Enter “me” to assign yourself.";
+                                small(style = "font-weight: normal;") : "racetime.gg profile URL, racetime.gg user ID, or Hyrule Town Hall user ID. Enter \"me\" to assign yourself.";
                             }
                         }
                     }
@@ -3254,7 +3279,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                                 if let Some(ref racetime) = me.racetime {
                                     restreamers.insert(language, racetime.id.clone());
                                 } else {
-                                    form.context.push_error(form::Error::validation("A racetime.gg account is required to restream races. Go to your profile and select “Connect a racetime.gg account”.").with_name(format!("restreamers.{}", language.short_code()))); //TODO direct link
+                                    form.context.push_error(form::Error::validation("A racetime.gg account is required to restream races. Go to your profile and select \"Connect a racetime.gg account\".").with_name(format!("restreamers.{}", language.short_code()))); //TODO direct link
                                 }
                             } else {
                                 match racetime_bot::parse_user(&mut transaction, http_client, restreamer).await {
