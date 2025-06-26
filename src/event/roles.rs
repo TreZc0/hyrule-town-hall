@@ -89,6 +89,7 @@ pub(crate) struct RoleBinding {
 }
 
 #[allow(unused)]
+#[derive(Debug)]
 pub(crate) struct RoleRequest {
     pub(crate) id: Id<RoleRequests>,
     pub(crate) role_binding_id: Id<RoleBindings>,
