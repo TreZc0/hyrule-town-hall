@@ -605,6 +605,8 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::roles::manage_roster,
         event::roles::withdraw_signup,
         event::roles::withdraw_role_request,
+        event::roles::revoke_signup,
+        event::roles::revoke_role_request,
         event::roles::match_signup_page_get,
         favicon::favicon_ico,
         favicon::favicon_png,

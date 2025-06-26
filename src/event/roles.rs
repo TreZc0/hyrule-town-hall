@@ -314,33 +314,45 @@ impl RoleRequest {
         series: Series,
         event: &str,
     ) -> sqlx::Result<Vec<Self>> {
-        sqlx::query_as!(
+        Ok(sqlx::query_as!(
             Self,
-            r#"
-                SELECT 
-                    rr.id AS "id: Id<RoleRequests>",
-                    rr.role_binding_id AS "role_binding_id: Id<RoleBindings>",
-                    rr.user_id AS "user_id: Id<Users>",
-                    rr.status AS "status: RoleRequestStatus",
-                    rr.notes,
-                    rr.created_at,
-                    rr.updated_at,
-                    rb.series AS "series: Series",
-                    rb.event,
-                    rb.min_count,
-                    rb.max_count,
-                    rt.name AS "role_type_name"
-                FROM role_requests rr
-                JOIN role_bindings rb ON rr.role_binding_id = rb.id
-                JOIN role_types rt ON rb.role_type_id = rt.id
-                WHERE rb.series = $1 AND rb.event = $2 AND rr.status = 'pending'
-                ORDER BY rt.name, rr.created_at
-            "#,
+            r#"SELECT rr.id as "id!: Id<RoleRequests>", rr.role_binding_id as "role_binding_id!: Id<RoleBindings>", rr.user_id as "user_id!: Id<Users>", 
+                      rr.status as "status!: RoleRequestStatus", rr.notes, rr.created_at as "created_at!", rr.updated_at as "updated_at!",
+                      rb.series as "series!: Series", rb.event as "event!", rb.min_count as "min_count!", rb.max_count as "max_count!", 
+                      rt.name as "role_type_name!"
+               FROM role_requests rr
+               JOIN role_bindings rb ON rr.role_binding_id = rb.id
+               JOIN role_types rt ON rb.role_type_id = rt.id
+               WHERE rb.series = $1 AND rb.event = $2 AND rr.status = 'pending'
+               ORDER BY rr.created_at ASC"#,
             series as _,
             event
         )
         .fetch_all(&mut **pool)
-        .await
+        .await?)
+    }
+
+    pub(crate) async fn approved_for_event(
+        pool: &mut Transaction<'_, Postgres>,
+        series: Series,
+        event: &str,
+    ) -> sqlx::Result<Vec<Self>> {
+        Ok(sqlx::query_as!(
+            Self,
+            r#"SELECT rr.id as "id!: Id<RoleRequests>", rr.role_binding_id as "role_binding_id!: Id<RoleBindings>", rr.user_id as "user_id!: Id<Users>", 
+                      rr.status as "status!: RoleRequestStatus", rr.notes, rr.created_at as "created_at!", rr.updated_at as "updated_at!",
+                      rb.series as "series!: Series", rb.event as "event!", rb.min_count as "min_count!", rb.max_count as "max_count!", 
+                      rt.name as "role_type_name!"
+               FROM role_requests rr
+               JOIN role_bindings rb ON rr.role_binding_id = rb.id
+               JOIN role_types rt ON rb.role_type_id = rt.id
+               WHERE rb.series = $1 AND rb.event = $2 AND rr.status = 'approved'
+               ORDER BY rt.name ASC, rr.created_at ASC"#,
+            series as _,
+            event
+        )
+        .fetch_all(&mut **pool)
+        .await?)
     }
 
     pub(crate) async fn from_id(
@@ -509,6 +521,8 @@ async fn roles_page(
                 RoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
             let pending_requests =
                 RoleRequest::pending_for_event(&mut transaction, data.series, &data.event).await?;
+            let approved_requests =
+                RoleRequest::approved_for_event(&mut transaction, data.series, &data.event).await?;
             let all_role_types = RoleType::all(&mut transaction).await?;
 
             html! {
@@ -529,7 +543,7 @@ async fn roles_page(
                             }
                         }
                         tbody {
-                            @for binding in role_bindings {
+                            @for binding in &role_bindings {
                                 tr {
                                     td : binding.role_type_name;
                                     td : binding.min_count;
@@ -606,6 +620,56 @@ async fn roles_page(
                                         @let (errors, reject_button) = button_form(uri!(reject_role_request(data.series, &*data.event, request.id)), csrf, errors, "Reject");
                                         : errors;
                                         : reject_button;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                h3 : "Confirmed Role Requests";
+                @if approved_requests.is_empty() {
+                    p : "No confirmed role requests.";
+                } else {
+                    @for binding in &role_bindings {
+                        @let binding_requests = approved_requests.iter().filter(|req| req.role_binding_id == binding.id).collect::<Vec<_>>();
+                        @if !binding_requests.is_empty() {
+                            details {
+                                summary : format!("{} ({})", binding.role_type_name, binding_requests.len());
+                                table {
+                                    thead {
+                                        tr {
+                                            th : "User";
+                                            th : "Notes";
+                                            th : "Approved";
+                                            th : "Actions";
+                                        }
+                                    }
+                                    tbody {
+                                        @for request in binding_requests {
+                                            tr {
+                                                td {
+                                                    @let user = User::from_id(&mut *transaction, request.user_id).await?;
+                                                    : user.map_or_else(|| request.user_id.to_string(), |u| u.to_string());
+                                                }
+                                                td {
+                                                    @if let Some(ref notes) = request.notes {
+                                                        : notes;
+                                                    } else {
+                                                        : "No notes";
+                                                    }
+                                                }
+                                                td : format_datetime(request.updated_at, DateTimeFormat { long: true, running_text: false });
+                                                td {
+                                                    @let errors = Vec::new();
+                                                    @let (errors, revoke_button) = button_form_ext(uri!(revoke_role_request(data.series, &*data.event)), csrf, errors, html! {
+                                                        input(type = "hidden", name = "request_id", value = request.id.to_string());
+                                                    }, "Revoke");
+                                                    : errors;
+                                                    : revoke_button;
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1134,6 +1198,26 @@ async fn volunteer_page(
                                     : withdraw_button;
                                 }
                             }
+                            @if matches!(request.status, RoleRequestStatus::Approved) {
+                                @let is_organizer = data.organizers(&mut transaction).await?.contains(me);
+                                @let is_restreamer = data.restreamers(&mut transaction).await?.contains(me);
+                                @if is_organizer || is_restreamer {
+                                    @let errors = Vec::new();
+                                    div(class = "button-row") {
+                                        @let (errors, revoke_button) = button_form_ext(
+                                            uri!(revoke_role_request(data.series, &*data.event)),
+                                            csrf,
+                                            errors,
+                                            html! {
+                                                input(type = "hidden", name = "request_id", value = request.id.to_string());
+                                            },
+                                            "Revoke Approval"
+                                        );
+                                        : errors;
+                                        : revoke_button;
+                                    }
+                                }
+                            }
                         }
                         @if !has_active_request {
                             @let mut errors = Vec::new();
@@ -1550,6 +1634,22 @@ async fn match_signup_page(
                                     li {
                                         @let user = User::from_id(&mut *transaction, signup.user_id).await?;
                                         : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                        @if can_manage {
+                                            @let errors = Vec::new();
+                                            div(class = "button-row") {
+                                                @let (errors, revoke_button) = button_form_ext(
+                                                    uri!(revoke_signup(data.series, &*data.event, race_id)),
+                                                    csrf,
+                                                    errors,
+                                                    html! {
+                                                        input(type = "hidden", name = "signup_id", value = signup.id.to_string());
+                                                    },
+                                                    "Revoke"
+                                                );
+                                                : errors;
+                                                : revoke_button;
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1740,6 +1840,13 @@ pub(crate) struct WithdrawSignupForm {
     signup_id: Id<Signups>,
 }
 
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct RevokeSignupForm {
+    #[field(default = String::new())]
+    csrf: String,
+    signup_id: Id<Signups>,
+}
+
 #[rocket::post("/event/<series>/<event>/races/<race_id>/withdraw-signup", data = "<form>")]
 pub(crate) async fn withdraw_signup(
     pool: &State<PgPool>,
@@ -1817,8 +1924,101 @@ pub(crate) async fn withdraw_signup(
     })
 }
 
+#[rocket::post("/event/<series>/<event>/races/<race_id>/revoke-signup", data = "<form>")]
+pub(crate) async fn revoke_signup(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    race_id: Id<Races>,
+    form: Form<Contextual<'_, RevokeSignupForm>>,
+) -> Result<RedirectOrContent, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    Ok(if let Some(ref value) = form.value {
+        if data.is_ended() {
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be managed",
+            ));
+        }
+
+        let is_organizer = data.organizers(&mut transaction).await?.contains(&me);
+        let is_restreamer = data.restreamers(&mut transaction).await?.contains(&me);
+
+        if !is_organizer && !is_restreamer {
+            form.context.push_error(form::Error::validation(
+                "You must be an organizer or restreamer to revoke signups",
+            ));
+        }
+
+        // Verify the signup exists
+        let signup = Signup::from_id(&mut transaction, value.signup_id).await?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+        if signup.race_id != race_id {
+            form.context.push_error(form::Error::validation(
+                "Invalid signup for this race",
+            ));
+        }
+
+        // Only allow revoking confirmed signups
+        if !matches!(signup.status, VolunteerSignupStatus::Confirmed) {
+            form.context.push_error(form::Error::validation(
+                "You can only revoke confirmed signups",
+            ));
+        }
+
+        if form.context.errors().next().is_some() {
+            RedirectOrContent::Content(
+                match_signup_page(
+                    transaction,
+                    Some(me),
+                    &uri,
+                    csrf.as_ref(),
+                    data,
+                    race_id,
+                    form.context,
+                )
+                .await?,
+            )
+        } else {
+            // Update the signup status back to Pending
+            Signup::update_status(&mut transaction, value.signup_id, VolunteerSignupStatus::Pending).await?;
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(series, event, race_id))))
+        }
+    } else {
+        RedirectOrContent::Content(
+            match_signup_page(
+                transaction,
+                Some(me),
+                &uri,
+                csrf.as_ref(),
+                data,
+                race_id,
+                form.context,
+            )
+            .await?,
+        )
+    })
+}
+
 #[derive(FromForm, CsrfForm)]
 pub(crate) struct WithdrawRoleRequestForm {
+    #[field(default = String::new())]
+    csrf: String,
+    request_id: Id<RoleRequests>,
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct RevokeRoleRequestForm {
     #[field(default = String::new())]
     csrf: String,
     request_id: Id<RoleRequests>,
@@ -1874,6 +2074,89 @@ pub(crate) async fn withdraw_role_request(
         } else {
             // Update the role request status to Aborted
             RoleRequest::update_status(&mut transaction, value.request_id, RoleRequestStatus::Aborted).await?;
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(volunteer_page_get(series, event))))
+        }
+    } else {
+        RedirectOrContent::Content(
+            volunteer_page(
+                transaction,
+                Some(me),
+                &uri,
+                csrf.as_ref(),
+                data,
+                form.context,
+            )
+            .await?,
+        )
+    })
+}
+
+#[rocket::post("/event/<series>/<event>/revoke-role-request", data = "<form>")]
+pub(crate) async fn revoke_role_request(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, RevokeRoleRequestForm>>,
+) -> Result<RedirectOrContent, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    Ok(if let Some(ref value) = form.value {
+        if data.is_ended() {
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be managed",
+            ));
+        }
+
+        let is_organizer = data.organizers(&mut transaction).await?.contains(&me);
+        let is_restreamer = data.restreamers(&mut transaction).await?.contains(&me);
+
+        if !is_organizer && !is_restreamer {
+            form.context.push_error(form::Error::validation(
+                "You must be an organizer or restreamer to revoke role requests",
+            ));
+        }
+
+        // Verify the role request exists
+        let request = RoleRequest::from_id(&mut transaction, value.request_id).await?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+        if request.series != series || request.event != event {
+            form.context.push_error(form::Error::validation(
+                "Invalid role request for this event",
+            ));
+        }
+
+        // Only allow revoking approved role requests
+        if !matches!(request.status, RoleRequestStatus::Approved) {
+            form.context.push_error(form::Error::validation(
+                "You can only revoke approved role requests",
+            ));
+        }
+
+        if form.context.errors().next().is_some() {
+            RedirectOrContent::Content(
+                volunteer_page(
+                    transaction,
+                    Some(me),
+                    &uri,
+                    csrf.as_ref(),
+                    data,
+                    form.context,
+                )
+                .await?,
+            )
+        } else {
+            // Update the role request status back to Pending
+            RoleRequest::update_status(&mut transaction, value.request_id, RoleRequestStatus::Pending).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(volunteer_page_get(series, event))))
         }
