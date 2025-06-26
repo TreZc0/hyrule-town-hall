@@ -1642,37 +1642,40 @@ async fn match_signup_page(
                         }
 
                         @if !role_signups.is_empty() {
-                            h5 : "Current Signups:";
-                            ul {
-                                @for signup in &role_signups {
-                                    @if !matches!(signup.status, VolunteerSignupStatus::Confirmed) {
-                                        @let user = User::from_id(&mut *transaction, signup.user_id).await?;
-                                        li {
-                                            : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
-                                            : " - ";
-                                            : signup.role_type_name;
-                                            : " (";
-                                            : match signup.status {
-                                                VolunteerSignupStatus::Pending => "Pending",
-                                                VolunteerSignupStatus::Confirmed => "Confirmed",
-                                                VolunteerSignupStatus::Declined => "Declined",
-                                                VolunteerSignupStatus::Aborted => "Aborted",
-                                            };
-                                            : ")";
-                                            @if signup.user_id == me.id && matches!(signup.status, VolunteerSignupStatus::Pending) {
-                                                @let errors = Vec::new();
-                                                div(class = "button-row") {
-                                                    @let (errors, withdraw_button) = button_form_ext(
-                                                        uri!(withdraw_signup(data.series, &*data.event, race_id)),
-                                                        csrf,
-                                                        errors,
-                                                        html! {
-                                                            input(type = "hidden", name = "signup_id", value = signup.id.to_string());
-                                                        },
-                                                        "Withdraw"
-                                                    );
-                                                    : errors;
-                                                    : withdraw_button;
+                            @let has_non_confirmed_non_aborted = role_signups.iter().any(|s| !matches!(s.status, VolunteerSignupStatus::Confirmed | VolunteerSignupStatus::Aborted));
+                            @if has_non_confirmed_non_aborted {
+                                h5 : "Current Signups:";
+                                ul {
+                                    @for signup in &role_signups {
+                                        @if !matches!(signup.status, VolunteerSignupStatus::Confirmed) {
+                                            @let user = User::from_id(&mut *transaction, signup.user_id).await?;
+                                            li {
+                                                : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                                : " - ";
+                                                : signup.role_type_name;
+                                                : " (";
+                                                : match signup.status {
+                                                    VolunteerSignupStatus::Pending => "Pending",
+                                                    VolunteerSignupStatus::Confirmed => "Confirmed",
+                                                    VolunteerSignupStatus::Declined => "Declined",
+                                                    VolunteerSignupStatus::Aborted => "Aborted",
+                                                };
+                                                : ")";
+                                                @if signup.user_id == me.id && matches!(signup.status, VolunteerSignupStatus::Pending) {
+                                                    @let errors = Vec::new();
+                                                    div(class = "button-row") {
+                                                        @let (errors, withdraw_button) = button_form_ext(
+                                                            uri!(withdraw_signup(data.series, &*data.event, race_id)),
+                                                            csrf,
+                                                            errors,
+                                                            html! {
+                                                                input(type = "hidden", name = "signup_id", value = signup.id.to_string());
+                                                            },
+                                                            "Withdraw"
+                                                        );
+                                                        : errors;
+                                                        : withdraw_button;
+                                                    }
                                                 }
                                             }
                                         }
@@ -1846,12 +1849,6 @@ pub(crate) async fn withdraw_role_request(
         if request.user_id != me.id {
             form.context.push_error(form::Error::validation(
                 "You can only withdraw your own role requests",
-            ));
-        }
-
-        if request.series != series || request.event != event {
-            form.context.push_error(form::Error::validation(
-                "Invalid role request for this event",
             ));
         }
 
