@@ -1558,8 +1558,7 @@ async fn match_signup_page(
 
         html! {
             h2 : "Match Volunteer Signups";
-            p {
-                : "Race: ";
+            h3 {
                 : format!("{} {} {}",
                     race.phase.as_deref().unwrap_or(""),
                     race.round.as_deref().unwrap_or(""),
@@ -1596,6 +1595,16 @@ async fn match_signup_page(
                         _ => "Unknown entrants".to_string(),
                     }
                 );
+            }
+            p {
+                @match race.schedule {
+                    RaceSchedule::Unscheduled => : "Unscheduled";
+                    RaceSchedule::Live { start, .. } => {
+                        : "Scheduled for ";
+                        : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                    }
+                    RaceSchedule::Async { .. } => : "Async Race";
+                }
             }
 
             @if role_bindings.is_empty() {
