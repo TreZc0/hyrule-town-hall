@@ -81,7 +81,7 @@ pub(crate) fn favicon(url: &Url) -> RawHtml<String> {
         Some("discord.gg") => html! {
             img(class = "favicon", alt = "external link (discord.gg)", src = static_url!("discord-favicon.ico"));
         },
-        Some("racetime.gg" | "racetime.midos.house") => html! {
+        Some("racetime.gg" | "racetime.midos.house" | "rtdev.zeldaspeedruns.com") => html! {
             img(class = "favicon", alt = "external link (racetime.gg)", src = static_url!("racetimeGG-favicon.svg"));
         },
         Some("start.gg" | "www.start.gg") => html! {
@@ -91,7 +91,8 @@ pub(crate) fn favicon(url: &Url) -> RawHtml<String> {
             img(class = "favicon", alt = "external link (twitch.tv)", srcset = "https://static.twitchcdn.net/assets/favicon-16-52e571ffea063af7a7f4.png 16w, https://static.twitchcdn.net/assets/favicon-32-e29e246c157142c94346.png 32w");
         },
         _ => html! {
-            : "🌐";
+            span(class = "fallback-favicon");
+              : "🌐";
         },
     }
 }

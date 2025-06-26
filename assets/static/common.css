@@ -85,6 +85,11 @@ nav h1 {
   height: 16px;
 }
 
+.fallback-favicon {
+  margin-top: -3px;
+  margin-left: -3px;
+}
+
 .button .favicon {
   margin-inline-end: 8px;
   vertical-align: sub;

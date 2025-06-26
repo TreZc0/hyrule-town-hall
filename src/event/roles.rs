@@ -1486,7 +1486,6 @@ async fn match_signup_page(
                                     li {
                                         @let user = User::from_id(&mut *transaction, signup.user_id).await?;
                                         : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
-                                        : " - ";
                                         @let errors = Vec::new();
                                         div(class = "button-row") {
                                             @let (errors, confirm_button) = button_form_ext_disabled(
@@ -1571,18 +1570,20 @@ async fn match_signup_page(
                             h5 : "Current Signups:";
                             ul {
                                 @for signup in &role_signups {
-                                    @let user = User::from_id(&mut *transaction, signup.user_id).await?;
-                                    li {
-                                        : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
-                                        : " - ";
-                                        : signup.role_type_name;
-                                        : " (";
-                                        : match signup.status {
-                                            VolunteerSignupStatus::Pending => "Pending",
-                                            VolunteerSignupStatus::Confirmed => "Confirmed",
-                                            VolunteerSignupStatus::Declined => "Declined",
-                                        };
-                                        : ")";
+                                    @if !matches!(signup.status, VolunteerSignupStatus::Confirmed) {
+                                        @let user = User::from_id(&mut *transaction, signup.user_id).await?;
+                                        li {
+                                            : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                            : " - ";
+                                            : signup.role_type_name;
+                                            : " (";
+                                            : match signup.status {
+                                                VolunteerSignupStatus::Pending => "Pending",
+                                                VolunteerSignupStatus::Confirmed => "Confirmed",
+                                                VolunteerSignupStatus::Declined => "Declined",
+                                            };
+                                            : ")";
+                                        }
                                     }
                                 }
                             }
