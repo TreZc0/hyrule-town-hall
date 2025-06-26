@@ -1991,6 +1991,7 @@ pub(crate) async fn race_table(
     };
     let has_buttons = options.can_create || options.can_edit;
     let now = Utc::now();
+    let show_volunteer_column = approved_role_binding_ids.is_some() && races.iter().any(|race| !race.is_ended());
     Ok(html! {
         table {
             thead {
@@ -2034,7 +2035,9 @@ pub(crate) async fn race_table(
                             }
                         }
                     }
-                    th : "Volunteer";
+                    @if show_volunteer_column {
+                        th : "Volunteer";
+                    }
                 }
             }
             tbody {
@@ -2215,24 +2218,25 @@ pub(crate) async fn race_table(
                                 }
                             }
                         }
-                        td {
-                            @if let (Some(user), Some(approved_roles)) = (user, approved_role_binding_ids) {
-                                @let scheduled = match race.schedule {
-                                    RaceSchedule::Unscheduled => false,
-                                    RaceSchedule::Live { end, .. } => end.is_none_or(|end_time| end_time > Utc::now()),
-                                    RaceSchedule::Async { start1, start2, start3, end1, end2, end3, .. } => {
-                                        let has_started = start1.is_some() || start2.is_some() || start3.is_some();
-                                        let is_finished = match race.entrants {
-                                            Entrants::Two(_) => end1.is_some() && end2.is_some(),
-                                            Entrants::Three(_) => end1.is_some() && end2.is_some() && end3.is_some(),
-                                            _ => false,
-                                        };
-                                        has_started && !is_finished
-                                    }
+                        @if show_volunteer_column {
+                            td {
+                                // Only show the volunteer button for upcoming live races
+                                @let is_upcoming_live = match race.schedule {
+                                    RaceSchedule::Live { end, .. } => end.is_none(),
+                                    _ => false,
                                 };
-                                @let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
-                                @if scheduled && all_teams_consented && !approved_roles.is_empty() {
-                                    a(class = "button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id))) : "Volunteer";
+                                @if is_upcoming_live {
+                                    @if let (Some(user), Some(approved_roles)) = (user, approved_role_binding_ids) {
+                                        @let scheduled = match race.schedule {
+                                            RaceSchedule::Unscheduled => false,
+                                            RaceSchedule::Live { end, .. } => end.is_none_or(|end_time| end_time > Utc::now()),
+                                            RaceSchedule::Async { .. } => false, // asyncs not eligible
+                                        };
+                                        @let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
+                                        @if scheduled && all_teams_consented && !approved_roles.is_empty() {
+                                            a(class = "button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id))) : "Volunteer";
+                                        }
+                                    }
                                 }
                             }
                         }

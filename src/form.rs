@@ -67,7 +67,7 @@ pub(crate) fn button_form_ext(uri: Origin<'_>, csrf: Option<&CsrfToken>, errors:
     )
 }
 
-pub(crate) fn full_form(uri: Origin<'_>, csrf: Option<&CsrfToken>, content: impl ToHtml, errors: Vec<&form::Error<'_>>, submit_text: &str) -> RawHtml<String> {
+pub(crate) fn full_form_disabled(uri: Origin<'_>, csrf: Option<&CsrfToken>, content: impl ToHtml, errors: Vec<&form::Error<'_>>, submit_text: &str, disabled: bool) -> RawHtml<String> {
     html! {
         form(action = uri.to_string(), method = "post") {
             : csrf;
@@ -76,8 +76,13 @@ pub(crate) fn full_form(uri: Origin<'_>, csrf: Option<&CsrfToken>, content: impl
             }
             : content;
             fieldset {
-                input(type = "submit", value = submit_text);
+                input(type = "submit", value = submit_text, disabled? = disabled.then_some("disabled"));
             }
         }
     }
+}
+
+// Backward-compatible version
+pub(crate) fn full_form(uri: Origin<'_>, csrf: Option<&CsrfToken>, content: impl ToHtml, errors: Vec<&form::Error<'_>>, submit_text: &str) -> RawHtml<String> {
+    full_form_disabled(uri, csrf, content, errors, submit_text, false)
 }

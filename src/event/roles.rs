@@ -1,7 +1,7 @@
 use crate::{
     cal::{self, Entrant, Entrants, Race, RaceSchedule},
     event::{Data, Tab},
-    form::{EmptyForm, button_form, form_field, full_form},
+    form::{EmptyForm, button_form, form_field, full_form, full_form_disabled},
     http::{PageError, StatusOrError},
     id::{RoleBindings, RoleRequests, RoleTypes, Signups},
     prelude::*,
@@ -1461,7 +1461,7 @@ async fn match_signup_page(
                             p : "No confirmed volunteers yet.";
                         } else {
                             ul {
-                                @for signup in confirmed_signups {
+                                @for signup in &confirmed_signups {
                                     li {
                                         @let user = User::from_id(&mut *transaction, signup.user_id).await?;
                                         : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
@@ -1511,9 +1511,32 @@ async fn match_signup_page(
                             @if my_approved_roles.iter().any(|req| req.role_binding_id == binding.id) {
                                 @if !role_signups.iter().any(|s| s.user_id == me.id) {
                                     @let errors = Vec::new();
-                                    : full_form(uri!(signup_for_match(data.series, &*data.event, race_id)), csrf, html! {
-                                        input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                    }, errors, &format!("Sign up for {}", binding.role_type_name).as_str());
+                                    @let max_reached = confirmed_signups.len() as i32 >= binding.max_count;
+                                    @let is_async = matches!(race.schedule, RaceSchedule::Async { .. });
+                                    @let is_ended = race.is_ended();
+                                    @let disabled = max_reached || is_async || is_ended;
+                                    @let reason = if max_reached {
+                                        Some("Maximum number of volunteers reached for this role.")
+                                    } else if is_async {
+                                        Some("Signups are not available for async races.")
+                                    } else if is_ended {
+                                        Some("This race has ended and can no longer accept signups.")
+                                    } else {
+                                        None
+                                    };
+                                    : full_form_disabled(
+                                        uri!(signup_for_match(data.series, &*data.event, race_id)),
+                                        csrf,
+                                        html! {
+                                            input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                        },
+                                        errors,
+                                        &format!("Sign up for {}", binding.role_type_name),
+                                        disabled
+                                    );
+                                    @if let Some(reason) = reason {
+                                        p(class = "disabled-reason") : reason;
+                                    }
                                 } else {
                                     p : "You have already signed up for this role.";
                                 }
