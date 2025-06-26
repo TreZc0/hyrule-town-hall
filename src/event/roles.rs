@@ -1284,11 +1284,9 @@ async fn volunteer_page(
                                             );
                                             @match race.schedule {
                                                 RaceSchedule::Unscheduled => : " (Unscheduled)";
-                                                RaceSchedule::Live { end, .. } => {
+                                                RaceSchedule::Live { start, .. } => {
                                                     : " - ";
-                                                    @if let Some(end) = end {
-                                                        : format_datetime(end, DateTimeFormat { long: false, running_text: false });
-                                                    }
+                                                    : format_datetime(start, DateTimeFormat { long: false, running_text: false });
                                                 }
                                                 RaceSchedule::Async { .. } => : " (Async)";
                                             }
