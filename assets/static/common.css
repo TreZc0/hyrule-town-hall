@@ -172,9 +172,17 @@ textarea,
   color: var(--text-primary);
 }
 
+.favicon-container .button {
+
+}
+
 input[type="text"], input[type="number"], select {
   margin: 0 5px !important;
   padding: 2px !important;
+}
+
+input[type="text"] {
+  width: 80%;
 }
 
 [popover] {

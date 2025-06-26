@@ -1159,15 +1159,7 @@ async fn volunteer_page(
                     RaceSchedule::Live { end, .. } => {
                         end.is_none_or(|end_time| end_time > Utc::now())
                     }
-                    RaceSchedule::Async { start1, start2, start3, end1, end2, end3, .. } => {
-                        let has_started = start1.is_some() || start2.is_some() || start3.is_some();
-                        let is_finished = match race.entrants {
-                            Entrants::Two(_) => end1.is_some() && end2.is_some(),
-                            Entrants::Three(_) => end1.is_some() && end2.is_some() && end3.is_some(),
-                            _ => false,
-                        };
-                        has_started && !is_finished
-                    }
+                    RaceSchedule::Async { .. } => false, // Exclude async races entirely
                 };
                 let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
                 scheduled && all_teams_consented
@@ -1296,8 +1288,6 @@ async fn volunteer_page(
                                                     : " - ";
                                                     @if let Some(end) = end {
                                                         : format_datetime(end, DateTimeFormat { long: false, running_text: false });
-                                                    } else {
-                                                        : "(not yet ended)";
                                                     }
                                                 }
                                                 RaceSchedule::Async { .. } => : " (Async)";
