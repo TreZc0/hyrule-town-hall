@@ -207,6 +207,24 @@ impl RoleBinding {
             .await?;
         Ok(())
     }
+
+    pub(crate) async fn exists_for_role_type(
+        pool: &mut Transaction<'_, Postgres>,
+        series: Series,
+        event: &str,
+        role_type_id: Id<RoleTypes>,
+    ) -> sqlx::Result<bool> {
+        Ok(sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM role_bindings
+                   WHERE series = $1 AND event = $2 AND role_type_id = $3)"#,
+            series as _,
+            event,
+            role_type_id as _
+        )
+        .fetch_one(&mut **pool)
+        .await?
+        .unwrap_or(false))
+    }
 }
 
 impl RoleRequest {
@@ -774,6 +792,12 @@ pub(crate) async fn add_role_binding(
         if value.min_count < 1 {
             form.context
                 .push_error(form::Error::validation("Minimum count must be at least 1."));
+        }
+
+        if RoleBinding::exists_for_role_type(&mut transaction, data.series, &data.event, value.role_type_id).await? {
+            form.context.push_error(form::Error::validation(
+                "A role binding for this role type already exists.",
+            ));
         }
 
         if form.context.errors().next().is_some() {
