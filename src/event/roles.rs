@@ -1095,7 +1095,9 @@ async fn volunteer_page(
             } else {
                 h3 : "Available Roles";
                 @for binding in role_bindings {
-                    @let my_request = my_requests.iter().find(|req| req.role_binding_id == binding.id);
+                    @let my_request = my_requests.iter()
+                        .filter(|req| req.role_binding_id == binding.id && !matches!(req.status, RoleRequestStatus::Aborted))
+                        .max_by_key(|req| req.created_at);
                     @let has_active_request = my_request.map_or(false, |req| matches!(req.status, RoleRequestStatus::Pending | RoleRequestStatus::Approved));
                     div(class = "role-binding") {
                         h4 : binding.role_type_name;

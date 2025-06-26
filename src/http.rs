@@ -192,7 +192,7 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                         div(id = "login") {
                             @if !matches!(style.kind, PageKind::Login) {
                                 @if let Some(me) = me {
-                                    : "signed in as ";
+                                    : "Signed in as ";
                                     @if let PageKind::MyProfile = style.kind {
                                         bdi : me.display_name();
                                     } else {
@@ -238,9 +238,9 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                         : " • ";
                         a(href = "https://github.com/trezc0/midos.house", target = "_blank") {
                             @if style.mw_footer {
-                                : "website source code";
+                                : "Website Source Code";
                             } else {
-                                : "source code";
+                                : "Source Code";
                             }
                         }
                     }
@@ -336,7 +336,7 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
             : " • ";
             a(href = uri!(new_event)) : "Planning an event?";
         }
-        h1 : "Ongoing/upcoming races";
+        h1 : "Ongoing/Upcoming races";
         p {
             span(class = "timezone-wrapper") {
                 : "Times shown in your timezone (detected as ";
