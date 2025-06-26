@@ -89,7 +89,6 @@ pub(crate) struct RoleBinding {
 }
 
 #[allow(unused)]
-#[derive(Debug)]
 pub(crate) struct RoleRequest {
     pub(crate) id: Id<RoleRequests>,
     pub(crate) role_binding_id: Id<RoleBindings>,
@@ -992,12 +991,11 @@ async fn volunteer_page(
             .filter(|req| req.user_id == me.id)
             .collect::<Vec<_>>();
 
-        println!("my_requests: {:?}", my_requests);
+        // Get my approved roles
         let my_approved_roles: Vec<_> = my_requests
             .iter()
             .filter(|req| matches!(req.status, RoleRequestStatus::Approved))
             .collect();
-        println!("my_approved_roles: {:?}", my_approved_roles);
 
         // Get upcoming races for this event
         let all_races = Race::for_event(&mut transaction, &reqwest::Client::new(), &data).await?;
@@ -1063,6 +1061,23 @@ async fn volunteer_page(
                     }
                 }
             }
+
+            @if my_approved_roles.is_empty() {
+                h3 : "DEBUG: No approved roles";
+            }
+
+            @if upcoming_races.is_empty() {
+                h3 : "DEBUG: No upcoming races";
+            }
+
+            @if !upcoming_races.is_empty() {
+                h3 : "DEBUG: upcoming races exist";
+            }
+
+            @if !my_approved_roles.is_empty() {
+                h3 : "DEBUG: approved roles exist";
+            }
+
 
             @if !my_approved_roles.is_empty() && !upcoming_races.is_empty() {
                 h3 : "Sign Up for Matches";
