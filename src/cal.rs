@@ -2194,7 +2194,7 @@ pub(crate) async fn race_table(
                                         };
                                         @let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
                                         @if scheduled && all_teams_consented && !approved_roles.is_empty() {
-                                            a(class = "button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id))) : "Volunteer";
+                                            a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id))) : "Volunteer";
                                         }
                                     }
                                 }

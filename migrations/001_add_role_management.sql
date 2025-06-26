@@ -8,9 +8,9 @@ CREATE TABLE role_types (
 );
 
 INSERT INTO role_types (name) VALUES 
-    ('Commentator'),
-    ('Tracker'), 
-    ('Race Monitor');
+    ('Commentatory'),
+    ('Tracking'), 
+    ('Race Monitoring');
 
 CREATE TABLE role_bindings (
     id SERIAL PRIMARY KEY,
