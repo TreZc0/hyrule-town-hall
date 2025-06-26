@@ -2186,15 +2186,23 @@ pub(crate) async fn race_table(
                                     _ => false,
                                 };
                                 @if is_upcoming_live {
-                                    @if let (Some(user), Some(approved_roles)) = (user, approved_role_binding_ids) {
-                                        @let scheduled = match race.schedule {
-                                            RaceSchedule::Unscheduled => false,
-                                            RaceSchedule::Live { end, .. } => end.is_none_or(|end_time| end_time > Utc::now()),
-                                            RaceSchedule::Async { .. } => false, // asyncs not eligible
-                                        };
-                                        @let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
-                                        @if scheduled && all_teams_consented && !approved_roles.is_empty() {
-                                            a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id))) : "Volunteer";
+                                    @let scheduled = match race.schedule {
+                                        RaceSchedule::Unscheduled => false,
+                                        RaceSchedule::Live { end, .. } => end.is_none_or(|end_time| end_time > Utc::now()),
+                                        RaceSchedule::Async { .. } => false, // asyncs not eligible
+                                    };
+                                    @let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
+                                    @if scheduled && all_teams_consented {
+                                        @if let Some(user) = user {
+                                            @let is_organizer = event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(user));
+                                            @let is_restreamer = event.restreamers(&mut *transaction).await.ok().map_or(false, |rest| rest.contains(user));
+                                            @if is_organizer || is_restreamer {
+                                                a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id))) : "Manage Volunteers";
+                                            } else if let Some(approved_roles) = approved_role_binding_ids {
+                                                @if !approved_roles.is_empty() {
+                                                    a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id))) : "Volunteer";
+                                                }
+                                            }
                                         }
                                     }
                                 }

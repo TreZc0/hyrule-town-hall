@@ -1222,26 +1222,6 @@ async fn volunteer_page(
                                     : withdraw_button;
                                 }
                             }
-                            @if matches!(request.status, RoleRequestStatus::Approved) {
-                                @let is_organizer = data.organizers(&mut transaction).await?.contains(me);
-                                @let is_restreamer = data.restreamers(&mut transaction).await?.contains(me);
-                                @if is_organizer || is_restreamer {
-                                    @let errors = Vec::new();
-                                    div(class = "button-row") {
-                                        @let (errors, revoke_button) = button_form_ext(
-                                            uri!(revoke_role_request(data.series, &*data.event)),
-                                            csrf,
-                                            errors,
-                                            html! {
-                                                input(type = "hidden", name = "request_id", value = request.id.to_string());
-                                            },
-                                            "Revoke Approval"
-                                        );
-                                        : errors;
-                                        : revoke_button;
-                                    }
-                                }
-                            }
                         }
                         @if !has_active_request {
                             @let mut errors = Vec::new();
