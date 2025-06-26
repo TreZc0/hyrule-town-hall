@@ -2144,7 +2144,7 @@ pub(crate) async fn revoke_role_request(
 
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(
-                volunteer_page(
+                roles_page(
                     transaction,
                     Some(me),
                     &uri,
@@ -2158,11 +2158,11 @@ pub(crate) async fn revoke_role_request(
             // Update the role request status back to Pending
             RoleRequest::update_status(&mut transaction, value.request_id, RoleRequestStatus::Pending).await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(volunteer_page_get(series, event))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
         }
     } else {
         RedirectOrContent::Content(
-            volunteer_page(
+            roles_page(
                 transaction,
                 Some(me),
                 &uri,
