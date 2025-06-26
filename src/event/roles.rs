@@ -1647,12 +1647,10 @@ async fn match_signup_page(
                                 h5 : "Current Signups:";
                                 ul {
                                     @for signup in &role_signups {
-                                        @if !matches!(signup.status, VolunteerSignupStatus::Confirmed) {
+                                        @if !matches!(signup.status, VolunteerSignupStatus::Confirmed | VolunteerSignupStatus::Aborted) {
                                             @let user = User::from_id(&mut *transaction, signup.user_id).await?;
                                             li {
                                                 : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
-                                                : " - ";
-                                                : signup.role_type_name;
                                                 : " (";
                                                 : match signup.status {
                                                     VolunteerSignupStatus::Pending => "Pending",
