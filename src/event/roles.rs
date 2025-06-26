@@ -1502,47 +1502,45 @@ async fn match_signup_page(
                             }
                         }
 
-                        @if !can_manage {
-                            @let my_approved_roles = RoleRequest::for_event(&mut transaction, data.series, &data.event).await?
-                                .into_iter()
-                                .filter(|req| req.user_id == me.id && matches!(req.status, RoleRequestStatus::Approved))
-                                .collect::<Vec<_>>();
+                        @let my_approved_roles = RoleRequest::for_event(&mut transaction, data.series, &data.event).await?
+                            .into_iter()
+                            .filter(|req| req.user_id == me.id && matches!(req.status, RoleRequestStatus::Approved))
+                            .collect::<Vec<_>>();
 
-                            @if my_approved_roles.iter().any(|req| req.role_binding_id == binding.id) {
-                                @if !role_signups.iter().any(|s| s.user_id == me.id) {
-                                    @let errors = Vec::new();
-                                    @let max_reached = confirmed_signups.len() as i32 >= binding.max_count;
-                                    @let is_async = matches!(race.schedule, RaceSchedule::Async { .. });
-                                    @let is_ended = race.is_ended();
-                                    @let disabled = max_reached || is_async || is_ended;
-                                    @let reason = if max_reached {
-                                        Some("Maximum number of volunteers reached for this role.")
-                                    } else if is_async {
-                                        Some("Signups are not available for async races.")
-                                    } else if is_ended {
-                                        Some("This race has ended and can no longer accept signups.")
-                                    } else {
-                                        None
-                                    };
-                                    : full_form_disabled(
-                                        uri!(signup_for_match(data.series, &*data.event, race_id)),
-                                        csrf,
-                                        html! {
-                                            input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                        },
-                                        errors,
-                                        &format!("Sign up for {}", binding.role_type_name),
-                                        disabled
-                                    );
-                                    @if let Some(reason) = reason {
-                                        p(class = "disabled-reason") : reason;
-                                    }
+                        @if my_approved_roles.iter().any(|req| req.role_binding_id == binding.id) {
+                            @if !role_signups.iter().any(|s| s.user_id == me.id) {
+                                @let errors = Vec::new();
+                                @let max_reached = confirmed_signups.len() as i32 >= binding.max_count;
+                                @let is_async = matches!(race.schedule, RaceSchedule::Async { .. });
+                                @let is_ended = race.is_ended();
+                                @let disabled = max_reached || is_async || is_ended;
+                                @let reason = if max_reached {
+                                    Some("Maximum number of volunteers reached for this role.")
+                                } else if is_async {
+                                    Some("Signups are not available for async races.")
+                                } else if is_ended {
+                                    Some("This race has ended and can no longer accept signups.")
                                 } else {
-                                    p : "You have already signed up for this role.";
+                                    None
+                                };
+                                : full_form_disabled(
+                                    uri!(signup_for_match(data.series, &*data.event, race_id)),
+                                    csrf,
+                                    html! {
+                                        input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                    },
+                                    errors,
+                                    &format!("Sign up for {}", binding.role_type_name),
+                                    disabled
+                                );
+                                @if let Some(reason) = reason {
+                                    p(class = "disabled-reason") : reason;
                                 }
                             } else {
-                                p : "You are not approved for this role.";
+                                p : "You have already signed up for this role.";
                             }
+                        } else {
+                            p : "You are not approved for this role.";
                         }
 
                         @if !role_signups.is_empty() {
