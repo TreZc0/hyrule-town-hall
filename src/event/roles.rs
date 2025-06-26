@@ -991,6 +991,13 @@ async fn volunteer_page(
             .filter(|req| req.user_id == me.id)
             .collect::<Vec<_>>();
 
+        println!("my_requests: {:?}", my_requests);
+        let my_approved_roles: Vec<_> = my_requests
+            .iter()
+            .filter(|req| matches!(req.status, RoleRequestStatus::Approved))
+            .collect();
+        println!("my_approved_roles: {:?}", my_approved_roles);
+
         // Get upcoming races for this event
         let all_races = Race::for_event(&mut transaction, &reqwest::Client::new(), &data).await?;
         let upcoming_races: Vec<_> = all_races
@@ -1012,12 +1019,6 @@ async fn volunteer_page(
                     }
                 }
             })
-            .collect();
-
-        // Get my approved roles
-        let my_approved_roles: Vec<_> = my_requests
-            .iter()
-            .filter(|req| matches!(req.status, RoleRequestStatus::Approved))
             .collect();
 
         html! {
