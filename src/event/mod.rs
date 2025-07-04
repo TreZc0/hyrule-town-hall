@@ -9,6 +9,7 @@ use {
         types::Json,
     },
     crate::{
+        hash_icon::HashIcon,
         notification::SimpleNotificationKind,
         prelude::*,
         racetime_bot::VersionedBranch,

@@ -1,4 +1,5 @@
 use {
+    chrono::TimeDelta,
     futures::stream::Stream,
     hyper::header::{
         ACCESS_CONTROL_ALLOW_ORIGIN,
@@ -8,14 +9,26 @@ use {
     rocket::{
         fs::NamedFile,
         http::Header,
-        response::content::RawJson,
+        response::content::{
+            RawJson,
+            RawHtml,
+        },
         uri,
     },
-    rocket_util::OptSuffix,
+    rocket_util::{
+        html,
+        OptSuffix,
+    },
+    serde::Deserialize,
     crate::{
+        hash_icon::{
+            HashIcon,
+            OcarinaNote,
+            SpoilerLog,
+        },
         prelude::*,
         racetime_bot::SeedMetadata,
-    },
+    }
 };
 
 #[cfg(unix)] pub(crate) const DIR: &str = "/var/www/midos.house/seed";
@@ -34,38 +47,9 @@ impl HashIconExt for HashIcon {
     fn to_html(&self) -> RawHtml<String> {
         html! {
             @match self {
-                Self::DekuStick => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/deku-stick.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/deku-stick.png")));
-                Self::DekuNut => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/deku-nut.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/deku-nut.png")));
-                Self::Bow => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/bow.svg"));
-                Self::Slingshot => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/slingshot.svg"));
-                Self::FairyOcarina => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/fairy-ocarina.svg"));
-                Self::Bombchu => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/bombchu.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/bombchu.png")));
-                Self::Longshot => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/longshot.svg"));
-                Self::Boomerang => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/boomerang.svg"));
-                Self::LensOfTruth => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/lens-of-truth.svg"));
-                Self::Beans => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/beans.svg"));
-                Self::MegatonHammer => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/megaton-hammer.svg"));
-                Self::BottledFish => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/bottled-fish.png"));
-                Self::BottledMilk => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/bottled-milk.png"));
-                Self::MaskOfTruth => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/mask-of-truth.svg"));
-                Self::SoldOut => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/sold-out.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/sold-out.png")));
-                Self::Cucco => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/cucco.png"));
-                Self::Mushroom => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/mushroom.png"));
-                Self::Saw => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/saw.png"));
-                Self::Frog => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/frog.png"));
-                Self::MasterSword => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/master-sword.svg"));
-                Self::MirrorShield => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/mirror-shield.svg"));
-                Self::KokiriTunic => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/kokiri-tunic.png"));
-                Self::HoverBoots => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/hover-boots.png"));
-                Self::SilverGauntlets => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/silver-gauntlets.svg"));
-                Self::GoldScale => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/gold-scale.svg"));
-                Self::StoneOfAgony => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/stone-of-agony.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/stone-of-agony.png")));
-                Self::SkullToken => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/skull-token.svg"));
-                Self::HeartContainer => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/heart-container.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/heart-container.png")));
-                Self::BossKey => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/boss-key.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/boss-key.png")));
-                Self::Compass => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/compass.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/compass.png")));
-                Self::Map => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/map.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/map.png")));
-                Self::BigMagic => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/big-magic.svg"));
+                // Self::DekuNut => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/deku-nut.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/deku-nut.png")));
+                // Self::Bow => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/bow.svg"));
+                _ => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/bow.svg"));
             }
         }
     }

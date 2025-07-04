@@ -24,6 +24,10 @@ use {
         discord_bot,
         event::Tab,
         event::roles::{Signup, VolunteerSignupStatus},
+        hash_icon::{
+            HashIcon,
+            SpoilerLog
+        },
         prelude::*,
         sheets,
     },

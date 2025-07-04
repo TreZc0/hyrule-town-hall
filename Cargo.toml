@@ -32,6 +32,7 @@ thiserror = "2"
 anyhow = "1"
 async-graphql = { git = "https://github.com/fenhl/async-graphql", branch = "forms" }
 async-graphql-rocket = { git = "https://github.com/fenhl/async-graphql", branch = "forms" }
+async-proto = { version = "0.25", features = ["semver"] }
 async-trait = "0.1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }

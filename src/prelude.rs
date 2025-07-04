@@ -79,14 +79,7 @@ pub(crate) use {
         NEVec,
         NonEmptyIterator as _,
     },
-    ootr_utils::{
-        camc::ChestTexture,
-        spoiler::{
-            HashIcon,
-            OcarinaNote,
-            SpoilerLog,
-        },
-    },
+    ootr_utils::camc::ChestTexture,
     racetime::model::RaceData,
     rand::{
         prelude::*,

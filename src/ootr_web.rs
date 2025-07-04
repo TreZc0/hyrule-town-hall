@@ -15,6 +15,10 @@ use {
         TryAcquireError,
     },
     crate::{
+        hash_icon::{
+            HashIcon,
+            OcarinaNote,
+        },
         prelude::*,
         racetime_bot::{
             SeedRollUpdate,
