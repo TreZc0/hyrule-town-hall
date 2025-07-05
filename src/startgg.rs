@@ -120,6 +120,16 @@ pub(crate) struct ReportOneGameResultMutation;
 )]
 pub(crate) struct UserSlugQuery;
 
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "assets/graphql/startgg-schema.json",
+    query_path = "assets/graphql/startgg-entrants-query.graphql",
+    skip_default_scalars, // workaround for https://github.com/smashgg/developer-portal/issues/171
+    variables_derives = "Clone, PartialEq, Eq, Hash",
+    response_derives = "Debug, Clone",
+)]
+pub(crate) struct EntrantsQuery;
+
 async fn query_inner<T: GraphQLQuery + 'static>(http_client: &reqwest::Client, auth_token: &str, variables: T::Variables, next_request: &mut Instant) -> Result<T::ResponseData, Error>
 where T::Variables: Clone + Eq + Hash + Send + Sync, T::ResponseData: Clone + Send + Sync {
     sleep_until(*next_request).await;
@@ -275,9 +285,9 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
                     .and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup { rounds, .. }| rounds.as_ref())
                     .and_then(|rounds| rounds.iter().filter_map(Option::as_ref).find(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroupRounds { number, .. }| *number == round))
                     .and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroupRounds { best_of, .. }| *best_of);
-                let phase = phase_group
-                    .and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup { phase, .. }| phase)
-                    .and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroupPhase { name }| name);
+                let phase = phase_group.as_ref()
+                    .and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup { phase, .. }| phase.as_ref())
+                    .and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroupPhase { name }| name.clone());
                 if let Some(reason) = process_set(&mut *transaction, http_client, event, races, event_slug, id.clone(), phase, full_round_text, team1, team2, set_games_type, total_games, best_of).await? {
                     skips.push((id, reason));
                 }
@@ -295,4 +305,59 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
         process_page(&mut *transaction, http_client, config, event, event_slug, page, &mut races, &mut skips).await?;
     }
     Ok((races, skips))
+}
+
+/// Fetches all entrants for a given event slug
+pub(crate) async fn fetch_event_entrants(http_client: &reqwest::Client, config: &Config, event_slug: &str) -> Result<Vec<(ID, String, Vec<Option<ID>>)>, Error> {
+    let startgg_token = if Environment::default().is_dev() { &config.startgg_dev } else { &config.startgg_production };
+    let mut all_entrants = Vec::new();
+    let mut page = 1;
+    
+    loop {
+        let response = query_uncached::<EntrantsQuery>(http_client, startgg_token, entrants_query::Variables { 
+            slug: Some(event_slug.to_owned()), 
+            page: Some(page)
+        }).await?;
+        
+        let entrants_query::ResponseData {
+            event: Some(entrants_query::EntrantsQueryEvent {
+                entrants: Some(entrants_query::EntrantsQueryEventEntrants {
+                    page_info: Some(entrants_query::EntrantsQueryEventEntrantsPageInfo { 
+                        page: Some(current_page), 
+                        total_pages: Some(total_pages) 
+                    }),
+                    nodes: Some(entrants),
+                }), id: _,
+            }),
+        } = response else { return Err(Error::GraphQL(vec![graphql_client::Error { message: "Entrants query failed or returned no data".to_string(), locations: None, path: None, extensions: None }])); };
+        
+        for entrant in entrants.into_iter().filter_map(identity) {
+            let entrants_query::EntrantsQueryEventEntrantsNodes { 
+                id: Some(entrant_id), 
+                name: Some(entrant_name), 
+                participants: Some(participants) 
+            } = entrant else { continue };
+            
+            let user_ids: Vec<Option<ID>> = participants.into_iter()
+                .filter_map(identity)
+                .map(|participant| {
+                    let entrants_query::EntrantsQueryEventEntrantsNodesParticipants { 
+                        user: Some(entrants_query::EntrantsQueryEventEntrantsNodesParticipantsUser { 
+                            id: Some(user_id) 
+                        }) 
+                    } = participant else { return None };
+                    Some(user_id)
+                })
+                .collect();
+            
+            all_entrants.push((entrant_id, entrant_name, user_ids));
+        }
+        
+        if current_page >= total_pages {
+            break;
+        }
+        page += 1;
+    }
+    
+    Ok(all_entrants)
 }

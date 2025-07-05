@@ -5,6 +5,7 @@ use crate::{
     },
     prelude::*,
     racetime_bot::VersionedBranch,
+    startgg,
 };
 
 async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
@@ -50,7 +51,7 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                     pre : serde_json::to_string_pretty(event.single_settings.as_ref().expect("no settings configured for weeklies"))?;
                     p {
                         : "The data above is currently not editable for technical reasons. Please contact ";
-                        : User::from_id(&mut *transaction, Id::<Users>::from(14571800683221815449_u64)).await?.ok_or(PageError::FenhlUserData)?; // Fenhl
+                        : User::from_id(&mut *transaction, Id::<Users>::from(14571800683221815449_u64)).await?.ok_or(PageError::TrezUserData(1))?; // Fenhl
                         : " if you've spotted an error in it.";
                     } //TODO make editable
                 } else {
@@ -60,6 +61,10 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                                 input(type = "checkbox", id = "auto_import", name = "auto_import", checked? = ctx.field_value("auto_import").map_or(event.auto_import, |value| value == "on"));
                                 label(for = "auto_import") : "Automatically import new races from start.gg";
                                 label(class = "help") : "(If this option is turned off, you can import races by clicking the Import button on the Races tab.)";
+                            });
+                            : form_field("sync_startgg_ids", &mut errors, html! {
+                                button(type = "submit", name = "sync_startgg_ids", value = "sync") : "Sync StartGG Participant IDs";
+                                label(class = "help") : "(This will attempt to match teams with solo players to their StartGG entrant IDs.)";
                             });
                         }
                         : form_field("min_schedule_notice", &mut errors, html! {
@@ -134,6 +139,7 @@ pub(crate) struct ConfigureForm {
     min_schedule_notice: String,
     retime_window: Option<String>,
     manual_reporting_with_breaks: bool,
+    sync_startgg_ids: Option<String>,
 }
 
 #[rocket::post("/event/<series>/<event>/configure", data = "<form>")]
@@ -152,14 +158,14 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
         let min_schedule_notice = if let Some(time) = parse_duration(&value.min_schedule_notice, DurationUnit::Hours) {
             Some(time)
         } else {
-            form.context.push_error(form::Error::validation("Duration must be formatted like “1:23:45” or “1h 23m 45s”.").with_name("min_schedule_notice"));
+            form.context.push_error(form::Error::validation("Duration must be formatted like '1:23:45' or '1h 23m 45s'.").with_name("min_schedule_notice"));
             None
         };
         let retime_window = if let Some(retime_window) = &value.retime_window {
             if let Some(time) = parse_duration(retime_window, DurationUnit::Hours) {
                 Some(time)
             } else {
-                form.context.push_error(form::Error::validation("Duration must be formatted like “1:23:45” or “1h 23m 45s”.").with_name("retime_window"));
+                form.context.push_error(form::Error::validation("Duration must be formatted like '1:23:45' or '1h 23m 45s'.").with_name("retime_window"));
                 None
             }
         } else {
@@ -179,6 +185,14 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             }
             if matches!(data.match_source(), MatchSource::StartGG(_)) || data.discord_race_results_channel.is_some() {
                 sqlx::query!("UPDATE events SET manual_reporting_with_breaks = $1 WHERE series = $2 AND event = $3", value.manual_reporting_with_breaks, data.series as _, &data.event).execute(&mut *transaction).await?;
+            }
+            if let Some(_) = value.sync_startgg_ids {
+                if let MatchSource::StartGG(event_slug) = data.match_source() {
+                    if let Err(sync_error) = sync_startgg_participant_ids(&mut transaction, &data, &event_slug).await {
+                        form.context.push_error(form::Error::validation(format!("Failed to sync StartGG participant IDs: {}", sync_error)));
+                        return Ok(RedirectOrContent::Content(configure_form(transaction, Some(me), uri, csrf.as_ref(), data, form.context).await?));
+                    }
+                }
             }
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(super::info(series, event))))
@@ -366,4 +380,85 @@ pub(crate) async fn remove_restreamer(pool: &State<PgPool>, me: User, uri: Origi
     } else {
         RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::RemoveContext(restreamer, form.context)).await?)
     })
+}
+
+async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres>, event: &Data<'_>, event_slug: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use crate::config::Config;
+    
+    let http_client = reqwest::Client::new();
+    let config = Config::load().await.map_err(|e| format!("Failed to load config: {}", e))?;
+    
+
+    let entrants = startgg::fetch_event_entrants(&http_client, &config, event_slug).await
+        .map_err(|e| format!("Failed to fetch entrants from StartGG: {}", e))?;
+    
+    let teams = sqlx::query_as!(Team, r#"
+        SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, 
+               startgg_id AS "startgg_id: startgg::ID", plural_name, restream_consent, 
+               mw_impl AS "mw_impl: mw::Impl", qualifier_rank 
+        FROM teams 
+        WHERE series = $1 AND event = $2 AND startgg_id IS NULL AND NOT resigned
+    "#, event.series as _, &event.event).fetch_all(&mut **transaction).await?;
+    
+    let mut _synced_count = 0;
+    
+    for team in teams {
+        let team_members = sqlx::query!(r#"
+            SELECT member, startgg_id AS "startgg_id: startgg::ID"
+            FROM team_members 
+            WHERE team = $1
+        "#, team.id as _).fetch_all(&mut **transaction).await?;
+        
+        if team_members.len() == 1 {
+            let member = &team_members[0];
+            
+            if let Some(entrant_id) = find_matching_entrant(&entrants, member.member.into(), transaction).await? {
+                sqlx::query!(r#"
+                    UPDATE teams 
+                    SET startgg_id = $1 
+                    WHERE id = $2
+                "#, entrant_id as _, team.id as _).execute(&mut **transaction).await?;
+                
+                _synced_count += 1;
+            }
+        }
+    }
+    
+    Ok(())
+}
+
+async fn find_matching_entrant(
+    entrants: &[(startgg::ID, String, Vec<Option<startgg::ID>>)], 
+    member_id: Id<Users>, 
+    transaction: &mut Transaction<'_, Postgres>
+) -> Result<Option<startgg::ID>, Box<dyn std::error::Error + Send + Sync>> {
+    // Get user details
+    let user = User::from_id(&mut **transaction, member_id).await?.ok_or("User not found")?;
+    
+    for (entrant_id, entrant_name, participant_user_ids) in entrants {
+        if let Some(user_startgg_id) = &user.startgg_id {
+            if participant_user_ids.iter().any(|id| id.as_ref() == Some(user_startgg_id)) {
+                return Ok(Some(entrant_id.clone()));
+            }
+        }
+        
+        let entrant_name_lower = entrant_name.to_lowercase();
+        
+        let user_names = [
+            user.racetime.as_ref().map(|r| r.display_name.as_str()),
+            user.discord.as_ref().map(|d| d.display_name.as_str()),
+            user.discord.as_ref().and_then(|d| match &d.username_or_discriminator {
+                Either::Left(username) => Some(username.as_str()),
+                Either::Right(_) => None,
+            }),
+        ];
+        
+        for user_name in user_names.iter().filter_map(|&name| name) {
+            if entrant_name_lower == user_name.to_lowercase() {
+                return Ok(Some(entrant_id.clone()));
+            }
+        }
+    }
+    
+    Ok(None)
 }

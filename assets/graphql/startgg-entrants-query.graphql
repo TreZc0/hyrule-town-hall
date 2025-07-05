@@ -1,0 +1,20 @@
+query EntrantsQuery($slug: String, $page: Int) {
+  event(slug: $slug) {
+    id
+    entrants(query: { page: $page, perPage: 64 }) {
+      pageInfo {
+        page
+        totalPages
+      }
+      nodes {
+        id
+        name
+        participants {
+          user {
+            id
+          }
+        }
+      }
+    }
+  }
+} 
