@@ -42,6 +42,7 @@ mod draft;
 mod event;
 mod favicon;
 mod form;
+mod hash_icon;
 #[macro_use] mod http;
 mod id;
 mod lang;

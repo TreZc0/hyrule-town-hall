@@ -9,6 +9,7 @@ use {
         types::Json,
     },
     crate::{
+        hash_icon::HashIcon,
         notification::SimpleNotificationKind,
         prelude::*,
         racetime_bot::VersionedBranch,
@@ -18,6 +19,7 @@ use {
 pub(crate) mod configure;
 pub(crate) mod enter;
 pub(crate) mod teams;
+pub(crate) mod roles;
 
 #[derive(Debug, Clone, Copy, sqlx::Type)]
 #[sqlx(type_name = "signup_status", rename_all = "snake_case")]
@@ -38,9 +40,9 @@ impl SignupStatus {
 pub(crate) enum Role {
     /// For solo events.
     None,
-    /// Player 1 of 2. “Runner” in Pictionary.
+    /// Player 1 of 2. 'Runner' in Pictionary.
     Sheikah,
-    /// Player 2 of 2. “Pilot” in Pictionary.
+    /// Player 2 of 2. 'Pilot' in Pictionary.
     Gerudo,
     /// Player 1 of 3.
     Power,
@@ -487,6 +489,17 @@ impl<'a> Data<'a> {
         Ok(None)
     }
 
+    pub(crate) async fn has_role_bindings(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<bool, Error> {
+        let count = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) FROM role_bindings WHERE series = $1 AND event = $2"#,
+            self.series as _,
+            &self.event
+        )
+        .fetch_one(&mut **transaction)
+        .await?;
+        Ok(count.unwrap_or(0) > 0)
+    }
+
     pub(crate) async fn header(&self, transaction: &mut Transaction<'_, Postgres>, me: Option<&User>, tab: Tab, is_subpage: bool) -> Result<RawHtml<String>, Error> {
         let signed_up = if let Some(me) = me {
             sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams, team_members WHERE
@@ -611,11 +624,11 @@ impl<'a> Data<'a> {
                         button(popovertarget = "practice-menu") : "Practice ⯆";
                     }
                 }
-                @if matches!(self.series, Series::League | Series::TriforceBlitz) && !self.is_ended() {
+                @if self.has_role_bindings(transaction).await? && !self.is_ended() {
                     @if let Tab::Volunteer = tab {
-                        a(class = "button selected", href? = is_subpage.then(|| uri!(volunteer(self.series, &*self.event)))) : "Volunteer";
+                        a(class = "button selected", href? = is_subpage.then(|| uri!(roles::volunteer_page_get(self.series, &*self.event)))) : "Volunteer";
                     } else {
-                        a(class = "button", href = uri!(volunteer(self.series, &*self.event))) : "Volunteer";
+                        a(class = "button", href = uri!(roles::volunteer_page_get(self.series, &*self.event))) : "Volunteer";
                     }
                 }
                 @if let Some(ref video_url) = self.video_url {
@@ -647,6 +660,11 @@ impl<'a> Data<'a> {
                         } else {
                             a(class = "button", href = uri!(configure::get(self.series, &*self.event))) : "Configure";
                         }
+                        @if let Tab::Roles = tab {
+                            a(class = "button selected", href? = is_subpage.then(|| uri!(roles::get(self.series, &*self.event)))) : "Roles";
+                        } else {
+                            a(class = "button", href = uri!(roles::get(self.series, &*self.event))) : "Roles";
+                        }
                     }
                 }
             }
@@ -673,6 +691,7 @@ pub(crate) enum Tab {
     FindTeam,
     Volunteer,
     Configure,
+    Roles,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -833,13 +852,20 @@ pub(crate) async fn races(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
         //TODO copiable calendar link (with link to index for explanation?)
         @if any_races_ongoing_or_upcoming {
             //TODO split into ongoing and upcoming, show headers for both
-            : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: true, can_create, can_edit, show_restream_consent, challonge_import_ctx: None }, &ongoing_and_upcoming_races).await?;
+            @if let Some(ref me) = me {
+               @let my_approved_roles = roles::RoleRequest::for_event(&mut transaction, data.series, &data.event).await
+                    .map(|reqs| reqs.into_iter().filter(|req| req.user_id == me.id && matches!(req.status, roles::RoleRequestStatus::Approved)).map(|req| req.role_binding_id).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: true, can_create, can_edit, show_restream_consent, challonge_import_ctx: None }, &ongoing_and_upcoming_races, Some(me), Some(&my_approved_roles)).await?;
+            } else {
+                : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: true, can_create, can_edit, show_restream_consent, challonge_import_ctx: None }, &ongoing_and_upcoming_races, None, None).await?;
+            }
         }
         @if !past_races.is_empty() {
             @if any_races_ongoing_or_upcoming {
                 h2 : "Past races";
             }
-            : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: false, can_create: can_create && !any_races_ongoing_or_upcoming, can_edit, show_restream_consent: false, challonge_import_ctx: None }, &past_races).await?;
+            : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: false, can_create: can_create && !any_races_ongoing_or_upcoming, can_edit, show_restream_consent: false, challonge_import_ctx: None }, &past_races, None, None).await?;
         } else if can_create && !any_races_ongoing_or_upcoming {
             div(class = "button-row") {
                 @match data.match_source() {
@@ -1927,7 +1953,7 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, discord_ctx: &State<RwFut
             } else if let Some(time) = parse_duration(&value.time1, DurationUnit::Hours) {
                 Some(time)
             } else {
-                form.context.push_error(form::Error::validation("Duration must be formatted like “1:23:45” or “1h 23m 45s”. Leave blank to indicate DNF.").with_name("time1"));
+                form.context.push_error(form::Error::validation("Duration must be formatted like '1:23:45' or '1h 23m 45s'. Leave blank to indicate DNF.").with_name("time1"));
                 None
             },
             if value.time2.is_empty() {
@@ -1935,7 +1961,7 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, discord_ctx: &State<RwFut
             } else if let Some(time) = parse_duration(&value.time2, DurationUnit::Hours) {
                 Some(time)
             } else {
-                form.context.push_error(form::Error::validation("Duration must be formatted like “1:23:45” or “1h 23m 45s”. Leave blank to indicate DNF.").with_name("time2"));
+                form.context.push_error(form::Error::validation("Duration must be formatted like '1:23:45' or '1h 23m 45s'. Leave blank to indicate DNF.").with_name("time2"));
                 None
             },
             if value.time3.is_empty() {
@@ -1943,7 +1969,7 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, discord_ctx: &State<RwFut
             } else if let Some(time) = parse_duration(&value.time3, DurationUnit::Hours) {
                 Some(time)
             } else {
-                form.context.push_error(form::Error::validation("Duration must be formatted like “1:23:45” or “1h 23m 45s”. Leave blank to indicate DNF.").with_name("time3"));
+                form.context.push_error(form::Error::validation("Duration must be formatted like '1:23:45' or '1h 23m 45s'. Leave blank to indicate DNF.").with_name("time3"));
                 None
             },
         ];
@@ -2069,40 +2095,4 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, ootr_api_client: &State<
     let web_version = ootr_api_client.can_roll_on_web(None, &version, world_count, UnlockSpoilerLog::Now).await.ok_or(StatusOrError::Status(Status::NotFound))?;
     let id = Arc::clone(ootr_api_client).roll_practice_seed(web_version, false, settings).await?;
     Ok(Redirect::to(format!("https://ootrandomizer.com/seed/get?id={id}")))
-}
-
-#[rocket::get("/event/<series>/<event>/volunteer")]
-pub(crate) async fn volunteer(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, series: Series, event: &str) -> Result<RawHtml<String>, StatusOrError<Error>> {
-    let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    let header = data.header(&mut transaction, me.as_ref(), Tab::Volunteer, false).await?;
-    let content = match data.series {
-        Series::League => html! {
-            @let chuckles = User::from_id(&mut *transaction, Id::from(3480396938053963767_u64)).await?.ok_or(Error::OrganizerUserData)?;
-            article {
-                p {
-                    : "If you or an organised restream team want to restream matches, please complete ";
-                    a(href = "https://forms.gle/eCJsvdE7CQY7Wofp6") : "this form";
-                    : " (only one person from the team needs to complete it), then DM ";
-                    : chuckles;
-                    : " on Discord.";
-                }
-            }
-        },
-        Series::TriforceBlitz => html! {
-            article {
-                p {
-                    : "If you are interested in restreaming, commentating, or tracking a race for this tournament, please contact ";
-                    : User::from_id(&mut *transaction, Id::from(13528320435736334110_u64)).await?.ok_or(Error::OrganizerUserData)?;
-                    : ".";
-                }
-                p : "If a race already has a restream, you can volunteer through that channel's Discord.";
-            }
-        },
-        _ => unimplemented!(), //TODO ask other events' organizers if they want to show the Volunteer tab
-    };
-    Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &data.display_name, html! {
-        : header;
-        : content;
-    }).await?)
 }

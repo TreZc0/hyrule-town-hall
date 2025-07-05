@@ -1,4 +1,5 @@
 use {
+    chrono::TimeDelta,
     futures::stream::Stream,
     hyper::header::{
         ACCESS_CONTROL_ALLOW_ORIGIN,
@@ -8,14 +9,26 @@ use {
     rocket::{
         fs::NamedFile,
         http::Header,
-        response::content::RawJson,
+        response::content::{
+            RawJson,
+            RawHtml,
+        },
         uri,
     },
-    rocket_util::OptSuffix,
+    rocket_util::{
+        html,
+        OptSuffix,
+    },
+    serde::Deserialize,
     crate::{
+        hash_icon::{
+            HashIcon,
+            OcarinaNote,
+            SpoilerLog,
+        },
         prelude::*,
         racetime_bot::SeedMetadata,
-    },
+    }
 };
 
 #[cfg(unix)] pub(crate) const DIR: &str = "/var/www/midos.house/seed";
@@ -34,38 +47,38 @@ impl HashIconExt for HashIcon {
     fn to_html(&self) -> RawHtml<String> {
         html! {
             @match self {
-                Self::DekuStick => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/deku-stick.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/deku-stick.png")));
-                Self::DekuNut => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/deku-nut.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/deku-nut.png")));
-                Self::Bow => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/bow.svg"));
-                Self::Slingshot => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/slingshot.svg"));
-                Self::FairyOcarina => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/fairy-ocarina.svg"));
-                Self::Bombchu => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/bombchu.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/bombchu.png")));
-                Self::Longshot => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/longshot.svg"));
-                Self::Boomerang => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/boomerang.svg"));
-                Self::LensOfTruth => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/lens-of-truth.svg"));
-                Self::Beans => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/beans.svg"));
-                Self::MegatonHammer => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/megaton-hammer.svg"));
-                Self::BottledFish => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/bottled-fish.png"));
-                Self::BottledMilk => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/bottled-milk.png"));
-                Self::MaskOfTruth => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/mask-of-truth.svg"));
-                Self::SoldOut => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/sold-out.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/sold-out.png")));
-                Self::Cucco => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/cucco.png"));
-                Self::Mushroom => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/mushroom.png"));
-                Self::Saw => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/saw.png"));
-                Self::Frog => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/frog.png"));
-                Self::MasterSword => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/master-sword.svg"));
-                Self::MirrorShield => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/mirror-shield.svg"));
-                Self::KokiriTunic => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/kokiri-tunic.png"));
-                Self::HoverBoots => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/hover-boots.png"));
-                Self::SilverGauntlets => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/silver-gauntlets.svg"));
-                Self::GoldScale => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/gold-scale.svg"));
-                Self::StoneOfAgony => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/stone-of-agony.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/stone-of-agony.png")));
-                Self::SkullToken => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/skull-token.svg"));
-                Self::HeartContainer => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/heart-container.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/heart-container.png")));
-                Self::BossKey => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/boss-key.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/boss-key.png")));
-                Self::Compass => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/compass.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/compass.png")));
-                Self::Map => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/map.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/map.png")));
-                Self::BigMagic => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/big-magic.svg"));
+                Self::Bomb => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashBombs.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashBombs.png")));
+                Self::Bombos => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashBombos.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashBombos.png")));
+                Self::Boomerang => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashBoomerang.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashBoomerang.png")));
+                Self::Bow => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashBow.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashBow.png")));
+                Self::Hookshot => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashHookshot.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashHookshot.png")));
+                Self::Mushroom => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashMushroom.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashMushroom.png")));
+                Self::Pendant => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashPendant.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashPendant.png")));
+                Self::Powder => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashMagicPowder.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashMagicPowder.png")));
+                Self::Rod => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashIceRod.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashIceRod.png")));
+                Self::Ether => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashEther.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashEther.png")));
+                Self::Quake => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashQuake.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashQuake.png")));
+                Self::Lamp => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashLamp.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashLamp.png")));
+                Self::Hammer => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashHammer.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashHammer.png")));
+                Self::Shovel => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashShovel.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashShovel.png")));
+                Self::Ocarina => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashFlute.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashFlute.png")));
+                Self::BugNet => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashBugnet.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashBugnet.png")));
+                Self::Book => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashBook.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashBook.png")));
+                Self::Bottle => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashEmptyBottle.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashEmptyBottle.png")));
+                Self::Potion => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashGreenPotion.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashGreenPotion.png")));
+                Self::Cane => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashSomaria.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashSomaria.png")));
+                Self::Cape => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashCape.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashCape.png")));
+                Self::Mirror => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashMirror.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashMirror.png")));
+                Self::Boots => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashBoots.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashBoots.png")));
+                Self::Gloves => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashGloves.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashGloves.png")));
+                Self::Flippers => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashFlippers.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashFlippers.png")));
+                Self::Pearl => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashMoonPearl.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashMoonPearl.png")));
+                Self::Shield => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashShield.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashShield.png")));
+                Self::Tunic => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashTunic.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashTunic.png")));
+                Self::Heart => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashHeart.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashHeart.png")));
+                Self::Map => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashMap.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashMap.png")));
+                Self::Compass => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashCompass.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashCompass.png")));
+                Self::Key => img(class = "hash-icon", alt = self.to_string(), src = static_url!("hash-icon/HashBigKey.png"), srcset = format!("{} 10x", static_url!("hash-icon-500/HashBigKey.png")));
             }
         }
     }
@@ -305,7 +318,7 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
                     : seed_links;
                     : " • ";
                 }
-                a(class = "button", href = add_hash_url.to_string()) : "Add Hash";
+                a(class = "clean_button", href = add_hash_url.to_string()) : "Add Hash";
             });
         }
     }

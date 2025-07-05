@@ -22,7 +22,10 @@ use {
         request::FromParam,
     },
     rocket_util::Response,
-    crate::prelude::*,
+    crate::{
+        hash_icon::SpoilerLog,
+        prelude::*,
+    },
 };
 
 #[derive(Clone, Copy, Deserialize)]
@@ -49,8 +52,8 @@ impl ChestAppearances {
 }
 
 impl From<SpoilerLog> for ChestAppearances {
-    fn from(spoiler: SpoilerLog) -> Self {
-        Self(spoiler.midos_house_chests().choose(&mut rng()).expect("no worlds in location list"))
+    fn from(_spoiler: SpoilerLog) -> Self {
+        ChestAppearances::VANILLA
     }
 }
 

@@ -81,7 +81,7 @@ pub(crate) fn favicon(url: &Url) -> RawHtml<String> {
         Some("discord.gg") => html! {
             img(class = "favicon", alt = "external link (discord.gg)", src = static_url!("discord-favicon.ico"));
         },
-        Some("racetime.gg" | "racetime.midos.house") => html! {
+        Some("racetime.gg" | "racetime.midos.house" | "rtdev.zeldaspeedruns.com") => html! {
             img(class = "favicon", alt = "external link (racetime.gg)", src = static_url!("racetimeGG-favicon.svg"));
         },
         Some("start.gg" | "www.start.gg") => html! {
@@ -91,7 +91,8 @@ pub(crate) fn favicon(url: &Url) -> RawHtml<String> {
             img(class = "favicon", alt = "external link (twitch.tv)", srcset = "https://static.twitchcdn.net/assets/favicon-16-52e571ffea063af7a7f4.png 16w, https://static.twitchcdn.net/assets/favicon-32-e29e246c157142c94346.png 32w");
         },
         _ => html! {
-            : "🌐";
+            span(class = "fallback-favicon");
+              : "🌐";
         },
     }
 }
@@ -191,7 +192,7 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                         div(id = "login") {
                             @if !matches!(style.kind, PageKind::Login) {
                                 @if let Some(me) = me {
-                                    : "signed in as ";
+                                    : "Signed in as ";
                                     @if let PageKind::MyProfile = style.kind {
                                         bdi : me.display_name();
                                     } else {
@@ -237,9 +238,9 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                         : " • ";
                         a(href = "https://github.com/trezc0/midos.house", target = "_blank") {
                             @if style.mw_footer {
-                                : "website source code";
+                                : "Website Source Code";
                             } else {
-                                : "source code";
+                                : "Source Code";
                             }
                         }
                     }
@@ -335,7 +336,7 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
             : " • ";
             a(href = uri!(new_event)) : "Planning an event?";
         }
-        h1 : "Ongoing/upcoming races";
+        h1 : "Ongoing/Upcoming races";
         p {
             span(class = "timezone-wrapper") {
                 : "Times shown in your timezone (detected as ";
@@ -347,7 +348,7 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
         @if races.is_empty() {
             i : "(none currently)";
         } else {
-            : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, None, cal::RaceTableOptions { game_count: false, show_multistreams: true, can_create: false, can_edit: me.as_ref().is_some_and(|me| me.is_archivist), show_restream_consent: false, challonge_import_ctx: None }, &races).await?;
+            : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, None, cal::RaceTableOptions { game_count: false, show_multistreams: true, can_create: false, can_edit: me.as_ref().is_some_and(|me| me.is_archivist), show_restream_consent: false, challonge_import_ctx: None }, &races, me.as_ref(), None).await?;
         }
     };
     Ok(page(transaction, &me, &uri, PageStyle { kind: PageKind::Index, chests, ..PageStyle::default() }, "Hyrule Town Hall", page_content).await?)
@@ -585,7 +586,6 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::request_async,
         event::submit_async,
         event::practice_seed,
-        event::volunteer,
         event::enter::get,
         event::enter::post,
         event::teams::get,
@@ -594,6 +594,20 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::configure::restreamers_get,
         event::configure::add_restreamer,
         event::configure::remove_restreamer,
+        event::roles::get,
+        event::roles::add_role_binding,
+        event::roles::delete_role_binding,
+        event::roles::approve_role_request,
+        event::roles::reject_role_request,
+        event::roles::apply_for_role,
+        event::roles::volunteer_page_get,
+        event::roles::signup_for_match,
+        event::roles::manage_roster,
+        event::roles::withdraw_signup,
+        event::roles::withdraw_role_request,
+        event::roles::revoke_signup,
+        event::roles::revoke_role_request,
+        event::roles::match_signup_page_get,
         favicon::favicon_ico,
         favicon::favicon_png,
         legal::legal_disclaimer,

@@ -42,6 +42,10 @@ use {
         cal::Entrant,
         config::ConfigRaceTime,
         discord_bot::ADMIN_USER,
+        hash_icon::{
+            HashIcon,
+            OcarinaNote,
+        },
         prelude::*,
     },
 };
@@ -1515,6 +1519,7 @@ impl GlobalState {
             let yaml_path = yaml_file.path();
             tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(serde_yml::to_string(&crosskeys_yaml)?.as_bytes()).await.at(&yaml_file)?;
             Command::new(PYTHON).current_dir("../alttpr").arg("DungeonRandomizer.py").arg("--customizer").arg(yaml_path).arg("--outputpath").arg("/var/www/midos.house/seed").check("DungeonRandomizer.py").await?;
+
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
                     file_hash: None,

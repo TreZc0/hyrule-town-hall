@@ -85,6 +85,11 @@ nav h1 {
   height: 16px;
 }
 
+.fallback-favicon {
+  margin-top: -3px;
+  margin-left: -3px;
+}
+
 .button .favicon {
   margin-inline-end: 8px;
   vertical-align: sub;
@@ -165,6 +170,19 @@ textarea,
   padding: 8px;
   font: unset;
   color: var(--text-primary);
+}
+
+.favicon-container .button {
+
+}
+
+input[type="text"], input[type="number"], select {
+  margin: 0 5px !important;
+  padding: 2px !important;
+}
+
+input[type="text"] {
+  width: 80%;
 }
 
 [popover] {
