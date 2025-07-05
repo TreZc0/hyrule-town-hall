@@ -10,10 +10,7 @@ use {
             InfoError,
         },
         prelude::*,
-        racetime_bot::{
-            PrerollMode,
-            VersionedBranch,
-        },
+        racetime_bot::PrerollMode,
     },
 };
 
@@ -196,7 +193,6 @@ impl WeeklyKind {
 }
 
 // Make sure to keep the following in sync with each other and the rando_version and single_settings database entries:
-pub(crate) const WEEKLY_RANDO_VERSION: VersionedBranch = VersionedBranch::Pinned { version: ootr_utils::Version::from_dev(8, 3, 15) };
 pub(crate) const WEEKLY_PREROLL_MODE: PrerollMode = PrerollMode::Medium;
 pub(crate) fn weekly_chest_appearances() -> ChestAppearances {
     static WEIGHTS: LazyLock<Vec<(ChestAppearances, usize)>> = LazyLock::new(|| serde_json::from_str(include_str!("../../assets/event/s/chests-w-8.3.12.json")).expect("failed to parse chest weights"));
@@ -258,97 +254,6 @@ fn long_weekly_settings() -> RawHtml<String> {
             }
         }
     }
-}
-pub(crate) fn weekly_settings() -> seed::Settings {
-    collect![
-        format!("user_message") => json!("Standard Weekly (2025-06-07)"),
-        format!("bridge") => json!("dungeons"),
-        format!("trials") => json!(0),
-        format!("shuffle_ganon_bosskey") => json!("remove"),
-        format!("open_forest") => json!("closed_deku"),
-        format!("open_kakariko") => json!("open"),
-        format!("open_door_of_time") => json!(true),
-        format!("gerudo_fortress") => json!("fast"),
-        format!("starting_age") => json!("random"),
-        format!("empty_dungeons_mode") => json!("rewards"),
-        format!("empty_dungeons_rewards") => json!([
-            "Shadow Medallion",
-            "Spirit Medallion",
-        ]),
-        format!("spawn_positions") => json!([
-            "child",
-            "adult",
-        ]),
-        format!("free_bombchu_drops") => json!(false),
-        format!("adult_trade_start") => json!([
-            "Prescription",
-            "Eyeball Frog",
-            "Eyedrops",
-            "Claim Check",
-        ]),
-        format!("shuffle_mapcompass") => json!("startwith"),
-        format!("disabled_locations") => json!([
-            "Deku Theater Mask of Truth",
-        ]),
-        format!("allowed_tricks") => json!([
-            "logic_grottos_without_agony",
-            "logic_fewer_tunic_requirements",
-            "logic_rusted_switches",
-            "logic_man_on_roof",
-            "logic_windmill_poh",
-            "logic_crater_bean_poh_with_hovers",
-            "logic_dc_jump",
-            "logic_forest_vines",
-            "logic_child_deadhand",
-            "logic_lens_botw",
-            "logic_lens_shadow",
-            "logic_lens_shadow_platform",
-            "logic_lens_bongo",
-            "logic_lens_spirit",
-            "logic_lens_gtg",
-            "logic_lens_castle",
-        ]),
-        format!("starting_equipment") => json!([
-            "deku_shield",
-        ]),
-        format!("starting_inventory") => json!([
-            "ocarina",
-            "zeldas_letter",
-        ]),
-        format!("start_with_consumables") => json!(true),
-        format!("skip_reward_from_rauru") => json!(true),
-        format!("no_escape_sequence") => json!(true),
-        format!("no_guard_stealth") => json!(true),
-        format!("no_epona_race") => json!(true),
-        format!("skip_some_minigame_phases") => json!(true),
-        format!("scarecrow_behavior") => json!("free"),
-        format!("fast_bunny_hood") => json!(true),
-        format!("plant_beans") => json!(true),
-        format!("ruto_already_f1_jabu") => json!(true),
-        format!("fast_shadow_boat") => json!(true),
-        format!("chicken_count") => json!(3),
-        format!("big_poe_count") => json!(1),
-        format!("hint_dist") => json!("weekly"),
-        format!("plandomized_locations") => json!({
-            "ToT Reward from Rauru": "Light Medallion",
-        }),
-        format!("misc_hints") => json!([
-            "altar",
-            "ganondorf",
-            "warp_songs_and_owls",
-            "30_skulltulas",
-            "40_skulltulas",
-            "50_skulltulas",
-        ]),
-        format!("correct_chest_appearances") => json!("both"),
-        format!("correct_potcrate_appearances") => json!("off"),
-        format!("key_appearance_match_dungeon") => json!(true),
-        format!("potcrate_textures_specific") => json!([]),
-        format!("blue_fire_arrows") => json!(true),
-        format!("tcg_requires_lens") => json!(true),
-        format!("junk_ice_traps") => json!("off"),
-        format!("ice_trap_appearance") => json!("anything"),
-    ]
 }
 
 pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Data<'_>) -> Result<Option<RawHtml<String>>, InfoError> {

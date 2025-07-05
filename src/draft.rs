@@ -265,7 +265,16 @@ impl Draft {
                         Id::from(592664405695569367_u64), // The Jhegsons
                         Id::from(14405144517033747435_u64), // Pandora's Brot
                     ],
-                    Kind::MultiworldS5 => unimplemented!("top 8 seeding for mw/5"),
+                    Kind::MultiworldS5 => [
+                        Id::from(15744003931430480727_u64), // Schulzer, Jay and Bobby are here
+                        Id::from(1129367405239208119_u64), // Pandora's Brot
+                        Id::from(17104756766000096702_u64), // Moeko Appreciation Society
+                        Id::from(32215927528820085_u64), // Captain Levi's Fish and Chimp Shop
+                        Id::from(4924230698541822293_u64), // Trois clampins et une chaussette
+                        Id::from(17175023655531815569_u64), // SariasObjects
+                        Id::from(5779097592179749366_u64), // Clube Athletico Paranaense
+                        Id::from(3033012543915648585_u64), // DAChuck
+                    ],
                     _ => unreachable!("checked by outer match"),
                 };
                 let mut team_ids = [team1.id, team2.id];
@@ -440,20 +449,20 @@ impl Draft {
                                             2 | 3 => MessageBuilder::default()
                                                 .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                 .push(": pick a major setting using ")
-                                                .mention_command(command_ids.draft.unwrap(), "draft")
+                                                .mention_command(command_ids.pick.unwrap(), "pick")
                                                 .push('.')
                                                 .build(),
                                             4 | 5 => MessageBuilder::default()
                                                 .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                 .push(": pick a minor setting using ")
-                                                .mention_command(command_ids.draft.unwrap(), "draft")
+                                                .mention_command(command_ids.pick.unwrap(), "pick")
                                                 .push('.')
                                                 .build(),
                                             0..=1 | 6.. => unreachable!(),
                                         }
                                     }
                                     MessageContext::RaceTime { high_seed_name, low_seed_name, .. } => match n {
-                                        2 => format!("{}, pick a major setting using “!draft <setting> <value>”", team.choose(high_seed_name, low_seed_name)),
+                                        2 => format!("{}, pick a major setting using “!pick <setting> <value>”", team.choose(high_seed_name, low_seed_name)),
                                         3 => format!("{}, pick a major setting.", team.choose(high_seed_name, low_seed_name)),
                                         4 | 5 => format!("{}, pick a minor setting.", team.choose(high_seed_name, low_seed_name)),
                                         0..=1 | 6.. => unreachable!(),
@@ -584,7 +593,7 @@ impl Draft {
                                         MessageBuilder::default()
                                             .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                             .push(": ban a setting using ")
-                                            .mention_command(command_ids.draft.unwrap(), "ban")
+                                            .mention_command(command_ids.pick.unwrap(), "ban")
                                             .push(", or use ")
                                             .mention_command(command_ids.skip.unwrap(), "skip")
                                             .push(" if you don't want to ban anything.")
@@ -803,25 +812,25 @@ impl Draft {
                                             2 => MessageBuilder::default()
                                                 .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                 .push(": pick a setting using ")
-                                                .mention_command(command_ids.draft.unwrap(), "draft")
+                                                .mention_command(command_ids.pick.unwrap(), "pick")
                                                 .push('.')
                                                 .build(),
                                             3 => MessageBuilder::default()
                                                 .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                 .push(": pick a setting using ")
-                                                .mention_command(command_ids.draft.unwrap(), "draft")
+                                                .mention_command(command_ids.pick.unwrap(), "pick")
                                                 .push(". You will have another pick after this.")
                                                 .build(),
                                             4 => MessageBuilder::default()
                                                 .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                 .push(": pick your second setting using ")
-                                                .mention_command(command_ids.draft.unwrap(), "draft")
+                                                .mention_command(command_ids.pick.unwrap(), "pick")
                                                 .push('.')
                                                 .build(),
                                             5 => MessageBuilder::default()
                                                 .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                 .push(": pick a setting using ")
-                                                .mention_command(command_ids.draft.unwrap(), "draft")
+                                                .mention_command(command_ids.pick.unwrap(), "pick")
                                                 .push(". You can also use ")
                                                 .mention_command(command_ids.skip.unwrap(), "skip")
                                                 .push(" if you want to leave the settings as they are.")
@@ -830,7 +839,7 @@ impl Draft {
                                         }
                                     }
                                     MessageContext::RaceTime { high_seed_name, low_seed_name, .. } => match n {
-                                        2 => format!("{}, pick a setting using “!draft <setting> <value>”", team.choose(high_seed_name, low_seed_name)),
+                                        2 => format!("{}, pick a setting using “!pick <setting> <value>”", team.choose(high_seed_name, low_seed_name)),
                                         3 => format!("{}, pick two settings.", team.choose(high_seed_name, low_seed_name)),
                                         4 => format!("And your second pick?"),
                                         5 => format!("{}, pick the final setting. You can also use “!skip” if you want to leave the settings as they are.", team.choose(high_seed_name, low_seed_name)),
@@ -985,25 +994,25 @@ impl Draft {
                                             2 | 5 | 8 => MessageBuilder::default()
                                                 .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                 .push(": pick a setting using ")
-                                                .mention_command(command_ids.draft.unwrap(), "draft")
+                                                .mention_command(command_ids.pick.unwrap(), "pick")
                                                 .push('.')
                                                 .build(),
                                             3 => MessageBuilder::default()
                                                 .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                 .push(": pick a setting using ")
-                                                .mention_command(command_ids.draft.unwrap(), "draft")
+                                                .mention_command(command_ids.pick.unwrap(), "pick")
                                                 .push(". You will have another pick after this.")
                                                 .build(),
                                             4 => MessageBuilder::default()
                                                 .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                 .push(": pick your second setting using ")
-                                                .mention_command(command_ids.draft.unwrap(), "draft")
+                                                .mention_command(command_ids.pick.unwrap(), "pick")
                                                 .push('.')
                                                 .build(),
                                             9 => MessageBuilder::default()
                                                 .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                 .push(": pick a setting using ")
-                                                .mention_command(command_ids.draft.unwrap(), "draft")
+                                                .mention_command(command_ids.pick.unwrap(), "pick")
                                                 .push(". You can also use ")
                                                 .mention_command(command_ids.skip.unwrap(), "skip")
                                                 .push(" if you want to leave the settings as they are.")
@@ -1012,7 +1021,7 @@ impl Draft {
                                         }
                                     }
                                     MessageContext::RaceTime { high_seed_name, low_seed_name, .. } => match n {
-                                        2 => format!("{}, pick a setting using “!draft <setting> <value>”", team.choose(high_seed_name, low_seed_name)),
+                                        2 => format!("{}, pick a setting using “!pick <setting> <value>”", team.choose(high_seed_name, low_seed_name)),
                                         3 => format!("{}, pick two settings.", team.choose(high_seed_name, low_seed_name)),
                                         4 => format!("And your second pick?"),
                                         5 | 8 => format!("{}, pick a setting.", team.choose(high_seed_name, low_seed_name)),
@@ -1148,25 +1157,25 @@ impl Draft {
                                             2 | 5 | 8 => MessageBuilder::default()
                                                 .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                 .push(": pick a setting using ")
-                                                .mention_command(command_ids.draft.unwrap(), "draft")
+                                                .mention_command(command_ids.pick.unwrap(), "pick")
                                                 .push('.')
                                                 .build(),
                                             3 => MessageBuilder::default()
                                                 .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                 .push(": pick a setting using ")
-                                                .mention_command(command_ids.draft.unwrap(), "draft")
+                                                .mention_command(command_ids.pick.unwrap(), "pick")
                                                 .push(". You will have another pick after this.")
                                                 .build(),
                                             4 => MessageBuilder::default()
                                                 .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                 .push(": pick your second setting using ")
-                                                .mention_command(command_ids.draft.unwrap(), "draft")
+                                                .mention_command(command_ids.pick.unwrap(), "pick")
                                                 .push('.')
                                                 .build(),
                                             9 => MessageBuilder::default()
                                                 .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                 .push(": pick a setting using ")
-                                                .mention_command(command_ids.draft.unwrap(), "draft")
+                                                .mention_command(command_ids.pick.unwrap(), "pick")
                                                 .push(". You can also use ")
                                                 .mention_command(command_ids.skip.unwrap(), "skip")
                                                 .push(" if you want to leave the settings as they are.")
@@ -1175,7 +1184,7 @@ impl Draft {
                                         }
                                     }
                                     MessageContext::RaceTime { high_seed_name, low_seed_name, .. } => match n {
-                                        2 => format!("{}, pick a setting using “!draft <setting> <value>”", team.choose(high_seed_name, low_seed_name)),
+                                        2 => format!("{}, pick a setting using “!pick <setting> <value>”", team.choose(high_seed_name, low_seed_name)),
                                         3 => format!("{}, pick two settings.", team.choose(high_seed_name, low_seed_name)),
                                         4 => format!("And your second pick?"),
                                         5 | 8 => format!("{}, pick a setting.", team.choose(high_seed_name, low_seed_name)),
@@ -1424,7 +1433,7 @@ impl Draft {
                                                     let mut builder = MessageBuilder::default();
                                                     builder.mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?;
                                                     builder.push(" : Choisissez un setting avec ");
-                                                    builder.mention_command(command_ids.draft.unwrap(), "draft");
+                                                    builder.mention_command(command_ids.pick.unwrap(), "pick");
                                                     builder.push('.');
                                                     if skippable {
                                                         builder.push(" Vous pouvez également utiliser ");
@@ -1436,7 +1445,7 @@ impl Draft {
                                                     let mut builder = MessageBuilder::default();
                                                     builder.mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?;
                                                     builder.push(": pick a setting using ");
-                                                    builder.mention_command(command_ids.draft.unwrap(), "draft");
+                                                    builder.mention_command(command_ids.pick.unwrap(), "pick");
                                                     builder.push('.');
                                                     if skippable {
                                                         builder.push(" You can also use ");
@@ -1449,14 +1458,14 @@ impl Draft {
                                                     MessageBuilder::default()
                                                         .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                         .push(" : Choisissez un setting en utilisant ")
-                                                        .mention_command(command_ids.draft.unwrap(), "draft")
+                                                        .mention_command(command_ids.pick.unwrap(), "pick")
                                                         .push('.')
                                                         .build()
                                                 } else {
                                                     MessageBuilder::default()
                                                         .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                         .push(": pick a setting using ")
-                                                        .mention_command(command_ids.draft.unwrap(), "draft")
+                                                        .mention_command(command_ids.pick.unwrap(), "pick")
                                                         .push('.')
                                                         .build()
                                                 },
@@ -1464,14 +1473,14 @@ impl Draft {
                                                     MessageBuilder::default()
                                                         .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                         .push(" : Choisissez un setting avec ")
-                                                        .mention_command(command_ids.draft.unwrap(), "draft")
+                                                        .mention_command(command_ids.pick.unwrap(), "pick")
                                                         .push(". Vous aurez un autre pick après celui-ci.")
                                                         .build()
                                                 } else {
                                                     MessageBuilder::default()
                                                         .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                         .push(": pick a setting using ")
-                                                        .mention_command(command_ids.draft.unwrap(), "draft")
+                                                        .mention_command(command_ids.pick.unwrap(), "pick")
                                                         .push(". You will have another pick after this.")
                                                         .build()
                                                 },
@@ -1479,14 +1488,14 @@ impl Draft {
                                                     MessageBuilder::default()
                                                         .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                         .push(" : Choisissez votre second setting avec ")
-                                                        .mention_command(command_ids.draft.unwrap(), "draft")
+                                                        .mention_command(command_ids.pick.unwrap(), "pick")
                                                         .push('.')
                                                         .build()
                                                 } else {
                                                     MessageBuilder::default()
                                                         .mention_team(transaction, Some(*guild_id), team.choose(high_seed, low_seed)).await?
                                                         .push(": pick your second setting using ")
-                                                        .mention_command(command_ids.draft.unwrap(), "draft")
+                                                        .mention_command(command_ids.pick.unwrap(), "pick")
                                                         .push('.')
                                                         .build()
                                                 },
@@ -1505,9 +1514,9 @@ impl Draft {
                                                 format!("{}, pick the final setting.", team.choose(high_seed_name, low_seed_name))
                                             },
                                             (_, 2) => if let French = kind.language() {
-                                                format!("{}, choisissez un setting avec “!draft <setting> <configuration>”. <configuration> signifie la valeur du setting. Par exemple pour tokensanity, la configuration peut être {{all, dungeon, overworld}}.", team.choose(high_seed_name, low_seed_name))
+                                                format!("{}, choisissez un setting avec “!pick <setting> <configuration>”. <configuration> signifie la valeur du setting. Par exemple pour tokensanity, la configuration peut être {{all, dungeon, overworld}}.", team.choose(high_seed_name, low_seed_name))
                                             } else {
-                                                format!("{}, pick a setting using “!draft <setting> <value>”", team.choose(high_seed_name, low_seed_name))
+                                                format!("{}, pick a setting using “!pick <setting> <value>”", team.choose(high_seed_name, low_seed_name))
                                             },
                                             (_, 3 | 5) => if let French = kind.language() {
                                                 format!("{}, choisissez deux settings. Quel est votre premier ?", team.choose(high_seed_name, low_seed_name))

@@ -180,9 +180,10 @@ impl TypeMapKey for ExtraRoomTx {
 pub(crate) struct CommandIds {
     pub(crate) ban: Option<CommandId>,
     delete_after: CommandId,
-    pub(crate) draft: Option<CommandId>,
+    draft: Option<CommandId>,
     pub(crate) first: Option<CommandId>,
     pub(crate) no: Option<CommandId>,
+    pub(crate) pick: Option<CommandId>,
     post_status: CommandId,
     pronoun_roles: CommandId,
     racing_role: CommandId,
@@ -262,7 +263,7 @@ impl GenericInteraction for ComponentInteraction {
 }
 
 //TODO refactor (MH admins should have permissions, room already being open should not remove permissions but only remove the team from return)
-async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction, game: Option<i16>, allow_rooms_for_other_teams: bool) -> Result<Option<(Transaction<'a, Postgres>, Race, Option<Team>)>, Box<dyn std::error::Error + Send + Sync>> {
+async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction, game: Option<i16>, allow_rooms_for_other_teams: bool, alternative_instructions: Option<&str>) -> Result<Option<(Transaction<'a, Postgres>, Race, Option<Team>)>, Box<dyn std::error::Error + Send + Sync>> {
     let (mut transaction, http_client) = {
         let data = ctx.data.read().await;
         (
@@ -283,12 +284,24 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
             let mut content = MessageBuilder::default();
             match (Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), game, true).await?.is_empty(), game.is_some()) {
                 (false, false) => {
-                    content.push("Sorry, this thread is not associated with any upcoming races. Tournament organizers can use ");
+                    content.push("Sorry, this thread is not associated with any upcoming races. ");
+                    if let Some(alternative_instructions) = alternative_instructions {
+                        content.push(alternative_instructions);
+                        content.push(", or tournament organizers can use ");
+                    } else {
+                        content.push("Tournament organizers can use ");
+                    }
                     content.mention_command(command_ids.reset_race, "reset-race");
                     content.push(" if necessary.");
                 }
                 (false, true) => {
-                    content.push("Sorry, there don't seem to be any upcoming races with that game number associated with this thread. Tournament organizers can use ");
+                    content.push("Sorry, there don't seem to be any upcoming races with that game number associated with this thread. ");
+                    if let Some(alternative_instructions) = alternative_instructions {
+                        content.push(alternative_instructions);
+                        content.push(", or tournament organizers can use ");
+                    } else {
+                        content.push("Tournament organizers can use ");
+                    }
                     content.mention_command(command_ids.reset_race, "reset-race");
                     content.push(" if necessary.");
                 }
@@ -339,7 +352,7 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
 }
 
 async fn check_draft_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction) -> Result<Option<(event::Data<'static>, Race, draft::Kind, draft::MessageContext<'a>)>, Box<dyn std::error::Error + Send + Sync>> {
-    let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false).await? else { return Ok(None) };
+    let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, Some("You can continue the draft in the race room")).await? else { return Ok(None) };
     let guild_id = interaction.guild_id().expect("Received interaction from outside of a guild");
     let event = race.event(&mut transaction).await?;
     Ok(if let Some(team) = team {
@@ -593,25 +606,22 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 );
                 idx
             };
-            let draft = draft_kind.map(|draft_kind| {
+            let draft = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("draft")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
-                        .description("Chooses a setting for this race."),
-                    draft::Kind::RslS7 => CreateCommand::new("ban")
-                        .kind(CommandType::ChatInput)
-                        .add_context(InteractionContext::Guild)
-                        .description("Sets a weight of a setting to 0."),
+                        .description("Chooses a setting for this race (same as /pick)."),
+                    draft::Kind::RslS7 => return None, // command is called /ban, no alias necessary
                     draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => CreateCommand::new("draft")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
-                        .description("Choisit un setting pour la race.")
-                        .description_localized("en-GB", "Chooses a setting for this race.")
-                        .description_localized("en-US", "Chooses a setting for this race."),
+                        .description("Choisit un setting pour la race (identique à /pick).")
+                        .description_localized("en-GB", "Chooses a setting for this race (same as /pick).")
+                        .description_localized("en-US", "Chooses a setting for this race (same as /pick)."),
                 });
-                idx
+                Some(idx)
             });
             let first = draft_kind.map(|draft_kind| {
                 let idx = commands.len();
@@ -663,6 +673,26 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         .description_localized("en-US", "Answers no to a yes/no question in the settings draft."),
                 });
                 Some(idx)
+            });
+            let pick = draft_kind.map(|draft_kind| {
+                let idx = commands.len();
+                commands.push(match draft_kind {
+                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("pick")
+                        .kind(CommandType::ChatInput)
+                        .add_context(InteractionContext::Guild)
+                        .description("Chooses a setting for this race."),
+                    draft::Kind::RslS7 => CreateCommand::new("ban")
+                        .kind(CommandType::ChatInput)
+                        .add_context(InteractionContext::Guild)
+                        .description("Sets a weight of a setting to 0."),
+                    draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => CreateCommand::new("pick")
+                        .kind(CommandType::ChatInput)
+                        .add_context(InteractionContext::Guild)
+                        .description("Choisit un setting pour la race.")
+                        .description_localized("en-GB", "Chooses a setting for this race.")
+                        .description_localized("en-US", "Chooses a setting for this race."),
+                });
+                idx
             });
             let post_status = {
                 let idx = commands.len();
@@ -922,6 +952,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 draft: draft.map(|idx| commands[idx].id),
                 first: first.map(|idx| commands[idx].id),
                 no: no.map(|idx| commands[idx].id),
+                pick: pick.map(|idx| commands[idx].id),
                 post_status: commands[post_status].id,
                 pronoun_roles: commands[pronoun_roles].id,
                 racing_role: commands[racing_role].id,
@@ -1069,7 +1100,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         } else if Some(interaction.data.id) == command_ids.no {
                             draft_action(ctx, interaction, draft::Action::BooleanChoice(false)).await?;
                         } else if interaction.data.id == command_ids.post_status {
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None).await? {
                                 let event = race.event(&mut transaction).await?;
                                 if event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id)) {
                                     if let Some(draft_kind) = event.draft_kind() {
@@ -1301,7 +1332,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 CommandDataOptionValue::Integer(game) => i16::try_from(game).expect("game number out of range"),
                                 _ => panic!("unexpected slash command option type"),
                             });
-                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, false).await? {
+                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, false, None).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
@@ -1439,7 +1470,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 CommandDataOptionValue::Integer(game) => i16::try_from(game).expect("game number out of range"),
                                 _ => panic!("unexpected slash command option type"),
                             });
-                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true).await? {
+                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
@@ -1646,7 +1677,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 CommandDataOptionValue::Integer(game) => i16::try_from(game).expect("game number out of range"),
                                 _ => panic!("unexpected slash command option type"),
                             });
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 if event.speedgaming_slug.is_some() {
@@ -1820,7 +1851,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         } else if Some(interaction.data.id) == command_ids.skip {
                             draft_action(ctx, interaction, draft::Action::Skip).await?;
                         } else if interaction.data.id == command_ids.status {
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None).await? {
                                 let event = race.event(&mut transaction).await?;
                                 if let Some(draft_kind) = event.draft_kind() {
                                     if let Some(ref draft) = race.draft {

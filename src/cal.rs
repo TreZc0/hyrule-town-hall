@@ -1789,7 +1789,7 @@ pub(crate) async fn create_race_form(mut transaction: Transaction<'_, Postgres>,
 }
 
 #[rocket::get("/event/<series>/<event>/races/new?<players>")]
-pub(crate) async fn create_race(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String, players: Option<NonZero<u8>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn create_race(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String, players: Option<NonZero<u8>>) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let is_3p = match players.unwrap_or_else(|| NonZero::<u8>::new(2).unwrap()).get() {
         2 => false,
         3 => true,
@@ -1797,7 +1797,7 @@ pub(crate) async fn create_race(pool: &State<PgPool>, me: Option<User>, uri: Ori
     };
     let mut transaction = pool.begin().await?;
     let event = event::Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    Ok(RedirectOrContent::Content(create_race_form(transaction, me, uri, csrf.as_ref(), event, Context::default(), is_3p).await?))
+    Ok(create_race_form(transaction, me, uri, csrf.as_ref(), event, Context::default(), is_3p).await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -2347,10 +2347,10 @@ pub(crate) async fn import_races_form(mut transaction: Transaction<'_, Postgres>
 }
 
 #[rocket::get("/event/<series>/<event>/races/import")]
-pub(crate) async fn import_races(config: &State<Config>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn import_races(config: &State<Config>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let event = event::Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    Ok(RedirectOrContent::Content(import_races_form(transaction, http_client, &*discord_ctx.read().await, config, me, uri, csrf.as_ref(), event, Context::default()).await?))
+    Ok(import_races_form(transaction, http_client, &*discord_ctx.read().await, config, me, uri, csrf.as_ref(), event, Context::default()).await?)
 }
 
 #[derive(FromForm, CsrfForm)]

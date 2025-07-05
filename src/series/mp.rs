@@ -71,6 +71,9 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                         : English.join_html_opt(data.organizers(transaction).await?);
                         : "!";
                     }
+                    p {
+                        a(href = "https://docs.google.com/spreadsheets/d/1xjU_tv8pbMpfDBeCbm6SQ7HtbOPS4ZCsOLySkDX296o/edit") : "Swiss and tiebreaker matchups and results";
+                    }
                     h2(id = "signing-up") : "Signing Up";
                     p {
                         strong {

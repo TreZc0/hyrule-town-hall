@@ -681,6 +681,7 @@ pub(crate) enum Error {
     #[error(transparent)] Data(#[from] DataError),
     #[error(transparent)] Discord(#[from] crate::discord_bot::Error),
     #[error(transparent)] Io(#[from] io::Error),
+    #[error(transparent)] Json(#[from] serde_json::Error),
     #[error(transparent)] OotrWeb(#[from] ootr_web::Error),
     #[error(transparent)] Page(#[from] PageError),
     #[error(transparent)] Reqwest(#[from] reqwest::Error),
@@ -708,6 +709,7 @@ impl IsNetworkError for Error {
             Self::Data(_) => false,
             Self::Discord(_) => false,
             Self::Io(e) => e.is_network_error(),
+            Self::Json(_) => false,
             Self::OotrWeb(e) => e.is_network_error(),
             Self::Page(e) => e.is_network_error(),
             Self::Reqwest(e) => e.is_network_error(),
@@ -1925,7 +1927,7 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, discord_ctx: &State<RwFut
             } else if let Some(time) = parse_duration(&value.time1, DurationUnit::Hours) {
                 Some(time)
             } else {
-                form.context.push_error(form::Error::validation("Duration must be formatted like “1:23:45” or “1h 23m 45s”.").with_name("time1"));
+                form.context.push_error(form::Error::validation("Duration must be formatted like “1:23:45” or “1h 23m 45s”. Leave blank to indicate DNF.").with_name("time1"));
                 None
             },
             if value.time2.is_empty() {
@@ -1933,7 +1935,7 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, discord_ctx: &State<RwFut
             } else if let Some(time) = parse_duration(&value.time2, DurationUnit::Hours) {
                 Some(time)
             } else {
-                form.context.push_error(form::Error::validation("Duration must be formatted like “1:23:45” or “1h 23m 45s”.").with_name("time2"));
+                form.context.push_error(form::Error::validation("Duration must be formatted like “1:23:45” or “1h 23m 45s”. Leave blank to indicate DNF.").with_name("time2"));
                 None
             },
             if value.time3.is_empty() {
@@ -1941,7 +1943,7 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, discord_ctx: &State<RwFut
             } else if let Some(time) = parse_duration(&value.time3, DurationUnit::Hours) {
                 Some(time)
             } else {
-                form.context.push_error(form::Error::validation("Duration must be formatted like “1:23:45” or “1h 23m 45s”.").with_name("time3"));
+                form.context.push_error(form::Error::validation("Duration must be formatted like “1:23:45” or “1h 23m 45s”. Leave blank to indicate DNF.").with_name("time3"));
                 None
             },
         ];
