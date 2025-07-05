@@ -2189,7 +2189,7 @@ pub(crate) async fn race_table(
                                     RaceSchedule::Live { end, .. } => end.is_none(),
                                     _ => false,
                                 };
-                                @if is_upcoming_live && !show_event {
+                                @if is_upcoming_live {
                                     @let scheduled = match race.schedule {
                                         RaceSchedule::Unscheduled => false,
                                         RaceSchedule::Live { end, .. } => end.is_none_or(|end_time| end_time > Utc::now()),
