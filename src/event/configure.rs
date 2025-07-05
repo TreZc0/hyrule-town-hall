@@ -223,7 +223,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 if let MatchSource::StartGG(event_slug) = data.match_source() {
                     match sync_startgg_participant_ids(&mut transaction, &data, &event_slug).await {
                         Ok(sync_result) => {
-                            // Redirect with success message
+                            transaction.commit().await?;
                             let success_msg = format!("Sync completed: {} teams synced, {} teams could not be synced", 
                                 sync_result.synced_count, sync_result.failed_count);
                             let redirect_url = if !sync_result.failed_teams.is_empty() {
