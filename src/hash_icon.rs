@@ -1,5 +1,6 @@
 use {
     std::num::NonZeroU8,
+
     async_proto::Protocol,
     enum_iterator::Sequence,
     serde::{
