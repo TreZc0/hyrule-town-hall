@@ -521,8 +521,21 @@ async fn find_matching_entrant(
         ];
         
         for user_name in user_names.iter().filter_map(|&name| name) {
-            if entrant_name_lower == user_name.to_lowercase() {
+            let user_name_lower = user_name.to_lowercase();
+            
+            // First try exact match
+            if entrant_name_lower == user_name_lower {
                 return Ok(Some(entrant_id.clone()));
+            }
+            
+            // If that fails, check if there's a clan tag (| character)
+            if entrant_name_lower.contains('|') {
+                if let Some(stripped_entrant_name) = entrant_name_lower.split('|').nth(1) {
+                    let stripped_entrant_name = stripped_entrant_name.trim();
+                    if stripped_entrant_name == user_name_lower {
+                        return Ok(Some(entrant_id.clone()));
+                    }
+                }
             }
         }
     }
