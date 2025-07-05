@@ -92,6 +92,7 @@ wheel = { git = "https://github.com/fenhl/wheel", branch = "rocket-forms", featu
 yup-oauth2 = "12"
 mhstatus = { git = "https://github.com/midoshouse/status.midos.house", branch = "main" }
 serde_urlencoded = "0.7.1"
+urlencoding = "2"
 
 [target.'cfg(unix)'.dependencies]
 async-proto = { version = "0.25", features = ["chrono", "serde_json", "serenity", "uuid"] }

@@ -9,7 +9,39 @@ use crate::{
 };
 
 async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
+    let query_string = uri.0.query().map(|q| q.to_string());
+    let sync_success = query_string.as_deref().and_then(|q| {
+        q.split('&')
+            .find(|param| param.starts_with("sync_success="))
+            .and_then(|param| param.split('=').nth(1))
+            .and_then(|encoded| urlencoding::decode(encoded).ok())
+    });
+    
+    let sync_failed = query_string.as_deref().and_then(|q| {
+        q.split('&')
+            .find(|param| param.starts_with("sync_failed="))
+            .and_then(|param| param.split('=').nth(1))
+            .and_then(|encoded| urlencoding::decode(encoded).ok())
+    });
     let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, false).await?;
+    let success_message = if let Some(success) = sync_success {
+        if let Some(failed) = sync_failed {
+            html! {
+                div(class = "success") {
+                    p : format!("{}. Failed to sync: {}", success, failed);
+                }
+            }
+        } else {
+            html! {
+                div(class = "success") {
+                    p : success;
+                }
+            }
+        }
+    } else {
+        html! {}
+    };
+    
     let content = if event.is_ended() {
         html! {
             article {
@@ -119,6 +151,7 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
     };
     Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Configure — {}", event.display_name), html! {
         : header;
+        : success_message;
         : content;
     }).await?)
 }
@@ -188,9 +221,27 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             }
             if let Some(_) = value.sync_startgg_ids {
                 if let MatchSource::StartGG(event_slug) = data.match_source() {
-                    if let Err(sync_error) = sync_startgg_participant_ids(&mut transaction, &data, &event_slug).await {
-                        form.context.push_error(form::Error::validation(format!("Failed to sync StartGG participant IDs: {}", sync_error)));
-                        return Ok(RedirectOrContent::Content(configure_form(transaction, Some(me), uri, csrf.as_ref(), data, form.context).await?));
+                    match sync_startgg_participant_ids(&mut transaction, &data, &event_slug).await {
+                        Ok(sync_result) => {
+                            // Redirect with success message
+                            let success_msg = format!("Sync completed: {} teams synced, {} teams could not be synced", 
+                                sync_result.synced_count, sync_result.failed_count);
+                            let redirect_url = if !sync_result.failed_teams.is_empty() {
+                                let failed_list = sync_result.failed_teams.join(", ");
+                                format!("{}?sync_success={}&sync_failed={}", 
+                                    uri!(get(series, event)), 
+                                    urlencoding::encode(&success_msg),
+                                    urlencoding::encode(&failed_list))
+                            } else {
+                                format!("{}?sync_success={}", 
+                                    uri!(get(series, event)), 
+                                    urlencoding::encode(&success_msg))
+                            };
+                            return Ok(RedirectOrContent::Redirect(Redirect::to(redirect_url)));
+                        }
+                        Err(sync_error) => {
+                            form.context.push_error(form::Error::validation(format!("Failed to sync StartGG participant IDs: {}", sync_error)));
+                        }
                     }
                 }
             }
@@ -382,7 +433,14 @@ pub(crate) async fn remove_restreamer(pool: &State<PgPool>, me: User, uri: Origi
     })
 }
 
-async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres>, event: &Data<'_>, event_slug: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+#[derive(Debug)]
+struct SyncResult {
+    synced_count: usize,
+    failed_count: usize,
+    failed_teams: Vec<String>,
+}
+
+async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres>, event: &Data<'_>, event_slug: &str) -> Result<SyncResult, Box<dyn std::error::Error + Send + Sync>> {
     use crate::config::Config;
     
     let http_client = reqwest::Client::new();
@@ -400,7 +458,8 @@ async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres
         WHERE series = $1 AND event = $2 AND startgg_id IS NULL AND NOT resigned
     "#, event.series as _, &event.event).fetch_all(&mut **transaction).await?;
     
-    let mut _synced_count = 0;
+    let mut synced_count = 0;
+    let mut failed_teams = Vec::new();
     
     for team in teams {
         let team_members = sqlx::query!(r#"
@@ -419,12 +478,21 @@ async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres
                     WHERE id = $2
                 "#, entrant_id as _, team.id as _).execute(&mut **transaction).await?;
                 
-                _synced_count += 1;
+                synced_count += 1;
+            } else {
+                // Could not find a matching entrant
+                failed_teams.push(team.name.clone().unwrap_or_else(|| format!("Team {}", team.id)));
             }
         }
     }
     
-    Ok(())
+    let failed_count = failed_teams.len();
+    
+    Ok(SyncResult {
+        synced_count,
+        failed_count,
+        failed_teams,
+    })
 }
 
 async fn find_matching_entrant(
@@ -432,7 +500,6 @@ async fn find_matching_entrant(
     member_id: Id<Users>, 
     transaction: &mut Transaction<'_, Postgres>
 ) -> Result<Option<startgg::ID>, Box<dyn std::error::Error + Send + Sync>> {
-    // Get user details
     let user = User::from_id(&mut **transaction, member_id).await?.ok_or("User not found")?;
     
     for (entrant_id, entrant_name, participant_user_ids) in entrants {
