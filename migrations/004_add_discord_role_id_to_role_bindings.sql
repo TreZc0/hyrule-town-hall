@@ -5,11 +5,6 @@
 ALTER TABLE role_bindings 
 ADD COLUMN discord_role_id BIGINT;
 
--- Add constraint to ensure discord_role_id is only set for event role bindings (not game role bindings)
-ALTER TABLE role_bindings 
-ADD CONSTRAINT check_discord_role_event_only 
-CHECK (discord_role_id IS NULL OR game_id IS NULL);
-
 -- Add index for efficient Discord role lookups
 CREATE INDEX idx_role_bindings_discord_role_id ON role_bindings(discord_role_id) WHERE discord_role_id IS NOT NULL;
 
