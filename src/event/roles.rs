@@ -612,8 +612,7 @@ async fn roles_page(
                     });
                     : form_field("discord_role_id", &mut errors, html! {
                         label(for = "discord_role_id") : "Discord Role ID (optional):";
-                        input(type = "number", name = "discord_role_id", id = "discord_role_id", placeholder = "e.g., 123456789012345678");
-                        p(class = "help-text") : "Leave empty if no Discord role should be assigned";
+                        input(type = "text", name = "discord_role_id", id = "discord_role_id", placeholder = "e.g. 123456789012345678");
                     });
                 }, errors, "Add Role Binding");
 
