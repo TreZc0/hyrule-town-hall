@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT EXISTS (SELECT 1 FROM signups\n                   WHERE race_id = $1 AND role_binding_id = $2 AND user_id = $3)",
+  "query": "SELECT EXISTS (SELECT 1 FROM role_requests\n                   WHERE role_binding_id = $1 AND user_id = $2 AND status IN ('pending', 'approved'))",
   "describe": {
     "columns": [
       {
@@ -11,7 +11,6 @@
     ],
     "parameters": {
       "Left": [
-        "Int8",
         "Int4",
         "Int8"
       ]
@@ -20,5 +19,5 @@
       null
     ]
   },
-  "hash": "44007803d3b2422719c2b010ea83738ed418a9438a3aae31a596a7f2fcc7fa34"
+  "hash": "7344b310e35dc31dad29d8db89791b0d8eae470ac6b494748c0358b74e65e976"
 }

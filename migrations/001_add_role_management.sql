@@ -23,6 +23,10 @@ CREATE TABLE role_bindings (
     UNIQUE(series, event, role_type_id)
 );
 
+
+ALTER TABLE public.role_bindings OWNER TO mido;
+
+
 CREATE TABLE role_requests (
     id SERIAL PRIMARY KEY,
     role_binding_id INTEGER NOT NULL REFERENCES role_bindings(id) ON DELETE CASCADE,
@@ -33,6 +37,8 @@ CREATE TABLE role_requests (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE public.role_requests OWNER TO mido;
+
 CREATE TABLE signups (
     id SERIAL PRIMARY KEY,
     race_id BIGINT NOT NULL REFERENCES races(id) ON DELETE CASCADE,
@@ -42,6 +48,8 @@ CREATE TABLE signups (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE public.signups OWNER TO mido;
 
 CREATE INDEX idx_role_bindings_series_event ON role_bindings(series, event);
 CREATE INDEX idx_role_requests_role_binding_id ON role_requests(role_binding_id);

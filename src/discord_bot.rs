@@ -140,7 +140,7 @@ impl MessageBuilderExt for MessageBuilder {
     }
 }
 
-enum DbPool {}
+pub(crate) enum DbPool {}
 
 impl TypeMapKey for DbPool {
     type Value = PgPool;
@@ -2146,8 +2146,28 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             }
             Ok(())
         }))
+        .on_guild_member_addition(|ctx, new_member| Box::pin(async move {
+                          if let Err(e) = crate::discord_role_manager::handle_member_join(ctx, new_member.guild_id, new_member.user.id).await {
+                eprintln!("Failed to handle member join for user {}: {}", new_member.user.id, e);
+            }
+            Ok(())
+        }))
         .task(|ctx_fut, _| async move {
-            shutdown.await;
+            let db_pool = ctx_fut.read().await.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+            
+            let mut shutdown = shutdown;
+            // Clean up expired invites every hour
+            let mut interval = tokio::time::interval(Duration::from_secs(3600));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if let Err(e) = crate::discord_role_manager::cleanup_expired_invites(&db_pool).await {
+                            eprintln!("Failed to cleanup expired Discord invites: {}", e);
+                        }
+                    }
+                    () = &mut shutdown => break,
+                }
+            }
             serenity_utils::shut_down(&*ctx_fut.read().await).await;
         })
 }
