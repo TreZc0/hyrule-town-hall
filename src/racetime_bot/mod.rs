@@ -12,6 +12,7 @@ use {
         NodeRef,
         traits::TendrilSink as _,
     },
+    lazy_regex::regex_captures,
     mhstatus::OpenRoom,
     ootr_utils as rando,
     racetime::{
@@ -35,8 +36,16 @@ use {
     },
     smart_default::SmartDefault,
     tokio::{
-        io::AsyncWriteExt as _,
+        io::{
+            AsyncBufReadExt as _,
+            AsyncWriteExt as _,
+            BufReader,
+        },
         time::timeout,
+    },
+    wheel::{
+        fs::File,
+        traits::IoResultExt as _,
     },
     crate::{
         cal::Entrant,
@@ -1460,7 +1469,7 @@ impl GlobalState {
                 name: uuid.to_string(),
                 race: true,
                 skip_playthrough: true,
-                spoiler: "none",
+                spoiler: "full",
                 suppress_rom: true,
             };
             let mut crosskeys_yaml = CrosskeysYaml {
@@ -1519,10 +1528,11 @@ impl GlobalState {
             let yaml_path = yaml_file.path();
             tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(serde_yml::to_string(&crosskeys_yaml)?.as_bytes()).await.at(&yaml_file)?;
             Command::new(PYTHON).current_dir("../alttpr").arg("DungeonRandomizer.py").arg("--customizer").arg(yaml_path).arg("--outputpath").arg("/var/www/midos.house/seed").check("DungeonRandomizer.py").await?;
-
+            // This swallows the hash error and just makes it empty--maybe we should surface this somehow?
+            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await.ok();
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
-                    file_hash: None,
+                    file_hash: file_hash,
                     files: Some(seed::Files::AlttprDoorRando {
                         uuid: uuid
                     }),
@@ -1540,6 +1550,24 @@ impl GlobalState {
             }
         }));
         update_rx
+    }
+
+    async fn retrieve_hash_and_clean_up_spoiler(uuid: Uuid) -> Result<[HashIcon; 5], RollError> {
+        let spoiler_path = format!("/var/www/midos.house/seed/DR_{uuid}_Spoiler.txt");
+        let destination_path = format!("/var/www/midos.house/spoilers/DR_{uuid}_Spoiler.txt");
+        let mut file = BufReader::new(File::open(spoiler_path.clone()).await?);
+        let mut line = String::default();
+        let hash = loop {
+            line.clear();
+            if file.read_line(&mut line).await.at(spoiler_path.clone())? == 0 {
+                return Err(RollError::AlttprHashLineNotFound)
+            }
+            if let Some((_, h1, h2, h3, h4, h5)) = regex_captures!("^Hash: (.+), (.+), (.+), (.+), (.+)\r?\n$", &line) {
+                break [h1.parse()?, h2.parse()?, h3.parse()?, h4.parse()?, h5.parse()?]
+            }
+        };
+        Command::new("mv").arg(spoiler_path).arg(destination_path).check("Moving spoiler file").await?;
+        Ok(hash)
     }
 
     pub(crate) fn roll_rsl_seed(self: Arc<Self>, delay_until: Option<DateTime<Utc>>, preset: rsl::VersionedPreset, world_count: u8, unlock_spoiler_log: UnlockSpoilerLog) -> mpsc::Receiver<SeedRollUpdate> {
@@ -1981,11 +2009,13 @@ pub(crate) enum RollError {
     #[error(transparent)] RandoVersion(#[from] rando::VersionParseError),
     #[error(transparent)] Reqwest(#[from] reqwest::Error),
     #[error(transparent)] RslScriptPath(#[from] rsl::ScriptPathError),
+    #[error(transparent)] SerdePlain(#[from] serde_plain::Error),
     #[error(transparent)] Sql(#[from] sqlx::Error),
     #[error(transparent)] Utf8(#[from] std::string::FromUtf8Error),
     #[error(transparent)] Wheel(#[from] wheel::Error),
     #[cfg(unix)] #[error(transparent)] Xdg(#[from] xdg::BaseDirectoriesError),
     #[error(transparent)] Yml(#[from] serde_yml::Error),
+    #[error("no hash line found in spoiler log")] AlttprHashLineNotFound,
     #[error("{display}")]
     Cloned {
         debug: String,
@@ -5467,7 +5497,7 @@ pub(crate) enum MainError {
     #[error(transparent)] CreateRooms(#[from] CreateRoomsError),
     #[error(transparent)] HandleRooms(#[from] HandleRoomsError),
     #[error(transparent)] PrepareSeeds(#[from] PrepareSeedsError),
-}
+} 
 
 pub(crate) async fn main(config: Config, shutdown: rocket::Shutdown, global_state: Arc<GlobalState>, seed_cache_rx: watch::Receiver<()>) -> Result<(), MainError> {
     let ((), (), ()) = tokio::try_join!(
