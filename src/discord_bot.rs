@@ -1289,6 +1289,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             },
                                             seed: if reset_schedule { seed::Data::default() } else { race.seed },
                                             notified: race.notified && !reset_schedule,
+                                            async_notified_1: race.async_notified_1 && !reset_schedule,
+                                            async_notified_2: race.async_notified_2 && !reset_schedule,
+                                            async_notified_3: race.async_notified_3 && !reset_schedule,
                                             // explicitly listing remaining fields here instead of using `..race` so if the fields change they're kept/reset correctly
                                             id: race.id,
                                             series: race.series,
@@ -2352,6 +2355,13 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
     let cal_event = cal_event.clone();
     let event = event.clone();
 
+    let notified_column = match cal_event.kind {
+        cal::EventKind::Async1 => "async_notified_1",
+        cal::EventKind::Async2 => "async_notified_2",
+        cal::EventKind::Async3 => "async_notified_3",
+        cal::EventKind::Normal => panic!("Why are we having a normal race in an async"),
+    };
+
     let mut transaction = {
         let discord_data = discord_ctx.data.read().await;
         discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
@@ -2422,7 +2432,7 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
             ADMIN_USER.create_dm_channel(&discord_ctx).await?.say(&discord_ctx, msg).await?;
         }
     }
-    sqlx::query!("UPDATE races SET notified = TRUE WHERE id = $1", cal_event.race.id as _).execute(&mut *transaction).await?;
+    sqlx::query!("UPDATE races SET $1 = TRUE WHERE id = $2", notified_column as _, cal_event.race.id as _).execute(&mut *transaction).await?;
     transaction.commit().await?;
     Ok(())
     // Leave the TODO below for posterity.
