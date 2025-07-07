@@ -450,7 +450,7 @@ impl Race {
             notified,
             async_notified_1,
             async_notified_2,
-            async_notified_3,
+            async_notified_3
         FROM races WHERE id = $1"#, id as _).fetch_one(&mut **transaction).await?;
         let source = if let Some(id) = row.challonge_match {
             Source::Challonge { id }
