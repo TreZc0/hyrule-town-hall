@@ -524,7 +524,7 @@ impl Requirement {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
                         : form_field("hover_ok", errors, html! {
-                            label(for = "hover_ok") : "Allow hovering in your races (with opponent consent)?";
+                            label(for = "hover_ok") : "Allow hovering and moldorm bouncing in your races (with opponent consent)?";
                             br;
                             input(id = "hover_ok-yes", type = "radio", name = "hover_ok", value = "yes", checked? = yes_checked);
                             label(for = "hover_ok-yes") : "Yes";

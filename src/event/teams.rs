@@ -945,7 +945,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
             th : "ZW";
         });
         column_headers.push(html! {
-            th : "Hovering";
+            th : "Hovering/Moldorm Bouncing";
         });
         column_headers.push(html! {
             th : "No Delay";
