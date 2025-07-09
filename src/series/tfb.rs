@@ -49,15 +49,15 @@ pub(crate) fn report_score_button(team_config: TeamConfig, finish_time: Option<D
             SurveyQuestion {
                 name: format!("pieces"),
                 label: format!("Pieces found"),
-                default: Some(if let Some(finish_time) = finish_time {
+                default: Some(json!(if let Some(finish_time) = finish_time {
                     if finish_time < Duration::from_secs(2 * 60 * 60) {
-                        piece_count(team_config).to_string()
+                        Cow::Owned(piece_count(team_config).to_string())
                     } else {
-                        format!("1")
+                        "1".into()
                     }
                 } else {
-                    format!("0")
-                }),
+                    "0".into()
+                })),
                 help_text: None,
                 kind: SurveyQuestionKind::Radio,
                 placeholder: None,
@@ -66,7 +66,7 @@ pub(crate) fn report_score_button(team_config: TeamConfig, finish_time: Option<D
             SurveyQuestion {
                 name: format!("last_collection_time"),
                 label: format!("Most recent collection time"),
-                default: finish_time.map(unparse_duration),
+                default: finish_time.map(|finish_time| json!(unparse_duration(finish_time))),
                 help_text: Some(format!("Leave blank if you didn't collect any pieces.")),
                 kind: SurveyQuestionKind::Input,
                 placeholder: Some(format!("e.g. 1h23m45s")),

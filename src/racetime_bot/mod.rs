@@ -3245,7 +3245,7 @@ impl RaceHandler<GlobalState> for Handler {
                                         survey: Some(s::S7_SETTINGS.into_iter().map(|setting| SurveyQuestion {
                                             name: setting.name.to_owned(),
                                             label: setting.display.to_owned(),
-                                            default: Some(format!("default")),
+                                            default: Some(json!("default")),
                                             help_text: None,
                                             kind: SurveyQuestionKind::Radio,
                                             placeholder: None,
@@ -3377,7 +3377,7 @@ impl RaceHandler<GlobalState> for Handler {
                                             survey: Some(available_settings.into_iter().map(|setting| SurveyQuestion {
                                                 name: setting.name.to_owned(),
                                                 label: setting.display.to_owned(),
-                                                default: Some(setting.default.to_owned()),
+                                                default: Some(json!(setting.default)),
                                                 help_text: None,
                                                 kind: SurveyQuestionKind::Radio,
                                                 placeholder: None,
@@ -3563,7 +3563,7 @@ impl RaceHandler<GlobalState> for Handler {
                                             SurveyQuestion {
                                                 name: format!("mq"),
                                                 label: format!("Donjons Master Quest"),
-                                                default: Some(format!("0")),
+                                                default: Some(json!("0")),
                                                 help_text: None,
                                                 kind: SurveyQuestionKind::Select,
                                                 placeholder: None,
@@ -3588,7 +3588,7 @@ impl RaceHandler<GlobalState> for Handler {
                                             SurveyQuestion {
                                                 name: format!("mq"),
                                                 label: format!("Donjons Master Quest"),
-                                                default: Some(format!("0")),
+                                                default: Some(json!("0")),
                                                 help_text: None,
                                                 kind: SurveyQuestionKind::Select,
                                                 placeholder: None,
@@ -3603,7 +3603,7 @@ impl RaceHandler<GlobalState> for Handler {
                                         survey: Some(fr::S3_SETTINGS.into_iter().map(|setting| SurveyQuestion {
                                             name: setting.name.to_owned(),
                                             label: setting.display.to_owned(),
-                                            default: Some(setting.default.to_owned()),
+                                            default: Some(json!(setting.default)),
                                             help_text: None,
                                             kind: SurveyQuestionKind::Radio,
                                             placeholder: None,
@@ -3614,7 +3614,7 @@ impl RaceHandler<GlobalState> for Handler {
                                         }).chain(iter::once(SurveyQuestion {
                                             name: format!("mq"),
                                             label: format!("Donjons Master Quest"),
-                                            default: Some(format!("0")),
+                                            default: Some(json!("0")),
                                             help_text: None,
                                             kind: SurveyQuestionKind::Select,
                                             placeholder: None,
@@ -3638,7 +3638,7 @@ impl RaceHandler<GlobalState> for Handler {
                                             SurveyQuestion {
                                                 name: format!("mq"),
                                                 label: format!("Donjons Master Quest"),
-                                                default: Some(format!("0")),
+                                                default: Some(json!("0")),
                                                 help_text: None,
                                                 kind: SurveyQuestionKind::Select,
                                                 placeholder: None,
@@ -3660,7 +3660,7 @@ impl RaceHandler<GlobalState> for Handler {
                                             SurveyQuestion {
                                                 name: format!("mq"),
                                                 label: format!("Master Quest Dungeons"),
-                                                default: Some(format!("0")),
+                                                default: Some(json!("0")),
                                                 help_text: None,
                                                 kind: SurveyQuestionKind::Select,
                                                 placeholder: None,
@@ -3685,7 +3685,7 @@ impl RaceHandler<GlobalState> for Handler {
                                             SurveyQuestion {
                                                 name: format!("mq"),
                                                 label: format!("Master Quest Dungeons"),
-                                                default: Some(format!("0")),
+                                                default: Some(json!("0")),
                                                 help_text: None,
                                                 kind: SurveyQuestionKind::Select,
                                                 placeholder: None,
@@ -3700,7 +3700,7 @@ impl RaceHandler<GlobalState> for Handler {
                                         survey: Some(fr::S4_SETTINGS.into_iter().map(|setting| SurveyQuestion {
                                             name: setting.name.to_owned(),
                                             label: setting.display.to_owned(),
-                                            default: Some(setting.default.to_owned()),
+                                            default: Some(json!(setting.default)),
                                             help_text: None,
                                             kind: SurveyQuestionKind::Radio,
                                             placeholder: None,
@@ -3711,7 +3711,7 @@ impl RaceHandler<GlobalState> for Handler {
                                         }).chain(iter::once(SurveyQuestion {
                                             name: format!("mq"),
                                             label: format!("Master Quest Dungeons"),
-                                            default: Some(format!("0")),
+                                            default: Some(json!("0")),
                                             help_text: None,
                                             kind: SurveyQuestionKind::Select,
                                             placeholder: None,
@@ -3735,7 +3735,7 @@ impl RaceHandler<GlobalState> for Handler {
                                             SurveyQuestion {
                                                 name: format!("mq"),
                                                 label: format!("Master Quest Dungeons"),
-                                                default: Some(format!("0")),
+                                                default: Some(json!("0")),
                                                 help_text: None,
                                                 kind: SurveyQuestionKind::Select,
                                                 placeholder: None,
@@ -3757,7 +3757,7 @@ impl RaceHandler<GlobalState> for Handler {
                                             SurveyQuestion {
                                                 name: format!("mq"),
                                                 label: format!("Master Quest Dungeons"),
-                                                default: Some(format!("0")),
+                                                default: Some(json!("0")),
                                                 help_text: None,
                                                 kind: SurveyQuestionKind::Select,
                                                 placeholder: None,
@@ -3782,7 +3782,7 @@ impl RaceHandler<GlobalState> for Handler {
                                             SurveyQuestion {
                                                 name: format!("mq"),
                                                 label: format!("Master Quest Dungeons"),
-                                                default: Some(format!("0")),
+                                                default: Some(json!("0")),
                                                 help_text: None,
                                                 kind: SurveyQuestionKind::Select,
                                                 placeholder: None,
@@ -3797,7 +3797,7 @@ impl RaceHandler<GlobalState> for Handler {
                                         survey: Some(fr::S5_SETTINGS.into_iter().map(|setting| SurveyQuestion {
                                             name: setting.name.to_owned(),
                                             label: setting.display.to_owned(),
-                                            default: Some(setting.default.to_owned()),
+                                            default: Some(json!(setting.default)),
                                             help_text: None,
                                             kind: SurveyQuestionKind::Radio,
                                             placeholder: None,
@@ -3808,7 +3808,7 @@ impl RaceHandler<GlobalState> for Handler {
                                         }).chain(iter::once(SurveyQuestion {
                                             name: format!("mq"),
                                             label: format!("Master Quest Dungeons"),
-                                            default: Some(format!("0")),
+                                            default: Some(json!("0")),
                                             help_text: None,
                                             kind: SurveyQuestionKind::Select,
                                             placeholder: None,
@@ -3832,7 +3832,7 @@ impl RaceHandler<GlobalState> for Handler {
                                             SurveyQuestion {
                                                 name: format!("mq"),
                                                 label: format!("Master Quest Dungeons"),
-                                                default: Some(format!("0")),
+                                                default: Some(json!("0")),
                                                 help_text: None,
                                                 kind: SurveyQuestionKind::Select,
                                                 placeholder: None,
