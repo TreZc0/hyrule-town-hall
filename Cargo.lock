@@ -5737,31 +5737,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "racetime"
-version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58ef67ff45addba466263df41fa62a84e88c847108bf6a50cd96770f70f5d4d6"
-dependencies = [
- "async-trait",
- "chrono",
- "collect-mac",
- "futures",
- "http 1.3.1",
- "itertools 0.14.0",
- "lazy-regex",
- "reqwest 0.12.20",
- "serde",
- "serde_json_path_to_error",
- "serde_with",
- "shlex",
- "thiserror 2.0.12",
- "tokio",
- "tokio-tungstenite 0.27.0",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "rand"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
