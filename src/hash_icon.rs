@@ -1,5 +1,6 @@
 use {
     std::num::NonZeroU8,
+
     async_proto::Protocol,
     enum_iterator::Sequence,
     serde::{
@@ -113,7 +114,7 @@ impl HashIcon {
             "HashHeart" => Some(Self::Heart),
             "HashMap" => Some(Self::Map),
             "HashCompass" => Some(Self::Compass),
-            "HashKey" => Some(Self::Key),
+            "HashBigKey" => Some(Self::Key),
             _ => None,
         }
     }
@@ -151,7 +152,7 @@ impl HashIcon {
             Self::Heart => "HashHeart",
             Self::Map => "HashMap",
             Self::Compass => "HashCompass",
-            Self::Key => "HashKey",
+            Self::Key => "HashBigKey",
         }
     }
 }

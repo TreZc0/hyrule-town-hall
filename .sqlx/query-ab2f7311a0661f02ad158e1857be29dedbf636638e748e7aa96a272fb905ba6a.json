@@ -1,10 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE races SET hash1 = $1, hash2 = $2, hash3 = $3, hash4 = $4, hash5 = $5 WHERE id = $6",
+  "query": "UPDATE races SET xkeys_uuid = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7",
   "describe": {
     "columns": [],
     "parameters": {
       "Left": [
+        "Uuid",
         {
           "Custom": {
             "name": "hash_icon_alttp",
@@ -215,5 +216,5 @@
     },
     "nullable": []
   },
-  "hash": "184415c18749955df1c4080b066887cfdb3167deee56cbe203c62784b4bff1c7"
+  "hash": "ab2f7311a0661f02ad158e1857be29dedbf636638e748e7aa96a272fb905ba6a"
 }

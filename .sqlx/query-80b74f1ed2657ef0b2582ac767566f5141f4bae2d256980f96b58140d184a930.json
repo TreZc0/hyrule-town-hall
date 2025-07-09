@@ -1,0 +1,94 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT \n                    s.id AS \"id: Id<Signups>\",\n                    s.race_id AS \"race_id: Id<Races>\",\n                    s.role_binding_id AS \"role_binding_id: Id<RoleBindings>\",\n                    s.user_id AS \"user_id: Id<Users>\",\n                    s.status AS \"status: VolunteerSignupStatus\",\n                    s.notes,\n                    s.created_at,\n                    s.updated_at,\n                    rb.series AS \"series: Series\",\n                    rb.event,\n                    rb.min_count,\n                    rb.max_count,\n                    rt.name AS \"role_type_name\"\n                FROM signups s\n                JOIN role_bindings rb ON s.role_binding_id = rb.id\n                JOIN role_types rt ON rb.role_type_id = rt.id\n                WHERE s.race_id = $1\n                ORDER BY rt.name, s.created_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Signups>",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "race_id: Id<Races>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "role_binding_id: Id<RoleBindings>",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "user_id: Id<Users>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "status: VolunteerSignupStatus",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "notes",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "series: Series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "event",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 10,
+        "name": "min_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "max_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "role_type_name",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "80b74f1ed2657ef0b2582ac767566f5141f4bae2d256980f96b58140d184a930"
+}

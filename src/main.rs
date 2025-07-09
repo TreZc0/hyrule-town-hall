@@ -38,6 +38,7 @@ mod cal;
 mod challonge;
 mod config;
 mod discord_bot;
+mod discord_role_manager;
 mod draft;
 mod event;
 mod favicon;

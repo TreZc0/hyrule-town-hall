@@ -594,6 +594,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::configure::restreamers_get,
         event::configure::add_restreamer,
         event::configure::remove_restreamer,
+        event::configure::search_users,
         event::roles::get,
         event::roles::add_role_binding,
         event::roles::delete_role_binding,

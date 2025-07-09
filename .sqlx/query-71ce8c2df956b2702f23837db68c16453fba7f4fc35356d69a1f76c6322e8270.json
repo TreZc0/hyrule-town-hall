@@ -1,32 +1,32 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT \n                    s.id AS \"id: Id<Signups>\",\n                    s.race_id AS \"race_id: Id<Races>\",\n                    s.role_binding_id AS \"role_binding_id: Id<RoleBindings>\",\n                    s.user_id AS \"user_id: Id<Users>\",\n                    s.status AS \"status: SignupStatus\",\n                    s.created_at,\n                    s.updated_at,\n                    rb.series AS \"series: Series\",\n                    rb.event,\n                    rb.min_count,\n                    rb.max_count,\n                    rt.name AS \"role_type_name\"\n                FROM signups s\n                JOIN role_bindings rb ON s.role_binding_id = rb.id\n                JOIN role_types rt ON rb.role_type_id = rt.id\n                WHERE s.race_id = $1\n                ORDER BY rt.name, s.created_at\n            ",
+  "query": "\n                SELECT \n                    rr.id AS \"id: Id<RoleRequests>\",\n                    rr.role_binding_id AS \"role_binding_id: Id<RoleBindings>\",\n                    rr.user_id AS \"user_id: Id<Users>\",\n                    rr.status AS \"status: RoleRequestStatus\",\n                    rr.notes,\n                    rr.created_at,\n                    rr.updated_at,\n                    rb.series AS \"series: Series\",\n                    rb.event,\n                    rb.min_count,\n                    rb.max_count,\n                    rt.name AS \"role_type_name\"\n                FROM role_requests rr\n                JOIN role_bindings rb ON rr.role_binding_id = rb.id\n                JOIN role_types rt ON rb.role_type_id = rt.id\n                WHERE rr.id = $1\n            ",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id: Id<Signups>",
+        "name": "id: Id<RoleRequests>",
         "type_info": "Int4"
       },
       {
         "ordinal": 1,
-        "name": "race_id: Id<Races>",
-        "type_info": "Int8"
-      },
-      {
-        "ordinal": 2,
         "name": "role_binding_id: Id<RoleBindings>",
         "type_info": "Int4"
       },
       {
-        "ordinal": 3,
+        "ordinal": 2,
         "name": "user_id: Id<Users>",
         "type_info": "Int8"
       },
       {
-        "ordinal": 4,
-        "name": "status: SignupStatus",
+        "ordinal": 3,
+        "name": "status: RoleRequestStatus",
         "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "notes",
+        "type_info": "Text"
       },
       {
         "ordinal": 5,
@@ -66,7 +66,7 @@
     ],
     "parameters": {
       "Left": [
-        "Int8"
+        "Int4"
       ]
     },
     "nullable": [
@@ -74,7 +74,7 @@
       false,
       false,
       false,
-      false,
+      true,
       false,
       false,
       false,
@@ -84,5 +84,5 @@
       false
     ]
   },
-  "hash": "b6ee72fa2e015051ed75ccc3f9a94625353251f32fac698ea15f67886a8ae4bf"
+  "hash": "71ce8c2df956b2702f23837db68c16453fba7f4fc35356d69a1f76c6322e8270"
 }

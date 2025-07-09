@@ -17,7 +17,7 @@ use {
 /// User preference that determines which external account a user's display name is be based on.
 #[derive(Debug, Clone, Copy, sqlx::Type)]
 #[sqlx(type_name = "user_display_source", rename_all = "lowercase")]
-enum DisplaySource {
+pub(crate) enum DisplaySource {
     RaceTime,
     Discord,
 }

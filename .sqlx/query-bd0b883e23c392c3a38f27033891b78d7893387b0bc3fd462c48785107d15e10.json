@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO signups (race_id, role_binding_id, user_id)\n               VALUES ($1, $2, $3) RETURNING id",
+  "query": "INSERT INTO signups (race_id, role_binding_id, user_id, notes)\n               VALUES ($1, $2, $3, $4) RETURNING id",
   "describe": {
     "columns": [
       {
@@ -13,12 +13,13 @@
       "Left": [
         "Int8",
         "Int4",
-        "Int8"
+        "Int8",
+        "Varchar"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "e82132c4fe0ae72c96a5dddee50172a410e812f992e24781dd71f2a475041795"
+  "hash": "bd0b883e23c392c3a38f27033891b78d7893387b0bc3fd462c48785107d15e10"
 }

@@ -9,6 +9,7 @@ use crate::{
     user::User,
 };
 
+
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
 pub(crate) enum Error {
     #[error(transparent)]
@@ -88,6 +89,7 @@ pub(crate) struct RoleBinding {
     pub(crate) min_count: i32,
     pub(crate) max_count: i32,
     pub(crate) role_type_name: String,
+    pub(crate) discord_role_id: Option<i64>,
 }
 
 #[allow(unused)]
@@ -113,6 +115,7 @@ pub(crate) struct Signup {
     pub(crate) role_binding_id: Id<RoleBindings>,
     pub(crate) user_id: Id<Users>,
     pub(crate) status: VolunteerSignupStatus,
+    pub(crate) notes: Option<String>,
     pub(crate) created_at: DateTime<Utc>,
     pub(crate) updated_at: DateTime<Utc>,
     pub(crate) series: Series,
@@ -163,7 +166,8 @@ impl RoleBinding {
                     rb.role_type_id AS "role_type_id: Id<RoleTypes>",
                     rb.min_count,
                     rb.max_count,
-                    rt.name AS "role_type_name"
+                    rt.name AS "role_type_name",
+                    rb.discord_role_id
                 FROM role_bindings rb
                 JOIN role_types rt ON rb.role_type_id = rt.id
                 WHERE rb.series = $1 AND rb.event = $2
@@ -183,15 +187,17 @@ impl RoleBinding {
         role_type_id: Id<RoleTypes>,
         min_count: i32,
         max_count: i32,
+        discord_role_id: Option<i64>,
     ) -> sqlx::Result<Id<RoleBindings>> {
         let id = sqlx::query_scalar!(
-            r#"INSERT INTO role_bindings (series, event, role_type_id, min_count, max_count) 
-               VALUES ($1, $2, $3, $4, $5) RETURNING id"#,
+            r#"INSERT INTO role_bindings (series, event, role_type_id, min_count, max_count, discord_role_id) 
+               VALUES ($1, $2, $3, $4, $5, $6) RETURNING id"#,
             series as _,
             event,
             role_type_id as _,
             min_count,
-            max_count
+            max_count,
+            discord_role_id
         )
         .fetch_one(&mut **pool)
         .await?;
@@ -419,6 +425,7 @@ impl Signup {
                     s.role_binding_id AS "role_binding_id: Id<RoleBindings>",
                     s.user_id AS "user_id: Id<Users>",
                     s.status AS "status: VolunteerSignupStatus",
+                    s.notes,
                     s.created_at,
                     s.updated_at,
                     rb.series AS "series: Series",
@@ -443,13 +450,15 @@ impl Signup {
         race_id: Id<Races>,
         role_binding_id: Id<RoleBindings>,
         user_id: Id<Users>,
+        notes: Option<String>,
     ) -> sqlx::Result<Id<Signups>> {
         let id = sqlx::query_scalar!(
-            r#"INSERT INTO signups (race_id, role_binding_id, user_id)
-               VALUES ($1, $2, $3) RETURNING id"#,
+            r#"INSERT INTO signups (race_id, role_binding_id, user_id, notes)
+               VALUES ($1, $2, $3, $4) RETURNING id"#,
             race_id as _,
             role_binding_id as _,
-            user_id as _
+            user_id as _,
+            notes
         )
         .fetch_one(&mut **pool)
         .await?;
@@ -502,6 +511,7 @@ impl Signup {
                     s.role_binding_id AS "role_binding_id: Id<RoleBindings>",
                     s.user_id AS "user_id: Id<Users>",
                     s.status AS "status: VolunteerSignupStatus",
+                    s.notes,
                     s.created_at,
                     s.updated_at,
                     rb.series AS "series: Series",
@@ -557,6 +567,7 @@ async fn roles_page(
                                 th : "Role Type";
                                 th : "Min Count";
                                 th : "Max Count";
+                                th : "Discord Role";
                                 th;
                             }
                         }
@@ -566,6 +577,13 @@ async fn roles_page(
                                     td : binding.role_type_name;
                                     td : binding.min_count;
                                     td : binding.max_count;
+                                    td {
+                                        @if let Some(discord_role_id) = binding.discord_role_id {
+                                            : format!("{}", discord_role_id);
+                                        } else {
+                                            : "None";
+                                        }
+                                    }
                                     td {
                                         @let errors = ctx.errors().collect_vec();
                                         @let (errors, button) = button_form(uri!(delete_role_binding(data.series, &*data.event, binding.id)), csrf, errors, "Delete");
@@ -596,6 +614,10 @@ async fn roles_page(
                     : form_field("max_count", &mut errors, html! {
                         label(for = "max_count") : "Maximum Count:";
                         input(type = "number", name = "max_count", id = "max_count", value = "1", min = "1");
+                    });
+                    : form_field("discord_role_id", &mut errors, html! {
+                        label(for = "discord_role_id") : "Discord Role ID (optional):";
+                        input(type = "text", name = "discord_role_id", id = "discord_role_id", placeholder = "e.g. 123456789012345678");
                     });
                 }, errors, "Add Role Binding");
 
@@ -754,6 +776,8 @@ pub(crate) struct AddRoleBindingForm {
     role_type_id: Id<RoleTypes>,
     min_count: i32,
     max_count: i32,
+    #[field(default = String::new())]
+    discord_role_id: String,
 }
 
 #[rocket::post("/event/<series>/<event>/roles/add-binding", data = "<form>")]
@@ -813,6 +837,30 @@ pub(crate) async fn add_role_binding(
                 .await?,
             )
         } else {
+            let discord_role_id = if value.discord_role_id.is_empty() {
+                None
+            } else {
+                match value.discord_role_id.parse::<i64>() {
+                    Ok(id) => Some(id),
+                    Err(_) => {
+                        form.context.push_error(form::Error::validation(
+                            "Discord role ID must be a valid number.",
+                        ));
+                        return Ok(RedirectOrContent::Content(
+                            roles_page(
+                                transaction,
+                                Some(me),
+                                &uri,
+                                csrf.as_ref(),
+                                data,
+                                form.context,
+                            )
+                            .await?,
+                        ));
+                    }
+                }
+            };
+
             RoleBinding::create(
                 &mut transaction,
                 data.series,
@@ -820,6 +868,7 @@ pub(crate) async fn add_role_binding(
                 value.role_type_id,
                 value.min_count,
                 value.max_count,
+                discord_role_id,
             )
             .await?;
             transaction.commit().await?;
@@ -905,6 +954,7 @@ pub(crate) async fn delete_role_binding(
 #[rocket::post("/event/<series>/<event>/roles/<request>/approve", data = "<form>")]
 pub(crate) async fn approve_role_request(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     uri: Origin<'_>,
     csrf: Option<CsrfToken>,
@@ -945,8 +995,100 @@ pub(crate) async fn approve_role_request(
                 .await?,
             )
         } else {
+            // Get the role request details
+            let role_request = RoleRequest::from_id(&mut transaction, request).await?
+                .ok_or(StatusOrError::Status(Status::NotFound))?;
+            
+            // Get the role binding to check for Discord role ID
+            let role_binding = sqlx::query_as!(
+                RoleBinding,
+                r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event as "event!", 
+                          rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count as "min_count!", 
+                          rb.max_count as "max_count!", rt.name as "role_type_name!", rb.discord_role_id
+                   FROM role_bindings rb
+                   JOIN role_types rt ON rb.role_type_id = rt.id
+                   WHERE rb.id = $1"#,
+                role_request.role_binding_id as _
+            )
+            .fetch_one(&mut *transaction)
+            .await?;
+
+            // Update the role request status
             RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Approved)
                 .await?;
+
+            // Handle Discord role assignment if applicable
+            if let Some(discord_role_id) = role_binding.discord_role_id {
+                if let Some(discord_guild) = data.discord_guild {
+                    // Get the user's Discord ID
+                    let user = User::from_id(&mut *transaction, role_request.user_id).await?
+                        .ok_or(StatusOrError::Status(Status::NotFound))?;
+                    
+                    if let Some(discord_user) = user.discord {
+                        let discord_ctx = discord_ctx.read().await;
+                        
+                        // Check if user is in the Discord server
+                        match discord_guild.member(&*discord_ctx, discord_user.id).await {
+                            Ok(member) => {
+                                // User is in the server, assign the role directly
+                                if let Err(e) = member.add_role(&*discord_ctx, RoleId::new(discord_role_id.try_into().unwrap())).await {
+                                    eprintln!("Failed to assign Discord role {} to user {}: {:?}", discord_role_id, discord_user.id, e);
+                                    // Don't fail the entire request, just log the error
+                                }
+                            }
+                            Err(_) => {
+                                // User is not in the server, create a pending invite
+                                let invite_url = if let Some(invite_url) = data.discord_invite_url {
+                                    invite_url.to_string()
+                                } else {
+                                    // For now, we'll just log that we need an invite URL
+                                    eprintln!("No Discord invite URL configured for event {}", event);
+                                    return Err(StatusOrError::Status(Status::InternalServerError));
+                                };
+
+                                // Store the pending invite
+                                sqlx::query!(
+                                    r#"INSERT INTO pending_discord_invites 
+                                       (user_id, role_request_id, discord_guild_id, discord_role_id, invite_url)
+                                       VALUES ($1, $2, $3, $4, $5)
+                                       ON CONFLICT (user_id, role_request_id) DO UPDATE SET
+                                       discord_guild_id = $3, discord_role_id = $4, invite_url = $5, created_at = NOW()"#,
+                                    role_request.user_id as _,
+                                    request as _,
+                                    discord_guild.get() as i64,
+                                    discord_role_id as i64,
+                                    invite_url
+                                )
+                                .execute(&mut *transaction)
+                                .await?;
+
+                                // Send DM to user with invite link
+                                if let Ok(dm_channel) = discord_user.id.create_dm_channel(&*discord_ctx).await {
+                                    let message = format!(
+                                        "Your role request for **{}** in **{}** has been approved! 🎉\n\nPlease join the Discord server to receive your role (invite valid for 7 days):\n{}",
+                                        role_binding.role_type_name, data.display_name, invite_url
+                                    );
+                                    if let Err(e) = dm_channel.say(&*discord_ctx, message).await {
+                                        eprintln!("Failed to send DM to user {}: {}", discord_user.id, e);
+                                    }
+                                } else {
+                                    eprintln!("Failed to create DM channel for user {}", discord_user.id);
+                                }
+                                
+                                eprintln!("User {} needs Discord invite to join server {} for role {}", 
+                                         discord_user.id, discord_guild.get(), discord_role_id);
+                            }
+                        }
+                    } else {
+                        // User doesn't have Discord connected
+                        eprintln!("User {} doesn't have Discord account connected for role assignment", role_request.user_id);
+                    }
+                } else {
+                    // Event doesn't have a Discord guild configured
+                    eprintln!("Event {} doesn't have Discord guild configured for role assignment", event);
+                }
+            }
+
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
         }
@@ -1040,6 +1182,7 @@ pub(crate) struct ApplyForRoleForm {
 #[rocket::post("/event/<series>/<event>/volunteer-roles/apply", data = "<form>")]
 pub(crate) async fn apply_for_role(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     uri: Origin<'_>,
     csrf: Option<CsrfToken>,
@@ -1096,13 +1239,58 @@ pub(crate) async fn apply_for_role(
                     .await?,
                 )
             } else {
+                // Get the role binding details for the notification
+                let role_binding = sqlx::query_as!(
+                    RoleBinding,
+                    r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event as "event!", 
+                              rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count as "min_count!", 
+                              rb.max_count as "max_count!", rt.name as "role_type_name!", rb.discord_role_id
+                       FROM role_bindings rb
+                       JOIN role_types rt ON rb.role_type_id = rt.id
+                       WHERE rb.id = $1"#,
+                    value.role_binding_id as _
+                )
+                .fetch_one(&mut *transaction)
+                .await?;
+
+                // Create the role request
                 RoleRequest::create(
                     &mut transaction,
                     value.role_binding_id,
                     me.id,
-                    notes.unwrap_or_default(),
+                    notes.clone().unwrap_or_default(),
                 )
                 .await?;
+
+                // Send Discord notification to organizer channel
+                if let Some(organizer_channel) = data.discord_organizer_channel {
+                    let discord_ctx = discord_ctx.read().await;
+                    let mut msg = MessageBuilder::default();
+                    msg.push("New volunteer application: ");
+                    msg.mention_user(&me);
+                    msg.push(" has applied for the **");
+                    msg.push_safe(&role_binding.role_type_name);
+                    msg.push("** role in **");
+                    msg.push_safe(&data.display_name);
+                    msg.push("**.");
+                    
+                    if let Some(notes) = notes {
+                        msg.push("\nNotes: ");
+                        msg.push_safe(&notes);
+                    }
+                    
+                    msg.push("\n\nClick here to review and manage role requests for the event: ");
+                    msg.push_named_link_no_preview("Manage Roles", format!("{}/event/{}/{}/roles", 
+                        base_uri(),
+                        series.slug(),
+                        event
+                    ));
+
+                    if let Err(e) = organizer_channel.say(&*discord_ctx, msg.build()).await {
+                        eprintln!("Failed to send Discord notification for role request: {}", e);
+                    }
+                }
+
                 transaction.commit().await?;
                 RedirectOrContent::Redirect(Redirect::to(uri!(volunteer_page_get(series, event))))
             }
@@ -1353,6 +1541,8 @@ pub(crate) struct SignupForMatchForm {
     #[field(default = String::new())]
     csrf: String,
     role_binding_id: Id<RoleBindings>,
+    #[field(default = String::new())]
+    notes: String,
 }
 
 #[rocket::post("/event/<series>/<event>/races/<race_id>/signup", data = "<form>")]
@@ -1406,7 +1596,12 @@ pub(crate) async fn signup_for_match(
                 .await?,
             )
         } else {
-            Signup::create(&mut transaction, race_id, value.role_binding_id, me.id).await?;
+            let notes = if value.notes.trim().is_empty() {
+                None
+            } else {
+                Some(value.notes.trim().to_string())
+            };
+            Signup::create(&mut transaction, race_id, value.role_binding_id, me.id, notes).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(
                 data.series,
@@ -1635,6 +1830,11 @@ async fn match_signup_page(
                                     li {
                                         @let user = User::from_id(&mut *transaction, signup.user_id).await?;
                                         : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                        @if can_manage && signup.notes.is_some() {
+                                            : " [";
+                                            : signup.notes.as_ref().unwrap();
+                                            : "]";
+                                        }
                                         @if can_manage {
                                             @let errors = Vec::new();
                                             div(class = "button-row") {
@@ -1663,6 +1863,11 @@ async fn match_signup_page(
                                     li {
                                         @let user = User::from_id(&mut *transaction, signup.user_id).await?;
                                         : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                        @if signup.notes.is_some() {
+                                            : " [";
+                                            : signup.notes.as_ref().unwrap();
+                                            : "]";
+                                        }
                                         @let errors = Vec::new();
                                         div(class = "button-row") {
                                             @let (errors, confirm_button) = button_form_ext_disabled(
@@ -1720,19 +1925,30 @@ async fn match_signup_page(
                                 } else {
                                     None
                                 };
-                                @let (errors, signup_button) = button_form_ext_disabled(
-                                    uri!(signup_for_match(data.series, &*data.event, race_id)),
-                                    csrf,
-                                    errors,
-                                    html! {
+                                @if disabled {
+                                    @let (errors, signup_button) = button_form_ext_disabled(
+                                        uri!(signup_for_match(data.series, &*data.event, race_id)),
+                                        csrf,
+                                        errors,
+                                        html! {
+                                            input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                        },
+                                        &format!("Sign up for {}", binding.role_type_name),
+                                        true
+                                    );
+                                    : errors;
+                                    div(class = "button-row") {
+                                        : signup_button;
+                                    }
+                                } else {
+                                    @let mut errors = Vec::new();
+                                    : full_form(uri!(signup_for_match(data.series, &*data.event, race_id)), csrf, html! {
                                         input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                    },
-                                    &format!("Sign up for {}", binding.role_type_name),
-                                    disabled
-                                );
-                                : errors;
-                                div(class = "button-row") {
-                                    : signup_button;
+                                        : form_field("notes", &mut errors, html! {
+                                            label(for = "notes") : "Notes:";
+                                            input(type = "text", name = "notes", id = "notes", maxlength = "60", size = "30", placeholder = "Optional notes for organizers");
+                                        });
+                                    }, errors, &format!("Sign up for {}", binding.role_type_name));
                                 }
                                 @if let Some(reason) = reason {
                                     p(class = "disabled-reason") : reason;
@@ -1754,6 +1970,11 @@ async fn match_signup_page(
                                             @let user = User::from_id(&mut *transaction, signup.user_id).await?;
                                             li {
                                                 : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                                @if can_manage && signup.notes.is_some() {
+                                                    : " [";
+                                                    : signup.notes.as_ref().unwrap();
+                                                    : "]";
+                                                }
                                                 : " (";
                                                 : match signup.status {
                                                     VolunteerSignupStatus::Pending => "Pending",
@@ -2117,12 +2338,9 @@ pub(crate) async fn revoke_role_request(
             ));
         }
 
-        let is_organizer = data.organizers(&mut transaction).await?.contains(&me);
-        let is_restreamer = data.restreamers(&mut transaction).await?.contains(&me);
-
-        if !is_organizer && !is_restreamer {
+        if !data.organizers(&mut transaction).await?.contains(&me) {
             form.context.push_error(form::Error::validation(
-                "You must be an organizer or restreamer to revoke role requests",
+                "You must be an organizer to revoke role requests",
             ));
         }
 

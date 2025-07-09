@@ -140,7 +140,7 @@ impl MessageBuilderExt for MessageBuilder {
     }
 }
 
-enum DbPool {}
+pub(crate) enum DbPool {}
 
 impl TypeMapKey for DbPool {
     type Value = PgPool;
@@ -1026,7 +1026,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     .content("Sorry, this channel is not configured as the scheduling channel for any ongoing Hyrule Town Hall events.")
                                 )).await?;
                             }
-                        } else if Some(interaction.data.id) == command_ids.draft {
+                        } else if Some(interaction.data.id) == command_ids.draft || Some(interaction.data.id) == command_ids.pick {
                             send_draft_settings_page(ctx, interaction, "draft", 0).await?;
                         } else if Some(interaction.data.id) == command_ids.first {
                             if let Some((_, mut race, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction).await? {
@@ -1289,6 +1289,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             },
                                             seed: if reset_schedule { seed::Data::default() } else { race.seed },
                                             notified: race.notified && !reset_schedule,
+                                            async_notified_1: race.async_notified_1 && !reset_schedule,
+                                            async_notified_2: race.async_notified_2 && !reset_schedule,
+                                            async_notified_3: race.async_notified_3 && !reset_schedule,
                                             // explicitly listing remaining fields here instead of using `..race` so if the fields change they're kept/reset correctly
                                             id: race.id,
                                             series: race.series,
@@ -2146,8 +2149,28 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             }
             Ok(())
         }))
+        .on_guild_member_addition(|ctx, new_member| Box::pin(async move {
+                          if let Err(e) = crate::discord_role_manager::handle_member_join(ctx, new_member.guild_id, new_member.user.id).await {
+                eprintln!("Failed to handle member join for user {}: {}", new_member.user.id, e);
+            }
+            Ok(())
+        }))
         .task(|ctx_fut, _| async move {
-            shutdown.await;
+            let db_pool = ctx_fut.read().await.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+            
+            let mut shutdown = shutdown;
+            // Clean up expired invites every hour
+            let mut interval = tokio::time::interval(Duration::from_secs(3600));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if let Err(e) = crate::discord_role_manager::cleanup_expired_invites(&db_pool).await {
+                            eprintln!("Failed to cleanup expired Discord invites: {}", e);
+                        }
+                    }
+                    () = &mut shutdown => break,
+                }
+            }
             serenity_utils::shut_down(&*ctx_fut.read().await).await;
         })
 }
@@ -2338,9 +2361,9 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
     };
 
     // There is already a seed rolled. Access that seed instead.
-    let (uuid, second_half) = match cal_event.race.seed.files {
+    let (uuid, second_half, file_hash) = match cal_event.race.seed.files {
         // Seed already exists, get the message appropriately.
-        Some(seed::Files::AlttprDoorRando { uuid}) => (uuid, true),
+        Some(seed::Files::AlttprDoorRando { uuid}) => (uuid, true, cal_event.race.seed.file_hash),
         Some(_) => unimplemented!("Haven't implemented asyncs for non-door rando yet"),
         // Roll a seed and put it in the database before returning the message.
         None => {
@@ -2364,8 +2387,13 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
                 _ => unimplemented!("handle what happens here?")
             };
 
-            sqlx::query!("UPDATE races SET xkeys_uuid = $1 WHERE id = $2",uuid, cal_event.race.id as _,).execute(&mut *transaction).await?;
-            (uuid, false)
+            let (hash1, hash2, hash3, hash4, hash5) = match seed.file_hash {
+                Some([hash1, hash2, hash3, hash4, hash5]) => (Some(hash1), Some(hash2), Some(hash3), Some(hash4), Some(hash5)),
+                None => (None, None, None, None, None)
+            };
+
+            sqlx::query!("UPDATE races SET xkeys_uuid = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7",uuid, hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,).execute(&mut *transaction).await?;
+            (uuid, false, seed.file_hash)
         }
     };
 
@@ -2380,6 +2408,10 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         content.push("Async starting for ");
         content.mention_team(&mut transaction, event.discord_guild, team).await?;
         content.push(format!(". Seed URL is {}. Please work with them in their async channel to run the race.",seed_url));
+        if let Some([hash1, hash2, hash3, hash4, hash5]) = file_hash {
+            content.push_line("");
+            content.push(format!("The hash for the seed is {hash1}, {hash2}, {hash3}, {hash4}, {hash5}"));
+        }
         if second_half {
             content.push_line("");
             content.push_line("");
@@ -2393,7 +2425,20 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
             ADMIN_USER.create_dm_channel(&discord_ctx).await?.say(&discord_ctx, msg).await?;
         }
     }
-    sqlx::query!("UPDATE races SET notified = TRUE WHERE id = $1", cal_event.race.id as _).execute(&mut *transaction).await?;
+
+    match cal_event.kind {
+        cal::EventKind::Async1 => {
+            sqlx::query!("UPDATE races SET async_notified_1 = TRUE WHERE id = $1", cal_event.race.id as _).execute(&mut *transaction).await?;
+        },
+        cal::EventKind::Async2 => {
+            sqlx::query!("UPDATE races SET async_notified_2 = TRUE WHERE id = $1", cal_event.race.id as _).execute(&mut *transaction).await?;
+        }
+        cal::EventKind::Async3 => {
+            sqlx::query!("UPDATE races SET async_notified_3 = TRUE WHERE id = $1", cal_event.race.id as _).execute(&mut *transaction).await?;
+        },
+        cal::EventKind::Normal => panic!("Why are we having a normal race in an async"),
+    };
+    
     transaction.commit().await?;
     Ok(())
     // Leave the TODO below for posterity.

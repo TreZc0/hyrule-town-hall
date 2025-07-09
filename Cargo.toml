@@ -60,9 +60,9 @@ log = "0.4"
 log-lock = { git = "https://github.com/fenhl/log-lock", branch = "main" }
 #mimalloc = "0.1.43" # fails to compile on Ubuntu
 noisy_float = "0.2"
-nonempty-collections = "0.3.0"
+nonempty-collections = "1"
 ootr-utils = { git = "https://github.com/midoshouse/rust-ootr-utils", branch = "main", features = ["sqlx"] }
-racetime = "0.26"
+racetime = "0.27"
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["charset", "hickory-dns", "http2", "json", "macos-system-configuration", "rustls-tls", "stream"] }
 rocket = { git = "https://github.com/fenhl/Rocket", branch = "forms" }
@@ -86,7 +86,7 @@ tempfile = "3.19.1"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "net", "parking_lot", "process", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["io"] }
-typemap_rev = "0.3"
+typemap_rev = "0.3" # transitive dependency of serenity
 url = { version = "2", features = ["serde"] }
 uuid = {version = "1.17.0", features = ["v4"]}
 wheel = { git = "https://github.com/fenhl/wheel", branch = "rocket-forms", features = ["chrono", "racetime", "reqwest", "rocket", "serde_json"] }

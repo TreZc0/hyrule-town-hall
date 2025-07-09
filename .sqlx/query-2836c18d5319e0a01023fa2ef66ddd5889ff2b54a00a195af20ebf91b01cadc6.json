@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT rb.id as \"id: Id<RoleBindings>\", rb.series as \"series: Series\", rb.event as \"event!\", \n                              rb.role_type_id as \"role_type_id: Id<RoleTypes>\", rb.min_count as \"min_count!\", \n                              rb.max_count as \"max_count!\", rt.name as \"role_type_name!\", rb.discord_role_id\n                       FROM role_bindings rb\n                       JOIN role_types rt ON rb.role_type_id = rt.id\n                       WHERE rb.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<RoleBindings>",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "series: Series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "event!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "role_type_id: Id<RoleTypes>",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "min_count!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "max_count!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "role_type_name!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "discord_role_id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "2836c18d5319e0a01023fa2ef66ddd5889ff2b54a00a195af20ebf91b01cadc6"
+}

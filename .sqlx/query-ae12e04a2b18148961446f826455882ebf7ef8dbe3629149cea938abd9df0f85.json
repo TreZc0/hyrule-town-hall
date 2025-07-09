@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT\n                    rb.id AS \"id: Id<RoleBindings>\",\n                    rb.series AS \"series: Series\",\n                    rb.event,\n                    rb.role_type_id AS \"role_type_id: Id<RoleTypes>\",\n                    rb.min_count,\n                    rb.max_count,\n                    rt.name AS \"role_type_name\"\n                FROM role_bindings rb\n                JOIN role_types rt ON rb.role_type_id = rt.id\n                WHERE rb.series = $1 AND rb.event = $2\n                ORDER BY rt.name\n            ",
+  "query": "SELECT rb.id as \"id: Id<RoleBindings>\", rb.series as \"series: Series\", rb.event as \"event!\", \n                          rb.role_type_id as \"role_type_id: Id<RoleTypes>\", rb.min_count as \"min_count!\", \n                          rb.max_count as \"max_count!\", rt.name as \"role_type_name!\", rb.discord_role_id\n                   FROM role_bindings rb\n                   JOIN role_types rt ON rb.role_type_id = rt.id\n                   WHERE rb.id = $1",
   "describe": {
     "columns": [
       {
@@ -15,7 +15,7 @@
       },
       {
         "ordinal": 2,
-        "name": "event",
+        "name": "event!",
         "type_info": "Varchar"
       },
       {
@@ -25,24 +25,28 @@
       },
       {
         "ordinal": 4,
-        "name": "min_count",
+        "name": "min_count!",
         "type_info": "Int4"
       },
       {
         "ordinal": 5,
-        "name": "max_count",
+        "name": "max_count!",
         "type_info": "Int4"
       },
       {
         "ordinal": 6,
-        "name": "role_type_name",
+        "name": "role_type_name!",
         "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "discord_role_id",
+        "type_info": "Int8"
       }
     ],
     "parameters": {
       "Left": [
-        "Text",
-        "Text"
+        "Int4"
       ]
     },
     "nullable": [
@@ -52,8 +56,9 @@
       false,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "16ed6fdfb10e58b471823dc46d2740937263e297f76c0b7d31943d7d06ae6b10"
+  "hash": "ae12e04a2b18148961446f826455882ebf7ef8dbe3629149cea938abd9df0f85"
 }
