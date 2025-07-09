@@ -253,7 +253,7 @@
         "name": "hash1: HashIcon",
         "type_info": {
           "Custom": {
-            "name": "hash_icon",
+            "name": "hash_icon_alttp",
             "kind": {
               "Enum": [
                 "Bomb",
@@ -298,7 +298,7 @@
         "name": "hash2: HashIcon",
         "type_info": {
           "Custom": {
-            "name": "hash_icon",
+            "name": "hash_icon_alttp",
             "kind": {
               "Enum": [
                 "Bomb",
@@ -343,7 +343,7 @@
         "name": "hash3: HashIcon",
         "type_info": {
           "Custom": {
-            "name": "hash_icon",
+            "name": "hash_icon_alttp",
             "kind": {
               "Enum": [
                 "Bomb",
@@ -388,7 +388,7 @@
         "name": "hash4: HashIcon",
         "type_info": {
           "Custom": {
-            "name": "hash_icon",
+            "name": "hash_icon_alttp",
             "kind": {
               "Enum": [
                 "Bomb",
@@ -433,7 +433,7 @@
         "name": "hash5: HashIcon",
         "type_info": {
           "Custom": {
-            "name": "hash_icon",
+            "name": "hash_icon_alttp",
             "kind": {
               "Enum": [
                 "Bomb",

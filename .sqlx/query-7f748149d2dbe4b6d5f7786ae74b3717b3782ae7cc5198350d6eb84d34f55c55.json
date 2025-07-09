@@ -26,7 +26,7 @@
         "Text",
         {
           "Custom": {
-            "name": "hash_icon",
+            "name": "hash_icon_alttp",
             "kind": {
               "Enum": [
                 "Bomb",
@@ -67,7 +67,7 @@
         },
         {
           "Custom": {
-            "name": "hash_icon",
+            "name": "hash_icon_alttp",
             "kind": {
               "Enum": [
                 "Bomb",
@@ -108,7 +108,7 @@
         },
         {
           "Custom": {
-            "name": "hash_icon",
+            "name": "hash_icon_alttp",
             "kind": {
               "Enum": [
                 "Bomb",
@@ -149,7 +149,7 @@
         },
         {
           "Custom": {
-            "name": "hash_icon",
+            "name": "hash_icon_alttp",
             "kind": {
               "Enum": [
                 "Bomb",
@@ -190,7 +190,7 @@
         },
         {
           "Custom": {
-            "name": "hash_icon",
+            "name": "hash_icon_alttp",
             "kind": {
               "Enum": [
                 "Bomb",

@@ -5,19 +5,7 @@
     "columns": [],
     "parameters": {
       "Left": [
-        {
-          "Custom": {
-            "name": "volunteer_signup_status",
-            "kind": {
-              "Enum": [
-                "pending",
-                "confirmed",
-                "declined",
-                "aborted"
-              ]
-            }
-          }
-        },
+        "Varchar",
         "Int4"
       ]
     },
