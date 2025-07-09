@@ -2268,10 +2268,10 @@ pub(crate) async fn race_table(
                                         @let signups = Signup::for_race(&mut *transaction, race.id).await?;
                                         @let pending_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Pending)).collect::<Vec<_>>();
                                         @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
-                                        
+
                                         @if !pending_signups.is_empty() && confirmed_signups.is_empty() {
                                             : "pending";
-                                        } else if signups.is_empty() {
+                                        } else if signups.is_empty() || (pending_signups.is_empty() && confirmed_signups.is_empty()) { //no signups or all rejected
                                             : "no volunteers";
                                         } else {
                                             @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
