@@ -1026,7 +1026,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     .content("Sorry, this channel is not configured as the scheduling channel for any ongoing Hyrule Town Hall events.")
                                 )).await?;
                             }
-                        } else if Some(interaction.data.id) == command_ids.draft {
+                        } else if Some(interaction.data.id) == command_ids.draft || Some(interaction.data.id) == command_ids.pick {
                             send_draft_settings_page(ctx, interaction, "draft", 0).await?;
                         } else if Some(interaction.data.id) == command_ids.first {
                             if let Some((_, mut race, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction).await? {
