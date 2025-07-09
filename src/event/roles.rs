@@ -1945,12 +1945,9 @@ async fn match_signup_page(
                                     : full_form(uri!(signup_for_match(data.series, &*data.event, race_id)), csrf, html! {
                                         input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
                                         : form_field("notes", &mut errors, html! {
-                                            label(for = "notes") : "Notes (optional, max 60 chars):";
-                                            input(type = "text", name = "notes", id = "notes", maxlength = "60", placeholder = "Any additional notes for organizers...");
+                                            label(for = "notes") : "Notes:";
+                                            input(type = "text", name = "notes", id = "notes", maxlength = "60", size = "30", placeholder = "Optional notes for organizers");
                                         });
-                                        div(class = "button-row") {
-                                            input(type = "submit", value = format!("Sign up for {}", binding.role_type_name));
-                                        }
                                     }, errors, &format!("Sign up for {}", binding.role_type_name));
                                 }
                                 @if let Some(reason) = reason {
