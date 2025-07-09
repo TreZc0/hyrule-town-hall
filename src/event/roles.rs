@@ -1267,14 +1267,14 @@ pub(crate) async fn apply_for_role(
                     msg.push_safe(&role_binding.role_type_name);
                     msg.push("** role in **");
                     msg.push_safe(&data.display_name);
-                    msg.push("**");
+                    msg.push("**.");
                     
                     if let Some(notes) = notes {
                         msg.push("\nNotes: ");
                         msg.push_safe(&notes);
                     }
                     
-                    msg.push("\n\nClick here to review and manage role requests: ");
+                    msg.push("\n\nClick here to review and manage role requests for the event: ");
                     msg.push_named_link_no_preview("Manage Roles", format!("{}/event/{}/{}/roles", 
                         base_uri(),
                         series.slug(),
