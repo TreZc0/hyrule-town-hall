@@ -16,6 +16,7 @@ use {
     },
     rocket_util::Doctype,
     crate::{
+        admin,
         api,
         notification::{
             self,
@@ -200,6 +201,14 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                                     }
                                     br;
                                     //TODO link to preferences
+                                    @if u64::from(me.id) == 16287394041462225947_u64 {
+                                        a(href = uri!(admin::index)) : "Admin";
+                                        br;
+                                    }
+                                    @if u64::from(me.id) == 16287394041462225947_u64 {
+                                        a(href = uri!(admin::game_management("ootr"))) : "Game Management";
+                                        br;
+                                    }
                                     a(href = uri!(auth::logout(Some(uri)))) : "Sign out";
                                 } else {
                                     a(href = uri!(auth::login(Some(uri)))) : "Sign in / Create account";
@@ -619,6 +628,15 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         notification::dismiss,
         seed::get,
         user::profile,
+        admin::index,
+        admin::manage_game,
+        admin::add_game_form,
+        admin::add_game_post,
+        admin::manage_game_admins,
+        admin::manage_game_series,
+        admin::game_management,
+        admin::add_role_binding,
+        admin::remove_role_binding,
     ])
     .mount("/static", FileServer::without_index("assets/static"))
     .register("/", rocket::catchers![

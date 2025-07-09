@@ -180,6 +180,33 @@ impl RoleBinding {
         .await
     }
 
+    pub(crate) async fn for_game(
+        pool: &mut Transaction<'_, Postgres>,
+        game_id: i32,
+    ) -> sqlx::Result<Vec<Self>> {
+        sqlx::query_as!(
+            Self,
+            r#"
+                SELECT
+                    rb.id AS "id: Id<RoleBindings>",
+                    rb.series AS "series: Series",
+                    rb.event,
+                    rb.role_type_id AS "role_type_id: Id<RoleTypes>",
+                    rb.min_count,
+                    rb.max_count,
+                    rt.name AS "role_type_name",
+                    rb.discord_role_id
+                FROM role_bindings rb
+                JOIN role_types rt ON rb.role_type_id = rt.id
+                WHERE rb.game_id = $1
+                ORDER BY rt.name
+            "#,
+            game_id
+        )
+        .fetch_all(&mut **pool)
+        .await
+    }
+
     pub(crate) async fn create(
         pool: &mut Transaction<'_, Postgres>,
         series: Series,

@@ -9,6 +9,7 @@ use {
         types::Json,
     },
     crate::{
+        game,
         hash_icon::HashIcon,
         notification::SimpleNotificationKind,
         prelude::*,
@@ -189,6 +190,7 @@ pub(crate) enum DataError {
     #[error(transparent)] PgInterval(#[from] PgIntervalDecodeError),
     #[error(transparent)] Sql(#[from] sqlx::Error),
     #[error(transparent)] Url(#[from] url::ParseError),
+    #[error(transparent)] Game(#[from] game::GameError),
     #[error("no event with this series and identifier")]
     Missing,
     #[error("team with nonexistent user")]
@@ -451,6 +453,11 @@ impl<'a> Data<'a> {
 
     fn is_ended(&self) -> bool {
         self.end.is_some_and(|end| end <= Utc::now())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn game(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Option<game::Game>, DataError> {
+        game::Game::from_series(transaction, self.series).await.map_err(DataError::from)
     }
 
     pub(crate) async fn organizers(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<User>, Error> {

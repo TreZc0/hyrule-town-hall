@@ -32,6 +32,7 @@ use {
     },
 };
 
+mod admin;
 mod api;
 mod auth;
 mod cal;
@@ -43,6 +44,7 @@ mod draft;
 mod event;
 mod favicon;
 mod form;
+mod game;
 mod games;
 mod hash_icon;
 #[macro_use] mod http;

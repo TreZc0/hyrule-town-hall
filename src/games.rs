@@ -1,19 +1,21 @@
 use crate::prelude::*;
 use crate::event::roles::{RoleBinding, RoleType};
+use crate::game::{Game, GameError};
+use rocket::uri;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
     #[error(transparent)]
-    Game(#[from] game::GameError),
+    Game(#[from] GameError),
     #[error(transparent)]
     Page(#[from] PageError),
     #[error(transparent)]
     Sql(#[from] sqlx::Error),
 }
 
-impl<E: Into<Error>> From<E> for StatusOrError<Error> {
-    fn from(e: E) -> Self {
-        Self::Err(e.into())
+impl From<Error> for StatusOrError<Error> {
+    fn from(e: Error) -> Self {
+        StatusOrError::Err(e)
     }
 }
 
@@ -41,55 +43,29 @@ impl IsNetworkError for Error {
     }
 }
 
+#[allow(dead_code)]
 #[rocket::get("/games")]
-pub(crate) async fn list(
-    pool: &State<PgPool>,
-    me: Option<User>,
-    uri: Origin<'_>,
-) -> Result<RawHtml<String>, StatusOrError<Error>> {
-    let mut transaction = pool.begin().await?;
-    
-    let games = Game::all(&mut transaction).await?;
-    
-    let content = html! {
-        article {
-            h1 : "Games";
-            p : "Browse games and their associated series and events.";
-            
-            @if games.is_empty() {
-                p : "No games found.";
-            } else {
-                div(class = "games-list") {
-                    @for game in &games {
-                        div(class = "game-card") {
-                            h3 {
-                                a(href = uri!(get(&game.name))) : game.display_name;
-                            }
-                            @if let Some(description) = &game.description {
-                                p : description;
-                            }
-                            p {
-                                : "Created: ";
-                                : game.created_at.format("%Y-%m-%d").to_string();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    };
-
+pub(crate) async fn list(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
+    let games = Game::all(&mut transaction).await.map_err(Error::from)?;
     Ok(page(
         transaction,
         &me,
         &uri,
         PageStyle::default(),
         "Games",
-        content,
-    )
-    .await?)
+        html! {
+            h1 : "Games";
+            ul {
+                @for game in &games {
+                    li { a(href = uri!(get(&game.name))) : &game.display_name; }
+                }
+            }
+        },
+    ).await.map_err(Error::from)?)
 }
 
+#[allow(dead_code)]
 #[rocket::get("/games/<game_name>")]
 pub(crate) async fn get(
     pool: &State<PgPool>,
@@ -97,16 +73,16 @@ pub(crate) async fn get(
     uri: Origin<'_>,
     game_name: &str,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
     
     let game = Game::from_name(&mut transaction, game_name)
-        .await?
+        .await.map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     
-    let series = game.series(&mut transaction).await?;
-    let admins = game.admins(&mut transaction).await?;
+    let series = game.series(&mut transaction).await.map_err(Error::from)?;
+    let admins = game.admins(&mut transaction).await.map_err(Error::from)?;
     let is_admin = if let Some(ref me) = me {
-        game.is_admin(&mut transaction, me).await?
+        game.is_admin(&mut transaction, me).await.map_err(Error::from)?
     } else {
         false
     };
@@ -163,9 +139,10 @@ pub(crate) async fn get(
         &format!("{} — Games", game.display_name),
         content,
     )
-    .await?)
+    .await.map_err(Error::from)?)
 }
 
+#[allow(dead_code)]
 #[rocket::get("/games/<game_name>/admins")]
 pub(crate) async fn manage_admins(
     pool: &State<PgPool>,
@@ -174,19 +151,19 @@ pub(crate) async fn manage_admins(
     _csrf: Option<CsrfToken>,
     game_name: &str,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
     
     let game = Game::from_name(&mut transaction, game_name)
-        .await?
+        .await.map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
     
-    if !game.is_admin(&mut transaction, &me).await? {
+    if !game.is_admin(&mut transaction, &me).await.map_err(Error::from)? {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     
-    let admins = game.admins(&mut transaction).await?;
+    let admins = game.admins(&mut transaction).await.map_err(Error::from)?;
     
     let content = html! {
         article {
@@ -216,9 +193,10 @@ pub(crate) async fn manage_admins(
         &format!("Manage Admins — {}", game.display_name),
         content,
     )
-    .await?)
+    .await.map_err(Error::from)?)
 }
 
+#[allow(dead_code)]
 #[rocket::get("/games/<game_name>/roles")]
 pub(crate) async fn manage_roles(
     pool: &State<PgPool>,
@@ -227,20 +205,20 @@ pub(crate) async fn manage_roles(
     _csrf: Option<CsrfToken>,
     game_name: &str,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
     
     let game = Game::from_name(&mut transaction, game_name)
-        .await?
+        .await.map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
     
-    if !game.is_admin(&mut transaction, &me).await? {
+    if !game.is_admin(&mut transaction, &me).await.map_err(Error::from)? {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     
-    let role_bindings = RoleBinding::for_game(&mut transaction, game.id).await?;
-    let _all_role_types = RoleType::all(&mut transaction).await?;
+    let role_bindings = RoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
+    let _all_role_types = RoleType::all(&mut transaction).await.map_err(Error::from)?;
     
     let content = html! {
         article {
@@ -283,5 +261,5 @@ pub(crate) async fn manage_roles(
         &format!("Manage Roles — {}", game.display_name),
         content,
     )
-    .await?)
+    .await.map_err(Error::from)?)
 } 

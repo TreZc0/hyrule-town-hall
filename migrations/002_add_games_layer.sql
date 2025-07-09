@@ -35,9 +35,9 @@ CREATE TABLE game_admins (
 
 ALTER TABLE public.game_admins OWNER TO mido;
 
--- Add id column to events table for proper foreign key relationships
+-- Add force_custom_role_binding column to event table
 ALTER TABLE events
-  ADD COLUMN game_id INTEGER REFERENCES games(id);
+ADD COLUMN force_custom_role_binding BOOLEAN DEFAULT TRUE;
 
 
 -- Add game_id and event_id columns to role_bindings table
@@ -56,7 +56,7 @@ CHECK (NOT custom_pool OR game_id IS NOT NULL);
 -- Add constraint to ensure role_bindings reference either a game or an event, not both
 ALTER TABLE role_bindings 
 ADD CONSTRAINT check_game_or_event 
-CHECK ((game_id IS NOT NULL AND event_id IS NULL) OR (game_id IS NULL AND event_id IS NOT NULL));
+CHECK ((game_id IS NOT NULL AND event IS NULL) OR (game_id IS NULL AND event IS NOT NULL));
 
 -- Insert initial games
 INSERT INTO games (name, display_name, description) VALUES
