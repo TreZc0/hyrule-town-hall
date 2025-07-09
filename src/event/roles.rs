@@ -2300,12 +2300,9 @@ pub(crate) async fn revoke_role_request(
             ));
         }
 
-        let is_organizer = data.organizers(&mut transaction).await?.contains(&me);
-        let is_restreamer = data.restreamers(&mut transaction).await?.contains(&me);
-
-        if !is_organizer && !is_restreamer {
+        if !data.organizers(&mut transaction).await?.contains(&me) {
             form.context.push_error(form::Error::validation(
-                "You must be an organizer or restreamer to revoke role requests",
+                "You must be an organizer to revoke role requests",
             ));
         }
 
