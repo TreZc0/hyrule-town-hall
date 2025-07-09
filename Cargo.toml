@@ -62,7 +62,7 @@ log-lock = { git = "https://github.com/fenhl/log-lock", branch = "main" }
 noisy_float = "0.2"
 nonempty-collections = "0.3.0"
 ootr-utils = { git = "https://github.com/midoshouse/rust-ootr-utils", branch = "main", features = ["sqlx"] }
-racetime = "0.26"
+racetime = "0.27"
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["charset", "hickory-dns", "http2", "json", "macos-system-configuration", "rustls-tls", "stream"] }
 rocket = { git = "https://github.com/fenhl/Rocket", branch = "forms" }

@@ -4792,7 +4792,7 @@ dependencies = [
  "nonempty-collections",
  "ootr-utils",
  "openssl",
- "racetime",
+ "racetime 0.27.0",
  "rand 0.9.1",
  "reqwest 0.12.20",
  "rocket 0.6.0-dev",
@@ -5721,6 +5721,31 @@ dependencies = [
  "thiserror 2.0.12",
  "tokio",
  "tokio-tungstenite 0.26.2",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "racetime"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58ef67ff45addba466263df41fa62a84e88c847108bf6a50cd96770f70f5d4d6"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "collect-mac",
+ "futures",
+ "http 1.3.1",
+ "itertools 0.14.0",
+ "lazy-regex",
+ "reqwest 0.12.20",
+ "serde",
+ "serde_json_path_to_error",
+ "serde_with",
+ "shlex",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-tungstenite 0.27.0",
  "url",
  "uuid",
 ]
@@ -7772,6 +7797,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-tungstenite"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "489a59b6730eda1b0171fcfda8b121f4bee2b35cba8645ca35c5f7ba3eb736c1"
+dependencies = [
+ "futures-util",
+ "log",
+ "rustls 0.23.28",
+ "rustls-pki-types",
+ "tokio",
+ "tokio-rustls 0.26.2",
+ "tungstenite 0.27.0",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
 name = "tokio-util"
 version = "0.7.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8022,6 +8063,26 @@ name = "tungstenite"
 version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4793cb5e56680ecbb1d843515b23b6de9a75eb04b66643e256a396d43be33c13"
+dependencies = [
+ "bytes",
+ "data-encoding",
+ "http 1.3.1",
+ "httparse",
+ "log",
+ "rand 0.9.1",
+ "rustls 0.23.28",
+ "rustls-pki-types",
+ "sha1",
+ "thiserror 2.0.12",
+ "url",
+ "utf-8",
+]
+
+[[package]]
+name = "tungstenite"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eadc29d668c91fcc564941132e17b28a7ceb2f3ebf0b9dae3e03fd7a6748eb0d"
 dependencies = [
  "bytes",
  "data-encoding",
@@ -8463,7 +8524,7 @@ dependencies = [
  "console-subscriber",
  "futures",
  "itertools 0.14.0",
- "racetime",
+ "racetime 0.26.1",
  "reqwest 0.12.20",
  "rocket 0.6.0-dev",
  "rocket-util 0.2.15 (git+https://github.com/fenhl/rocket-util?branch=forms)",

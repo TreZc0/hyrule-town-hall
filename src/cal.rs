@@ -2263,7 +2263,7 @@ pub(crate) async fn race_table(
                         @if has_buttons {
                             td {
                                 @if options.can_edit {
-                                    a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
+                                    a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
                                 }
                             }
                         }
