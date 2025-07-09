@@ -6,7 +6,9 @@ use crate::{
     prelude::*,
     racetime_bot::VersionedBranch,
     startgg,
+    user::DisplaySource,
 };
+use rocket::response::content::RawText;
 
 async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
     let query_string = uri.0.query().map(|q| q.to_string());
@@ -328,10 +330,15 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
                 : full_form(uri!(add_restreamer(event.series, &*event.event)), csrf, html! {
                     : form_field("restreamer", &mut errors, html! {
                         label(for = "restreamer") : "Restream coordinator:";
-                        input(type = "text", name = "restreamer", value? = defaults.add_restreamer());
-                        label(class = "help") : "(Enter the restream coordinator's Mido's House user ID. It can be found on their profile page.)"; //TODO add JS-based user search?
+                        div(class = "autocomplete-container") {
+                            input(type = "text", id = "restreamer", name = "restreamer", value? = defaults.add_restreamer(), autocomplete = "off");
+                            div(id = "user-suggestions", class = "suggestions", style = "display: none;") {}
+                        }
+                        label(class = "help") : "(Start typing a username to search for users. The search will match display names, racetime.gg IDs, and Discord usernames.)";
                     });
                 }, errors, "Add");
+                
+                script(src = static_url!("user-search.js")) {}
             }
         } else {
             html! {
@@ -367,7 +374,7 @@ pub(crate) async fn restreamers_get(pool: &State<PgPool>, me: Option<User>, uri:
 pub(crate) struct AddRestreamerForm {
     #[field(default = String::new())]
     csrf: String,
-    restreamer: Id<Users>,
+    restreamer: String,
 }
 
 #[rocket::post("/event/<series>/<event>/configure/restreamers", data = "<form>")]
@@ -383,7 +390,16 @@ pub(crate) async fn add_restreamer(pool: &State<PgPool>, me: User, uri: Origin<'
         if !data.organizers(&mut transaction).await?.contains(&me) {
             form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
         }
-        if let Some(restreamer) = User::from_id(&mut *transaction, value.restreamer).await? {
+        let restreamer_id = match value.restreamer.parse::<u64>() {
+            Ok(id) => id,
+            Err(_) => {
+                form.context.push_error(form::Error::validation("Invalid user ID format.").with_name("restreamer"));
+                return Ok(RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::AddContext(form.context)).await?));
+            }
+        };
+        let restreamer_id = Id::<Users>::from(restreamer_id);
+        
+        if let Some(restreamer) = User::from_id(&mut *transaction, restreamer_id).await? {
             if data.restreamers(&mut transaction).await?.contains(&restreamer) {
                 form.context.push_error(form::Error::validation("This user is already a restream coordinator for this event.").with_name("restreamer"));
             }
@@ -393,7 +409,7 @@ pub(crate) async fn add_restreamer(pool: &State<PgPool>, me: User, uri: Origin<'
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::AddContext(form.context)).await?)
         } else {
-            sqlx::query!("INSERT INTO restreamers (series, event, restreamer) VALUES ($1, $2, $3)", data.series as _, &data.event, value.restreamer as _).execute(&mut *transaction).await?;
+            sqlx::query!("INSERT INTO restreamers (series, event, restreamer) VALUES ($1, $2, $3)", data.series as _, &data.event, restreamer_id as _).execute(&mut *transaction).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(restreamers_get(series, event))))
         }
@@ -541,4 +557,88 @@ async fn find_matching_entrant(
     }
     
     Ok(None)
+}
+
+#[rocket::get("/api/users/search?<query>")]
+pub(crate) async fn search_users(
+    pool: &State<PgPool>,
+    query: Option<&str>,
+) -> Result<RawText<String>, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    
+    let query = query.unwrap_or("").trim();
+    if query.is_empty() {
+        return Ok(RawText(serde_json::to_string(&Vec::<UserSearchResult>::new())?));
+    }
+    
+    // Search for users by display name, racetime ID, or Discord username
+    let users = sqlx::query_as!(
+        UserSearchRow,
+        r#"
+        SELECT 
+            id as "id: Id<Users>",
+            display_source as "display_source: DisplaySource",
+            racetime_id,
+            racetime_display_name,
+            discord_display_name,
+            discord_username
+        FROM users 
+        WHERE 
+            racetime_display_name ILIKE $1 
+            OR discord_display_name ILIKE $1 
+            OR discord_username ILIKE $1
+            OR racetime_id ILIKE $1
+        ORDER BY 
+            CASE 
+                WHEN racetime_display_name ILIKE $1 THEN 1
+                WHEN discord_display_name ILIKE $1 THEN 2
+                WHEN discord_username ILIKE $1 THEN 3
+                WHEN racetime_id ILIKE $1 THEN 4
+                ELSE 5
+            END,
+            racetime_display_name,
+            discord_display_name
+        LIMIT 20
+        "#,
+        format!("%{}%", query)
+    )
+    .fetch_all(&mut *transaction)
+    .await?;
+    
+    let results: Vec<UserSearchResult> = users
+        .into_iter()
+        .map(|row| {
+            let display_name = match row.display_source {
+                DisplaySource::RaceTime => row.racetime_display_name.unwrap_or_else(|| "Unknown".to_string()),
+                DisplaySource::Discord => row.discord_display_name.unwrap_or_else(|| "Unknown".to_string()),
+            };
+            
+            UserSearchResult {
+                id: row.id,
+                display_name,
+                racetime_id: row.racetime_id,
+                discord_username: row.discord_username,
+            }
+        })
+        .collect();
+    
+    Ok(RawText(serde_json::to_string(&results)?))
+}
+
+#[derive(Serialize)]
+struct UserSearchResult {
+    id: Id<Users>,
+    display_name: String,
+    racetime_id: Option<String>,
+    discord_username: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct UserSearchRow {
+    id: Id<Users>,
+    display_source: DisplaySource,
+    racetime_id: Option<String>,
+    racetime_display_name: Option<String>,
+    discord_display_name: Option<String>,
+    discord_username: Option<String>,
 }
