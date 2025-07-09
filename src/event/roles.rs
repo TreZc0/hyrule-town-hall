@@ -7,6 +7,7 @@ use crate::{
     prelude::*,
     time::format_datetime,
     user::User,
+    series::Series,
 };
 
 
@@ -65,7 +66,7 @@ pub(crate) enum RoleRequestStatus {
     Aborted,
 }
 
-#[derive(Debug, Clone, Copy, sqlx::Type)]
+#[derive(Debug, Clone, Copy, sqlx::Type, PartialEq)]
 #[sqlx(type_name = "volunteer_signup_status", rename_all = "lowercase")]
 pub(crate) enum VolunteerSignupStatus {
     Pending,
@@ -528,6 +529,61 @@ impl Signup {
         )
         .fetch_optional(&mut **pool)
         .await
+    }
+
+    /// Auto-reject overlapping signups for a user when they are confirmed for a race
+    async fn auto_reject_overlapping_signups(
+        pool: &mut Transaction<'_, Postgres>,
+        confirmed_signup_id: Id<Signups>,
+        user_id: Id<Users>,
+    ) -> sqlx::Result<()> {
+        let confirmed_signup = sqlx::query!(
+            r#"SELECT s.race_id, s.role_binding_id, r.series as "series: Series", r.start
+               FROM signups s
+               JOIN races r ON s.race_id = r.id
+               WHERE s.id = $1"#,
+            confirmed_signup_id as _
+        )
+        .fetch_one(&mut **pool)
+        .await?;
+
+        if let Some(start_time) = confirmed_signup.start {
+            let duration = confirmed_signup.series.default_race_duration();
+            let end_time = start_time + duration;
+
+         
+            let all_user_signups = sqlx::query!(
+                r#"SELECT s.id, s.race_id, r.series as "series: Series", r.start
+                   FROM signups s
+                   JOIN races r ON s.race_id = r.id
+                   WHERE s.user_id = $1 
+                   AND s.id != $2
+                   AND s.status = 'pending'
+                   AND r.start IS NOT NULL"#,
+                user_id as _,
+                confirmed_signup_id as _
+            )
+            .fetch_all(&mut **pool)
+            .await?;
+
+            for signup in all_user_signups {
+                if let Some(signup_start_time) = signup.start {
+                    let signup_duration = signup.series.default_race_duration();
+                    let signup_end_time = signup_start_time + signup_duration;
+
+                    if start_time < signup_end_time && signup_start_time < end_time {
+                        sqlx::query!(
+                            r#"UPDATE signups SET status = 'declined', updated_at = NOW() WHERE id = $1"#,
+                            signup.id
+                        )
+                        .execute(&mut **pool)
+                        .await?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -1707,6 +1763,16 @@ pub(crate) async fn manage_roster(
             };
 
             Signup::update_status(&mut transaction, value.signup_id, status).await?;
+            
+            // If the signup is being confirmed, auto-reject overlapping signups for the same user
+            if status == VolunteerSignupStatus::Confirmed {
+                // Get the user ID for the confirmed signup
+                let signup = Signup::from_id(&mut transaction, value.signup_id).await?
+                    .ok_or(StatusOrError::Status(Status::NotFound))?;
+                
+                Signup::auto_reject_overlapping_signups(&mut transaction, value.signup_id, signup.user_id).await?;
+            }
+            
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(
                 series, &*event, race_id

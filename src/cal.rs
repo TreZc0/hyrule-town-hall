@@ -1594,14 +1594,7 @@ async fn add_event_races(transaction: &mut Transaction<'_, Postgres>, discord_ct
                     summary_prefix
                 })));
                 cal_event.push(dtstart(start));
-                cal_event.push(dtend(race_event.end().filter(|_| !race_event.is_private_async_part() || race.cal_events().all(|event| event.end().is_some())).unwrap_or_else(|| start + match event.series {
-                    Series::TriforceBlitz => TimeDelta::hours(2),
-                    Series::BattleRoyale | Series::Crosskeys => TimeDelta::hours(2) + TimeDelta::minutes(30),
-                    Series::CoOp | Series::MixedPools | Series::Scrubs | Series::SpeedGaming | Series::WeTryToBeBetter => TimeDelta::hours(3),
-                    Series::CopaDoBrasil | Series::League | Series::NineDaysOfSaws | Series::SongsOfHope | Series::Standard | Series::TournoiFrancophone => TimeDelta::hours(3) + TimeDelta::minutes(30),
-                    Series::Mq | Series::Multiworld | Series::Pictionary => TimeDelta::hours(4),
-                    Series::Rsl => TimeDelta::hours(4) + TimeDelta::minutes(30),
-                }))); //TODO better fallback duration estimates depending on participants
+                cal_event.push(dtend(race_event.end().filter(|_| !race_event.is_private_async_part() || race.cal_events().all(|event| event.end().is_some())).unwrap_or_else(|| start + event.series.default_race_duration())));
                 let mut urls = Vec::default();
                 for (language, video_url) in &race.video_urls {
                     urls.push((Cow::Owned(format!("{language} restream")), video_url.clone()));
@@ -1637,7 +1630,7 @@ async fn add_event_races(transaction: &mut Transaction<'_, Postgres>, discord_ct
         cal_event.push(Summary::new(format!("{kind} Weekly")));
         let start = kind.next_weekly_after(start);
         cal_event.push(dtstart(start));
-        cal_event.push(dtend(start + TimeDelta::hours(3) + TimeDelta::minutes(30)));
+        cal_event.push(dtend(start + Series::Standard.default_race_duration()));
         cal_event.push(RRule::new("FREQ=WEEKLY;INTERVAL=2"));
         cal.add_event(cal_event);
     }
