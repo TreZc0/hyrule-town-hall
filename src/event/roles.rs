@@ -1177,6 +1177,7 @@ pub(crate) struct ApplyForRoleForm {
 #[rocket::post("/event/<series>/<event>/volunteer-roles/apply", data = "<form>")]
 pub(crate) async fn apply_for_role(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     uri: Origin<'_>,
     csrf: Option<CsrfToken>,
@@ -1233,13 +1234,58 @@ pub(crate) async fn apply_for_role(
                     .await?,
                 )
             } else {
+                // Get the role binding details for the notification
+                let role_binding = sqlx::query_as!(
+                    RoleBinding,
+                    r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event as "event!", 
+                              rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count as "min_count!", 
+                              rb.max_count as "max_count!", rt.name as "role_type_name!", rb.discord_role_id
+                       FROM role_bindings rb
+                       JOIN role_types rt ON rb.role_type_id = rt.id
+                       WHERE rb.id = $1"#,
+                    value.role_binding_id as _
+                )
+                .fetch_one(&mut *transaction)
+                .await?;
+
+                // Create the role request
                 RoleRequest::create(
                     &mut transaction,
                     value.role_binding_id,
                     me.id,
-                    notes.unwrap_or_default(),
+                    notes.clone().unwrap_or_default(),
                 )
                 .await?;
+
+                // Send Discord notification to organizer channel
+                if let Some(organizer_channel) = data.discord_organizer_channel {
+                    let discord_ctx = discord_ctx.read().await;
+                    let mut msg = MessageBuilder::default();
+                    msg.push("New volunteer application: ");
+                    msg.mention_user(&me);
+                    msg.push(" has applied for the **");
+                    msg.push_safe(&role_binding.role_type_name);
+                    msg.push("** role in **");
+                    msg.push_safe(&data.display_name);
+                    msg.push("**");
+                    
+                    if let Some(notes) = notes {
+                        msg.push("\nNotes: ");
+                        msg.push_safe(&notes);
+                    }
+                    
+                    msg.push("\n\nClick here to review and manage role requests: ");
+                    msg.push_named_link_no_preview("Manage Roles", format!("{}/event/{}/{}/roles", 
+                        base_uri(),
+                        series.slug(),
+                        event
+                    ));
+
+                    if let Err(e) = organizer_channel.say(&*discord_ctx, msg.build()).await {
+                        eprintln!("Failed to send Discord notification for role request: {}", e);
+                    }
+                }
+
                 transaction.commit().await?;
                 RedirectOrContent::Redirect(Redirect::to(uri!(volunteer_page_get(series, event))))
             }
