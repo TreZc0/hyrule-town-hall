@@ -115,6 +115,7 @@ pub(crate) struct Signup {
     pub(crate) role_binding_id: Id<RoleBindings>,
     pub(crate) user_id: Id<Users>,
     pub(crate) status: VolunteerSignupStatus,
+    pub(crate) notes: Option<String>,
     pub(crate) created_at: DateTime<Utc>,
     pub(crate) updated_at: DateTime<Utc>,
     pub(crate) series: Series,
@@ -424,6 +425,7 @@ impl Signup {
                     s.role_binding_id AS "role_binding_id: Id<RoleBindings>",
                     s.user_id AS "user_id: Id<Users>",
                     s.status AS "status: VolunteerSignupStatus",
+                    s.notes,
                     s.created_at,
                     s.updated_at,
                     rb.series AS "series: Series",
@@ -448,13 +450,15 @@ impl Signup {
         race_id: Id<Races>,
         role_binding_id: Id<RoleBindings>,
         user_id: Id<Users>,
+        notes: Option<String>,
     ) -> sqlx::Result<Id<Signups>> {
         let id = sqlx::query_scalar!(
-            r#"INSERT INTO signups (race_id, role_binding_id, user_id)
-               VALUES ($1, $2, $3) RETURNING id"#,
+            r#"INSERT INTO signups (race_id, role_binding_id, user_id, notes)
+               VALUES ($1, $2, $3, $4) RETURNING id"#,
             race_id as _,
             role_binding_id as _,
-            user_id as _
+            user_id as _,
+            notes
         )
         .fetch_one(&mut **pool)
         .await?;
@@ -507,6 +511,7 @@ impl Signup {
                     s.role_binding_id AS "role_binding_id: Id<RoleBindings>",
                     s.user_id AS "user_id: Id<Users>",
                     s.status AS "status: VolunteerSignupStatus",
+                    s.notes,
                     s.created_at,
                     s.updated_at,
                     rb.series AS "series: Series",
@@ -1536,6 +1541,8 @@ pub(crate) struct SignupForMatchForm {
     #[field(default = String::new())]
     csrf: String,
     role_binding_id: Id<RoleBindings>,
+    #[field(default = String::new())]
+    notes: String,
 }
 
 #[rocket::post("/event/<series>/<event>/races/<race_id>/signup", data = "<form>")]
@@ -1589,7 +1596,12 @@ pub(crate) async fn signup_for_match(
                 .await?,
             )
         } else {
-            Signup::create(&mut transaction, race_id, value.role_binding_id, me.id).await?;
+            let notes = if value.notes.trim().is_empty() {
+                None
+            } else {
+                Some(value.notes.trim().to_string())
+            };
+            Signup::create(&mut transaction, race_id, value.role_binding_id, me.id, notes).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(
                 data.series,
@@ -1818,6 +1830,11 @@ async fn match_signup_page(
                                     li {
                                         @let user = User::from_id(&mut *transaction, signup.user_id).await?;
                                         : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                        @if can_manage && signup.notes.is_some() {
+                                            : " [";
+                                            : signup.notes.as_ref().unwrap();
+                                            : "]";
+                                        }
                                         @if can_manage {
                                             @let errors = Vec::new();
                                             div(class = "button-row") {
@@ -1846,6 +1863,11 @@ async fn match_signup_page(
                                     li {
                                         @let user = User::from_id(&mut *transaction, signup.user_id).await?;
                                         : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                        @if signup.notes.is_some() {
+                                            : " [";
+                                            : signup.notes.as_ref().unwrap();
+                                            : "]";
+                                        }
                                         @let errors = Vec::new();
                                         div(class = "button-row") {
                                             @let (errors, confirm_button) = button_form_ext_disabled(
@@ -1903,19 +1925,33 @@ async fn match_signup_page(
                                 } else {
                                     None
                                 };
-                                @let (errors, signup_button) = button_form_ext_disabled(
-                                    uri!(signup_for_match(data.series, &*data.event, race_id)),
-                                    csrf,
-                                    errors,
-                                    html! {
+                                @if disabled {
+                                    @let (errors, signup_button) = button_form_ext_disabled(
+                                        uri!(signup_for_match(data.series, &*data.event, race_id)),
+                                        csrf,
+                                        errors,
+                                        html! {
+                                            input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                        },
+                                        &format!("Sign up for {}", binding.role_type_name),
+                                        true
+                                    );
+                                    : errors;
+                                    div(class = "button-row") {
+                                        : signup_button;
+                                    }
+                                } else {
+                                    @let mut errors = Vec::new();
+                                    : full_form(uri!(signup_for_match(data.series, &*data.event, race_id)), csrf, html! {
                                         input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                    },
-                                    &format!("Sign up for {}", binding.role_type_name),
-                                    disabled
-                                );
-                                : errors;
-                                div(class = "button-row") {
-                                    : signup_button;
+                                        : form_field("notes", &mut errors, html! {
+                                            label(for = "notes") : "Notes (optional, max 60 chars):";
+                                            input(type = "text", name = "notes", id = "notes", maxlength = "60", placeholder = "Any additional notes for organizers...");
+                                        });
+                                        div(class = "button-row") {
+                                            input(type = "submit", value = format!("Sign up for {}", binding.role_type_name));
+                                        }
+                                    }, errors, &format!("Sign up for {}", binding.role_type_name));
                                 }
                                 @if let Some(reason) = reason {
                                     p(class = "disabled-reason") : reason;
@@ -1937,6 +1973,11 @@ async fn match_signup_page(
                                             @let user = User::from_id(&mut *transaction, signup.user_id).await?;
                                             li {
                                                 : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                                @if can_manage && signup.notes.is_some() {
+                                                    : " [";
+                                                    : signup.notes.as_ref().unwrap();
+                                                    : "]";
+                                                }
                                                 : " (";
                                                 : match signup.status {
                                                     VolunteerSignupStatus::Pending => "Pending",
