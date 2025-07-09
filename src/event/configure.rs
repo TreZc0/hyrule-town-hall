@@ -9,6 +9,7 @@ use crate::{
     user::DisplaySource,
 };
 use rocket::response::content::RawText;
+use serde::Serializer;
 
 async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
     let query_string = uri.0.query().map(|q| q.to_string());
@@ -627,10 +628,18 @@ pub(crate) async fn search_users(
 
 #[derive(Serialize)]
 struct UserSearchResult {
+    #[serde(serialize_with = "serialize_user_id")]
     id: Id<Users>,
     display_name: String,
     racetime_id: Option<String>,
     discord_username: Option<String>,
+}
+
+fn serialize_user_id<S>(id: &Id<Users>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&id.to_string())
 }
 
 #[derive(sqlx::FromRow)]
