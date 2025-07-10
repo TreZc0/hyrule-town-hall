@@ -23,7 +23,10 @@ use {
     crate::{
         discord_bot,
         event::Tab,
-        event::roles::{Signup, VolunteerSignupStatus},
+        event::roles::{
+            Signup, 
+            VolunteerSignupStatus
+        },
         hash_icon::{
             HashIcon,
             SpoilerLog
@@ -2256,7 +2259,20 @@ pub(crate) async fn race_table(
                         @if has_buttons {
                             td {
                                 @if options.can_edit {
-                                    a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
+                                    @let is_admin = user.map_or(false, |u| u.id == Id::from(16287394041462225947_u64));
+                                    @if is_admin {
+                                        a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
+                                    } else {
+                                        @match race.schedule {
+                                            RaceSchedule::Live { .. } => {
+                                                @let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
+                                                @if all_teams_consented {
+                                                    a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
+                                                }
+                                            }
+                                            RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {}
+                                        }
+                                    }
                                 }
                             }
                         }
