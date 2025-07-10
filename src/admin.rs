@@ -64,6 +64,37 @@ async fn is_game_admin(user: &User, game: &Game, transaction: &mut Transaction<'
     game.is_admin(transaction, user).await
 }
 
+async fn get_accessible_games(user: &User, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<Game>, GameError> {
+    if is_trez(user) {
+        // Trez can see all games
+        Game::all(transaction).await
+    } else {
+        // Game admins can only see games they're admin of
+        let rows = sqlx::query!(
+            r#"SELECT DISTINCT g.id, g.name, g.display_name, g.description, g.created_at, g.updated_at 
+               FROM games g 
+               JOIN game_admins ga ON g.id = ga.game_id 
+               WHERE ga.admin_id = $1 
+               ORDER BY g.display_name"#,
+            i64::from(user.id) as i32
+        )
+        .fetch_all(&mut **transaction)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| Game {
+                id: row.id,
+                name: row.name,
+                display_name: row.display_name,
+                description: row.description,
+                created_at: row.created_at.expect("created_at should not be null"),
+                updated_at: row.updated_at.expect("updated_at should not be null"),
+            })
+            .collect())
+    }
+}
+
 #[rocket::get("/admin")]
 pub(crate) async fn index(
     pool: &State<PgPool>,
@@ -136,14 +167,23 @@ pub(crate) async fn manage_game(
     game_name: &str,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let me = me.ok_or(Error::Unauthorized)?;
-    if !is_trez(&me) {
-        return Err(Error::Unauthorized.into());
-    }
-
+    
     let mut transaction = pool.begin().await.map_err(Error::from)?;
     let game = Game::from_name(&mut transaction, game_name)
         .await.map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
+    
+    // Check if user is trez or a game admin
+    let is_trez_user = is_trez(&me);
+    let is_game_admin = if !is_trez_user {
+        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
+    } else {
+        false
+    };
+    
+    if !is_trez_user && !is_game_admin {
+        return Err(Error::Unauthorized.into());
+    }
     
     let admins = game.admins(&mut transaction).await.map_err(Error::from)?;
     let series = game.series(&mut transaction).await.map_err(Error::from)?;
@@ -198,7 +238,7 @@ pub(crate) async fn manage_game(
             }
             
             p {
-                a(href = uri!(index)) : "← Back to Admin Panel";
+                a(href = uri!(game_management_overview)) : "← Back to Game Management";
             }
         }
     };
@@ -402,14 +442,23 @@ pub(crate) async fn manage_game_admins(
     game_name: &str,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let me = me.ok_or(Error::Unauthorized)?;
-    if !is_trez(&me) {
-        return Err(Error::Unauthorized.into());
-    }
-
+    
     let mut transaction = pool.begin().await.map_err(Error::from)?;
     let game = Game::from_name(&mut transaction, game_name)
         .await.map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
+    
+    // Check if user is trez or a game admin
+    let is_trez_user = is_trez(&me);
+    let is_game_admin = if !is_trez_user {
+        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
+    } else {
+        false
+    };
+    
+    if !is_trez_user && !is_game_admin {
+        return Err(Error::Unauthorized.into());
+    }
     
     let admins = game.admins(&mut transaction).await.map_err(Error::from)?;
     transaction.commit().await.map_err(Error::from)?;
@@ -475,14 +524,23 @@ pub(crate) async fn manage_game_series(
     game_name: &str,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let me = me.ok_or(Error::Unauthorized)?;
-    if !is_trez(&me) {
-        return Err(Error::Unauthorized.into());
-    }
-
+    
     let mut transaction = pool.begin().await.map_err(Error::from)?;
     let game = Game::from_name(&mut transaction, game_name)
         .await.map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
+    
+    // Check if user is trez or a game admin
+    let is_trez_user = is_trez(&me);
+    let is_game_admin = if !is_trez_user {
+        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
+    } else {
+        false
+    };
+    
+    if !is_trez_user && !is_game_admin {
+        return Err(Error::Unauthorized.into());
+    }
     
     let series = game.series(&mut transaction).await.map_err(Error::from)?;
     transaction.commit().await.map_err(Error::from)?;
@@ -676,11 +734,7 @@ pub(crate) async fn game_management(
             }
             
             p {
-                @if is_trez_user {
-                    a(href = uri!(manage_game(&game_name_clone))) : "← Back to Admin Panel";
-                } else {
-                    a(href = uri!(index)) : "← Back to Home";
-                }
+                a(href = uri!(game_management_overview)) : "← Back to Game Management";
             }
         }
     };
@@ -831,4 +885,75 @@ async fn get_series_events<'a>(pool: &'a PgPool, series: Series) -> Result<Optio
 
 async fn get_role_types(transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<event::roles::RoleType>, GameError> {
     event::roles::RoleType::all(transaction).await.map_err(GameError::from)
+} 
+
+#[rocket::get("/admin/game-management")]
+pub(crate) async fn game_management_overview(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    let me = me.ok_or(Error::Unauthorized)?;
+    
+    // Check if user is trez or has any game admin access
+    let is_trez_user = is_trez(&me);
+    let has_game_admin_access = if !is_trez_user {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        let accessible_games = get_accessible_games(&me, &mut transaction).await.map_err(Error::from)?;
+        transaction.commit().await.map_err(Error::from)?;
+        !accessible_games.is_empty()
+    } else {
+        true
+    };
+    
+    if !is_trez_user && !has_game_admin_access {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
+    let games = get_accessible_games(&me, &mut transaction).await.map_err(Error::from)?;
+    transaction.commit().await.map_err(Error::from)?;
+
+    let content = html! {
+        article {
+            h1 : "Game Management";
+            
+            @if games.is_empty() {
+                p : "No games available for management.";
+            } else {
+                div(class = "game-grid") {
+                    @for game in &games {
+                        div(class = "game-card") {
+                            h3 : &game.display_name;
+                            @if let Some(description) = &game.description {
+                                p : description;
+                            }
+                            p {
+                                a(href = uri!(game_management(&game.name))) : "Manage Game";
+                            }
+                        }
+                    }
+                }
+            }
+            
+            @if is_trez_user {
+                p {
+                    a(href = uri!(index)) : "← Back to Admin Panel";
+                }
+            } else {
+                p {
+                    a(href = uri!(crate::http::index)) : "← Back to Home";
+                }
+            }
+        }
+    };
+
+    Ok(page(
+        pool.begin().await.map_err(Error::from)?,
+        &Some(me),
+        &uri,
+        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        "Game Management — Hyrule Town Hall",
+        content,
+    ).await.map_err(Error::from)?)
 } 

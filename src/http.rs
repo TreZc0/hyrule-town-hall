@@ -206,7 +206,7 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                                         br;
                                     }
                                     @if u64::from(me.id) == 16287394041462225947_u64 {
-                                        a(href = uri!(admin::game_management("ootr"))) : "Game Management";
+                                        a(href = uri!(admin::game_management_overview)) : "Game Management";
                                         br;
                                     }
                                     a(href = uri!(auth::logout(Some(uri)))) : "Sign out";
@@ -634,6 +634,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         admin::add_game_post,
         admin::manage_game_admins,
         admin::manage_game_series,
+        admin::game_management_overview,
         admin::game_management,
         admin::add_role_binding,
         admin::remove_role_binding,

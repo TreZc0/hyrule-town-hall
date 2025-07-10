@@ -398,3 +398,38 @@ p.error {
   color: var(--text-muted);
   font-size: 0.8em;
 }
+
+.game-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.game-card {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.game-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.game-card h3 {
+  margin: 0 0 0.5rem 0;
+  color: var(--accent);
+}
+
+.game-card p {
+  margin: 0.5rem 0;
+  color: var(--text-muted);
+}
+
+.game-card a {
+  display: inline-block;
+  margin-top: 0.5rem;
+}
