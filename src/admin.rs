@@ -612,28 +612,13 @@ pub(crate) async fn game_management(
     transaction.commit().await.map_err(Error::from)?;
 
     // Now, for each series, fetch events using the pool
-    let mut all_events = Vec::new();
+    let mut series_with_events = Vec::new();
     for series_item in &series {
         let events_opt = get_series_events(pool, *series_item).await.map_err(Error::from)?;
         if let Some(events) = events_opt {
-            for event in events {
-                all_events.push((*series_item, event));
-            }
+            series_with_events.push((series_item, events));
         }
     }
-
-    // Build a Vec<(Series, Vec<EventType>)> for macro use
-    let series_with_events = {
-        let mut result = Vec::new();
-        for series_item in &series {
-            let events: Vec<_> = all_events.iter()
-                .filter(|(s, _)| s == series_item)
-                .map(|(_, e)| e)
-                .collect();
-            result.push((series_item, events));
-        }
-        result
-    };
 
     let game_name_clone = game.name.clone();
     let game_display_name = game.display_name.clone();
@@ -668,9 +653,9 @@ pub(crate) async fn game_management(
                         p : "No events in this series.";
                     } else {
                         ul {
-                            @for event in &**series_events {
+                            @for (event_name, display_name) in series_events {
                                 li {
-                                    a(href = uri!(event::info(**series_item, &*event.event))) : &event.display_name;
+                                    a(href = uri!(event::info(*series_item, event_name))) : display_name;
                                 }
                             }
                         }
@@ -688,6 +673,7 @@ pub(crate) async fn game_management(
                             th : "Role Type";
                             th : "Min Count";
                             th : "Max Count";
+                            th : "Discord Role";
                             th : "Actions";
                         }
                     }
@@ -697,6 +683,13 @@ pub(crate) async fn game_management(
                                 td : &binding.role_type_name;
                                 td : binding.min_count;
                                 td : binding.max_count;
+                                td {
+                                    @if let Some(discord_role_id) = binding.discord_role_id {
+                                        : format!("{}", discord_role_id);
+                                    } else {
+                                        : "None";
+                                    }
+                                }
                                 td {
                                     form(method = "post", action = uri!(remove_role_binding(&game_name_clone, binding.id))) {
                                         : csrf;
@@ -729,6 +722,10 @@ pub(crate) async fn game_management(
                     input(type = "number", id = "max_count", name = "max_count", value = "1", min = "1", required);
                 }
                 div {
+                    label(for = "discord_role_id") : "Discord Role ID (optional):";
+                    input(type = "text", id = "discord_role_id", name = "discord_role_id", placeholder = "e.g. 123456789012345678");
+                }
+                div {
                     input(type = "submit", value = "Add Role Binding");
                 }
             }
@@ -756,6 +753,8 @@ pub(crate) struct AddRoleBindingForm {
     role_type_id: String,
     min_count: i32,
     max_count: i32,
+    #[field(default = String::new())]
+    discord_role_id: String,
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -800,6 +799,16 @@ pub(crate) async fn add_role_binding(
         }
     };
     
+    // Parse discord_role_id (optional)
+    let discord_role_id = if form.discord_role_id.trim().is_empty() {
+        None
+    } else {
+        match form.discord_role_id.trim().parse::<i64>() {
+            Ok(id) => Some(id),
+            Err(_) => None,
+        }
+    };
+    
     // Check if role binding already exists
     let existing_bindings = RoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
     if existing_bindings.iter().any(|b| b.role_type_id == role_type_id) {
@@ -808,11 +817,12 @@ pub(crate) async fn add_role_binding(
     
     // Add role binding
     sqlx::query!(
-        r#"INSERT INTO role_bindings (game_id, role_type_id, min_count, max_count) VALUES ($1, $2, $3, $4)"#,
+        r#"INSERT INTO role_bindings (game_id, role_type_id, min_count, max_count, discord_role_id) VALUES ($1, $2, $3, $4, $5)"#,
         game.id,
         role_type_id as _,
         form.min_count,
-        form.max_count
+        form.max_count,
+        discord_role_id
     )
     .execute(&mut *transaction)
     .await.map_err(Error::from)?;
@@ -862,23 +872,17 @@ pub(crate) async fn remove_role_binding(
     Ok(Redirect::to(uri!(game_management(game_name))))
 }
 
-async fn get_series_events<'a>(pool: &'a PgPool, series: Series) -> Result<Option<Vec<event::Data<'a>>>, GameError> {
+async fn get_series_events<'a>(pool: &'a PgPool, series: Series) -> Result<Option<Vec<(String, String)>>, GameError> {
     let rows = sqlx::query!(
-        r#"SELECT event FROM events WHERE series = $1 AND listed ORDER BY start ASC"#,
+        r#"SELECT event, display_name FROM events WHERE series = $1 AND listed ORDER BY start ASC"#,
         series as _
     )
     .fetch_all(pool)
     .await?;
     
-    let mut events = Vec::new();
-    for row in rows {
-        let event_name = row.event.clone();
-        let mut tx = pool.begin().await?;
-        if let Ok(Some(event_data)) = event::Data::new(&mut tx, series, event_name).await {
-            events.push(event_data);
-        }
-        tx.commit().await?;
-    }
+    let events = rows.into_iter()
+        .map(|row| (row.event, row.display_name))
+        .collect();
     
     Ok(Some(events))
 }
