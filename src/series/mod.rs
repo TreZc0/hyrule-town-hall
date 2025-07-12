@@ -169,3 +169,9 @@ impl UriDisplay<Path> for Series {
 }
 
 impl_from_uri_param_identity!([Path] Series);
+
+impl fmt::Display for Series {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.slug())
+    }
+}

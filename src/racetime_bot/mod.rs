@@ -2233,7 +2233,21 @@ impl SeedRollUpdate {
                 if extra.password.is_some() {
                     ctx.say("Please note that this seed is password protected. You will receive the password to start a file ingame as soon as the countdown starts.").await?;
                 }
-                set_bot_raceinfo(ctx, &seed, rsl_preset, false).await?;
+                
+                // Get game_id for the event and call set_bot_raceinfo with database-driven hash icons
+                let game_id = if let Some(OfficialRaceData { event, .. }) = official_data {
+                    let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+                    let game_id = get_game_id_from_event(&mut transaction, &event.series.to_string()).await.to_racetime()?;
+                    transaction.commit().await.to_racetime()?;
+                    game_id
+                } else {
+                    1 // Default to OOTR if no official data
+                };
+                
+                let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+                set_bot_raceinfo(ctx, &seed, rsl_preset, false, &mut transaction, game_id).await?;
+                transaction.commit().await.to_racetime()?;
+                
                 if let Some(OfficialRaceData { cal_event, event, restreams, .. }) = official_data {
                     // send multiworld rooms
                     let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
@@ -2353,6 +2367,36 @@ impl SeedRollUpdate {
     }
 }
 
+async fn get_game_id_from_event(transaction: &mut Transaction<'_, Postgres>, series: &str) -> Result<i32, sqlx::Error> {
+    // Get the game_id for the event's series
+    let game_id = sqlx::query_scalar!(
+        r#"
+            SELECT gs.game_id
+            FROM game_series gs
+            WHERE gs.series = $1
+        "#,
+        series
+    )
+    .fetch_optional(&mut **transaction)
+    .await?;
+
+    // Default to OOTR (game_id = 1) if no mapping found
+    Ok(game_id.unwrap_or(Some(1)).unwrap_or(1))
+}
+
+async fn format_hash_with_game_id(file_hash: [HashIcon; 5], transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<String, sqlx::Error> {
+    let mut emojis = Vec::new();
+    for icon in file_hash {
+        if let Some(emoji) = icon.get_racetime_emoji(transaction, game_id).await? {
+            emojis.push(emoji);
+        } else {
+            // Fallback to hardcoded emoji
+            emojis.push(icon.to_racetime_emoji().to_string());
+        }
+    }
+    Ok(emojis.join(" "))
+}
+
 fn format_hash(file_hash: [HashIcon; 5]) -> impl fmt::Display {
     file_hash.into_iter().map(|icon| icon.to_racetime_emoji()).format(" ")
 }
@@ -2404,12 +2448,19 @@ async fn room_options(goal: Goal, event: &event::Data<'_>, cal_event: &cal::Even
     }
 }
 
-async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl_preset: Option<rsl::Preset>, show_password: bool) -> Result<(), Error> {
+async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl_preset: Option<rsl::Preset>, show_password: bool, transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<(), Error> {
     let extra = seed.extra(Utc::now()).await.to_racetime()?;
+    
+    let file_hash_str = if let Some(hash) = extra.file_hash {
+        format_hash_with_game_id(hash, transaction, game_id).await.to_racetime()?
+    } else {
+        String::new()
+    };
+    
     ctx.set_bot_raceinfo(&format!(
         "{rsl_preset}{file_hash}{sep}{password}{newline}{seed_url}",
         rsl_preset = rsl_preset.map(|preset| format!("{}\n", preset.race_info())).unwrap_or_default(),
-        file_hash = extra.file_hash.map(|hash| format_hash(hash).to_string()).unwrap_or_default(),
+        file_hash = file_hash_str,
         sep = if extra.file_hash.is_some() && extra.password.is_some() && show_password { " | " } else { "" },
         password = extra.password.filter(|_| show_password).map(|password| format_password(password).to_string()).unwrap_or_default(),
         newline = if extra.file_hash.is_some() || extra.password.is_some() && show_password { "\n" } else { "" },
@@ -4609,7 +4660,20 @@ impl RaceHandler<GlobalState> for Handler {
                     let extra = seed.extra(Utc::now()).await.to_racetime()?;
                     if let Some(password) = extra.password {
                         ctx.say(format!("This seed is password protected. To start a file, enter this password on the file select screen:\n{}\nYou are allowed to enter the password before the race starts.", format_password(password))).await?;
-                        set_bot_raceinfo(ctx, seed, None /*TODO support RSL seeds with password lock? */, true).await?;
+                        
+                        // Get game_id for the event and call set_bot_raceinfo with database-driven hash icons
+                        let game_id = if let Some(OfficialRaceData { event, .. }) = &self.official_data {
+                            let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+                            let game_id = get_game_id_from_event(&mut transaction, &event.series.to_string()).await.to_racetime()?;
+                            transaction.commit().await.to_racetime()?;
+                            game_id
+                        } else {
+                            1 // Default to OOTR if no official data
+                        };
+                        
+                        let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+                        set_bot_raceinfo(ctx, seed, None /*TODO support RSL seeds with password lock? */, true, &mut transaction, game_id).await?;
+                        transaction.commit().await.to_racetime()?;
                         if let Some(OfficialRaceData { cal_event, event, .. }) = &self.official_data {
                             if event.series == Series::Standard && event.event != "w" && cal_event.race.entrants == Entrants::Open && event.discord_guild == Some(OOTR_DISCORD_GUILD) {
                                 // post password in #s8-prequal-chat as a contingency for racetime.gg issues in large qualifiers
@@ -4823,7 +4887,20 @@ impl RaceHandler<GlobalState> for Handler {
                         let extra = seed.extra(Utc::now()).await.to_racetime()?;
                         if let Some(password) = extra.password {
                             ctx.say(format!("This seed is password protected. To start a file, enter this password on the file select screen:\n{}", format_password(password))).await?;
-                            set_bot_raceinfo(ctx, seed, None /*TODO support RSL seeds with password lock? */, true).await?;
+                            
+                            // Get game_id for the event and call set_bot_raceinfo with database-driven hash icons
+                            let game_id = if let Some(OfficialRaceData { event, .. }) = &self.official_data {
+                                let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+                                let game_id = get_game_id_from_event(&mut transaction, &event.series.to_string()).await.to_racetime()?;
+                                transaction.commit().await.to_racetime()?;
+                                game_id
+                            } else {
+                                1 // Default to OOTR if no official data
+                            };
+                            
+                            let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+                            set_bot_raceinfo(ctx, seed, None /*TODO support RSL seeds with password lock? */, true, &mut transaction, game_id).await?;
+                            transaction.commit().await.to_racetime()?;
                         }
                     });
                     self.password_sent = true;

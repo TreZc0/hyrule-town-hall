@@ -47,6 +47,7 @@ mod form;
 mod game;
 mod games;
 mod hash_icon;
+mod hash_icon_db;
 #[macro_use] mod http;
 mod id;
 mod lang;

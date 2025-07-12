@@ -205,21 +205,21 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
             seed::Data { file_hash: None, password: None, files: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_F35CF_3PT90NK69D"), locked_spoiler_log_path: None }), progression_spoiler: false },
             seed::Data { file_hash: None, password: None, files: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_F35CF_I7BN7K3S2Z"), locked_spoiler_log_path: None }), progression_spoiler: false },
             seed::Data { file_hash: None, password: None, files: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_F35CF_99YI7I0K6O"), locked_spoiler_log_path: None }), progression_spoiler: false },
-        ]), true).await?),
+        ]), true, transaction, 1).await?),
         "rs1" => Some(seed::table(stream::iter(vec![
             seed::Data { file_hash: None, password: None, files: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoTR_1079630_V6516H22IW"), locked_spoiler_log_path: None }), progression_spoiler: false },
             seed::Data { file_hash: None, password: None, files: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoTR_1079637_HAH75EOAHQ"), locked_spoiler_log_path: None }), progression_spoiler: false },
             seed::Data { file_hash: None, password: None, files: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoTR_1079645_6XZJOSDCRW"), locked_spoiler_log_path: None }), progression_spoiler: false },
             seed::Data { file_hash: None, password: None, files: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoTR_1079646_AJZWAB1X3U"), locked_spoiler_log_path: None }), progression_spoiler: false },
             seed::Data { file_hash: None, password: None, files: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoTR_1079648_1DHCCQB5AC"), locked_spoiler_log_path: None }), progression_spoiler: false },
-        ]), true).await?),
+        ]), true, transaction, 1).await?),
         "rs2" => Some(seed::table(stream::iter(vec![
             seed::Data { file_hash: None, password: None, files: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_5ADE7_1S6GBQNP8R"), locked_spoiler_log_path: None }), progression_spoiler: false },
             seed::Data { file_hash: None, password: None, files: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_5ADE7_IIPBIQ4XAB"), locked_spoiler_log_path: None }), progression_spoiler: false },
             seed::Data { file_hash: None, password: None, files: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_5ADE7_LBZIZMD75C"), locked_spoiler_log_path: None }), progression_spoiler: false },
             seed::Data { file_hash: None, password: None, files: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_5ADE7_3OBW74243M"), locked_spoiler_log_path: None }), progression_spoiler: false },
             seed::Data { file_hash: None, password: None, files: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_5ADE7_E18HE17UKF"), locked_spoiler_log_path: None }), progression_spoiler: false },
-        ]), true).await?),
+        ]), true, transaction, 1).await?),
         _ => None,
     };
     let winniedemon = User::from_id(&mut **transaction, Id::from(1807131022132982871_u64)).await?.ok_or(Error::OrganizerUserData)?;

@@ -314,7 +314,9 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
         p {
             : "With HTH, you can automate signups to tournaments, volunteer roles for restreams, ";
             : "syncing to known tournament platforms like Challonge and start.gg, race automation in racetime.gg, and more!";
-            : "Hyrule Town Hall is tightly integrated with Discord to handle user interaction inregards to scheduling, async racing, and role management.";
+        }
+        p {
+            : "HTH is tightly integrated with Discord to handle vital interactions in events like scheduling, async racing, and role management.";
         }
         div(class = "section-list") {
             div {

@@ -48,6 +48,11 @@ fn check_static_dir(cache: &mut HashMap<PathBuf, Oid>, repo: &Repository, relati
     for entry in fs::read_dir(&path)? {
         let entry = entry?;
         if entry.file_type()?.is_dir() {
+            // Skip hash-icon and hash-icon-500 directories as they contain many unused files
+            let file_name = entry.file_name();
+            if file_name == "hash-icon" || file_name == "hash-icon-500" {
+                continue;
+            }
             check_static_dir(cache, repo, &relative_path.join(entry.file_name()), entry.path())?;
         } else {
             check_static_file(cache, repo, &relative_path.join(entry.file_name()), entry.path())?;
@@ -57,7 +62,7 @@ fn check_static_dir(cache: &mut HashMap<PathBuf, Oid>, repo: &Repository, relati
 }
 
 fn main() -> Result<(), Error> {
-    println!("cargo:rerun-if-changed=nonexistent.foo"); // check a nonexistent file to make sure build script is always run (see https://github.com/rust-lang/cargo/issues/4213 and https://github.com/rust-lang/cargo/issues/5663)
+    println!("cargo:rerun-if-changed=nonexistent.foo");
     let static_dir = Path::new("assets").join("static");
     let mut cache = HashMap::default();
     let repo = Repository::open(&env::var_os("CARGO_MANIFEST_DIR").unwrap())?;
@@ -70,9 +75,30 @@ fn main() -> Result<(), Error> {
         }
     }
     let mut out_f = File::create(Path::new(&env::var_os("OUT_DIR").unwrap()).join("static_files.rs"))?;
-    writeln!(&mut out_f, "macro_rules! static_url {{")?;
+    // Split entries into icon and non-icon
+    let mut icon_entries = Vec::new();
+    let mut normal_entries = Vec::new();
     for (path, commit_id) in cache {
         let unix_path = path.to_str().expect("non-UTF-8 static file path").replace('\\', "/");
+        if unix_path.starts_with("hash-icon/") || unix_path.starts_with("hash-icon-500/") {
+            icon_entries.push((unix_path, commit_id));
+        } else {
+            normal_entries.push((unix_path, commit_id));
+        }
+    }
+    // Write normal static_url! macro
+    writeln!(&mut out_f, "macro_rules! static_url {{")?;
+    for (unix_path, commit_id) in &normal_entries {
+        let uri = format!("/static/{unix_path}?v={commit_id}");
+        writeln!(&mut out_f, "    ({unix_path:?}) => {{")?;
+        writeln!(&mut out_f, "        ::rocket_util::Origin(::rocket::uri!({uri:?}))")?;
+        writeln!(&mut out_f, "    }};")?;
+    }
+    writeln!(&mut out_f, "}}")?;
+    // Write icon static_url_icon! macro with allow unused
+    writeln!(&mut out_f, "#[allow(unused_macros, unused_macro_rules)]")?;
+    writeln!(&mut out_f, "macro_rules! static_url_icon {{")?;
+    for (unix_path, commit_id) in &icon_entries {
         let uri = format!("/static/{unix_path}?v={commit_id}");
         writeln!(&mut out_f, "    ({unix_path:?}) => {{")?;
         writeln!(&mut out_f, "        ::rocket_util::Origin(::rocket::uri!({uri:?}))")?;

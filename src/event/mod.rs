@@ -997,7 +997,21 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User
                                     async_row.seed_password.as_deref(),
                                     false, // no official races with progression spoilers so far
                                 );
-                                let seed_table = seed::table(stream::iter(iter::once(seed)), false).await?;
+                                // Get game_id for the event's series
+                                let game_id = sqlx::query_scalar!(
+                                    r#"
+                                        SELECT gs.game_id
+                                        FROM game_series gs
+                                        WHERE gs.series = $1
+                                    "#,
+                                    data.series.to_string()
+                                )
+                                .fetch_optional(&mut *transaction)
+                                .await?
+                                .flatten()
+                                .unwrap_or(1); // Default to OOTR if no mapping found
+                                
+                                let seed_table = seed::table(stream::iter(iter::once(seed)), false, &mut transaction, game_id).await?;
                                 let ctx = ctx.take_submit_async();
                                 let mut errors = ctx.errors().collect_vec();
                                 Some(html! {

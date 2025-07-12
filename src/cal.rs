@@ -2236,7 +2236,8 @@ pub(crate) async fn race_table(
                         @if has_seeds {
                             td {
                                 @if race.show_seed() {
-                                    : seed::table_cell(now, &race.seed, true, options.can_edit.then(|| uri!(cal::add_file_hash(race.series, &*race.event, race.id)))).await?;
+                                    @let game_id = event.game(&mut *transaction).await?.map(|g| g.id).unwrap_or(1);
+                                    : seed::table_cell(now, &race.seed, true, options.can_edit.then(|| uri!(cal::add_file_hash(race.series, &*race.event, race.id))), &mut *transaction, game_id).await?;
                                 } else {
                                     // hide seed if unfinished async
                                     //TODO show to the team that played the 1st async half

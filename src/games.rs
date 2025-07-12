@@ -140,8 +140,10 @@ pub(crate) async fn get(
                             @for event in events {
                                 li {
                                     a(href = uri!(crate::event::info(*series_item, &event.event))) : &event.display_name;
-                                    : " - ";
-                                    a(href = uri!(crate::event::roles::get(*series_item, &event.event))) : "Manage Roles";
+                                    @if is_admin || me.as_ref().map_or(false, |me| u64::from(me.id) == 16287394041462225947_u64) {
+                                        : " - ";
+                                        a(href = uri!(crate::event::roles::get(*series_item, &event.event))) : "Manage Roles";
+                                    }
                                     @if event.force_custom_role_binding.unwrap_or(false) {
                                         : " (standalone set of volunteer roles)";
                                     }
@@ -226,7 +228,7 @@ pub(crate) async fn get(
                 }
             }
             
-            @if is_admin {
+            @if is_admin || me.as_ref().map_or(false, |me| u64::from(me.id) == 16287394041462225947_u64) {
                 h2 : "Admin Actions";
                 p {
                     a(href = uri!(manage_admins(&game.name))) : "Manage Game Admins";
@@ -266,7 +268,10 @@ pub(crate) async fn manage_admins(
     
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
     
-    if !game.is_admin(&mut transaction, &me).await.map_err(Error::from)? {
+    let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+    let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+    
+    if !is_game_admin && !is_global_admin {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     
@@ -320,7 +325,10 @@ pub(crate) async fn manage_roles(
     
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
     
-    if !game.is_admin(&mut transaction, &me).await.map_err(Error::from)? {
+    let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+    let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+    
+    if !is_game_admin && !is_global_admin {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     
@@ -599,7 +607,10 @@ pub(crate) async fn add_game_role_binding(
             .await.map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
         
-        if !game.is_admin(&mut transaction, &me).await.map_err(Error::from)? {
+        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+        
+        if !is_game_admin && !is_global_admin {
             return Err(StatusOrError::Status(Status::Forbidden));
         }
         
@@ -653,7 +664,10 @@ pub(crate) async fn remove_game_role_binding(
             .await.map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
         
-        if !game.is_admin(&mut transaction, &me).await.map_err(Error::from)? {
+        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+        
+        if !is_game_admin && !is_global_admin {
             return Err(StatusOrError::Status(Status::Forbidden));
         }
         
@@ -685,7 +699,10 @@ pub(crate) async fn approve_game_role_request(
             .await.map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
         
-        if !game.is_admin(&mut transaction, &me).await.map_err(Error::from)? {
+        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+        
+        if !is_game_admin && !is_global_admin {
             return Err(StatusOrError::Status(Status::Forbidden));
         }
         
@@ -717,7 +734,10 @@ pub(crate) async fn reject_game_role_request(
             .await.map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
         
-        if !game.is_admin(&mut transaction, &me).await.map_err(Error::from)? {
+        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+        
+        if !is_game_admin && !is_global_admin {
             return Err(StatusOrError::Status(Status::Forbidden));
         }
         

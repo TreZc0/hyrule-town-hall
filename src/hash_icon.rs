@@ -119,6 +119,22 @@ impl HashIcon {
         }
     }
 
+    /// Get the racetime emoji for this hash icon from the database
+    pub async fn get_racetime_emoji(
+        &self,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        game_id: i32,
+    ) -> Result<Option<String>, sqlx::Error> {
+        use crate::hash_icon_db::HashIconData;
+        
+        if let Some(hash_icon_data) = HashIconData::by_name(transaction, game_id, &self.to_string()).await? {
+            Ok(Some(hash_icon_data.racetime_emoji))
+        } else {
+            // Fallback to hardcoded mapping for backward compatibility
+            Ok(Some(self.to_racetime_emoji().to_string()))
+        }
+    }
+
     pub fn to_racetime_emoji(&self) -> &'static str {
         match self {
             Self::Bomb => "HashBombs",
