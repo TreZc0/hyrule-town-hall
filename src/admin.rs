@@ -327,19 +327,52 @@ pub(crate) async fn add_game_post(
         return Err(Error::Unauthorized.into());
     }
 
-    let mut transaction = pool.begin().await.map_err(Error::from)?;
+    eprintln!("Starting add_game_post with name: {}, display_name: {}", form.name, form.display_name);
+
+    let mut transaction = match pool.begin().await {
+        Ok(t) => {
+            eprintln!("Successfully began transaction");
+            t
+        },
+        Err(e) => {
+            eprintln!("Failed to begin transaction: {:?}", e);
+            return Err(Error::from(e).into());
+        }
+    };
     
-    sqlx::query!(
+    eprintln!("Executing INSERT query...");
+    let insert_result = sqlx::query!(
         r#"INSERT INTO games (name, display_name, description) VALUES ($1, $2, $3)"#,
         form.name,
         form.display_name,
         if form.description.is_empty() { None } else { Some(&form.description) }
     )
     .execute(&mut *transaction)
-    .await.map_err(Error::from)?;
+    .await;
     
-    transaction.commit().await.map_err(Error::from)?;
+    match insert_result {
+        Ok(result) => {
+            eprintln!("INSERT query successful, affected rows: {}", result.rows_affected());
+        },
+        Err(e) => {
+            eprintln!("INSERT query failed: {:?}", e);
+            return Err(Error::from(e).into());
+        }
+    }
     
+    eprintln!("Committing transaction...");
+    let commit_result = transaction.commit().await;
+    match commit_result {
+        Ok(_) => {
+            eprintln!("Transaction committed successfully");
+        },
+        Err(e) => {
+            eprintln!("Transaction commit failed: {:?}", e);
+            return Err(Error::from(e).into());
+        }
+    }
+    
+    eprintln!("Redirecting to admin index");
     Ok(Redirect::to(uri!(index)))
 }
 
@@ -454,15 +487,36 @@ pub(crate) async fn add_game_admin(
         }
         
         // Add user as admin
-        sqlx::query!(
+        eprintln!("Adding user {} as admin for game {} (game_id: {})", admin_id, game_name, game.id);
+        let insert_result = sqlx::query!(
             r#"INSERT INTO game_admins (game_id, admin_id) VALUES ($1, $2)"#,
             game.id,
             i64::from(admin_id) as i32
         )
         .execute(&mut *transaction)
-        .await.map_err(Error::from)?;
+        .await;
         
-        transaction.commit().await.map_err(Error::from)?;
+        match insert_result {
+            Ok(result) => {
+                eprintln!("INSERT game_admins successful, affected rows: {}", result.rows_affected());
+            },
+            Err(e) => {
+                eprintln!("INSERT game_admins failed: {:?}", e);
+                return Err(Error::from(e).into());
+            }
+        }
+        
+        eprintln!("Committing game admin transaction...");
+        let commit_result = transaction.commit().await;
+        match commit_result {
+            Ok(_) => {
+                eprintln!("Game admin transaction committed successfully");
+            },
+            Err(e) => {
+                eprintln!("Game admin transaction commit failed: {:?}", e);
+                return Err(Error::from(e).into());
+            }
+        }
     }
     Ok(Redirect::to(uri!(manage_game_admins(game_name))))
 }
