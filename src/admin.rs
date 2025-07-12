@@ -404,42 +404,67 @@ pub(crate) async fn add_game_admin(
     game_name: &str,
     form: Form<Contextual<'_, AddAdminForm>>,
 ) -> Result<Redirect, StatusOrError<Error>> {
+    eprintln!("DEBUG: add_game_admin called with game_name: {}", game_name);
     let me = me.ok_or(Error::Unauthorized)?;
+    eprintln!("DEBUG: User authenticated: {}", me.display_name());
     if !is_trez(&me) {
+        eprintln!("DEBUG: User is not trez, returning unauthorized");
         return Err(Error::Unauthorized.into());
     }
+    eprintln!("DEBUG: User is trez, proceeding");
     let mut form = form.into_inner();
     form.verify(&csrf);
+    eprintln!("DEBUG: CSRF verified");
     
     if let Some(ref value) = form.value {
+        eprintln!("DEBUG: Form value received: admin = '{}'", value.admin);
+        eprintln!("DEBUG: Starting database transaction");
         let mut transaction = pool.begin().await.map_err(Error::from)?;
+        eprintln!("DEBUG: Looking up game: {}", game_name);
         let game = Game::from_name(&mut transaction, game_name)
             .await.map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
+        eprintln!("DEBUG: Game found: {}", game.display_name);
         // Parse user ID from form
+        eprintln!("DEBUG: Parsing admin ID from: '{}'", value.admin);
         let admin_id = match value.admin.parse::<u64>() {
-            Ok(id) => Id::<Users>::from(id),
-            Err(_) => {
+            Ok(id) => {
+                eprintln!("DEBUG: Successfully parsed admin ID: {}", id);
+                Id::<Users>::from(id)
+            },
+            Err(e) => {
+                eprintln!("DEBUG: Failed to parse admin ID: {}", e);
                 return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
             }
         };
         // Check if user exists
+        eprintln!("DEBUG: Checking if user exists with ID: {}", admin_id);
         let _user = match User::from_id(&mut *transaction, admin_id).await.map_err(Error::from)? {
-            Some(u) => u,
+            Some(u) => {
+                eprintln!("DEBUG: User found: {}", u.display_name());
+                u
+            },
             None => {
+                eprintln!("DEBUG: User not found");
                 return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
             }
         };
         // Check if already admin
+        eprintln!("DEBUG: Checking if user is already admin");
         let admins = game.admins(&mut transaction).await.map_err(Error::from)?;
         if admins.iter().any(|u| u.id == admin_id) {
+            eprintln!("DEBUG: User is already admin");
             return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
         }
+        eprintln!("DEBUG: Adding user as admin");
         sqlx::query!("INSERT INTO game_admins (game_id, admin_id) VALUES ($1, $2)", game.id, i64::from(admin_id) as i32)
             .execute(&mut *transaction)
             .await.map_err(Error::from)?;
+        eprintln!("DEBUG: Committing transaction");
         transaction.commit().await.map_err(Error::from)?;
+        eprintln!("DEBUG: Successfully added admin");
     }
+    eprintln!("DEBUG: Returning redirect to manage_game_admins");
     Ok(Redirect::to(uri!(manage_game_admins(game_name))))
 }
 
