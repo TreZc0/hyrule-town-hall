@@ -620,7 +620,7 @@ pub(crate) async fn game_management(
     };
     
     if !is_trez_user && !is_game_admin {
-        return Err(Error::Unauthorized.into());
+        return Err(StatusOrError::Err(Error::Unauthorized));
     }
     
     let series = match game.series(&mut transaction).await {
@@ -630,9 +630,7 @@ pub(crate) async fn game_management(
             return Err(StatusOrError::Err(Error::from(e)));
         }
     };
-    
-    // Remove the unused role_types call for now
-    // let _role_types = get_role_types(&mut transaction).await.map_err(Error::from)?;
+
     
     match transaction.commit().await {
         Ok(_) => {},
@@ -776,7 +774,7 @@ pub(crate) async fn add_role_binding(
     };
     
     if !is_trez_user && !is_game_admin {
-        return Err(Error::Unauthorized.into());
+        return Err(StatusOrError::Err(Error::Unauthorized));
     }
     
     // Parse role type ID
@@ -847,7 +845,7 @@ pub(crate) async fn remove_role_binding(
     };
     
     if !is_trez_user && !is_game_admin {
-        return Err(Error::Unauthorized.into());
+        return Err(StatusOrError::Err(Error::Unauthorized));
     }
     
     // Remove role binding
@@ -879,9 +877,6 @@ async fn get_series_events<'a>(pool: &'a PgPool, series: Series) -> Result<Optio
     Ok(Some(events))
 }
 
-async fn get_role_types(transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<event::roles::RoleType>, GameError> {
-    event::roles::RoleType::all(transaction).await.map_err(GameError::from)
-} 
 
 #[rocket::get("/admin/game-management")]
 pub(crate) async fn game_management_overview(
@@ -903,7 +898,7 @@ pub(crate) async fn game_management_overview(
     };
     
     if !is_trez_user && !has_game_admin_access {
-        return Err(Error::Unauthorized.into());
+        return Err(StatusOrError::Err(Error::Unauthorized));
     }
 
     let mut transaction = pool.begin().await.map_err(Error::from)?;

@@ -960,7 +960,6 @@ async fn roles_page(
             }
         }
     };
-
     Ok(page(
         transaction,
         &me,
@@ -1521,120 +1520,121 @@ async fn volunteer_page(
 
             let upcoming_races = Race::for_event(&mut transaction, &reqwest::Client::new(), &data).await?;
 
-        html! {
-            h2 : "Volunteer for Roles";
-            p : "Apply to volunteer for roles in this event.";
+            html! {
+                h2 : "Volunteer for Roles";
+                p : "Apply to volunteer for roles in this event.";
 
-            @if effective_role_bindings.is_empty() {
-                p : "No volunteer roles are currently available for this event.";
-            } else {
-                h3 : "Available Roles";
-                @for binding in &effective_role_bindings {
-                    @let my_request = my_requests.iter()
-                        .filter(|req| req.role_binding_id == binding.id && !matches!(req.status, RoleRequestStatus::Aborted))
-                        .max_by_key(|req| req.created_at);
-                    @let has_active_request = my_request.map_or(false, |req| matches!(req.status, RoleRequestStatus::Pending | RoleRequestStatus::Approved));
-                    div(class = "role-binding") {
-                        h4 : binding.role_type_name;
-                        p {
-                            : "Required: ";
-                            : binding.min_count;
-                            : " - ";
-                            : binding.max_count;
-                            : " volunteers";
-                        }
-                        @if let Some(discord_role_id) = binding.discord_role_id {
+                @if effective_role_bindings.is_empty() {
+                    p : "No volunteer roles are currently available for this event.";
+                } else {
+                    h3 : "Available Roles";
+                    @for binding in &effective_role_bindings {
+                        @let my_request = my_requests.iter()
+                            .filter(|req| req.role_binding_id == binding.id && !matches!(req.status, RoleRequestStatus::Aborted))
+                            .max_by_key(|req| req.created_at);
+                        @let has_active_request = my_request.map_or(false, |req| matches!(req.status, RoleRequestStatus::Pending | RoleRequestStatus::Approved));
+                        div(class = "role-binding") {
+                            h4 : binding.role_type_name;
                             p {
-                                : "Discord Role: ";
-                                : format!("{}", discord_role_id);
-                                @if binding.has_event_override {
-                                    span(class = "override-indicator") : " (event override)";
+                                : "Required: ";
+                                : binding.min_count;
+                                : " - ";
+                                : binding.max_count;
+                                : " volunteers";
+                            }
+                            @if let Some(discord_role_id) = binding.discord_role_id {
+                                p {
+                                    : "Discord Role: ";
+                                    : format!("{}", discord_role_id);
+                                    @if binding.has_event_override {
+                                        span(class = "override-indicator") : " (event override)";
+                                    }
                                 }
                             }
-                        }
-                        @if binding.is_game_binding {
-                            p(class = "game-binding-info") {
-                                : "This role is managed by the game's role binding system";
-                                @if binding.has_event_override {
-                                    : " with event-specific Discord role override";
+                            @if binding.is_game_binding {
+                                p(class = "game-binding-info") {
+                                    : "This role is managed by the game's role binding system";
+                                    @if binding.has_event_override {
+                                        : " with event-specific Discord role override";
+                                    }
                                 }
                             }
-                        }
 
-                        @if has_active_request {
-                            @let request = my_request.unwrap();
-                            p(class = "request-status") {
-                                : "Your request status: ";
-                                @match request.status {
-                                    RoleRequestStatus::Pending => {
-                                        span(class = "status-pending") : "Pending";
-                                    }
-                                    RoleRequestStatus::Approved => {
-                                        span(class = "status-approved") : "Approved";
-                                    }
-                                    RoleRequestStatus::Rejected => {
-                                        span(class = "status-rejected") : "Rejected";
-                                    }
-                                    RoleRequestStatus::Aborted => {
-                                        span(class = "status-aborted") : "Aborted";
+                            @if has_active_request {
+                                @let request = my_request.unwrap();
+                                p(class = "request-status") {
+                                    : "Your request status: ";
+                                    @match request.status {
+                                        RoleRequestStatus::Pending => {
+                                            span(class = "status-pending") : "Pending";
+                                        }
+                                        RoleRequestStatus::Approved => {
+                                            span(class = "status-approved") : "Approved";
+                                        }
+                                        RoleRequestStatus::Rejected => {
+                                            span(class = "status-rejected") : "Rejected";
+                                        }
+                                        RoleRequestStatus::Aborted => {
+                                            span(class = "status-aborted") : "Aborted";
+                                        }
                                     }
                                 }
-                            }
-                            @if let Some(ref notes) = request.notes {
-                                p(class = "request-notes") {
-                                    : "Your notes: ";
-                                    : notes;
+                                @if let Some(ref notes) = request.notes {
+                                    p(class = "request-notes") {
+                                        : "Your notes: ";
+                                        : notes;
+                                    }
                                 }
+                            } else {
+                                @let mut errors = Vec::new();
+                                : full_form(uri!(apply_for_role(data.series, &*data.event)), csrf.as_ref(), html! {
+                                    input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                    : form_field("notes", &mut errors, html! {
+                                        label(for = "notes") : "Notes (optional):";
+                                        textarea(name = "notes", id = "notes", rows = "3") : "";
+                                    });
+                                }, errors, format!("Apply for {}", binding.role_type_name).as_str());
                             }
-                        } else {
-                            @let mut errors = Vec::new();
-                            : full_form(uri!(apply_for_role(data.series, &*data.event)), csrf.as_ref(), html! {
-                                input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                : form_field("notes", &mut errors, html! {
-                                    label(for = "notes") : "Notes (optional):";
-                                    textarea(name = "notes", id = "notes", rows = "3") : "";
-                                });
-                            }, errors, format!("Apply for {}", binding.role_type_name).as_str());
                         }
                     }
                 }
-            }
 
-            @if !my_approved_roles.is_empty() && !upcoming_races.is_empty() {
-                h3 : "Sign Up for Matches";
-                p : "You have been approved for the following roles. You can now sign up for specific matches:";
-                
-                @for role_request in my_approved_roles {
-                    @let binding = effective_role_bindings.iter().find(|b| b.id == role_request.role_binding_id);
-                    @if let Some(binding) = binding {
-                        h4 : format!("{} - {}", binding.role_type_name, role_request.role_type_name);
-                        @let available_races = upcoming_races.iter().filter(|race| {
-                            // Filter races that need this role type
-                            // This is a simplified check - you might want more sophisticated logic
-                            true
-                        }).collect::<Vec<_>>();
-                        
-                        @if available_races.is_empty() {
-                            p : "No upcoming races available for signup.";
-                        } else {
-                            ul {
-                                @for race in available_races {
-                                    li {
-                                        a(href = uri!(match_signup_page_get(data.series, &*data.event, race.id))) : match &race.entrants {
-                                            Entrants::Two([team1, team2]) => format!("{} vs {}",
-                                                match team1 {
-                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                    Entrant::Named { name, .. } => name.clone(),
-                                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                                },
-                                                match team2 {
-                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                    Entrant::Named { name, .. } => name.clone(),
-                                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                                }
-                                            ),
-                                            _ => "TBD vs TBD".to_string(),
-                                        };
+                @if !my_approved_roles.is_empty() && !upcoming_races.is_empty() {
+                    h3 : "Sign Up for Matches";
+                    p : "You have been approved for the following roles. You can now sign up for specific matches:";
+                    
+                    @for role_request in my_approved_roles {
+                        @let binding = effective_role_bindings.iter().find(|b| b.id == role_request.role_binding_id);
+                        @if let Some(binding) = binding {
+                            h4 : format!("{} - {}", binding.role_type_name, role_request.role_type_name);
+                            @let available_races = upcoming_races.iter().filter(|race| {
+                                // Filter races that need this role type
+                                // This is a simplified check - you might want more sophisticated logic
+                                true
+                            }).collect::<Vec<_>>();
+                            
+                            @if available_races.is_empty() {
+                                p : "No upcoming races available for signup.";
+                            } else {
+                                ul {
+                                    @for race in available_races {
+                                        li {
+                                            a(href = uri!(match_signup_page_get(data.series, &*data.event, race.id))) : match &race.entrants {
+                                                Entrants::Two([team1, team2]) => format!("{} vs {}",
+                                                    match team1 {
+                                                        Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                        Entrant::Named { name, .. } => name.clone(),
+                                                        Entrant::Discord { .. } => "Discord User".to_string(),
+                                                    },
+                                                    match team2 {
+                                                        Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                        Entrant::Named { name, .. } => name.clone(),
+                                                        Entrant::Discord { .. } => "Discord User".to_string(),
+                                                    }
+                                                ),
+                                                _ => "TBD vs TBD".to_string(),
+                                            };
+                                        }
                                     }
                                 }
                             }
@@ -1667,6 +1667,7 @@ async fn volunteer_page(
     )
     .await?)
 }
+
 
 #[rocket::get("/event/<series>/<event>/volunteer-roles")]
 pub(crate) async fn volunteer_page_get(
