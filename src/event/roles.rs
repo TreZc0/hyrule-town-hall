@@ -291,29 +291,16 @@ impl RoleBinding {
 }
 
 impl GameRoleBinding {
+    // Note: This function is not implemented since role bindings are per-event, not per-game
+    // The game_id column doesn't exist in the role_bindings table
+    #[allow(dead_code)]
     pub(crate) async fn for_game(
-        pool: &mut Transaction<'_, Postgres>,
-        game_id: i32,
+        _pool: &mut Transaction<'_, Postgres>,
+        _game_id: i32,
     ) -> sqlx::Result<Vec<Self>> {
-        sqlx::query_as!(
-            Self,
-            r#"
-                SELECT
-                    rb.id AS "id: Id<RoleBindings>",
-                    rb.role_type_id AS "role_type_id: Id<RoleTypes>",
-                    rb.min_count,
-                    rb.max_count,
-                    rt.name AS "role_type_name",
-                    rb.discord_role_id
-                FROM role_bindings rb
-                JOIN role_types rt ON rb.role_type_id = rt.id
-                WHERE rb.game_id = $1
-                ORDER BY rt.name
-            "#,
-            game_id
-        )
-        .fetch_all(&mut **pool)
-        .await
+        // This function is not implemented since role bindings are per-event, not per-game
+        // The game_id column doesn't exist in the role_bindings table
+        Ok(Vec::new())
     }
 }
 
@@ -663,7 +650,9 @@ async fn roles_page(
 
     let content = if let Some(ref me) = me {
         if data.organizers(&mut transaction).await?.contains(me) {
-            let role_requests = RoleRequest::for_event(&mut transaction, data.series, &data.event).await?;
+            let all_role_requests = RoleRequest::for_event(&mut transaction, data.series, &data.event).await?;
+            let pending_requests = all_role_requests.iter().filter(|req| matches!(req.status, RoleRequestStatus::Pending)).collect::<Vec<_>>();
+            let approved_requests = all_role_requests.iter().filter(|req| matches!(req.status, RoleRequestStatus::Approved)).collect::<Vec<_>>();
             let all_role_types = RoleType::all(&mut transaction).await?;
             
             // Check if event uses custom role bindings
@@ -827,10 +816,27 @@ async fn roles_page(
                             }
                         }
                     }
+
+                    h4 : "Add Discord Role Override";
+                    @let mut errors = ctx.errors().collect_vec();
+                    : full_form(uri!(add_discord_override_form(data.series, &*data.event, all_role_types[0].id)), csrf.as_ref(), html! {
+                        : form_field("role_type_id", &mut errors, html! {
+                            label(for = "role_type_id") : "Role Type:";
+                            select(name = "role_type_id", id = "role_type_id") {
+                                @for role_type in all_role_types {
+                                    option(value = role_type.id.to_string()) : role_type.name;
+                                }
+                            }
+                        });
+                        : form_field("discord_role_id", &mut errors, html! {
+                            label(for = "discord_role_id") : "Discord Role ID:";
+                            input(type = "text", name = "discord_role_id", id = "discord_role_id", placeholder = "e.g. 123456789012345678", required);
+                        });
+                    }, errors, "Add Override");
                 }
 
                 h3 : "Pending Role Requests";
-                @if role_requests.is_empty() {
+                @if pending_requests.is_empty() {
                     p : "No pending role requests.";
                 } else {
                     table {
@@ -844,7 +850,7 @@ async fn roles_page(
                             }
                         }
                         tbody {
-                            @for request in &role_requests {
+                            @for request in pending_requests {
                                 tr {
                                     td {
                                         @if let Some(user) = User::from_id(&mut *transaction, request.user_id).await? {
@@ -889,7 +895,7 @@ async fn roles_page(
                 }
 
                 h3 : "Approved Role Requests";
-                @if role_requests.is_empty() {
+                @if approved_requests.is_empty() {
                     p : "No approved role requests.";
                 } else {
                     table {
@@ -899,10 +905,11 @@ async fn roles_page(
                                 th : "Role Type";
                                 th : "Notes";
                                 th : "Approved";
+                                th : "Actions";
                             }
                         }
                         tbody {
-                            @for request in &role_requests {
+                            @for request in approved_requests {
                                 tr {
                                     td {
                                         @if let Some(user) = User::from_id(&mut *transaction, request.user_id).await? {
@@ -920,6 +927,16 @@ async fn roles_page(
                                         }
                                     }
                                     td : format_datetime(request.updated_at, DateTimeFormat { long: false, running_text: false });
+                                    td {
+                                        @let (errors, revoke_button) = button_form(
+                                            uri!(revoke_role_request(data.series, &*data.event)),
+                                            csrf.as_ref(),
+                                            Vec::new(),
+                                            "Revoke"
+                                        );
+                                        : errors;
+                                        div(class = "button-row") : revoke_button;
+                                    }
                                 }
                             }
                         }

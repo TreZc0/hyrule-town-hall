@@ -1,26 +1,25 @@
-use {
-    rocket::{
-        form::Form,
-        http::Status,
-        response::Redirect,
-        State,
-    },
-    rocket_csrf::CsrfToken,
-    rocket_util::{
-        CsrfForm,
-        Origin,
-        html,
-    },
-    crate::http::page,
-    sqlx::PgPool,
-    crate::{
-        game::{Game, GameError},
-        prelude::*,
-        user::User,
-        event::{self, roles::GameRoleBinding},
-        series::Series,
-        id::{RoleTypes, RoleBindings},
-    },
+use rocket::{
+    form::Form,
+    http::Status,
+    response::Redirect,
+    State,
+};
+use rocket_util::Origin;
+use rocket::response::content::RawHtml;
+use rocket_csrf::CsrfToken;
+use rocket_util::{
+    CsrfForm,
+    html,
+};
+use crate::http::page;
+use sqlx::{Postgres, Transaction};
+use crate::{
+    game::{Game, GameError},
+    prelude::*,
+    user::User,
+    event::{self},
+    series::Series,
+    id::{RoleTypes, RoleBindings},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -584,7 +583,7 @@ pub(crate) async fn game_management(
     pool: &State<PgPool>,
     me: Option<User>,
     uri: Origin<'_>,
-    csrf: Option<CsrfToken>,
+    _csrf: Option<CsrfToken>,
     game_name: &str,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let me = me.ok_or(Error::Unauthorized)?;
@@ -607,8 +606,7 @@ pub(crate) async fn game_management(
     }
     
     let series = game.series(&mut transaction).await.map_err(Error::from)?;
-    let role_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
-    let role_types = get_role_types(&mut transaction).await.map_err(Error::from)?;
+    let _role_types = get_role_types(&mut transaction).await.map_err(Error::from)?;
     transaction.commit().await.map_err(Error::from)?;
 
     // Now, for each series, fetch events using the pool
@@ -656,6 +654,8 @@ pub(crate) async fn game_management(
                             @for (event_name, display_name) in series_events {
                                 li {
                                     a(href = uri!(event::info(*series_item, event_name))) : display_name;
+                                    : " - ";
+                                    a(href = uri!(event::roles::get(*series_item, event_name))) : "Manage Roles";
                                 }
                             }
                         }
@@ -663,72 +663,8 @@ pub(crate) async fn game_management(
                 }
             }
             
-            h2 : "Role Bindings";
-            @if role_bindings.is_empty() {
-                p : "No role bindings for this game.";
-            } else {
-                table {
-                    thead {
-                        tr {
-                            th : "Role Type";
-                            th : "Min Count";
-                            th : "Max Count";
-                            th : "Discord Role";
-                            th : "Actions";
-                        }
-                    }
-                    tbody {
-                        @for binding in &role_bindings {
-                            tr {
-                                td : &binding.role_type_name;
-                                td : binding.min_count;
-                                td : binding.max_count;
-                                td {
-                                    @if let Some(discord_role_id) = binding.discord_role_id {
-                                        : format!("{}", discord_role_id);
-                                    } else {
-                                        : "None";
-                                    }
-                                }
-                                td {
-                                    form(method = "post", action = uri!(remove_role_binding(&game_name_clone, binding.id))) {
-                                        : csrf;
-                                        input(type = "submit", value = "Remove", class = "button");
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            
-            h3 : "Add Role Binding";
-            form(method = "post", action = uri!(add_role_binding(&game_name_clone))) {
-                : csrf;
-                div {
-                    label(for = "role_type_id") : "Role Type:";
-                    select(id = "role_type_id", name = "role_type_id", required) {
-                        @for role_type in &role_types {
-                            option(value = role_type.id.to_string()) : &role_type.name;
-                        }
-                    }
-                }
-                div {
-                    label(for = "min_count") : "Min Count:";
-                    input(type = "number", id = "min_count", name = "min_count", value = "1", min = "1", required);
-                }
-                div {
-                    label(for = "max_count") : "Max Count:";
-                    input(type = "number", id = "max_count", name = "max_count", value = "1", min = "1", required);
-                }
-                div {
-                    label(for = "discord_role_id") : "Discord Role ID (optional):";
-                    input(type = "text", id = "discord_role_id", name = "discord_role_id", placeholder = "e.g. 123456789012345678");
-                }
-                div {
-                    input(type = "submit", value = "Add Role Binding");
-                }
-            }
+            h2 : "Role Management";
+            p : "Role bindings are managed per event. Use the links above to manage roles for specific events.";
             
             p {
                 a(href = uri!(game_management_overview)) : "← Back to Game Management";
@@ -751,7 +687,9 @@ pub(crate) struct AddRoleBindingForm {
     #[field(default = String::new())]
     csrf: String,
     role_type_id: String,
+    #[allow(dead_code)]
     min_count: i32,
+    #[allow(dead_code)]
     max_count: i32,
     #[field(default = String::new())]
     discord_role_id: String,
@@ -763,6 +701,9 @@ pub(crate) struct RemoveRoleBindingForm {
     csrf: String,
 }
 
+// Note: Role bindings are managed per event, not per game
+// These functions are kept for potential future use but are not currently used
+#[allow(dead_code)]
 #[rocket::post("/game/<game_name>/role-bindings", data = "<form>")]
 pub(crate) async fn add_role_binding(
     pool: &State<PgPool>,
@@ -792,7 +733,7 @@ pub(crate) async fn add_role_binding(
     }
     
     // Parse role type ID
-    let role_type_id = match form.role_type_id.parse::<i64>() {
+    let _role_type_id = match form.role_type_id.parse::<i64>() {
         Ok(id) => Id::<RoleTypes>::from(id),
         Err(_) => {
             return Ok(Redirect::to(uri!(game_management(game_name))));
@@ -800,7 +741,7 @@ pub(crate) async fn add_role_binding(
     };
     
     // Parse discord_role_id (optional)
-    let discord_role_id = if form.discord_role_id.trim().is_empty() {
+    let _discord_role_id = if form.discord_role_id.trim().is_empty() {
         None
     } else {
         match form.discord_role_id.trim().parse::<i64>() {
@@ -810,35 +751,38 @@ pub(crate) async fn add_role_binding(
     };
     
     // Check if role binding already exists
-    let existing_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
-    if existing_bindings.iter().any(|b| b.role_type_id == role_type_id) {
-        return Ok(Redirect::to(uri!(game_management(game_name))));
-    }
+    // Note: This function is not implemented since role bindings are per-event, not per-game
+    // let existing_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
+    // if existing_bindings.iter().any(|b| b.role_type_id == role_type_id) {
+    //     return Ok(Redirect::to(uri!(game_management(game_name))));
+    // }
     
     // Add role binding
-    sqlx::query!(
-        r#"INSERT INTO role_bindings (game_id, role_type_id, min_count, max_count, discord_role_id) VALUES ($1, $2, $3, $4, $5)"#,
-        game.id,
-        role_type_id as _,
-        form.min_count,
-        form.max_count,
-        discord_role_id
-    )
-    .execute(&mut *transaction)
-    .await.map_err(Error::from)?;
+    // Note: This is commented out since role bindings are per-event, not per-game
+    // sqlx::query!(
+    //     r#"INSERT INTO role_bindings (game_id, role_type_id, min_count, max_count, discord_role_id) VALUES ($1, $2, $3, $4, $5)"#,
+    //     game.id,
+    //     role_type_id as _,
+    //     form.min_count,
+    //     form.max_count,
+    //     discord_role_id
+    // )
+    // .execute(&mut *transaction)
+    // .await.map_err(Error::from)?;
     
     transaction.commit().await.map_err(Error::from)?;
     Ok(Redirect::to(uri!(game_management(game_name))))
 }
 
-#[rocket::post("/game/<game_name>/role-bindings/<binding_id>/remove")]
+#[allow(dead_code)]
+#[rocket::post("/game/<game_name>/role-bindings/<_binding_id>/remove")]
 pub(crate) async fn remove_role_binding(
     pool: &State<PgPool>,
     me: Option<User>,
     _uri: Origin<'_>,
     _csrf: Option<CsrfToken>,
     game_name: &str,
-    binding_id: Id<RoleBindings>,
+    _binding_id: Id<RoleBindings>,
 ) -> Result<Redirect, StatusOrError<Error>> {
     let me = me.ok_or(Error::Unauthorized)?;
     
@@ -860,13 +804,14 @@ pub(crate) async fn remove_role_binding(
     }
     
     // Remove role binding
-    sqlx::query!(
-        r#"DELETE FROM role_bindings WHERE id = $1 AND game_id = $2"#,
-        binding_id as _,
-        game.id
-    )
-    .execute(&mut *transaction)
-    .await.map_err(Error::from)?;
+    // Note: This is commented out since role bindings are per-event, not per-game
+    // sqlx::query!(
+    //     r#"DELETE FROM role_bindings WHERE id = $1 AND game_id = $2"#,
+    //     binding_id as _,
+    //     game.id
+    // )
+    // .execute(&mut *transaction)
+    // .await.map_err(Error::from)?;
     
     transaction.commit().await.map_err(Error::from)?;
     Ok(Redirect::to(uri!(game_management(game_name))))
