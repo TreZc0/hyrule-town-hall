@@ -457,11 +457,27 @@ pub(crate) async fn add_game_admin(
             return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
         }
         eprintln!("DEBUG: Adding user as admin");
-        sqlx::query!("INSERT INTO game_admins (game_id, admin_id) VALUES ($1, $2)", game.id, i64::from(admin_id) as i32)
+        eprintln!("DEBUG: game.id = {}, admin_id = {}", game.id, admin_id);
+        eprintln!("DEBUG: admin_id as i32 = {}", i64::from(admin_id) as i32);
+        let result = sqlx::query!("INSERT INTO game_admins (game_id, admin_id) VALUES ($1, $2)", game.id, i64::from(admin_id) as i32)
             .execute(&mut *transaction)
-            .await.map_err(Error::from)?;
+            .await;
+        match result {
+            Ok(_) => eprintln!("DEBUG: SQL INSERT successful"),
+            Err(e) => {
+                eprintln!("DEBUG: SQL INSERT failed: {:?}", e);
+                return Err(StatusOrError::Err(Error::from(e)));
+            }
+        }
         eprintln!("DEBUG: Committing transaction");
-        transaction.commit().await.map_err(Error::from)?;
+        let commit_result = transaction.commit().await;
+        match commit_result {
+            Ok(_) => eprintln!("DEBUG: Transaction commit successful"),
+            Err(e) => {
+                eprintln!("DEBUG: Transaction commit failed: {:?}", e);
+                return Err(StatusOrError::Err(Error::from(e)));
+            }
+        }
         eprintln!("DEBUG: Successfully added admin");
     }
     eprintln!("DEBUG: Returning redirect to manage_game_admins");
