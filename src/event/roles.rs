@@ -903,47 +903,59 @@ async fn roles_page(
                 @if approved_requests.is_empty() {
                     p : "No approved role requests.";
                 } else {
-                    table {
-                        thead {
-                            tr {
-                                th : "User";
-                                th : "Role Type";
-                                th : "Notes";
-                                th : "Approved";
-                                th : "Actions";
-                            }
+                    @let grouped = {
+                        let mut map = std::collections::BTreeMap::new();
+                        for request in &approved_requests {
+                            map.entry(&request.role_type_name).or_insert_with(Vec::new).push(request);
                         }
-                        tbody {
-                            @for request in approved_requests {
-                                tr {
-                                    td {
-                                        @if let Some(user) = User::from_id(&mut *transaction, request.user_id).await? {
-                                            : user.display_name();
-                                        } else {
-                                            : "Unknown User";
-                                        }
+                        map
+                    };
+                    @for (role_type_name, requests) in grouped.iter() {
+                        details {
+                            summary {
+                                : format!("{} ({})", role_type_name, requests.len());
+                            }
+                            table {
+                                thead {
+                                    tr {
+                                        th : "User";
+                                        th : "Notes";
+                                        th : "Approved";
+                                        th : "Actions";
                                     }
-                                    td : request.role_type_name;
-                                    td {
-                                        @if let Some(ref notes) = request.notes {
-                                            : notes;
-                                        } else {
-                                            : "None";
+                                }
+                                tbody {
+                                    @for request in requests.iter().sorted_by_key(|r| r.updated_at) {
+                                        tr {
+                                            td {
+                                                @if let Some(user) = User::from_id(&mut *transaction, request.user_id).await? {
+                                                    : user.display_name();
+                                                } else {
+                                                    : "Unknown User";
+                                                }
+                                            }
+                                            td {
+                                                @if let Some(ref notes) = request.notes {
+                                                    : notes;
+                                                } else {
+                                                    : "None";
+                                                }
+                                            }
+                                            td : format_datetime(request.updated_at, DateTimeFormat { long: false, running_text: false });
+                                            td {
+                                                @let (errors, revoke_button) = button_form_ext(
+                                                    uri!(revoke_role_request(data.series, &*data.event)),
+                                                    csrf.as_ref(),
+                                                    Vec::new(),
+                                                    html! {
+                                                        input(type = "hidden", name = "request_id", value = request.id.to_string());
+                                                    },
+                                                    "Revoke"
+                                                );
+                                                : errors;
+                                                div(class = "button-row") : revoke_button;
+                                            }
                                         }
-                                    }
-                                    td : format_datetime(request.updated_at, DateTimeFormat { long: false, running_text: false });
-                                    td {
-                                        @let (errors, revoke_button) = button_form_ext(
-                                            uri!(revoke_role_request(data.series, &*data.event)),
-                                            csrf.as_ref(),
-                                            Vec::new(),
-                                            html! {
-                                                input(type = "hidden", name = "request_id", value = request.id.to_string());
-                                            },
-                                            "Revoke"
-                                        );
-                                        : errors;
-                                        div(class = "button-row") : revoke_button;
                                     }
                                 }
                             }
