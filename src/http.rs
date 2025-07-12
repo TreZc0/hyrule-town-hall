@@ -636,6 +636,8 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         admin::add_game_form,
         admin::add_game_post,
         admin::manage_game_admins,
+        admin::add_game_admin,
+        admin::remove_game_admin,
         admin::manage_game_series,
         admin::game_management_overview,
         admin::game_management,
