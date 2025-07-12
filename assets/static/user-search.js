@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', function() {
-    const input = document.getElementById('restreamer');
+    const input = document.getElementById('restreamer') || document.getElementById('admin');
     const suggestions = document.getElementById('user-suggestions');
     let currentFocus = -1;
     

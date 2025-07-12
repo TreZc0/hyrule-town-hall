@@ -17,7 +17,7 @@ use crate::{
     game::{Game, GameError},
     prelude::*,
     user::User,
-    event::{self},
+    event::{self, roles::{GameRoleBinding, RoleType}},
     series::Series,
     id::{RoleTypes, RoleBindings},
 };
@@ -359,32 +359,38 @@ pub(crate) struct RemoveAdminForm {
 }
 
 #[allow(dead_code)]
-#[rocket::post("/admin/game/<game_name>/admins/<admin_id>/remove")]
+#[rocket::post("/admin/game/<game_name>/admins/<admin_id>/remove", data = "<form>")]
 pub(crate) async fn remove_game_admin(
     pool: &State<PgPool>,
     me: Option<User>,
     _uri: Origin<'_>,
-    _csrf: Option<CsrfToken>,
+    csrf: Option<CsrfToken>,
     game_name: &str,
     admin_id: Id<Users>,
+    form: Form<Contextual<'_, RemoveAdminForm>>,
 ) -> Result<Redirect, StatusOrError<Error>> {
     let me = me.ok_or(Error::Unauthorized)?;
     if !is_trez(&me) {
         return Err(Error::Unauthorized.into());
     }
-    let mut transaction = pool.begin().await.map_err(Error::from)?;
-    let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
-        .ok_or(StatusOrError::Status(Status::NotFound))?;
-    // Only remove if the user is currently an admin
-    let admins = game.admins(&mut transaction).await.map_err(Error::from)?;
-    if !admins.iter().any(|u| u.id == admin_id) {
-        return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    
+    if form.value.is_some() {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        let game = Game::from_name(&mut transaction, game_name)
+            .await.map_err(Error::from)?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+        // Only remove if the user is currently an admin
+        let admins = game.admins(&mut transaction).await.map_err(Error::from)?;
+        if !admins.iter().any(|u| u.id == admin_id) {
+            return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
+        }
+        sqlx::query!("DELETE FROM game_admins WHERE game_id = $1 AND admin_id = $2", game.id, i64::from(admin_id) as i32)
+            .execute(&mut *transaction)
+            .await.map_err(Error::from)?;
+        transaction.commit().await.map_err(Error::from)?;
     }
-    sqlx::query!("DELETE FROM game_admins WHERE game_id = $1 AND admin_id = $2", game.id, i64::from(admin_id) as i32)
-        .execute(&mut *transaction)
-        .await.map_err(Error::from)?;
-    transaction.commit().await.map_err(Error::from)?;
     Ok(Redirect::to(uri!(manage_game_admins(game_name))))
 }
 
@@ -394,41 +400,46 @@ pub(crate) async fn add_game_admin(
     pool: &State<PgPool>,
     me: Option<User>,
     _uri: Origin<'_>,
-    _csrf: Option<CsrfToken>,
+    csrf: Option<CsrfToken>,
     game_name: &str,
-    form: Form<AddAdminForm>,
+    form: Form<Contextual<'_, AddAdminForm>>,
 ) -> Result<Redirect, StatusOrError<Error>> {
     let me = me.ok_or(Error::Unauthorized)?;
     if !is_trez(&me) {
         return Err(Error::Unauthorized.into());
     }
-    let mut transaction = pool.begin().await.map_err(Error::from)?;
-    let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
-        .ok_or(StatusOrError::Status(Status::NotFound))?;
-    // Parse user ID from form
-    let admin_id = match form.admin.parse::<u64>() {
-        Ok(id) => Id::<Users>::from(id),
-        Err(_) => {
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    
+    if let Some(ref value) = form.value {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        let game = Game::from_name(&mut transaction, game_name)
+            .await.map_err(Error::from)?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+        // Parse user ID from form
+        let admin_id = match value.admin.parse::<u64>() {
+            Ok(id) => Id::<Users>::from(id),
+            Err(_) => {
+                return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
+            }
+        };
+        // Check if user exists
+        let _user = match User::from_id(&mut *transaction, admin_id).await.map_err(Error::from)? {
+            Some(u) => u,
+            None => {
+                return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
+            }
+        };
+        // Check if already admin
+        let admins = game.admins(&mut transaction).await.map_err(Error::from)?;
+        if admins.iter().any(|u| u.id == admin_id) {
             return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
         }
-    };
-    // Check if user exists
-    let _user = match User::from_id(&mut *transaction, admin_id).await.map_err(Error::from)? {
-        Some(u) => u,
-        None => {
-            return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
-        }
-    };
-    // Check if already admin
-    let admins = game.admins(&mut transaction).await.map_err(Error::from)?;
-    if admins.iter().any(|u| u.id == admin_id) {
-        return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
+        sqlx::query!("INSERT INTO game_admins (game_id, admin_id) VALUES ($1, $2)", game.id, i64::from(admin_id) as i32)
+            .execute(&mut *transaction)
+            .await.map_err(Error::from)?;
+        transaction.commit().await.map_err(Error::from)?;
     }
-    sqlx::query!("INSERT INTO game_admins (game_id, admin_id) VALUES ($1, $2)", game.id, i64::from(admin_id) as i32)
-        .execute(&mut *transaction)
-        .await.map_err(Error::from)?;
-    transaction.commit().await.map_err(Error::from)?;
     Ok(Redirect::to(uri!(manage_game_admins(game_name))))
 }
 
@@ -583,7 +594,7 @@ pub(crate) async fn game_management(
     pool: &State<PgPool>,
     me: Option<User>,
     uri: Origin<'_>,
-    _csrf: Option<CsrfToken>,
+    csrf: Option<CsrfToken>,
     game_name: &str,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let me = me.ok_or(Error::Unauthorized)?;
@@ -631,15 +642,6 @@ pub(crate) async fn game_management(
         }
     };
 
-    
-    match transaction.commit().await {
-        Ok(_) => {},
-        Err(e) => {
-            eprintln!("Failed to commit transaction: {:?}", e);
-            return Err(StatusOrError::Err(Error::from(e)));
-        }
-    }
-
     // Now, for each series, fetch events using the pool
     let mut series_with_events = Vec::new();
     for series_item in &series {
@@ -660,6 +662,18 @@ pub(crate) async fn game_management(
 
     let game_name_clone = game.name.clone();
     let game_display_name = game.display_name.clone();
+
+    // Get game role bindings and role types
+    let game_role_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
+    let all_role_types = RoleType::all(&mut transaction).await.map_err(Error::from)?;
+
+    match transaction.commit().await {
+        Ok(_) => {},
+        Err(e) => {
+            eprintln!("Failed to commit transaction: {:?}", e);
+            return Err(StatusOrError::Err(Error::from(e)));
+        }
+    }
 
     let content = html! {
         article {
@@ -703,8 +717,75 @@ pub(crate) async fn game_management(
                 }
             }
             
-            h2 : "Role Management";
-            p : "Role bindings are managed per event. Use the links above to manage roles for specific events.";
+            h2 : "Game Role Bindings";
+            p : "Game-level role bindings apply to all events in this game. Event-specific role bindings can override these.";
+            
+            @if game_role_bindings.is_empty() {
+                p : "No game-level role bindings configured yet.";
+            } else {
+                table {
+                    thead {
+                        tr {
+                            th : "Role Type";
+                            th : "Min Count";
+                            th : "Max Count";
+                            th : "Discord Role";
+                            th : "Actions";
+                        }
+                    }
+                    tbody {
+                        @for binding in &game_role_bindings {
+                            tr {
+                                td : binding.role_type_name;
+                                td : binding.min_count;
+                                td : binding.max_count;
+                                td {
+                                    @if let Some(discord_role_id) = binding.discord_role_id {
+                                        : format!("{}", discord_role_id);
+                                    } else {
+                                        : "None";
+                                    }
+                                }
+                                td {
+                                    @let (errors, delete_button) = button_form(
+                                        uri!(remove_game_role_binding(&game_name_clone, binding.id)),
+                                        csrf.as_ref(),
+                                        Vec::new(),
+                                        "Delete"
+                                    );
+                                    : errors;
+                                    div(class = "button-row") : delete_button;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            h3 : "Add Game Role Binding";
+            @let mut errors = Vec::new();
+            : full_form(uri!(add_game_role_binding(&game_name_clone)), csrf.as_ref(), html! {
+                : form_field("role_type_id", &mut errors, html! {
+                    label(for = "role_type_id") : "Role Type:";
+                    select(name = "role_type_id", id = "role_type_id") {
+                        @for role_type in all_role_types {
+                            option(value = role_type.id.to_string()) : role_type.name;
+                        }
+                    }
+                });
+                : form_field("min_count", &mut errors, html! {
+                    label(for = "min_count") : "Minimum Count:";
+                    input(type = "number", name = "min_count", id = "min_count", value = "1", min = "1");
+                });
+                : form_field("max_count", &mut errors, html! {
+                    label(for = "max_count") : "Maximum Count:";
+                    input(type = "number", name = "max_count", id = "max_count", value = "1", min = "1");
+                });
+                : form_field("discord_role_id", &mut errors, html! {
+                    label(for = "discord_role_id") : "Discord Role ID (optional):";
+                    input(type = "text", name = "discord_role_id", id = "discord_role_id", placeholder = "e.g. 123456789012345678");
+                });
+            }, errors, "Add Game Role Binding");
             
             p {
                 a(href = uri!(game_management_overview)) : "← Back to Game Management";
@@ -730,13 +811,11 @@ pub(crate) async fn game_management(
 }
 
 #[derive(FromForm, CsrfForm)]
-pub(crate) struct AddRoleBindingForm {
+pub(crate) struct AddGameRoleBindingForm {
     #[field(default = String::new())]
     csrf: String,
-    role_type_id: String,
-    #[allow(dead_code)]
+    role_type_id: Id<RoleTypes>,
     min_count: i32,
-    #[allow(dead_code)]
     max_count: i32,
     #[field(default = String::new())]
     discord_role_id: String,
@@ -748,119 +827,104 @@ pub(crate) struct RemoveRoleBindingForm {
     csrf: String,
 }
 
-// Note: Role bindings are managed per event, not per game
-// These functions are kept for potential future use but are not currently used
-#[allow(dead_code)]
 #[rocket::post("/game/<game_name>/role-bindings", data = "<form>")]
-pub(crate) async fn add_role_binding(
+pub(crate) async fn add_game_role_binding(
     pool: &State<PgPool>,
     me: Option<User>,
     _uri: Origin<'_>,
-    _csrf: Option<CsrfToken>,
+    csrf: Option<CsrfToken>,
     game_name: &str,
-    form: Form<AddRoleBindingForm>,
+    form: Form<Contextual<'_, AddGameRoleBindingForm>>,
 ) -> Result<Redirect, StatusOrError<Error>> {
     let me = me.ok_or(Error::Unauthorized)?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
     
-    let mut transaction = pool.begin().await.map_err(Error::from)?;
-    let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
-        .ok_or(StatusOrError::Status(Status::NotFound))?;
-    
-    // Check if user is trez or a game admin
-    let is_trez_user = is_trez(&me);
-    let is_game_admin = if !is_trez_user {
-        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
-    } else {
-        false
-    };
-    
-    if !is_trez_user && !is_game_admin {
-        return Err(StatusOrError::Err(Error::Unauthorized));
-    }
-    
-    // Parse role type ID
-    let _role_type_id = match form.role_type_id.parse::<i64>() {
-        Ok(id) => Id::<RoleTypes>::from(id),
-        Err(_) => {
+    if let Some(ref value) = form.value {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        let game = Game::from_name(&mut transaction, game_name)
+            .await.map_err(Error::from)?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+        
+        // Check if user is trez or a game admin
+        let is_trez_user = is_trez(&me);
+        let is_game_admin = if !is_trez_user {
+            is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
+        } else {
+            false
+        };
+        
+        if !is_trez_user && !is_game_admin {
+            return Err(StatusOrError::Err(Error::Unauthorized));
+        }
+        
+        // Parse discord_role_id (optional)
+        let discord_role_id = if value.discord_role_id.trim().is_empty() {
+            None
+        } else {
+            match value.discord_role_id.trim().parse::<i64>() {
+                Ok(id) => Some(id),
+                Err(_) => None,
+            }
+        };
+        
+        // Check if role binding already exists
+        if GameRoleBinding::exists_for_role_type(&mut transaction, game.id, value.role_type_id).await.map_err(Error::from)? {
             return Ok(Redirect::to(uri!(game_management(game_name))));
         }
-    };
-    
-    // Parse discord_role_id (optional)
-    let _discord_role_id = if form.discord_role_id.trim().is_empty() {
-        None
-    } else {
-        match form.discord_role_id.trim().parse::<i64>() {
-            Ok(id) => Some(id),
-            Err(_) => None,
-        }
-    };
-    
-    // Check if role binding already exists
-    // Note: This function is not implemented since role bindings are per-event, not per-game
-    // let existing_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
-    // if existing_bindings.iter().any(|b| b.role_type_id == role_type_id) {
-    //     return Ok(Redirect::to(uri!(game_management(game_name))));
-    // }
-    
-    // Add role binding
-    // Note: This is commented out since role bindings are per-event, not per-game
-    // sqlx::query!(
-    //     r#"INSERT INTO role_bindings (game_id, role_type_id, min_count, max_count, discord_role_id) VALUES ($1, $2, $3, $4, $5)"#,
-    //     game.id,
-    //     role_type_id as _,
-    //     form.min_count,
-    //     form.max_count,
-    //     discord_role_id
-    // )
-    // .execute(&mut *transaction)
-    // .await.map_err(Error::from)?;
-    
-    transaction.commit().await.map_err(Error::from)?;
+        
+        // Add role binding
+        GameRoleBinding::create(
+            &mut transaction,
+            game.id,
+            value.role_type_id,
+            value.min_count,
+            value.max_count,
+            discord_role_id,
+        ).await.map_err(Error::from)?;
+        
+        transaction.commit().await.map_err(Error::from)?;
+    }
     Ok(Redirect::to(uri!(game_management(game_name))))
 }
 
-#[allow(dead_code)]
-#[rocket::post("/game/<game_name>/role-bindings/<_binding_id>/remove")]
-pub(crate) async fn remove_role_binding(
+#[rocket::post("/game/<game_name>/role-bindings/<binding_id>/remove", data = "<form>")]
+pub(crate) async fn remove_game_role_binding(
     pool: &State<PgPool>,
     me: Option<User>,
     _uri: Origin<'_>,
-    _csrf: Option<CsrfToken>,
+    csrf: Option<CsrfToken>,
     game_name: &str,
-    _binding_id: Id<RoleBindings>,
+    binding_id: Id<RoleBindings>,
+    form: Form<Contextual<'_, RemoveRoleBindingForm>>,
 ) -> Result<Redirect, StatusOrError<Error>> {
     let me = me.ok_or(Error::Unauthorized)?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
     
-    let mut transaction = pool.begin().await.map_err(Error::from)?;
-    let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
-        .ok_or(StatusOrError::Status(Status::NotFound))?;
-    
-    // Check if user is trez or a game admin
-    let is_trez_user = is_trez(&me);
-    let is_game_admin = if !is_trez_user {
-        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
-    } else {
-        false
-    };
-    
-    if !is_trez_user && !is_game_admin {
-        return Err(StatusOrError::Err(Error::Unauthorized));
+    if form.value.is_some() {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        let game = Game::from_name(&mut transaction, game_name)
+            .await.map_err(Error::from)?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+        
+        // Check if user is trez or a game admin
+        let is_trez_user = is_trez(&me);
+        let is_game_admin = if !is_trez_user {
+            is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
+        } else {
+            false
+        };
+        
+        if !is_trez_user && !is_game_admin {
+            return Err(StatusOrError::Err(Error::Unauthorized));
+        }
+        
+        // Delete the role binding
+        GameRoleBinding::delete(&mut transaction, binding_id).await.map_err(Error::from)?;
+        
+        transaction.commit().await.map_err(Error::from)?;
     }
-    
-    // Remove role binding
-    // Note: This is commented out since role bindings are per-event, not per-game
-    // sqlx::query!(
-    //     r#"DELETE FROM role_bindings WHERE id = $1 AND game_id = $2"#,
-    //     binding_id as _,
-    //     game.id
-    // )
-    // .execute(&mut *transaction)
-    // .await.map_err(Error::from)?;
-    
-    transaction.commit().await.map_err(Error::from)?;
     Ok(Redirect::to(uri!(game_management(game_name))))
 }
 

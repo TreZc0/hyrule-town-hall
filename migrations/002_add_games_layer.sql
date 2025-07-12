@@ -65,21 +65,4 @@ INSERT INTO games (name, display_name, description) VALUES
 
 -- Insert initial game_series mappings
 INSERT INTO game_series (game_id, series) VALUES
-(1, 's'),      -- Standard series for OOTR
-(1, 'league'), -- League series for OOTR
-(1, 'rsl'),    -- RSL series for OOTR
-(1, 'mw'),     -- Multiworld series for OOTR
-(1, 'mp'),     -- Mixed Pools series for OOTR
-(1, 'br'),     -- Battle Royale series for OOTR
-(1, 'fr'),     -- French Tournament series for OOTR
-(1, 'tfb'),    -- Triforce Blitz series for OOTR
-(1, 'ohko'),   -- One Hit KO series for OOTR
-(1, 'mq'),     -- MQ series for OOTR
-(1, 'scrubs'), -- Scrubs series for OOTR
-(1, 'sgl'),    -- SpeedGaming series for OOTR
-(1, 'soh'),    -- Songs of Hope series for OOTR
-(1, 'wttbb'),  -- We Try To Be Better series for OOTR
-(1, 'coop'),   -- CoOp series for OOTR
-(1, 'pic'),    -- Pictionary series for OOTR
-(1, 'ndos'),   -- Nine Days of Saws series for OOTR
-(1, 'xkeys');  -- Crosskeys series for OOTR
+(2, 'xkeys');  -- Crosskeys series for OOTR

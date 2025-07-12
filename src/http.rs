@@ -639,8 +639,8 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         admin::manage_game_series,
         admin::game_management_overview,
         admin::game_management,
-        admin::add_role_binding,
-        admin::remove_role_binding,
+        admin::add_game_role_binding,
+        admin::remove_game_role_binding,
     ])
     .mount("/static", FileServer::without_index("assets/static"))
     .register("/", rocket::catchers![

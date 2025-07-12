@@ -104,8 +104,9 @@ pub(crate) struct RoleType {
 #[allow(unused)]
 pub(crate) struct RoleBinding {
     pub(crate) id: Id<RoleBindings>,
-    pub(crate) series: Series,
-    pub(crate) event: String,
+    pub(crate) series: Option<Series>,
+    pub(crate) event: Option<String>,
+    pub(crate) game_id: Option<i32>,
     pub(crate) role_type_id: Id<RoleTypes>,
     pub(crate) min_count: i32,
     pub(crate) max_count: i32,
@@ -220,6 +221,7 @@ impl RoleBinding {
                     rb.id AS "id: Id<RoleBindings>",
                     rb.series AS "series: Series",
                     rb.event,
+                    rb.game_id,
                     rb.role_type_id AS "role_type_id: Id<RoleTypes>",
                     rb.min_count,
                     rb.max_count,
@@ -247,8 +249,8 @@ impl RoleBinding {
         discord_role_id: Option<i64>,
     ) -> sqlx::Result<Id<RoleBindings>> {
         let id = sqlx::query_scalar!(
-            r#"INSERT INTO role_bindings (series, event, role_type_id, min_count, max_count, discord_role_id) 
-               VALUES ($1, $2, $3, $4, $5, $6) RETURNING id"#,
+            r#"INSERT INTO role_bindings (series, event, role_type_id, min_count, max_count, discord_role_id, game_id) 
+               VALUES ($1, $2, $3, $4, $5, $6, NULL) RETURNING id"#,
             series as _,
             event,
             role_type_id as _,
@@ -279,7 +281,7 @@ impl RoleBinding {
     ) -> sqlx::Result<bool> {
         Ok(sqlx::query_scalar!(
             r#"SELECT EXISTS (SELECT 1 FROM role_bindings
-                   WHERE series = $1 AND event = $2 AND role_type_id = $3)"#,
+                   WHERE series = $1 AND event = $2 AND role_type_id = $3 AND game_id IS NULL)"#,
             series as _,
             event,
             role_type_id as _
@@ -291,16 +293,77 @@ impl RoleBinding {
 }
 
 impl GameRoleBinding {
-    // Note: This function is not implemented since role bindings are per-event, not per-game
-    // The game_id column doesn't exist in the role_bindings table
-    #[allow(dead_code)]
     pub(crate) async fn for_game(
-        _pool: &mut Transaction<'_, Postgres>,
-        _game_id: i32,
+        pool: &mut Transaction<'_, Postgres>,
+        game_id: i32,
     ) -> sqlx::Result<Vec<Self>> {
-        // This function is not implemented since role bindings are per-event, not per-game
-        // The game_id column doesn't exist in the role_bindings table
-        Ok(Vec::new())
+        sqlx::query_as!(
+            Self,
+            r#"
+                SELECT
+                    rb.id AS "id: Id<RoleBindings>",
+                    rb.role_type_id AS "role_type_id: Id<RoleTypes>",
+                    rb.min_count,
+                    rb.max_count,
+                    rt.name AS "role_type_name",
+                    rb.discord_role_id
+                FROM role_bindings rb
+                JOIN role_types rt ON rb.role_type_id = rt.id
+                WHERE rb.game_id = $1 AND rb.series IS NULL AND rb.event IS NULL
+                ORDER BY rt.name
+            "#,
+            game_id
+        )
+        .fetch_all(&mut **pool)
+        .await
+    }
+
+    pub(crate) async fn create(
+        pool: &mut Transaction<'_, Postgres>,
+        game_id: i32,
+        role_type_id: Id<RoleTypes>,
+        min_count: i32,
+        max_count: i32,
+        discord_role_id: Option<i64>,
+    ) -> sqlx::Result<Id<RoleBindings>> {
+        let id = sqlx::query_scalar!(
+            r#"INSERT INTO role_bindings (game_id, role_type_id, min_count, max_count, discord_role_id, series, event) 
+               VALUES ($1, $2, $3, $4, $5, NULL, NULL) RETURNING id"#,
+            game_id,
+            role_type_id as _,
+            min_count,
+            max_count,
+            discord_role_id
+        )
+        .fetch_one(&mut **pool)
+        .await?;
+        Ok(Id::from(id as i64))
+    }
+
+    pub(crate) async fn delete(
+        pool: &mut Transaction<'_, Postgres>,
+        id: Id<RoleBindings>,
+    ) -> sqlx::Result<()> {
+        sqlx::query!("DELETE FROM role_bindings WHERE id = $1", id as _)
+            .execute(&mut **pool)
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn exists_for_role_type(
+        pool: &mut Transaction<'_, Postgres>,
+        game_id: i32,
+        role_type_id: Id<RoleTypes>,
+    ) -> sqlx::Result<bool> {
+        Ok(sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM role_bindings
+                   WHERE game_id = $1 AND role_type_id = $2 AND series IS NULL AND event IS NULL)"#,
+            game_id,
+            role_type_id as _
+        )
+        .fetch_one(&mut **pool)
+        .await?
+        .unwrap_or(false))
     }
 }
 
@@ -1241,7 +1304,7 @@ pub(crate) async fn approve_role_request(
             // Get the role binding to check for Discord role ID
             let role_binding = sqlx::query_as!(
                 RoleBinding,
-                r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event, rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count, rb.max_count, rt.name as role_type_name, rb.discord_role_id FROM role_bindings rb JOIN role_types rt ON rb.role_type_id = rt.id WHERE rb.id = $1"#,
+                r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event, rb.game_id, rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count, rb.max_count, rt.name as role_type_name, rb.discord_role_id FROM role_bindings rb JOIN role_types rt ON rb.role_type_id = rt.id WHERE rb.id = $1"#,
                 i64::from(role_request.role_binding_id) as i32
             )
             .fetch_optional(&mut *transaction)
@@ -1422,7 +1485,7 @@ pub(crate) async fn apply_for_role(
             // Get the role binding details for the notification
             let role_binding = sqlx::query_as!(
                 RoleBinding,
-                r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event as "event!", 
+                r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event as "event!", rb.game_id,
                           rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count as "min_count!", 
                           rb.max_count as "max_count!", rt.name as "role_type_name!", rb.discord_role_id
                        FROM role_bindings rb
