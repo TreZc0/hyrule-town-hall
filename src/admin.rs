@@ -434,7 +434,7 @@ pub(crate) async fn add_game_admin(
             Ok(id) => {
                 Id::<Users>::from(id)
             },
-            Err(e) => {
+            Err(_) => {
                 return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
             }
         };
@@ -454,14 +454,13 @@ pub(crate) async fn add_game_admin(
         }
         
         // Add user as admin
-        GameRoleBinding::create(
-            &mut transaction,
+        sqlx::query!(
+            r#"INSERT INTO game_admins (game_id, admin_id) VALUES ($1, $2)"#,
             game.id,
-            RoleType::GameAdmin.id, // Assuming GameAdmin role type ID is 1
-            RoleType::GameAdmin.min_count, // Assuming GameAdmin role type min_count is 1
-            RoleType::GameAdmin.max_count, // Assuming GameAdmin role type max_count is 1
-            None, // No Discord role ID for GameAdmin
-        ).await.map_err(Error::from)?;
+            i64::from(admin_id) as i32
+        )
+        .execute(&mut *transaction)
+        .await.map_err(Error::from)?;
         
         transaction.commit().await.map_err(Error::from)?;
     }
