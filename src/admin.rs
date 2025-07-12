@@ -648,7 +648,8 @@ pub(crate) async fn game_management(
                 series_with_events.push((series_item, events));
             }
             Ok(None) => {
-                // No events for this series, which is fine
+                // No events for this series, but we still want to show it
+                series_with_events.push((series_item, Vec::new()));
             }
             Err(e) => {
                 eprintln!("Failed to get series events for {:?}: {:?}", series_item, e);
@@ -687,14 +688,14 @@ pub(crate) async fn game_management(
                 @for (series_item, series_events) in &series_with_events {
                     h3 : series_item.display_name();
                     @if series_events.is_empty() {
-                        p : "No events in this series.";
+                        p : "No events found in this series.";
                     } else {
                         ul {
                             @for (event_name, display_name) in series_events {
                                 li {
-                                    a(href = uri!(event::info(*series_item, event_name))) : display_name;
+                                    a(href = uri!(event::info(*series_item, &*event_name))) : display_name;
                                     : " - ";
-                                    a(href = uri!(event::roles::get(*series_item, event_name))) : "Manage Roles";
+                                    a(href = uri!(event::roles::get(*series_item, &*event_name))) : "Manage Roles";
                                 }
                             }
                         }

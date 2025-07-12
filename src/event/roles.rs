@@ -1918,15 +1918,13 @@ async fn match_signup_page(
         let can_manage = is_organizer || is_restreamer;
 
         html! {
-            h2 : "Race Volunteer Signups";
-            p : format!("Manage volunteer signups for race {}", race_id);
-
-            h3 : "Race Information";
-            p {
-                : "Teams: ";
-                @match &race.entrants {
-                    Entrants::Two([team1, team2]) => {
-                        : format!("{} vs {}", 
+            h2 : "Match Volunteer Signups";
+            h3 {
+                : format!("{} {} {}",
+                    race.phase.as_deref().unwrap_or(""),
+                    race.round.as_deref().unwrap_or(""),
+                    match &race.entrants {
+                        Entrants::Two([team1, team2]) => format!("{} vs {}",
                             match team1 {
                                 Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
                                 Entrant::Named { name, .. } => name.clone(),
@@ -1937,10 +1935,8 @@ async fn match_signup_page(
                                 Entrant::Named { name, .. } => name.clone(),
                                 Entrant::Discord { .. } => "Discord User".to_string(),
                             }
-                        );
-                    }
-                    Entrants::Three([team1, team2, team3]) => {
-                        : format!("{} vs {} vs {}", 
+                        ),
+                        Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
                             match team1 {
                                 Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
                                 Entrant::Named { name, .. } => name.clone(),
@@ -1956,19 +1952,19 @@ async fn match_signup_page(
                                 Entrant::Named { name, .. } => name.clone(),
                                 Entrant::Discord { .. } => "Discord User".to_string(),
                             }
-                        );
+                        ),
+                        _ => "Unknown entrants".to_string(),
                     }
-                    _ => : "Unknown entrants";
-                }
+                );
             }
-            @if let Some(start) = match &race.schedule {
-                RaceSchedule::Live { start, .. } => Some(start),
-                RaceSchedule::Async { .. } => None, // Async doesn't have a start field
-                _ => None,
-            } {
-                p {
-                    : "Scheduled for: ";
-                    : format_datetime(*start, DateTimeFormat { long: false, running_text: false });
+            p {
+                @match race.schedule {
+                    RaceSchedule::Unscheduled => : "Unscheduled";
+                    RaceSchedule::Live { start, .. } => {
+                        : "Scheduled for ";
+                        : format_datetime(start, DateTimeFormat { long: true, running_text: false });
+                    }
+                    RaceSchedule::Async { .. } => : "Async Race";
                 }
             }
 

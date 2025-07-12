@@ -82,5 +82,4 @@ INSERT INTO game_series (game_id, series) VALUES
 (1, 'coop'),   -- CoOp series for OOTR
 (1, 'pic'),    -- Pictionary series for OOTR
 (1, 'ndos'),   -- Nine Days of Saws series for OOTR
-(1, 'xkeys'),  -- Crosskeys series for OOTR
-(2, 'alttpr'); -- ALTTPR series for ALTTPR game 
+(1, 'xkeys');  -- Crosskeys series for OOTR
