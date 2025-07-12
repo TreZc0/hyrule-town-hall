@@ -75,7 +75,7 @@ async fn get_accessible_games(user: &User, transaction: &mut Transaction<'_, Pos
                JOIN game_admins ga ON g.id = ga.game_id 
                WHERE ga.admin_id = $1 
                ORDER BY g.display_name"#,
-            i64::from(user.id) as i32
+            i64::from(user.id)
         )
         .fetch_all(&mut **transaction)
         .await?;
@@ -419,7 +419,7 @@ pub(crate) async fn remove_game_admin(
         if !admins.iter().any(|u| u.id == admin_id) {
             return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
         }
-        sqlx::query!("DELETE FROM game_admins WHERE game_id = $1 AND admin_id = $2", game.id, i64::from(admin_id) as i32)
+        sqlx::query!("DELETE FROM game_admins WHERE game_id = $1 AND admin_id = $2", game.id, i64::from(admin_id))
             .execute(&mut *transaction)
             .await.map_err(Error::from)?;
         transaction.commit().await.map_err(Error::from)?;
@@ -491,7 +491,7 @@ pub(crate) async fn add_game_admin(
         let insert_result = sqlx::query!(
             r#"INSERT INTO game_admins (game_id, admin_id) VALUES ($1, $2)"#,
             game.id,
-            i64::from(admin_id) as i32
+            i64::from(admin_id)
         )
         .execute(&mut *transaction)
         .await;

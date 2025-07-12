@@ -118,7 +118,7 @@ impl Game {
         let count = sqlx::query_scalar!(
             r#"SELECT COUNT(*) FROM game_admins WHERE game_id = $1 AND admin_id = $2"#,
             self.id,
-            i64::from(user.id) as i32
+            i64::from(user.id)
         )
         .fetch_one(&mut **transaction)
         .await?;
