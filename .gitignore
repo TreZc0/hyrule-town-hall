@@ -1,3 +1,5 @@
 /.cargo/config.toml
 /assets/google-client-secret.json
 /target
+# VSCode
+.vscode

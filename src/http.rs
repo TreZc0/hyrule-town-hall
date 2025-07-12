@@ -18,6 +18,8 @@ use {
     crate::{
         admin,
         api,
+        game,
+        games,
         notification::{
             self,
             Notification,
@@ -302,15 +304,36 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
         }
     }
     let page_content = html! {
+        h1 : "Welcome to the Hyrule Town Hall!";
         p {
-            : "Hyrule Town Hall is a platform where speedrunning and randomizer";
+            : "HTH is a platform where speedrunning and randomizer";
             : " events like tournaments or community races can be organized. ";
             : "It is a fork of ";
             a(href = "https://github.com/midoshouse/midos.house") : "Mido's House created by fenhl.";
         }
+        p {
+            : "With HTH, you can automate signups to tournaments, volunteer roles for restreams, ";
+            : "syncing to known tournament platforms like Challonge and start.gg, race automation in racetime.gg, and more!";
+            : "Hyrule Town Hall is tightly integrated with Discord to handle user interaction inregards to scheduling, async racing, and role management.";
+        }
         div(class = "section-list") {
             div {
-                h1 : "Ongoing events";
+                h2 : "Games we host";
+                @let games = game::Game::all(&mut transaction).await.map_err(event::Error::from)?;
+                ul {
+                    @if games.is_empty() {
+                        i : "(none currently)";
+                    } else {
+                        @for game in &games {
+                            li {
+                                a(href = uri!(games::get(&game.name))) : &game.display_name;
+                            }
+                        }
+                    }
+                }
+            }
+            div {
+                h2 : "Ongoing events";
                 ul {
                     @if ongoing_events.is_empty() {
                         i : "(none currently)";
@@ -322,7 +345,7 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
                 }
             }
             div {
-                h1 : "Upcoming events";
+                h2 : "Upcoming events";
                 ul {
                     @if upcoming_events.is_empty() {
                         i : "(none currently)";
@@ -643,6 +666,15 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         admin::game_management,
         admin::add_game_role_binding,
         admin::remove_game_role_binding,
+        games::list,
+        games::get,
+        games::manage_admins,
+        games::manage_roles,
+        games::apply_for_game_role,
+        games::add_game_role_binding,
+        games::remove_game_role_binding,
+        games::approve_game_role_request,
+        games::reject_game_role_request,
     ])
     .mount("/static", FileServer::without_index("assets/static"))
     .register("/", rocket::catchers![
