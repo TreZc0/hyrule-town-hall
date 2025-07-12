@@ -1483,18 +1483,43 @@ async fn volunteer_page(
         .await?;
 
     let content = if let Some(ref me) = me {
-        let effective_role_bindings = EffectiveRoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
-        let my_requests = RoleRequest::for_user(&mut transaction, me.id).await?;
-        let my_approved_roles = my_requests
-            .iter()
-            .filter(|req| {
+        // Check if user has access to view volunteer signups
+        let is_organizer = data.organizers(&mut transaction).await?.contains(me);
+        let is_restreamer = data.restreamers(&mut transaction).await?.contains(me);
+        let has_confirmed_roles = {
+            let my_requests = RoleRequest::for_user(&mut transaction, me.id).await?;
+            my_requests.iter().any(|req| {
                 matches!(req.status, RoleRequestStatus::Approved)
                     && req.series == data.series
                     && req.event == data.event
             })
-            .collect::<Vec<_>>();
+        };
 
-        let upcoming_races = Race::for_event(&mut transaction, &reqwest::Client::new(), &data).await?;
+        if !is_organizer && !is_restreamer && !has_confirmed_roles {
+            // User doesn't have access - show appropriate message
+            html! {
+                article {
+                    h2 : "Volunteer Signups";
+                    p : "You need to be an organizer, restreamer, or have confirmed roles for this event to view volunteer signups.";
+                    p {
+                        a(href = uri!(volunteer_page_get(data.series, &*data.event))) : "Apply for volunteer roles";
+                    }
+                }
+            }
+        } else {
+            // User has access - show the full volunteer interface
+            let effective_role_bindings = EffectiveRoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
+            let my_requests = RoleRequest::for_user(&mut transaction, me.id).await?;
+            let my_approved_roles = my_requests
+                .iter()
+                .filter(|req| {
+                    matches!(req.status, RoleRequestStatus::Approved)
+                        && req.series == data.series
+                        && req.event == data.event
+                })
+                .collect::<Vec<_>>();
+
+            let upcoming_races = Race::for_event(&mut transaction, &reqwest::Client::new(), &data).await?;
 
         html! {
             h2 : "Volunteer for Roles";

@@ -588,15 +588,33 @@ pub(crate) async fn game_management(
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let me = me.ok_or(Error::Unauthorized)?;
     
-    let mut transaction = pool.begin().await.map_err(Error::from)?;
-    let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
-        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut transaction = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Failed to begin transaction: {:?}", e);
+            return Err(StatusOrError::Err(Error::from(e)));
+        }
+    };
+    
+    let game = match Game::from_name(&mut transaction, game_name).await {
+        Ok(Some(g)) => g,
+        Ok(None) => return Err(StatusOrError::Status(Status::NotFound)),
+        Err(e) => {
+            eprintln!("Failed to get game by name '{}': {:?}", game_name, e);
+            return Err(StatusOrError::Err(Error::from(e)));
+        }
+    };
     
     // Check if user is trez or a game admin
     let is_trez_user = is_trez(&me);
     let is_game_admin = if !is_trez_user {
-        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
+        match is_game_admin(&me, &game, &mut transaction).await {
+            Ok(admin) => admin,
+            Err(e) => {
+                eprintln!("Failed to check game admin status: {:?}", e);
+                return Err(StatusOrError::Err(Error::from(e)));
+            }
+        }
     } else {
         false
     };
@@ -605,16 +623,39 @@ pub(crate) async fn game_management(
         return Err(Error::Unauthorized.into());
     }
     
-    let series = game.series(&mut transaction).await.map_err(Error::from)?;
-    let _role_types = get_role_types(&mut transaction).await.map_err(Error::from)?;
-    transaction.commit().await.map_err(Error::from)?;
+    let series = match game.series(&mut transaction).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to get game series: {:?}", e);
+            return Err(StatusOrError::Err(Error::from(e)));
+        }
+    };
+    
+    // Remove the unused role_types call for now
+    // let _role_types = get_role_types(&mut transaction).await.map_err(Error::from)?;
+    
+    match transaction.commit().await {
+        Ok(_) => {},
+        Err(e) => {
+            eprintln!("Failed to commit transaction: {:?}", e);
+            return Err(StatusOrError::Err(Error::from(e)));
+        }
+    }
 
     // Now, for each series, fetch events using the pool
     let mut series_with_events = Vec::new();
     for series_item in &series {
-        let events_opt = get_series_events(pool, *series_item).await.map_err(Error::from)?;
-        if let Some(events) = events_opt {
-            series_with_events.push((series_item, events));
+        match get_series_events(pool, *series_item).await {
+            Ok(Some(events)) => {
+                series_with_events.push((series_item, events));
+            }
+            Ok(None) => {
+                // No events for this series, which is fine
+            }
+            Err(e) => {
+                eprintln!("Failed to get series events for {:?}: {:?}", series_item, e);
+                return Err(StatusOrError::Err(Error::from(e)));
+            }
         }
     }
 
@@ -672,14 +713,20 @@ pub(crate) async fn game_management(
         }
     };
 
-    Ok(page(
+    match page(
         pool.begin().await.map_err(Error::from)?,
         &Some(me),
         &uri,
         PageStyle { kind: PageKind::Other, ..PageStyle::default() },
         &format!("Game Management — {}", game_display_name),
         content,
-    ).await.map_err(Error::from)?)
+    ).await {
+        Ok(page_content) => Ok(page_content),
+        Err(e) => {
+            eprintln!("Failed to generate page: {:?}", e);
+            Err(StatusOrError::Err(Error::from(e)))
+        }
+    }
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -820,7 +867,7 @@ pub(crate) async fn remove_role_binding(
 async fn get_series_events<'a>(pool: &'a PgPool, series: Series) -> Result<Option<Vec<(String, String)>>, GameError> {
     let rows = sqlx::query!(
         r#"SELECT event, display_name FROM events WHERE series = $1 AND listed ORDER BY start ASC"#,
-        series as _
+        series.slug()
     )
     .fetch_all(pool)
     .await?;
