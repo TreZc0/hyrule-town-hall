@@ -245,7 +245,7 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                         : " • ";
                         a(href = uri!(api::graphql_playground)) : "API";
                         : " • ";
-                        a(href = "https://github.com/trezc0/midos.house", target = "_blank") {
+                        a(href = "https://github.com/trezc0/hyrule-town-hall", target = "_blank") {
                             @if style.mw_footer {
                                 : "Website Source Code";
                             } else {

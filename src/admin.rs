@@ -404,83 +404,67 @@ pub(crate) async fn add_game_admin(
     game_name: &str,
     form: Form<Contextual<'_, AddAdminForm>>,
 ) -> Result<Redirect, StatusOrError<Error>> {
-    eprintln!("DEBUG: add_game_admin called with game_name: {}", game_name);
     let me = me.ok_or(Error::Unauthorized)?;
-    eprintln!("DEBUG: User authenticated: {}", me.display_name());
     if !is_trez(&me) {
-        eprintln!("DEBUG: User is not trez, returning unauthorized");
         return Err(Error::Unauthorized.into());
     }
-    eprintln!("DEBUG: User is trez, proceeding");
     let mut form = form.into_inner();
     form.verify(&csrf);
-    eprintln!("DEBUG: CSRF verified");
     
     if let Some(ref value) = form.value {
-        eprintln!("DEBUG: Form value received: admin = '{}'", value.admin);
-        eprintln!("DEBUG: Starting database transaction");
         let mut transaction = pool.begin().await.map_err(Error::from)?;
-        eprintln!("DEBUG: Looking up game: {}", game_name);
         let game = Game::from_name(&mut transaction, game_name)
             .await.map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
-        eprintln!("DEBUG: Game found: {}", game.display_name);
+        
+        // Check if user is trez or a game admin
+        let is_trez_user = is_trez(&me);
+        let is_game_admin = if !is_trez_user {
+            is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
+        } else {
+            false
+        };
+        
+        if !is_trez_user && !is_game_admin {
+            return Err(StatusOrError::Err(Error::Unauthorized));
+        }
+        
         // Parse user ID from form
-        eprintln!("DEBUG: Parsing admin ID from: '{}'", value.admin);
         let admin_id = match value.admin.parse::<u64>() {
             Ok(id) => {
-                eprintln!("DEBUG: Successfully parsed admin ID: {}", id);
                 Id::<Users>::from(id)
             },
             Err(e) => {
-                eprintln!("DEBUG: Failed to parse admin ID: {}", e);
                 return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
             }
         };
         // Check if user exists
-        eprintln!("DEBUG: Checking if user exists with ID: {}", admin_id);
         let _user = match User::from_id(&mut *transaction, admin_id).await.map_err(Error::from)? {
             Some(u) => {
-                eprintln!("DEBUG: User found: {}", u.display_name());
                 u
             },
             None => {
-                eprintln!("DEBUG: User not found");
                 return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
             }
         };
         // Check if already admin
-        eprintln!("DEBUG: Checking if user is already admin");
         let admins = game.admins(&mut transaction).await.map_err(Error::from)?;
         if admins.iter().any(|u| u.id == admin_id) {
-            eprintln!("DEBUG: User is already admin");
             return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
         }
-        eprintln!("DEBUG: Adding user as admin");
-        eprintln!("DEBUG: game.id = {}, admin_id = {}", game.id, admin_id);
-        eprintln!("DEBUG: admin_id as i32 = {}", i64::from(admin_id) as i32);
-        let result = sqlx::query!("INSERT INTO game_admins (game_id, admin_id) VALUES ($1, $2)", game.id, i64::from(admin_id) as i32)
-            .execute(&mut *transaction)
-            .await;
-        match result {
-            Ok(_) => eprintln!("DEBUG: SQL INSERT successful"),
-            Err(e) => {
-                eprintln!("DEBUG: SQL INSERT failed: {:?}", e);
-                return Err(StatusOrError::Err(Error::from(e)));
-            }
-        }
-        eprintln!("DEBUG: Committing transaction");
-        let commit_result = transaction.commit().await;
-        match commit_result {
-            Ok(_) => eprintln!("DEBUG: Transaction commit successful"),
-            Err(e) => {
-                eprintln!("DEBUG: Transaction commit failed: {:?}", e);
-                return Err(StatusOrError::Err(Error::from(e)));
-            }
-        }
-        eprintln!("DEBUG: Successfully added admin");
+        
+        // Add user as admin
+        GameRoleBinding::create(
+            &mut transaction,
+            game.id,
+            RoleType::GameAdmin.id, // Assuming GameAdmin role type ID is 1
+            RoleType::GameAdmin.min_count, // Assuming GameAdmin role type min_count is 1
+            RoleType::GameAdmin.max_count, // Assuming GameAdmin role type max_count is 1
+            None, // No Discord role ID for GameAdmin
+        ).await.map_err(Error::from)?;
+        
+        transaction.commit().await.map_err(Error::from)?;
     }
-    eprintln!("DEBUG: Returning redirect to manage_game_admins");
     Ok(Redirect::to(uri!(manage_game_admins(game_name))))
 }
 
