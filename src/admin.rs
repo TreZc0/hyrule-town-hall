@@ -711,8 +711,9 @@ pub(crate) async fn game_management(
         }
     };
 
+    let page_transaction = pool.begin().await.map_err(Error::from)?;
     match page(
-        pool.begin().await.map_err(Error::from)?,
+        page_transaction,
         &Some(me),
         &uri,
         PageStyle { kind: PageKind::Other, ..PageStyle::default() },

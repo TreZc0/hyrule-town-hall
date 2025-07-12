@@ -739,9 +739,14 @@ async fn roles_page(
                                                 }
                                             }
                                         } else {
-                                            : full_form(uri!(delete_role_binding(data.series, &*data.event, binding.id)), csrf.as_ref(), html! {
-                                                input(type = "submit", value = "Delete");
-                                            }, Vec::new(), "Delete");
+                                            @let (errors, delete_button) = button_form(
+                                                uri!(delete_role_binding(data.series, &*data.event, binding.id)),
+                                                csrf.as_ref(),
+                                                Vec::new(),
+                                                "Delete"
+                                            );
+                                            : errors;
+                                            div(class = "button-row") : delete_button;
                                         }
                                     }
                                 }
@@ -928,10 +933,13 @@ async fn roles_page(
                                     }
                                     td : format_datetime(request.updated_at, DateTimeFormat { long: false, running_text: false });
                                     td {
-                                        @let (errors, revoke_button) = button_form(
+                                        @let (errors, revoke_button) = button_form_ext(
                                             uri!(revoke_role_request(data.series, &*data.event)),
                                             csrf.as_ref(),
                                             Vec::new(),
+                                            html! {
+                                                input(type = "hidden", name = "request_id", value = request.id.to_string());
+                                            },
                                             "Revoke"
                                         );
                                         : errors;
@@ -2155,6 +2163,7 @@ async fn match_signup_page(
 #[rocket::get("/event/<series>/<event>/races/<race_id>/signups")]
 pub(crate) async fn match_signup_page_get(
     pool: &State<PgPool>,
+    me: Option<User>,
     series: Series,
     event: &str,
     race_id: Id<Races>,
@@ -2165,7 +2174,7 @@ pub(crate) async fn match_signup_page_get(
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let ctx = Context::default();
     let uri = HttpOrigin::parse_owned(format!("/event/{}/{}/races/{}", series.slug(), event, race_id)).unwrap();
-    Ok(match_signup_page(transaction, None, &Origin(uri.clone()), data, race_id, ctx, None).await?)
+    Ok(match_signup_page(transaction, me, &Origin(uri.clone()), data, race_id, ctx, None).await?)
 }
 
 #[derive(FromForm, CsrfForm)]
