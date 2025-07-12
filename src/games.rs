@@ -1,6 +1,10 @@
-use crate::prelude::*;
-use crate::event::roles::{RoleBinding, RoleType};
-use crate::game::{Game, GameError};
+use crate::{
+    game::{Game, GameError},
+    prelude::*,
+    user::User,
+    event::roles::{GameRoleBinding, RoleType},
+    http::{PageError, StatusOrError},
+};
 use rocket::uri;
 
 #[derive(Debug, thiserror::Error)]
@@ -217,7 +221,7 @@ pub(crate) async fn manage_roles(
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     
-    let role_bindings = RoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
+    let role_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
     let _all_role_types = RoleType::all(&mut transaction).await.map_err(Error::from)?;
     
     let content = html! {

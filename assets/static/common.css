@@ -324,6 +324,88 @@ p.error {
   background-color: #c0ffff;
 }
 
+/* Role binding override styles */
+.info-box {
+    background-color: #f0f8ff;
+    border: 1px solid #b0d4f1;
+    border-radius: 4px;
+    padding: 15px;
+    margin-bottom: 20px;
+}
+
+.info-box h3 {
+    margin-top: 0;
+    color: #2c5aa0;
+}
+
+.override-indicator {
+    color: #d63384;
+    font-weight: bold;
+    font-size: 0.9em;
+}
+
+.game-binding-info {
+    color: #6c757d;
+    font-style: italic;
+    font-size: 0.9em;
+    margin-top: 5px;
+}
+
+.status-pending {
+    color: #ffc107;
+    font-weight: bold;
+}
+
+.status-approved {
+    color: #28a745;
+    font-weight: bold;
+}
+
+.status-rejected {
+    color: #dc3545;
+    font-weight: bold;
+}
+
+.status-aborted {
+    color: #6c757d;
+    font-weight: bold;
+}
+
+.request-notes {
+    color: #6c757d;
+    font-style: italic;
+    margin-top: 5px;
+}
+
+.signup-item {
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 10px;
+    margin-bottom: 10px;
+}
+
+.signup-notes {
+    color: #6c757d;
+    font-style: italic;
+    margin-top: 5px;
+}
+
+.signup-actions {
+    margin-top: 10px;
+}
+
+.signup-count {
+    color: #6c757d;
+    font-size: 0.9em;
+    margin-top: 10px;
+}
+
+.disabled-reason {
+    color: #dc3545;
+    font-size: 0.9em;
+    margin-top: 5px;
+}
+
 @media (min-width: 448px) {
   nav.index .logo {
     grid-template-columns: 64px 64px;

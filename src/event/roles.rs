@@ -1,12 +1,29 @@
-use crate::{
-    cal::{self, Entrant, Entrants, Race, RaceSchedule},
-    event::{Data, Tab},
-    form::{EmptyForm, button_form_ext_disabled, form_field, full_form},
-    http::{PageError, StatusOrError},
-    id::{RoleBindings, RoleRequests, RoleTypes, Signups},
-    prelude::*,
-    time::format_datetime,
-    user::User,
+use {
+    rocket::{
+        form::{Contextual, Form},
+        http::{Status, uri::Origin as HttpOrigin},
+        response::Redirect,
+        State,
+    },
+    sqlx::{
+        PgPool,
+        Transaction,
+        Postgres,
+    },
+    chrono::{DateTime, Utc},
+    crate::{
+        event::{Data, Tab},
+        form::{EmptyForm, button_form_ext_disabled, form_field, full_form},
+        http::{PageError, StatusOrError},
+        id::{RoleBindings, RoleRequests, RoleTypes, Signups, EventDiscordRoleOverrides},
+        prelude::*,
+        time::format_datetime,
+        user::User,
+        game,
+        cal::{Race, RaceSchedule, Entrants, Entrant},
+    },
+    std::collections::HashMap,
+    rocket_util::Origin,
 };
 
 
@@ -24,6 +41,10 @@ pub(crate) enum Error {
     Wheel(#[from] wheel::Error),
     #[error(transparent)]
     Cal(#[from] cal::Error),
+    #[error(transparent)]
+    Game(#[from] game::GameError),
+    #[error("unauthorized access")]
+    Unauthorized,
 }
 
 impl From<Error> for StatusOrError<Error> {
@@ -93,6 +114,16 @@ pub(crate) struct RoleBinding {
 }
 
 #[allow(unused)]
+pub(crate) struct GameRoleBinding {
+    pub(crate) id: Id<RoleBindings>,
+    pub(crate) role_type_id: Id<RoleTypes>,
+    pub(crate) min_count: i32,
+    pub(crate) max_count: i32,
+    pub(crate) role_type_name: String,
+    pub(crate) discord_role_id: Option<i64>,
+}
+
+#[allow(unused)]
 pub(crate) struct RoleRequest {
     pub(crate) id: Id<RoleRequests>,
     pub(crate) role_binding_id: Id<RoleBindings>,
@@ -124,6 +155,32 @@ pub(crate) struct Signup {
     pub(crate) max_count: i32,
     pub(crate) role_type_name: String,
 }
+
+#[allow(unused)]
+pub(crate) struct EffectiveRoleBinding {
+    pub(crate) id: Id<RoleBindings>,
+    pub(crate) role_type_id: Id<RoleTypes>,
+    pub(crate) min_count: i32,
+    pub(crate) max_count: i32,
+    pub(crate) role_type_name: String,
+    pub(crate) discord_role_id: Option<i64>,
+    pub(crate) is_game_binding: bool,
+    pub(crate) has_event_override: bool,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct EventDiscordRoleOverride {
+    pub(crate) id: Id<EventDiscordRoleOverrides>,
+    pub(crate) series: Series,
+    pub(crate) event: String,
+    pub(crate) role_type_id: Id<RoleTypes>,
+    pub(crate) discord_role_id: i64,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
+}
+
+
 
 impl RoleType {
     #[allow(unused)]
@@ -175,33 +232,6 @@ impl RoleBinding {
             "#,
             series as _,
             event
-        )
-        .fetch_all(&mut **pool)
-        .await
-    }
-
-    pub(crate) async fn for_game(
-        pool: &mut Transaction<'_, Postgres>,
-        game_id: i32,
-    ) -> sqlx::Result<Vec<Self>> {
-        sqlx::query_as!(
-            Self,
-            r#"
-                SELECT
-                    rb.id AS "id: Id<RoleBindings>",
-                    rb.series AS "series: Series",
-                    rb.event,
-                    rb.role_type_id AS "role_type_id: Id<RoleTypes>",
-                    rb.min_count,
-                    rb.max_count,
-                    rt.name AS "role_type_name",
-                    rb.discord_role_id
-                FROM role_bindings rb
-                JOIN role_types rt ON rb.role_type_id = rt.id
-                WHERE rb.game_id = $1
-                ORDER BY rt.name
-            "#,
-            game_id
         )
         .fetch_all(&mut **pool)
         .await
@@ -260,6 +290,33 @@ impl RoleBinding {
     }
 }
 
+impl GameRoleBinding {
+    pub(crate) async fn for_game(
+        pool: &mut Transaction<'_, Postgres>,
+        game_id: i32,
+    ) -> sqlx::Result<Vec<Self>> {
+        sqlx::query_as!(
+            Self,
+            r#"
+                SELECT
+                    rb.id AS "id: Id<RoleBindings>",
+                    rb.role_type_id AS "role_type_id: Id<RoleTypes>",
+                    rb.min_count,
+                    rb.max_count,
+                    rt.name AS "role_type_name",
+                    rb.discord_role_id
+                FROM role_bindings rb
+                JOIN role_types rt ON rb.role_type_id = rt.id
+                WHERE rb.game_id = $1
+                ORDER BY rt.name
+            "#,
+            game_id
+        )
+        .fetch_all(&mut **pool)
+        .await
+    }
+}
+
 impl RoleRequest {
     pub(crate) async fn for_event(
         pool: &mut Transaction<'_, Postgres>,
@@ -290,6 +347,38 @@ impl RoleRequest {
             "#,
             series as _,
             event
+        )
+        .fetch_all(&mut **pool)
+        .await
+    }
+
+    pub(crate) async fn for_user(
+        pool: &mut Transaction<'_, Postgres>,
+        user_id: Id<Users>,
+    ) -> sqlx::Result<Vec<Self>> {
+        sqlx::query_as!(
+            Self,
+            r#"
+                SELECT 
+                    rr.id AS "id: Id<RoleRequests>",
+                    rr.role_binding_id AS "role_binding_id: Id<RoleBindings>",
+                    rr.user_id AS "user_id: Id<Users>",
+                    rr.status AS "status: RoleRequestStatus",
+                    rr.notes,
+                    rr.created_at,
+                    rr.updated_at,
+                    rb.series AS "series: Series",
+                    rb.event,
+                    rb.min_count,
+                    rb.max_count,
+                    rt.name AS "role_type_name"
+                FROM role_requests rr
+                JOIN role_bindings rb ON rr.role_binding_id = rb.id
+                JOIN role_types rt ON rb.role_type_id = rt.id
+                WHERE rr.user_id = $1
+                ORDER BY rr.created_at DESC
+            "#,
+            user_id as _
         )
         .fetch_all(&mut **pool)
         .await
@@ -360,6 +449,7 @@ impl RoleRequest {
         .unwrap_or(false))
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn pending_for_event(
         pool: &mut Transaction<'_, Postgres>,
         series: Series,
@@ -383,6 +473,7 @@ impl RoleRequest {
         .await?)
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn approved_for_event(
         pool: &mut Transaction<'_, Postgres>,
         series: Series,
@@ -561,10 +652,10 @@ impl Signup {
 async fn roles_page(
     mut transaction: Transaction<'_, Postgres>,
     me: Option<User>,
-    uri: &Origin<'_>,
-    csrf: Option<&CsrfToken>,
+    _uri: &Origin<'_>,
     data: Data<'_>,
     ctx: Context<'_>,
+    csrf: Option<CsrfToken>,
 ) -> Result<RawHtml<String>, Error> {
     let header = data
         .header(&mut transaction, me.as_ref(), Tab::Roles, false)
@@ -572,20 +663,56 @@ async fn roles_page(
 
     let content = if let Some(ref me) = me {
         if data.organizers(&mut transaction).await?.contains(me) {
-            let role_bindings =
-                RoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
-            let pending_requests =
-                RoleRequest::pending_for_event(&mut transaction, data.series, &data.event).await?;
-            let approved_requests =
-                RoleRequest::approved_for_event(&mut transaction, data.series, &data.event).await?;
+            let role_requests = RoleRequest::for_event(&mut transaction, data.series, &data.event).await?;
             let all_role_types = RoleType::all(&mut transaction).await?;
+            
+            // Check if event uses custom role bindings
+            let uses_custom_bindings = sqlx::query_scalar!(
+                r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,
+                data.series as _,
+                &data.event
+            )
+            .fetch_optional(&mut *transaction)
+            .await?
+            .unwrap_or(Some(true)).unwrap_or(true);
+
+            // Get game info if using game bindings
+            let game_info = if !uses_custom_bindings {
+                game::Game::from_series(&mut transaction, data.series).await.map_err(Error::from)?
+            } else {
+                None
+            };
+
+            // Get event overrides if using game bindings
+            let event_overrides = if !uses_custom_bindings {
+                EventDiscordRoleOverride::for_event(&mut transaction, data.series, &data.event).await?
+            } else {
+                Vec::new()
+            };
+
+            let effective_role_bindings = EffectiveRoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
 
             html! {
                 h2 : "Role Management";
                 p : "Manage volunteer roles for this event.";
 
+                @if !uses_custom_bindings {
+                    div(class = "info-box") {
+                        h3 : "Using Game Role Bindings";
+                        p {
+                            : "This event is using role bindings from the ";
+                            @if let Some(ref game) = game_info {
+                                strong : &game.display_name;
+                            } else {
+                                strong : "game";
+                            }
+                            : " with event-specific Discord role overrides.";
+                        }
+                    }
+                }
+
                 h3 : "Current Role Bindings";
-                @if role_bindings.is_empty() {
+                @if effective_role_bindings.is_empty() {
                     p : "No role bindings configured yet.";
                 } else {
                     table {
@@ -595,11 +722,11 @@ async fn roles_page(
                                 th : "Min Count";
                                 th : "Max Count";
                                 th : "Discord Role";
-                                th;
+                                th : "Actions";
                             }
                         }
                         tbody {
-                            @for binding in &role_bindings {
+                            @for binding in &effective_role_bindings {
                                 tr {
                                     td : binding.role_type_name;
                                     td : binding.min_count;
@@ -607,15 +734,26 @@ async fn roles_page(
                                     td {
                                         @if let Some(discord_role_id) = binding.discord_role_id {
                                             : format!("{}", discord_role_id);
+                                            @if binding.has_event_override {
+                                                span(class = "override-indicator") : " (event override)";
+                                            }
                                         } else {
                                             : "None";
                                         }
                                     }
                                     td {
-                                        @let errors = ctx.errors().collect_vec();
-                                        @let (errors, button) = button_form(uri!(delete_role_binding(data.series, &*data.event, binding.id)), csrf, errors, "Delete");
-                                        : errors;
-                                        div(class = "button-row") : button;
+                                        @if binding.is_game_binding {
+                                            p(class = "game-binding-info") {
+                                                : "This role is managed by the game's role binding system";
+                                                @if binding.has_event_override {
+                                                    : " with event-specific Discord role override";
+                                                }
+                                            }
+                                        } else {
+                                            : full_form(uri!(delete_role_binding(data.series, &*data.event, binding.id)), csrf.as_ref(), html! {
+                                                input(type = "submit", value = "Delete");
+                                            }, Vec::new(), "Delete");
+                                        }
                                     }
                                 }
                             }
@@ -623,33 +761,76 @@ async fn roles_page(
                     }
                 }
 
-                h3 : "Add Role Binding";
-                @let mut errors = ctx.errors().collect_vec();
-                : full_form(uri!(add_role_binding(data.series, &*data.event)), csrf, html! {
-                    : form_field("role_type_id", &mut errors, html! {
-                        label(for = "role_type_id") : "Role Type:";
-                        select(name = "role_type_id", id = "role_type_id") {
-                            @for role_type in all_role_types {
-                                option(value = role_type.id.to_string()) : role_type.name;
+                @if uses_custom_bindings {
+                    h3 : "Add Role Binding";
+                    @let mut errors = ctx.errors().collect_vec();
+                    : full_form(uri!(add_role_binding(data.series, &*data.event)), csrf.as_ref(), html! {
+                        : form_field("role_type_id", &mut errors, html! {
+                            label(for = "role_type_id") : "Role Type:";
+                            select(name = "role_type_id", id = "role_type_id") {
+                                @for role_type in all_role_types {
+                                    option(value = role_type.id.to_string()) : role_type.name;
+                                }
+                            }
+                        });
+                        : form_field("min_count", &mut errors, html! {
+                            label(for = "min_count") : "Minimum Count:";
+                            input(type = "number", name = "min_count", id = "min_count", value = "1", min = "1");
+                        });
+                        : form_field("max_count", &mut errors, html! {
+                            label(for = "max_count") : "Maximum Count:";
+                            input(type = "number", name = "max_count", id = "max_count", value = "1", min = "1");
+                        });
+                        : form_field("discord_role_id", &mut errors, html! {
+                            label(for = "discord_role_id") : "Discord Role ID (optional):";
+                            input(type = "text", name = "discord_role_id", id = "discord_role_id", placeholder = "e.g. 123456789012345678");
+                        });
+                    }, errors, "Add Role Binding");
+                } else {
+                    h3 : "Discord Role Overrides";
+                    p : "You can override Discord role IDs for specific role types while using the game's role binding structure.";
+                    
+                    @if event_overrides.is_empty() {
+                        p : "No Discord role overrides configured.";
+                    } else {
+                        table {
+                            thead {
+                                tr {
+                                    th : "Role Type";
+                                    th : "Discord Role ID";
+                                    th : "Actions";
+                                }
+                            }
+                            tbody {
+                                @for override_item in &event_overrides {
+                                    tr {
+                                        td {
+                                            @if let Some(role_type) = all_role_types.iter().find(|rt| rt.id == override_item.role_type_id) {
+                                                : role_type.name;
+                                            } else {
+                                                : "Unknown";
+                                            }
+                                        }
+                                        td : override_item.discord_role_id;
+                                        td {
+                                            @let (errors, button) = button_form(
+                                                uri!(delete_discord_override(data.series, &*data.event, override_item.role_type_id)),
+                                                csrf.as_ref(),
+                                                Vec::new(),
+                                                "Remove"
+                                            );
+                                            : errors;
+                                            div(class = "button-row") : button;
+                                        }
+                                    }
+                                }
                             }
                         }
-                    });
-                    : form_field("min_count", &mut errors, html! {
-                        label(for = "min_count") : "Minimum Count:";
-                        input(type = "number", name = "min_count", id = "min_count", value = "1", min = "1");
-                    });
-                    : form_field("max_count", &mut errors, html! {
-                        label(for = "max_count") : "Maximum Count:";
-                        input(type = "number", name = "max_count", id = "max_count", value = "1", min = "1");
-                    });
-                    : form_field("discord_role_id", &mut errors, html! {
-                        label(for = "discord_role_id") : "Discord Role ID (optional):";
-                        input(type = "text", name = "discord_role_id", id = "discord_role_id", placeholder = "e.g. 123456789012345678");
-                    });
-                }, errors, "Add Role Binding");
+                    }
+                }
 
                 h3 : "Pending Role Requests";
-                @if pending_requests.is_empty() {
+                @if role_requests.is_empty() {
                     p : "No pending role requests.";
                 } else {
                     table {
@@ -658,35 +839,48 @@ async fn roles_page(
                                 th : "User";
                                 th : "Role Type";
                                 th : "Notes";
-                                th : "Requested";
+                                th : "Applied";
                                 th : "Actions";
                             }
                         }
                         tbody {
-                            @for request in pending_requests {
+                            @for request in &role_requests {
                                 tr {
                                     td {
-                                        @let user = User::from_id(&mut *transaction, request.user_id).await?;
-                                        : user.map_or_else(|| request.user_id.to_string(), |u| u.to_string());
+                                        @if let Some(user) = User::from_id(&mut *transaction, request.user_id).await? {
+                                            : user.display_name();
+                                        } else {
+                                            : "Unknown User";
+                                        }
                                     }
                                     td : request.role_type_name;
                                     td {
                                         @if let Some(ref notes) = request.notes {
                                             : notes;
                                         } else {
-                                            : "No notes";
+                                            : "None";
                                         }
                                     }
-                                    td : format_datetime(request.created_at, DateTimeFormat { long: true, running_text: false });
+                                    td : format_datetime(request.created_at, DateTimeFormat { long: false, running_text: false });
                                     td {
-                                        @let errors = Vec::new();
-                                        @let (errors, approve_button) = button_form(uri!(approve_role_request(data.series, &*data.event, request.id)), csrf, errors, "Approve");
+                                        @let (errors, approve_button) = button_form(
+                                            uri!(approve_role_request(data.series, &*data.event, request.id)),
+                                            csrf.as_ref(),
+                                            Vec::new(),
+                                            "Approve"
+                                        );
                                         : errors;
-                                        : approve_button;
-                                        @let errors = Vec::new();
-                                        @let (errors, reject_button) = button_form(uri!(reject_role_request(data.series, &*data.event, request.id)), csrf, errors, "Reject");
-                                        : errors;
-                                        : reject_button;
+                                        div(class = "button-row") {
+                                            : approve_button;
+                                            @let (errors, reject_button) = button_form(
+                                                uri!(reject_role_request(data.series, &*data.event, request.id)),
+                                                csrf.as_ref(),
+                                                Vec::new(),
+                                                "Reject"
+                                            );
+                                            : errors;
+                                            : reject_button;
+                                        }
                                     }
                                 }
                             }
@@ -694,50 +888,38 @@ async fn roles_page(
                     }
                 }
 
-                h3 : "Confirmed Role Requests";
-                @if approved_requests.is_empty() {
-                    p : "No confirmed role requests.";
+                h3 : "Approved Role Requests";
+                @if role_requests.is_empty() {
+                    p : "No approved role requests.";
                 } else {
-                    @for binding in &role_bindings {
-                        @let binding_requests = approved_requests.iter().filter(|req| req.role_binding_id == binding.id).collect::<Vec<_>>();
-                        @if !binding_requests.is_empty() {
-                            details {
-                                summary : format!("{} ({})", binding.role_type_name, binding_requests.len());
-                                table {
-                                    thead {
-                                        tr {
-                                            th : "User";
-                                            th : "Notes";
-                                            th : "Approved";
-                                            th : "Actions";
+                    table {
+                        thead {
+                            tr {
+                                th : "User";
+                                th : "Role Type";
+                                th : "Notes";
+                                th : "Approved";
+                            }
+                        }
+                        tbody {
+                            @for request in &role_requests {
+                                tr {
+                                    td {
+                                        @if let Some(user) = User::from_id(&mut *transaction, request.user_id).await? {
+                                            : user.display_name();
+                                        } else {
+                                            : "Unknown User";
                                         }
                                     }
-                                    tbody {
-                                        @for request in binding_requests {
-                                            tr {
-                                                td {
-                                                    @let user = User::from_id(&mut *transaction, request.user_id).await?;
-                                                    : user.map_or_else(|| request.user_id.to_string(), |u| u.to_string());
-                                                }
-                                                td {
-                                                    @if let Some(ref notes) = request.notes {
-                                                        : notes;
-                                                    } else {
-                                                        : "No notes";
-                                                    }
-                                                }
-                                                td : format_datetime(request.updated_at, DateTimeFormat { long: true, running_text: false });
-                                                td {
-                                                    @let errors = Vec::new();
-                                                    @let (errors, revoke_button) = button_form_ext(uri!(revoke_role_request(data.series, &*data.event)), csrf, errors, html! {
-                                                        input(type = "hidden", name = "request_id", value = request.id.to_string());
-                                                    }, "Revoke");
-                                                    : errors;
-                                                    : revoke_button;
-                                                }
-                                            }
+                                    td : request.role_type_name;
+                                    td {
+                                        @if let Some(ref notes) = request.notes {
+                                            : notes;
+                                        } else {
+                                            : "None";
                                         }
                                     }
+                                    td : format_datetime(request.updated_at, DateTimeFormat { long: false, running_text: false });
                                 }
                             }
                         }
@@ -755,7 +937,7 @@ async fn roles_page(
         html! {
             article {
                 p {
-                    a(href = uri!(auth::login(Some(uri!(get(data.series, &*data.event)))))) : "Sign in";
+                    a(href = "/login") : "Sign in";
                     : " to manage roles for this event.";
                 }
             }
@@ -765,11 +947,8 @@ async fn roles_page(
     Ok(page(
         transaction,
         &me,
-        uri,
-        PageStyle {
-            chests: data.chests().await?,
-            ..PageStyle::default()
-        },
+        &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", data.series.slug(), data.event)).unwrap()),
+        PageStyle::default(),
         &format!("Roles — {}", data.display_name),
         html! {
             : header;
@@ -783,8 +962,6 @@ async fn roles_page(
 pub(crate) async fn get(
     pool: &State<PgPool>,
     me: Option<User>,
-    uri: Origin<'_>,
-    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
@@ -793,7 +970,8 @@ pub(crate) async fn get(
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let ctx = Context::default();
-    Ok(roles_page(transaction, me, &uri, csrf.as_ref(), data, ctx).await?)
+    let uri = HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap();
+    Ok(roles_page(transaction, me, &Origin(uri.clone()), data, ctx, None).await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -811,10 +989,10 @@ pub(crate) struct AddRoleBindingForm {
 pub(crate) async fn add_role_binding(
     pool: &State<PgPool>,
     me: User,
-    uri: Origin<'_>,
-    csrf: Option<CsrfToken>,
+    _uri: &HttpOrigin<'_>,
     series: Series,
     event: &str,
+    csrf: Option<CsrfToken>,
     form: Form<Contextual<'_, AddRoleBindingForm>>
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
@@ -856,10 +1034,10 @@ pub(crate) async fn add_role_binding(
                 roles_page(
                     transaction,
                     Some(me),
-                    &uri,
-                    csrf.as_ref(),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
                     data,
                     form.context,
+                    csrf,
                 )
                 .await?,
             )
@@ -877,10 +1055,10 @@ pub(crate) async fn add_role_binding(
                             roles_page(
                                 transaction,
                                 Some(me),
-                                &uri,
-                                csrf.as_ref(),
+                                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
                                 data,
                                 form.context,
+                                csrf,
                             )
                             .await?,
                         ));
@@ -906,10 +1084,10 @@ pub(crate) async fn add_role_binding(
             roles_page(
                 transaction,
                 Some(me),
-                &uri,
-                csrf.as_ref(),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
                 data,
                 form.context,
+                csrf,
             )
             .await?,
         )
@@ -920,11 +1098,10 @@ pub(crate) async fn add_role_binding(
 pub(crate) async fn delete_role_binding(
     pool: &State<PgPool>,
     me: User,
-    uri: Origin<'_>,
-    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
     binding: Id<RoleBindings>,
+    csrf: Option<CsrfToken>,
     form: Form<Contextual<'_, EmptyForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
@@ -951,10 +1128,10 @@ pub(crate) async fn delete_role_binding(
                 roles_page(
                     transaction,
                     Some(me),
-                    &uri,
-                    csrf.as_ref(),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
                     data,
                     form.context,
+                    csrf,
                 )
                 .await?,
             )
@@ -968,10 +1145,10 @@ pub(crate) async fn delete_role_binding(
             roles_page(
                 transaction,
                 Some(me),
-                &uri,
-                csrf.as_ref(),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
                 data,
                 form.context,
+                csrf,
             )
             .await?,
         )
@@ -983,11 +1160,10 @@ pub(crate) async fn approve_role_request(
     pool: &State<PgPool>,
     discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
-    uri: Origin<'_>,
-    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
     request: Id<RoleRequests>,
+    csrf: Option<CsrfToken>,
     form: Form<Contextual<'_, EmptyForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
@@ -1014,10 +1190,10 @@ pub(crate) async fn approve_role_request(
                 roles_page(
                     transaction,
                     Some(me),
-                    &uri,
-                    csrf.as_ref(),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
                     data,
                     form.context,
+                    csrf,
                 )
                 .await?,
             )
@@ -1029,90 +1205,32 @@ pub(crate) async fn approve_role_request(
             // Get the role binding to check for Discord role ID
             let role_binding = sqlx::query_as!(
                 RoleBinding,
-                r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event as "event!", 
-                          rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count as "min_count!", 
-                          rb.max_count as "max_count!", rt.name as "role_type_name!", rb.discord_role_id
-                   FROM role_bindings rb
-                   JOIN role_types rt ON rb.role_type_id = rt.id
-                   WHERE rb.id = $1"#,
-                role_request.role_binding_id as _
+                r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event, rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count, rb.max_count, rt.name as role_type_name, rb.discord_role_id FROM role_bindings rb JOIN role_types rt ON rb.role_type_id = rt.id WHERE rb.id = $1"#,
+                i64::from(role_request.role_binding_id) as i32
             )
-            .fetch_one(&mut *transaction)
+            .fetch_optional(&mut *transaction)
             .await?;
 
             // Update the role request status
-            RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Approved)
-                .await?;
+            RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Approved).await?;
 
-            // Handle Discord role assignment if applicable
-            if let Some(discord_role_id) = role_binding.discord_role_id {
-                if let Some(discord_guild) = data.discord_guild {
-                    // Get the user's Discord ID
+            // If there's a Discord role ID, assign the role
+            if let Some(binding) = role_binding {
+                if let Some(discord_role_id) = binding.discord_role_id {
                     let user = User::from_id(&mut *transaction, role_request.user_id).await?
                         .ok_or(StatusOrError::Status(Status::NotFound))?;
                     
                     if let Some(discord_user) = user.discord {
+                        // Get the Discord context and guild
                         let discord_ctx = discord_ctx.read().await;
-                        
-                        // Check if user is in the Discord server
-                        match discord_guild.member(&*discord_ctx, discord_user.id).await {
-                            Ok(member) => {
-                                // User is in the server, assign the role directly
+                        if let Some(discord_guild) = data.discord_guild {
+                            if let Ok(member) = discord_guild.member(&*discord_ctx, discord_user.id).await {
                                 if let Err(e) = member.add_role(&*discord_ctx, RoleId::new(discord_role_id.try_into().unwrap())).await {
-                                    eprintln!("Failed to assign Discord role {} to user {}: {:?}", discord_role_id, discord_user.id, e);
-                                    // Don't fail the entire request, just log the error
+                                    eprintln!("Failed to assign Discord role {} to user {}: {}", discord_role_id, discord_user.id, e);
                                 }
-                            }
-                            Err(_) => {
-                                // User is not in the server, create a pending invite
-                                let invite_url = if let Some(invite_url) = data.discord_invite_url {
-                                    invite_url.to_string()
-                                } else {
-                                    // For now, we'll just log that we need an invite URL
-                                    eprintln!("No Discord invite URL configured for event {}", event);
-                                    return Err(StatusOrError::Status(Status::InternalServerError));
-                                };
-
-                                // Store the pending invite
-                                sqlx::query!(
-                                    r#"INSERT INTO pending_discord_invites 
-                                       (user_id, role_request_id, discord_guild_id, discord_role_id, invite_url)
-                                       VALUES ($1, $2, $3, $4, $5)
-                                       ON CONFLICT (user_id, role_request_id) DO UPDATE SET
-                                       discord_guild_id = $3, discord_role_id = $4, invite_url = $5, created_at = NOW()"#,
-                                    role_request.user_id as _,
-                                    request as _,
-                                    discord_guild.get() as i64,
-                                    discord_role_id as i64,
-                                    invite_url
-                                )
-                                .execute(&mut *transaction)
-                                .await?;
-
-                                // Send DM to user with invite link
-                                if let Ok(dm_channel) = discord_user.id.create_dm_channel(&*discord_ctx).await {
-                                    let message = format!(
-                                        "Your role request for **{}** in **{}** has been approved! 🎉\n\nPlease join the Discord server to receive your role (invite valid for 7 days):\n{}",
-                                        role_binding.role_type_name, data.display_name, invite_url
-                                    );
-                                    if let Err(e) = dm_channel.say(&*discord_ctx, message).await {
-                                        eprintln!("Failed to send DM to user {}: {}", discord_user.id, e);
-                                    }
-                                } else {
-                                    eprintln!("Failed to create DM channel for user {}", discord_user.id);
-                                }
-                                
-                                eprintln!("User {} needs Discord invite to join server {} for role {}", 
-                                         discord_user.id, discord_guild.get(), discord_role_id);
                             }
                         }
-                    } else {
-                        // User doesn't have Discord connected
-                        eprintln!("User {} doesn't have Discord account connected for role assignment", role_request.user_id);
                     }
-                } else {
-                    // Event doesn't have a Discord guild configured
-                    eprintln!("Event {} doesn't have Discord guild configured for role assignment", event);
                 }
             }
 
@@ -1124,10 +1242,10 @@ pub(crate) async fn approve_role_request(
             roles_page(
                 transaction,
                 Some(me),
-                &uri,
-                csrf.as_ref(),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
                 data,
                 form.context,
+                csrf,
             )
             .await?,
         )
@@ -1138,11 +1256,10 @@ pub(crate) async fn approve_role_request(
 pub(crate) async fn reject_role_request(
     pool: &State<PgPool>,
     me: User,
-    uri: Origin<'_>,
-    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
     request: Id<RoleRequests>,
+    csrf: Option<CsrfToken>,
     form: Form<Contextual<'_, EmptyForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
@@ -1169,10 +1286,10 @@ pub(crate) async fn reject_role_request(
                 roles_page(
                     transaction,
                     Some(me),
-                    &uri,
-                    csrf.as_ref(),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
                     data,
                     form.context,
+                    csrf,
                 )
                 .await?,
             )
@@ -1187,10 +1304,10 @@ pub(crate) async fn reject_role_request(
             roles_page(
                 transaction,
                 Some(me),
-                &uri,
-                csrf.as_ref(),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
                 data,
                 form.context,
+                csrf,
             )
             .await?,
         )
@@ -1211,10 +1328,9 @@ pub(crate) async fn apply_for_role(
     pool: &State<PgPool>,
     discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
-    uri: Origin<'_>,
-    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
+    csrf: Option<CsrfToken>,
     form: Form<Contextual<'_, ApplyForRoleForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
@@ -1236,10 +1352,10 @@ pub(crate) async fn apply_for_role(
                 volunteer_page(
                     transaction,
                     Some(me),
-                    &uri,
-                    csrf.as_ref(),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
                     data,
                     form.context,
+                    csrf,
                 )
                 .await?,
             )
@@ -1254,83 +1370,83 @@ pub(crate) async fn apply_for_role(
                 form.context.push_error(form::Error::validation(
                     "You have already applied for this role",
                 ));
-                RedirectOrContent::Content(
+                return Ok(RedirectOrContent::Content(
                     volunteer_page(
                         transaction,
                         Some(me),
-                        &uri,
-                        csrf.as_ref(),
+                        &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
                         data,
                         form.context,
+                        csrf,
                     )
                     .await?,
-                )
-            } else {
-                // Get the role binding details for the notification
-                let role_binding = sqlx::query_as!(
-                    RoleBinding,
-                    r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event as "event!", 
-                              rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count as "min_count!", 
-                              rb.max_count as "max_count!", rt.name as "role_type_name!", rb.discord_role_id
+                ));
+            }
+
+            // Get the role binding details for the notification
+            let role_binding = sqlx::query_as!(
+                RoleBinding,
+                r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event as "event!", 
+                          rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count as "min_count!", 
+                          rb.max_count as "max_count!", rt.name as "role_type_name!", rb.discord_role_id
                        FROM role_bindings rb
                        JOIN role_types rt ON rb.role_type_id = rt.id
                        WHERE rb.id = $1"#,
-                    value.role_binding_id as _
-                )
-                .fetch_one(&mut *transaction)
-                .await?;
+                i64::from(value.role_binding_id) as i32
+            )
+            .fetch_one(&mut *transaction)
+            .await?;
 
-                // Create the role request
-                RoleRequest::create(
-                    &mut transaction,
-                    value.role_binding_id,
-                    me.id,
-                    notes.clone().unwrap_or_default(),
-                )
-                .await?;
+            // Create the role request
+            RoleRequest::create(
+                &mut transaction,
+                value.role_binding_id,
+                me.id,
+                notes.clone().unwrap_or_default(),
+            )
+            .await?;
 
-                // Send Discord notification to organizer channel
-                if let Some(organizer_channel) = data.discord_organizer_channel {
-                    let discord_ctx = discord_ctx.read().await;
-                    let mut msg = MessageBuilder::default();
-                    msg.push("New volunteer application: ");
-                    msg.mention_user(&me);
-                    msg.push(" has applied for the **");
-                    msg.push_safe(&role_binding.role_type_name);
-                    msg.push("** role in **");
-                    msg.push_safe(&data.display_name);
-                    msg.push("**.");
-                    
-                    if let Some(notes) = notes {
-                        msg.push("\nNotes: ");
-                        msg.push_safe(&notes);
-                    }
-                    
-                    msg.push("\n\nClick here to review and manage role requests for the event: ");
-                    msg.push_named_link_no_preview("Manage Roles", format!("{}/event/{}/{}/roles", 
-                        base_uri(),
-                        series.slug(),
-                        event
-                    ));
-
-                    if let Err(e) = organizer_channel.say(&*discord_ctx, msg.build()).await {
-                        eprintln!("Failed to send Discord notification for role request: {}", e);
-                    }
+            // Send Discord notification to organizer channel
+            if let Some(organizer_channel) = data.discord_organizer_channel {
+                let discord_ctx = discord_ctx.read().await;
+                let mut msg = MessageBuilder::default();
+                msg.push("New volunteer application: ");
+                msg.mention_user(&me);
+                msg.push(" has applied for the **");
+                msg.push_safe(&role_binding.role_type_name);
+                msg.push("** role in **");
+                msg.push_safe(&data.display_name);
+                msg.push("**.");
+                
+                if let Some(notes) = notes {
+                    msg.push("\nNotes: ");
+                    msg.push_safe(&notes);
                 }
+                
+                msg.push("\n\nClick here to review and manage role requests for the event: ");
+                msg.push_named_link_no_preview("Manage Roles", format!("{}/event/{}/{}/roles", 
+                    base_uri(),
+                    series.slug(),
+                    event
+                ));
 
-                transaction.commit().await?;
-                RedirectOrContent::Redirect(Redirect::to(uri!(volunteer_page_get(series, event))))
+                if let Err(e) = organizer_channel.say(&*discord_ctx, msg.build()).await {
+                    eprintln!("Failed to send Discord notification for role request: {}", e);
+                }
             }
+
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(volunteer_page_get(series, event))))
         }
     } else {
         RedirectOrContent::Content(
             volunteer_page(
                 transaction,
                 Some(me),
-                &uri,
-                csrf.as_ref(),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
                 data,
                 form.context,
+                csrf,
             )
             .await?,
         )
@@ -1340,56 +1456,38 @@ pub(crate) async fn apply_for_role(
 async fn volunteer_page(
     mut transaction: Transaction<'_, Postgres>,
     me: Option<User>,
-    uri: &Origin<'_>,
-    csrf: Option<&CsrfToken>,
+    _uri: &Origin<'_>,
     data: Data<'_>,
     _ctx: Context<'_>,
+    csrf: Option<CsrfToken>,
 ) -> Result<RawHtml<String>, Error> {
     let header = data
         .header(&mut transaction, me.as_ref(), Tab::Volunteer, false)
         .await?;
 
     let content = if let Some(ref me) = me {
-        let role_bindings =
-            RoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
-        let my_requests = RoleRequest::for_event(&mut transaction, data.series, &data.event)
-            .await?
-            .into_iter()
-            .filter(|req| req.user_id == me.id)
+        let effective_role_bindings = EffectiveRoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
+        let my_requests = RoleRequest::for_user(&mut transaction, me.id).await?;
+        let my_approved_roles = my_requests
+            .iter()
+            .filter(|req| {
+                matches!(req.status, RoleRequestStatus::Approved)
+                    && req.series == data.series
+                    && req.event == data.event
+            })
             .collect::<Vec<_>>();
 
-        // Get my approved roles
-        let my_approved_roles: Vec<_> = my_requests
-            .iter()
-            .filter(|req| matches!(req.status, RoleRequestStatus::Approved))
-            .collect();
-
-        // Get upcoming races for this event
-        let all_races = Race::for_event(&mut transaction, &reqwest::Client::new(), &data).await?;
-        let upcoming_races: Vec<_> = all_races
-            .into_iter()
-            .filter(|race| {
-                let scheduled = match race.schedule {
-                    RaceSchedule::Unscheduled => false, 
-                    RaceSchedule::Live { end, .. } => {
-                        end.is_none_or(|end_time| end_time > Utc::now())
-                    }
-                    RaceSchedule::Async { .. } => false, // Exclude async races entirely
-                };
-                let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
-                scheduled && all_teams_consented
-            })
-            .collect();
+        let upcoming_races = Race::for_event(&mut transaction, &reqwest::Client::new(), &data).await?;
 
         html! {
             h2 : "Volunteer for Roles";
             p : "Apply to volunteer for roles in this event.";
 
-            @if role_bindings.is_empty() {
+            @if effective_role_bindings.is_empty() {
                 p : "No volunteer roles are currently available for this event.";
             } else {
                 h3 : "Available Roles";
-                @for binding in role_bindings {
+                @for binding in &effective_role_bindings {
                     @let my_request = my_requests.iter()
                         .filter(|req| req.role_binding_id == binding.id && !matches!(req.status, RoleRequestStatus::Aborted))
                         .max_by_key(|req| req.created_at);
@@ -1397,42 +1495,58 @@ async fn volunteer_page(
                     div(class = "role-binding") {
                         h4 : binding.role_type_name;
                         p {
-                            : "Selected per restream: ";
+                            : "Required: ";
                             : binding.min_count;
                             : " - ";
                             : binding.max_count;
                             : " volunteers";
                         }
-                        @if let Some(request) = my_request {
+                        @if let Some(discord_role_id) = binding.discord_role_id {
                             p {
-                                : "Your application status: ";
-                                @match request.status {
-                                    RoleRequestStatus::Pending => : "Pending";
-                                    RoleRequestStatus::Approved => : "Approved";
-                                    RoleRequestStatus::Rejected => : "Rejected";
-                                    RoleRequestStatus::Aborted => : "Aborted";
-                                }
-                            }
-                            @if matches!(request.status, RoleRequestStatus::Pending) {
-                                @let errors = Vec::new();
-                                div(class = "button-row") {
-                                    @let (errors, withdraw_button) = button_form_ext(
-                                        uri!(withdraw_role_request(data.series, &*data.event)),
-                                        csrf,
-                                        errors,
-                                        html! {
-                                            input(type = "hidden", name = "request_id", value = request.id.to_string());
-                                        },
-                                        "Withdraw Application"
-                                    );
-                                    : errors;
-                                    : withdraw_button;
+                                : "Discord Role: ";
+                                : format!("{}", discord_role_id);
+                                @if binding.has_event_override {
+                                    span(class = "override-indicator") : " (event override)";
                                 }
                             }
                         }
-                        @if !has_active_request {
+                        @if binding.is_game_binding {
+                            p(class = "game-binding-info") {
+                                : "This role is managed by the game's role binding system";
+                                @if binding.has_event_override {
+                                    : " with event-specific Discord role override";
+                                }
+                            }
+                        }
+
+                        @if has_active_request {
+                            @let request = my_request.unwrap();
+                            p(class = "request-status") {
+                                : "Your request status: ";
+                                @match request.status {
+                                    RoleRequestStatus::Pending => {
+                                        span(class = "status-pending") : "Pending";
+                                    }
+                                    RoleRequestStatus::Approved => {
+                                        span(class = "status-approved") : "Approved";
+                                    }
+                                    RoleRequestStatus::Rejected => {
+                                        span(class = "status-rejected") : "Rejected";
+                                    }
+                                    RoleRequestStatus::Aborted => {
+                                        span(class = "status-aborted") : "Aborted";
+                                    }
+                                }
+                            }
+                            @if let Some(ref notes) = request.notes {
+                                p(class = "request-notes") {
+                                    : "Your notes: ";
+                                    : notes;
+                                }
+                            }
+                        } else {
                             @let mut errors = Vec::new();
-                            : full_form(uri!(apply_for_role(data.series, &*data.event)), csrf, html! {
+                            : full_form(uri!(apply_for_role(data.series, &*data.event)), csrf.as_ref(), html! {
                                 input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
                                 : form_field("notes", &mut errors, html! {
                                     label(for = "notes") : "Notes (optional):";
@@ -1446,83 +1560,53 @@ async fn volunteer_page(
 
             @if !my_approved_roles.is_empty() && !upcoming_races.is_empty() {
                 h3 : "Sign Up for Matches";
-                p : "You are approved for the following roles. Click on a match to sign up as a volunteer:";
+                p : "You have been approved for the following roles. You can now sign up for specific matches:";
                 
-                @for role in my_approved_roles {
-                    div(class = "approved-role") {
-                        h4 : role.role_type_name;
-                        p : "You are approved for this role.";
+                @for role_request in my_approved_roles {
+                    @let binding = effective_role_bindings.iter().find(|b| b.id == role_request.role_binding_id);
+                    @if let Some(binding) = binding {
+                        h4 : format!("{} - {}", binding.role_type_name, role_request.role_type_name);
+                        @let available_races = upcoming_races.iter().filter(|race| {
+                            // Filter races that need this role type
+                            // This is a simplified check - you might want more sophisticated logic
+                            true
+                        }).collect::<Vec<_>>();
                         
-                        @if upcoming_races.is_empty() {
-                            p : "No upcoming matches available for signup.";
+                        @if available_races.is_empty() {
+                            p : "No upcoming races available for signup.";
                         } else {
-                            h5 : "Upcoming Matches:";
                             ul {
-                                @for race in &upcoming_races {
+                                @for race in available_races {
                                     li {
-                                        a(href = uri!(match_signup_page_get(data.series, &*data.event, race.id))) {
-                                            : format!("{} {} {}",
-                                                race.phase.as_deref().unwrap_or(""),
-                                                race.round.as_deref().unwrap_or(""),
-                                                match &race.entrants {
-                                                    Entrants::Two([team1, team2]) => format!("{} vs {}",
-                                                        match team1 {
-                                                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                            Entrant::Named { name, .. } => name.clone(),
-                                                            Entrant::Discord { .. } => "Discord User".to_string(),
-                                                        },
-                                                        match team2 {
-                                                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                            Entrant::Named { name, .. } => name.clone(),
-                                                            Entrant::Discord { .. } => "Discord User".to_string(),
-                                                        }
-                                                    ),
-                                                    Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
-                                                        match team1 {
-                                                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                            Entrant::Named { name, .. } => name.clone(),
-                                                            Entrant::Discord { .. } => "Discord User".to_string(),
-                                                        },
-                                                        match team2 {
-                                                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                            Entrant::Named { name, .. } => name.clone(),
-                                                            Entrant::Discord { .. } => "Discord User".to_string(),
-                                                        },
-                                                        match team3 {
-                                                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                            Entrant::Named { name, .. } => name.clone(),
-                                                            Entrant::Discord { .. } => "Discord User".to_string(),
-                                                        }
-                                                    ),
-                                                    _ => "Unknown entrants".to_string(),
+                                        a(href = uri!(match_signup_page_get(data.series, &*data.event, race.id))) : match &race.entrants {
+                                            Entrants::Two([team1, team2]) => format!("{} vs {}",
+                                                match team1 {
+                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                    Entrant::Named { name, .. } => name.clone(),
+                                                    Entrant::Discord { .. } => "Discord User".to_string(),
+                                                },
+                                                match team2 {
+                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                    Entrant::Named { name, .. } => name.clone(),
+                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                 }
-                                            );
-                                            @match race.schedule {
-                                                RaceSchedule::Unscheduled => : " (Unscheduled)";
-                                                RaceSchedule::Live { start, .. } => {
-                                                    : " - ";
-                                                    : format_datetime(start, DateTimeFormat { long: false, running_text: false });
-                                                }
-                                                RaceSchedule::Async { .. } => : " (Async)";
-                                            }
-                                        }
+                                            ),
+                                            _ => "TBD vs TBD".to_string(),
+                                        };
                                     }
                                 }
                             }
                         }
                     }
                 }
-            } else if !my_approved_roles.is_empty() && upcoming_races.is_empty() {
-                h3 : "No Upcoming Matches";
-                p : "You are approved for roles, but there are no upcoming matches available for signup.";
             }
         }
     } else {
         html! {
             article {
                 p {
-                    a(href = uri!(auth::login(Some(uri!(volunteer_page_get(data.series, &*data.event)))))) : "Sign in";
-                    : " to view volunteer opportunities for this event.";
+                    a(href = "/login") : "Sign in";
+                    : " to volunteer for roles in this event.";
                 }
             }
         }
@@ -1531,12 +1615,9 @@ async fn volunteer_page(
     Ok(page(
         transaction,
         &me,
-        uri,
-        PageStyle {
-            chests: data.chests().await?,
-            ..PageStyle::default()
-        },
-        &data.display_name,
+        &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", data.series.slug(), data.event)).unwrap()),
+        PageStyle::default(),
+        &format!("Volunteer — {}", data.display_name),
         html! {
             : header;
             : content;
@@ -1549,8 +1630,6 @@ async fn volunteer_page(
 pub(crate) async fn volunteer_page_get(
     pool: &State<PgPool>,
     me: Option<User>,
-    uri: Origin<'_>,
-    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
@@ -1559,7 +1638,8 @@ pub(crate) async fn volunteer_page_get(
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let ctx = Context::default();
-    Ok(volunteer_page(transaction, me, &uri, csrf.as_ref(), data, ctx).await?)
+    let uri = HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap();
+    Ok(volunteer_page(transaction, me, &Origin(uri.clone()), data, ctx, None).await?)
 }
 
 // Match signup functionality
@@ -1576,11 +1656,10 @@ pub(crate) struct SignupForMatchForm {
 pub(crate) async fn signup_for_match(
     pool: &State<PgPool>,
     me: User,
-    uri: Origin<'_>,
-    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
     race_id: Id<Races>,
+    csrf: Option<CsrfToken>,
     form: Form<Contextual<'_, SignupForMatchForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
@@ -1614,11 +1693,11 @@ pub(crate) async fn signup_for_match(
                 match_signup_page(
                     transaction,
                     Some(me),
-                    &uri,
-                    csrf.as_ref(),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/races/{}", series.slug(), event, race_id)).unwrap()),
                     data,
                     race_id,
                     form.context,
+                    csrf,
                 )
                 .await?,
             )
@@ -1631,9 +1710,7 @@ pub(crate) async fn signup_for_match(
             Signup::create(&mut transaction, race_id, value.role_binding_id, me.id, notes).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(
-                data.series,
-                &*data.event,
-                race_id
+                series, &*event, race_id
             ))))
         }
     } else {
@@ -1641,11 +1718,11 @@ pub(crate) async fn signup_for_match(
             match_signup_page(
                 transaction,
                 Some(me),
-                &uri,
-                csrf.as_ref(),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/races/{}", series.slug(), event, race_id)).unwrap()),
                 data,
                 race_id,
                 form.context,
+                csrf,
             )
             .await?,
         )
@@ -1668,11 +1745,10 @@ pub(crate) struct ManageRosterForm {
 pub(crate) async fn manage_roster(
     pool: &State<PgPool>,
     me: User,
-    uri: Origin<'_>,
-    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
     race_id: Id<Races>,
+    csrf: Option<CsrfToken>,
     form: Form<Contextual<'_, ManageRosterForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
@@ -1703,11 +1779,11 @@ pub(crate) async fn manage_roster(
                 match_signup_page(
                     transaction,
                     Some(me),
-                    &uri,
-                    csrf.as_ref(),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/races/{}", series.slug(), event, race_id)).unwrap()),
                     data,
                     race_id,
                     form.context,
+                    csrf,
                 )
                 .await?,
             )
@@ -1722,11 +1798,11 @@ pub(crate) async fn manage_roster(
                         match_signup_page(
                             transaction,
                             Some(me),
-                            &uri,
-                            csrf.as_ref(),
+                            &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/races/{}", series.slug(), event, race_id)).unwrap()),
                             data,
                             race_id,
                             form.context,
+                            csrf,
                         )
                         .await?,
                     ));
@@ -1744,11 +1820,11 @@ pub(crate) async fn manage_roster(
             match_signup_page(
                 transaction,
                 Some(me),
-                &uri,
-                csrf.as_ref(),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/races/{}", series.slug(), event, race_id)).unwrap()),
                 data,
                 race_id,
                 form.context,
+                csrf,
             )
             .await?,
         )
@@ -1758,11 +1834,11 @@ pub(crate) async fn manage_roster(
 async fn match_signup_page(
     mut transaction: Transaction<'_, Postgres>,
     me: Option<User>,
-    uri: &Origin<'_>,
-    csrf: Option<&CsrfToken>,
+    _uri: &Origin<'_>,
     data: Data<'_>,
     race_id: Id<Races>,
     _ctx: Context<'_>,
+    csrf: Option<CsrfToken>,
 ) -> Result<RawHtml<String>, Error> {
     let header = data
         .header(&mut transaction, me.as_ref(), Tab::Races, true)
@@ -1771,7 +1847,7 @@ async fn match_signup_page(
     // Get race details
     let race = Race::from_id(&mut transaction, &reqwest::Client::new(), race_id).await?;
     let signups = Signup::for_race(&mut transaction, race_id).await?;
-    let role_bindings = RoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
+    let effective_role_bindings = EffectiveRoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
 
     let content = if let Some(ref me) = me {
         let is_organizer = data.organizers(&mut transaction).await?.contains(me);
@@ -1779,13 +1855,15 @@ async fn match_signup_page(
         let can_manage = is_organizer || is_restreamer;
 
         html! {
-            h2 : "Match Volunteer Signups";
-            h3 {
-                : format!("{} {} {}",
-                    race.phase.as_deref().unwrap_or(""),
-                    race.round.as_deref().unwrap_or(""),
-                    match &race.entrants {
-                        Entrants::Two([team1, team2]) => format!("{} vs {}",
+            h2 : "Race Volunteer Signups";
+            p : format!("Manage volunteer signups for race {}", race_id);
+
+            h3 : "Race Information";
+            p {
+                : "Teams: ";
+                @match &race.entrants {
+                    Entrants::Two([team1, team2]) => {
+                        : format!("{} vs {}", 
                             match team1 {
                                 Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
                                 Entrant::Named { name, .. } => name.clone(),
@@ -1796,8 +1874,10 @@ async fn match_signup_page(
                                 Entrant::Named { name, .. } => name.clone(),
                                 Entrant::Discord { .. } => "Discord User".to_string(),
                             }
-                        ),
-                        Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                        );
+                    }
+                    Entrants::Three([team1, team2, team3]) => {
+                        : format!("{} vs {} vs {}", 
                             match team1 {
                                 Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
                                 Entrant::Named { name, .. } => name.clone(),
@@ -1813,224 +1893,192 @@ async fn match_signup_page(
                                 Entrant::Named { name, .. } => name.clone(),
                                 Entrant::Discord { .. } => "Discord User".to_string(),
                             }
-                        ),
-                        _ => "Unknown entrants".to_string(),
+                        );
                     }
-                );
+                    _ => : "Unknown entrants";
+                }
             }
-            p {
-                @match race.schedule {
-                    RaceSchedule::Unscheduled => : "Unscheduled";
-                    RaceSchedule::Live { start, .. } => {
-                        : "Scheduled for ";
-                        : format_datetime(start, DateTimeFormat { long: true, running_text: false });
-                    }
-                    RaceSchedule::Async { .. } => : "Async Race";
+            @if let Some(start) = match &race.schedule {
+                RaceSchedule::Live { start, .. } => Some(start),
+                RaceSchedule::Async { .. } => None, // Async doesn't have a start field
+                _ => None,
+            } {
+                p {
+                    : "Scheduled for: ";
+                    : format_datetime(*start, DateTimeFormat { long: false, running_text: false });
                 }
             }
 
-            @if role_bindings.is_empty() {
-                p : "No volunteer roles are configured for this event.";
-            } else {
-                h3 : "Role Signups";
-                @for binding in role_bindings {
-                    div(class = "role-binding") {
-                        h4 : binding.role_type_name;
-                        p {
-                            : "Required: ";
-                            : binding.min_count;
-                            : " - ";
-                            : binding.max_count;
-                            : " volunteers";
-                        }
-
-                        @let role_signups = signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
-                        @let confirmed_signups = role_signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
-                        @let pending_signups = role_signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Pending)).collect::<Vec<_>>();
-
-                        h5 : "Confirmed Volunteers";
-                        @if confirmed_signups.is_empty() {
-                            p : "No confirmed volunteers yet.";
-                        } else {
-                            ul {
-                                @for signup in &confirmed_signups {
-                                    li {
-                                        @let user = User::from_id(&mut *transaction, signup.user_id).await?;
-                                        : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
-                                        @if can_manage && signup.notes.is_some() {
-                                            : " [";
-                                            : signup.notes.as_ref().unwrap();
-                                            : "]";
-                                        }
-                                        @if can_manage {
-                                            @let errors = Vec::new();
-                                            div(class = "button-row") {
-                                                @let (errors, revoke_button) = button_form_ext(
-                                                    uri!(revoke_signup(data.series, &*data.event, race_id)),
-                                                    csrf,
-                                                    errors,
-                                                    html! {
-                                                        input(type = "hidden", name = "signup_id", value = signup.id.to_string());
-                                                    },
-                                                    "Revoke"
-                                                );
-                                                : errors;
-                                                : revoke_button;
-                                            }
-                                        }
-                                    }
+            @if can_manage {
+                h3 : "Manage Signups";
+                @for signup in &signups {
+                    @if let Some(user) = User::from_id(&mut *transaction, signup.user_id).await? {
+                        div(class = "signup-item") {
+                            p {
+                                strong : user.display_name();
+                                : " - ";
+                                : signup.role_type_name;
+                                : " (";
+                                @match signup.status {
+                                    VolunteerSignupStatus::Pending => : "Pending";
+                                    VolunteerSignupStatus::Confirmed => : "Confirmed";
+                                    VolunteerSignupStatus::Declined => : "Declined";
+                                    VolunteerSignupStatus::Aborted => : "Aborted";
                                 }
+                                : ")";
                             }
-                        }
-
-                        @if can_manage && !pending_signups.is_empty() {
-                            h5 : "Pending Volunteers";
-                            ul {
-                                @for signup in pending_signups {
-                                    li {
-                                        @let user = User::from_id(&mut *transaction, signup.user_id).await?;
-                                        : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
-                                        @if signup.notes.is_some() {
-                                            : " [";
-                                            : signup.notes.as_ref().unwrap();
-                                            : "]";
-                                        }
-                                        @let errors = Vec::new();
-                                        div(class = "button-row") {
-                                            @let (errors, confirm_button) = button_form_ext_disabled(
-                                                uri!(manage_roster(data.series, &*data.event, race_id)), 
-                                                csrf, 
-                                                errors, 
-                                                html! {
-                                                    input(type = "hidden", name = "signup_id", value = signup.id.to_string());
-                                                    input(type = "hidden", name = "action", value = "confirm");
-                                                },
-                                                "Confirm",
-                                                false
-                                            );
-                                            : errors;
-                                            : confirm_button;
-                                            @let errors = Vec::new();
-                                            @let (errors, decline_button) = button_form_ext_disabled(
-                                                uri!(manage_roster(data.series, &*data.event, race_id)), 
-                                                csrf, 
-                                                errors, 
-                                                html! {
-                                                    input(type = "hidden", name = "signup_id", value = signup.id.to_string());
-                                                    input(type = "hidden", name = "action", value = "decline");
-                                                },
-                                                "Decline",
-                                                false
-                                            );
-                                            : errors;
-                                            : decline_button;
-                                        }
-                                    }
-                                }
+                            @if let Some(ref notes) = signup.notes {
+                                p(class = "signup-notes") : notes;
                             }
-                        }
-
-                        @let my_approved_roles = RoleRequest::for_event(&mut transaction, data.series, &data.event).await?
-                            .into_iter()
-                            .filter(|req| req.user_id == me.id && matches!(req.status, RoleRequestStatus::Approved))
-                            .collect::<Vec<_>>();
-
-                        @if my_approved_roles.iter().any(|req| req.role_binding_id == binding.id) {
-                            @let has_active_signup = role_signups.iter().any(|s| s.user_id == me.id && matches!(s.status, VolunteerSignupStatus::Pending | VolunteerSignupStatus::Confirmed));
-                            @if !has_active_signup {
-                                @let errors = Vec::new();
-                                @let max_reached = confirmed_signups.len() as i32 >= binding.max_count;
-                                @let is_async = matches!(race.schedule, RaceSchedule::Async { .. });
-                                @let is_ended = race.is_ended();
-                                @let disabled = max_reached || is_async || is_ended;
-                                @let reason = if max_reached {
-                                    Some("Maximum number of volunteers reached for this role.")
-                                } else if is_async {
-                                    Some("Signups are not available for async races.")
-                                } else if is_ended {
-                                    Some("This race has ended and can no longer accept signups.")
-                                } else {
-                                    None
-                                };
-                                @if disabled {
-                                    @let (errors, signup_button) = button_form_ext_disabled(
-                                        uri!(signup_for_match(data.series, &*data.event, race_id)),
-                                        csrf,
-                                        errors,
+                            @if matches!(signup.status, VolunteerSignupStatus::Pending) {
+                                div(class = "signup-actions") {
+                                    @let (errors, confirm_button) = button_form_ext(
+                                        uri!(manage_roster(data.series, &*data.event, race_id)),
+                                        csrf.as_ref(),
+                                        Vec::new(),
                                         html! {
-                                            input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                            input(type = "hidden", name = "signup_id", value = signup.id.to_string());
+                                            input(type = "hidden", name = "action", value = "confirm");
                                         },
-                                        &format!("Sign up for {}", binding.role_type_name),
-                                        true
+                                        "Confirm"
                                     );
                                     : errors;
-                                    div(class = "button-row") {
-                                        : signup_button;
-                                    }
-                                } else {
-                                    @let mut errors = Vec::new();
-                                    : full_form(uri!(signup_for_match(data.series, &*data.event, race_id)), csrf, html! {
-                                        input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                        : form_field("notes", &mut errors, html! {
-                                            label(for = "notes") : "Notes:";
-                                            input(type = "text", name = "notes", id = "notes", maxlength = "60", size = "30", placeholder = "Optional notes for organizers");
-                                        });
-                                    }, errors, &format!("Sign up for {}", binding.role_type_name));
+                                    : confirm_button;
+                                    @let (errors, decline_button) = button_form_ext(
+                                        uri!(manage_roster(data.series, &*data.event, race_id)),
+                                        csrf.as_ref(),
+                                        Vec::new(),
+                                        html! {
+                                            input(type = "hidden", name = "signup_id", value = signup.id.to_string());
+                                            input(type = "hidden", name = "action", value = "decline");
+                                        },
+                                        "Decline"
+                                    );
+                                    : errors;
+                                    : decline_button;
                                 }
-                                @if let Some(reason) = reason {
-                                    p(class = "disabled-reason") : reason;
-                                }
-                            } else {
-                                p : "You have already signed up for this role.";
                             }
-                        } else {
-                            p : "You are not approved for this role.";
                         }
+                    }
+                }
+            }
 
-                        @if !role_signups.is_empty() {
-                            @let has_non_confirmed_non_aborted = role_signups.iter().any(|s| !matches!(s.status, VolunteerSignupStatus::Confirmed | VolunteerSignupStatus::Aborted));
-                            @if has_non_confirmed_non_aborted {
-                                h5 : "Current Signups:";
-                                ul {
-                                    @for signup in &role_signups {
-                                        @if !matches!(signup.status, VolunteerSignupStatus::Confirmed | VolunteerSignupStatus::Aborted) {
-                                            @let user = User::from_id(&mut *transaction, signup.user_id).await?;
-                                            li {
-                                                : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
-                                                @if can_manage && signup.notes.is_some() {
-                                                    : " [";
-                                                    : signup.notes.as_ref().unwrap();
-                                                    : "]";
-                                                }
-                                                : " (";
-                                                : match signup.status {
-                                                    VolunteerSignupStatus::Pending => "Pending",
-                                                    VolunteerSignupStatus::Confirmed => "Confirmed",
-                                                    VolunteerSignupStatus::Declined => "Declined",
-                                                    VolunteerSignupStatus::Aborted => "Aborted",
-                                                };
-                                                : ")";
-                                                @if signup.user_id == me.id && matches!(signup.status, VolunteerSignupStatus::Pending) {
-                                                    @let errors = Vec::new();
-                                                    div(class = "button-row") {
-                                                        @let (errors, withdraw_button) = button_form_ext(
-                                                            uri!(withdraw_signup(data.series, &*data.event, race_id)),
-                                                            csrf,
-                                                            errors,
-                                                            html! {
-                                                                input(type = "hidden", name = "signup_id", value = signup.id.to_string());
-                                                            },
-                                                            "Withdraw"
-                                                        );
-                                                        : errors;
-                                                        : withdraw_button;
-                                                    }
-                                                }
-                                            }
+            h3 : "Role Signups";
+            @for binding in &effective_role_bindings {
+                div(class = "role-binding") {
+                    h4 : binding.role_type_name;
+                    p {
+                        : "Required: ";
+                        : binding.min_count;
+                        : " - ";
+                        : binding.max_count;
+                        : " volunteers";
+                    }
+                    @if let Some(discord_role_id) = binding.discord_role_id {
+                        p {
+                            : "Discord Role: ";
+                            : format!("{}", discord_role_id);
+                            @if binding.has_event_override {
+                                span(class = "override-indicator") : " (event override)";
+                            }
+                        }
+                    }
+
+                    @let role_signups = signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                    @let confirmed_signups = role_signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
+                    @let pending_signups = role_signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Pending)).collect::<Vec<_>>();
+
+                    h5 : "Confirmed Volunteers";
+                    @if confirmed_signups.is_empty() {
+                        p : "No confirmed volunteers yet.";
+                    } else {
+                        ul {
+                            @for signup in &confirmed_signups {
+                                @if let Some(user) = User::from_id(&mut *transaction, signup.user_id).await? {
+                                    li {
+                                        : user.display_name();
+                                        @if let Some(ref notes) = signup.notes {
+                                            : " - ";
+                                            : notes;
                                         }
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    @if !pending_signups.is_empty() {
+                        h5 : "Pending Volunteers";
+                        ul {
+                            @for signup in pending_signups {
+                                @if let Some(user) = User::from_id(&mut *transaction, signup.user_id).await? {
+                                    li {
+                                        : user.display_name();
+                                        @if let Some(ref notes) = signup.notes {
+                                            : " - ";
+                                            : notes;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    @if let Some(ref me) = Some(me) {
+                        @let my_signup = role_signups.iter().find(|s| s.user_id == me.id);
+                        @if my_signup.is_none() {
+                            @let errors = Vec::new();
+                            @let max_reached = confirmed_signups.len() as i32 >= binding.max_count;
+                            @let is_async = matches!(race.schedule, RaceSchedule::Async { .. });
+                            @let is_ended = race.is_ended();
+                            @let disabled = max_reached || is_async || is_ended;
+                            @let reason = if max_reached {
+                                Some("Maximum number of volunteers reached for this role.")
+                            } else if is_async {
+                                Some("Signups are not available for async races.")
+                            } else if is_ended {
+                                Some("This race has ended and can no longer accept signups.")
+                            } else {
+                                None
+                            };
+                            @if disabled {
+                                @let (errors, signup_button) = button_form_ext_disabled(
+                                    uri!(signup_for_match(data.series, &*data.event, race_id)),
+                                    csrf.as_ref(),
+                                    errors,
+                                    html! {
+                                        input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                    },
+                                    &format!("Sign up for {}", binding.role_type_name),
+                                    true
+                                );
+                                : errors;
+                                div(class = "button-row") {
+                                    : signup_button;
+                                }
+                            } else {
+                                @let mut errors = Vec::new();
+                                : full_form(uri!(signup_for_match(data.series, &*data.event, race_id)), csrf.as_ref(), html! {
+                                    input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                    : form_field("notes", &mut errors, html! {
+                                        label(for = "notes") : "Notes:";
+                                        input(type = "text", name = "notes", id = "notes", maxlength = "60", size = "30", placeholder = "Optional notes for organizers");
+                                    });
+                                }, errors, &format!("Sign up for {}", binding.role_type_name));
+                            }
+                            @if let Some(reason) = reason {
+                                p(class = "disabled-reason") : reason;
+                            }
+                        } else {
+                            p : "You have already signed up for this role.";
+                        }
+                    } else {
+                        p : "You are not approved for this role.";
+                    }
+
+                    @if !role_signups.is_empty() {
+                        p(class = "signup-count") {
+                            : format!("{}/{} confirmed volunteers", confirmed_signups.len(), binding.max_count);
                         }
                     }
                 }
@@ -2040,8 +2088,8 @@ async fn match_signup_page(
         html! {
             article {
                 p {
-                    a(href = uri!(auth::login(Some(uri!(match_signup_page_get(data.series, &*data.event, race_id)))))) : "Sign in";
-                    : " to view volunteer signups for this match.";
+                    a(href = "/login") : "Sign in";
+                    : " to view volunteer signups for this race.";
                 }
             }
         }
@@ -2050,12 +2098,9 @@ async fn match_signup_page(
     Ok(page(
         transaction,
         &me,
-        uri,
-        PageStyle {
-            chests: data.chests().await?,
-            ..PageStyle::default()
-        },
-        &format!("Volunteer Signups — {}", data.display_name),
+        &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", data.series.slug(), data.event)).unwrap()),
+        PageStyle::default(),
+        &format!("Race Signups — {}", data.display_name),
         html! {
             : header;
             : content;
@@ -2064,12 +2109,9 @@ async fn match_signup_page(
     .await?)
 }
 
-#[rocket::get("/event/<series>/<event>/races/<race_id>/volunteers")]
+#[rocket::get("/event/<series>/<event>/races/<race_id>/signups")]
 pub(crate) async fn match_signup_page_get(
     pool: &State<PgPool>,
-    me: Option<User>,
-    uri: Origin<'_>,
-    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
     race_id: Id<Races>,
@@ -2079,7 +2121,8 @@ pub(crate) async fn match_signup_page_get(
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let ctx = Context::default();
-    Ok(match_signup_page(transaction, me, &uri, csrf.as_ref(), data, race_id, ctx).await?)
+    let uri = HttpOrigin::parse_owned(format!("/event/{}/{}/races/{}", series.slug(), event, race_id)).unwrap();
+    Ok(match_signup_page(transaction, None, &Origin(uri.clone()), data, race_id, ctx, None).await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -2100,11 +2143,10 @@ pub(crate) struct RevokeSignupForm {
 pub(crate) async fn withdraw_signup(
     pool: &State<PgPool>,
     me: User,
-    uri: Origin<'_>,
-    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
     race_id: Id<Races>,
+    csrf: Option<CsrfToken>,
     form: Form<Contextual<'_, WithdrawSignupForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
@@ -2143,11 +2185,11 @@ pub(crate) async fn withdraw_signup(
                 match_signup_page(
                     transaction,
                     Some(me),
-                    &uri,
-                    csrf.as_ref(),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/races/{}", series.slug(), event, race_id)).unwrap()),
                     data,
                     race_id,
                     form.context,
+                    csrf,
                 )
                 .await?,
             )
@@ -2162,11 +2204,11 @@ pub(crate) async fn withdraw_signup(
             match_signup_page(
                 transaction,
                 Some(me),
-                &uri,
-                csrf.as_ref(),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/races/{}", series.slug(), event, race_id)).unwrap()),
                 data,
                 race_id,
                 form.context,
+                csrf,
             )
             .await?,
         )
@@ -2177,11 +2219,10 @@ pub(crate) async fn withdraw_signup(
 pub(crate) async fn revoke_signup(
     pool: &State<PgPool>,
     me: User,
-    uri: Origin<'_>,
-    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
     race_id: Id<Races>,
+    csrf: Option<CsrfToken>,
     form: Form<Contextual<'_, RevokeSignupForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
@@ -2229,11 +2270,11 @@ pub(crate) async fn revoke_signup(
                 match_signup_page(
                     transaction,
                     Some(me),
-                    &uri,
-                    csrf.as_ref(),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/races/{}", series.slug(), event, race_id)).unwrap()),
                     data,
                     race_id,
                     form.context,
+                    csrf,
                 )
                 .await?,
             )
@@ -2248,11 +2289,11 @@ pub(crate) async fn revoke_signup(
             match_signup_page(
                 transaction,
                 Some(me),
-                &uri,
-                csrf.as_ref(),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/races/{}", series.slug(), event, race_id)).unwrap()),
                 data,
                 race_id,
                 form.context,
+                csrf,
             )
             .await?,
         )
@@ -2277,10 +2318,9 @@ pub(crate) struct RevokeRoleRequestForm {
 pub(crate) async fn withdraw_role_request(
     pool: &State<PgPool>,
     me: User,
-    uri: Origin<'_>,
-    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
+    csrf: Option<CsrfToken>,
     form: Form<Contextual<'_, WithdrawRoleRequestForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
@@ -2310,13 +2350,13 @@ pub(crate) async fn withdraw_role_request(
 
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(
-                volunteer_page(
+                roles_page(
                     transaction,
                     Some(me),
-                    &uri,
-                    csrf.as_ref(),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
                     data,
                     form.context,
+                    csrf,
                 )
                 .await?,
             )
@@ -2324,17 +2364,17 @@ pub(crate) async fn withdraw_role_request(
             // Update the role request status to Aborted
             RoleRequest::update_status(&mut transaction, value.request_id, RoleRequestStatus::Aborted).await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(volunteer_page_get(series, event))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
         }
     } else {
         RedirectOrContent::Content(
-            volunteer_page(
+            roles_page(
                 transaction,
                 Some(me),
-                &uri,
-                csrf.as_ref(),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
                 data,
                 form.context,
+                csrf,
             )
             .await?,
         )
@@ -2345,10 +2385,9 @@ pub(crate) async fn withdraw_role_request(
 pub(crate) async fn revoke_role_request(
     pool: &State<PgPool>,
     me: User,
-    uri: Origin<'_>,
-    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
+    csrf: Option<CsrfToken>,
     form: Form<Contextual<'_, RevokeRoleRequestForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
@@ -2393,10 +2432,10 @@ pub(crate) async fn revoke_role_request(
                 roles_page(
                     transaction,
                     Some(me),
-                    &uri,
-                    csrf.as_ref(),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
                     data,
                     form.context,
+                    csrf,
                 )
                 .await?,
             )
@@ -2411,12 +2450,339 @@ pub(crate) async fn revoke_role_request(
             roles_page(
                 transaction,
                 Some(me),
-                &uri,
-                csrf.as_ref(),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
                 data,
                 form.context,
+                csrf,
             )
             .await?,
         )
     })
+}
+
+impl EventDiscordRoleOverride {
+    pub(crate) async fn for_event(
+        pool: &mut Transaction<'_, Postgres>,
+        series: Series,
+        event: &str,
+    ) -> sqlx::Result<Vec<Self>> {
+        sqlx::query_as!(
+            Self,
+            r#"
+                SELECT
+                    id AS "id: Id<EventDiscordRoleOverrides>",
+                    series AS "series: Series",
+                    event,
+                    role_type_id AS "role_type_id: Id<RoleTypes>",
+                    discord_role_id,
+                    created_at AS "created_at!",
+                    updated_at AS "updated_at!"
+                FROM event_discord_role_overrides
+                WHERE series = $1 AND event = $2
+                ORDER BY role_type_id
+            "#,
+            series as _,
+            event
+        )
+        .fetch_all(&mut **pool)
+        .await
+    }
+
+    pub(crate) async fn create(
+        pool: &mut Transaction<'_, Postgres>,
+        series: Series,
+        event: &str,
+        role_type_id: Id<RoleTypes>,
+        discord_role_id: i64,
+    ) -> sqlx::Result<Id<EventDiscordRoleOverrides>> {
+        let id = sqlx::query_scalar!(
+            r#"INSERT INTO event_discord_role_overrides (series, event, role_type_id, discord_role_id) 
+               VALUES ($1, $2, $3, $4) RETURNING id"#,
+            series as _,
+            event,
+            role_type_id as _,
+            discord_role_id
+        )
+        .fetch_one(&mut **pool)
+        .await?;
+        Ok(Id::from(id as i64))
+    }
+
+    pub(crate) async fn delete(
+        pool: &mut Transaction<'_, Postgres>,
+        id: Id<EventDiscordRoleOverrides>,
+    ) -> sqlx::Result<()> {
+        sqlx::query!("DELETE FROM event_discord_role_overrides WHERE id = $1", id as _)
+            .execute(&mut **pool)
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn exists_for_role_type(
+        pool: &mut Transaction<'_, Postgres>,
+        series: Series,
+        event: &str,
+        role_type_id: Id<RoleTypes>,
+    ) -> sqlx::Result<bool> {
+        Ok(sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM event_discord_role_overrides
+                   WHERE series = $1 AND event = $2 AND role_type_id = $3)"#,
+            series as _,
+            event,
+            role_type_id as _
+        )
+        .fetch_one(&mut **pool)
+        .await?
+        .unwrap_or(false))
+    }
+}
+
+impl EffectiveRoleBinding {
+    /// Get effective role bindings for an event, combining game role bindings with event-specific overrides
+    pub(crate) async fn for_event(
+        pool: &mut Transaction<'_, Postgres>,
+        series: Series,
+        event: &str,
+    ) -> sqlx::Result<Vec<Self>> {
+        // First, check if the event uses custom role bindings
+        let uses_custom_bindings = sqlx::query_scalar!(
+            r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,
+            series as _,
+            event
+        )
+        .fetch_optional(&mut **pool)
+        .await?
+        .unwrap_or(Some(true)).unwrap_or(true);
+
+        if uses_custom_bindings {
+            // Use event-specific role bindings
+            let event_bindings = RoleBinding::for_event(pool, series, event).await?;
+            let mut effective_bindings = Vec::new();
+            
+            for binding in event_bindings {
+                effective_bindings.push(Self {
+                    id: binding.id,
+                    role_type_id: binding.role_type_id,
+                    min_count: binding.min_count,
+                    max_count: binding.max_count,
+                    role_type_name: binding.role_type_name,
+                    discord_role_id: binding.discord_role_id,
+                    is_game_binding: false,
+                    has_event_override: false,
+                });
+            }
+            
+            Ok(effective_bindings)
+        } else {
+            // Use game role bindings with potential event-specific overrides
+            let game = game::Game::from_series(pool, series).await.map_err(|e| sqlx::Error::config(e))?;
+            let game_id = if let Some(game) = game {
+                game.id
+            } else {
+                return Ok(Vec::new());
+            };
+
+            let game_bindings = GameRoleBinding::for_game(pool, game_id).await?;
+            let event_overrides = EventDiscordRoleOverride::for_event(pool, series, event).await?;
+            
+            let mut override_map = HashMap::new();
+            for override_item in event_overrides {
+                override_map.insert(override_item.role_type_id, override_item.discord_role_id);
+            }
+
+            let mut effective_bindings = Vec::new();
+            for binding in game_bindings {
+                let has_override = override_map.contains_key(&binding.role_type_id);
+                let discord_role_id = if has_override {
+                    Some(override_map[&binding.role_type_id])
+                } else {
+                    binding.discord_role_id
+                };
+
+                effective_bindings.push(Self {
+                    id: binding.id,
+                    role_type_id: binding.role_type_id,
+                    min_count: binding.min_count,
+                    max_count: binding.max_count,
+                    role_type_name: binding.role_type_name,
+                    discord_role_id,
+                    is_game_binding: true,
+                    has_event_override: has_override,
+                });
+            }
+
+            Ok(effective_bindings)
+        }
+    }
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct AddDiscordOverrideForm {
+    #[field(default = String::new())]
+    csrf: String,
+    discord_role_id: String,
+}
+
+#[rocket::get("/event/<series>/<event>/roles/override/<role_type_id>/add")]
+pub(crate) async fn add_discord_override_form(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    series: Series,
+    event: &str,
+    role_type_id: Id<RoleTypes>,
+    csrf: Option<CsrfToken>,
+) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    let me = me.ok_or(Error::Unauthorized)?;
+    
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    
+    if !data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(Error::Unauthorized.into());
+    }
+
+    // Check if event uses custom role bindings
+    let uses_custom_bindings = sqlx::query_scalar!(
+        r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,
+        series as _,
+        event
+    )
+    .fetch_optional(&mut *transaction)
+    .await?
+    .unwrap_or(Some(true)).unwrap_or(true);
+
+    if uses_custom_bindings {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let role_type = RoleType::from_id(&mut transaction, role_type_id).await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    let content = html! {
+        article {
+            h2 : "Add Discord Role Override";
+            p : format!("Add a Discord role override for {} role type.", role_type.name);
+            
+            form(method = "post", action = uri!(add_discord_override(series, event, role_type_id))) {
+                : csrf;
+                div {
+                    label(for = "discord_role_id") : "Discord Role ID:";
+                    input(type = "text", id = "discord_role_id", name = "discord_role_id", required, placeholder = "e.g. 123456789012345678");
+                }
+                div {
+                    input(type = "submit", value = "Add Override");
+                }
+            }
+            
+            p {
+                a(href = uri!(get(series, event))) : "← Back to Role Management";
+            }
+        }
+    };
+
+    Ok(page(
+        transaction,
+        &Some(me),
+        &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+        PageStyle::default(),
+        &format!("Add Discord Role Override — {}", data.display_name),
+        content,
+    )
+    .await?)
+}
+
+#[rocket::post("/event/<series>/<event>/roles/override/<role_type_id>/add", data = "<form>")]
+pub(crate) async fn add_discord_override(
+    pool: &State<PgPool>,
+    me: User,
+    series: Series,
+    event: &str,
+    role_type_id: Id<RoleTypes>,
+    _csrf: Option<CsrfToken>,
+    form: Form<AddDiscordOverrideForm>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    
+    if !data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(Error::Unauthorized.into());
+    }
+
+    // Check if event uses custom role bindings
+    let uses_custom_bindings = sqlx::query_scalar!(
+        r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,
+        series as _,
+        event
+    )
+    .fetch_optional(&mut *transaction)
+    .await?
+    .unwrap_or(Some(true)).unwrap_or(true);
+
+    if uses_custom_bindings {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let discord_role_id = match form.discord_role_id.parse::<i64>() {
+        Ok(id) => id,
+        Err(_) => {
+            return Ok(Redirect::to(uri!(get(series, event))));
+        }
+    };
+
+    // Check if override already exists
+    if EventDiscordRoleOverride::exists_for_role_type(&mut transaction, series, event, role_type_id).await? {
+        return Ok(Redirect::to(uri!(get(series, event))));
+    }
+
+    // Add the override
+    EventDiscordRoleOverride::create(&mut transaction, series, event, role_type_id, discord_role_id).await?;
+    transaction.commit().await?;
+    
+    Ok(Redirect::to(uri!(get(series, event))))
+}
+
+#[rocket::post("/event/<series>/<event>/roles/override/<role_type_id>/delete")]
+pub(crate) async fn delete_discord_override(
+    pool: &State<PgPool>,
+    me: User,
+    series: Series,
+    event: &str,
+    role_type_id: Id<RoleTypes>,
+    _csrf: Option<CsrfToken>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    
+    if !data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(Error::Unauthorized.into());
+    }
+
+    // Check if event uses custom role bindings
+    let uses_custom_bindings = sqlx::query_scalar!(
+        r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,
+        series as _,
+        event
+    )
+    .fetch_optional(&mut *transaction)
+    .await?
+    .unwrap_or(Some(true)).unwrap_or(true);
+
+    if uses_custom_bindings {
+        return Err(Error::Unauthorized.into());
+    }
+
+    // Find and delete the override
+    let overrides = EventDiscordRoleOverride::for_event(&mut transaction, series, event).await?;
+    if let Some(override_item) = overrides.iter().find(|o| o.role_type_id == role_type_id) {
+        EventDiscordRoleOverride::delete(&mut transaction, override_item.id).await?;
+    }
+    
+    transaction.commit().await?;
+    Ok(Redirect::to(uri!(get(series, event))))
 }

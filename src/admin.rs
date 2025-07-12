@@ -17,7 +17,7 @@ use {
         game::{Game, GameError},
         prelude::*,
         user::User,
-        event::{self, roles::RoleBinding},
+        event::{self, roles::GameRoleBinding},
         series::Series,
         id::{RoleTypes, RoleBindings},
     },
@@ -607,7 +607,7 @@ pub(crate) async fn game_management(
     }
     
     let series = game.series(&mut transaction).await.map_err(Error::from)?;
-    let role_bindings = RoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
+    let role_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
     let role_types = get_role_types(&mut transaction).await.map_err(Error::from)?;
     transaction.commit().await.map_err(Error::from)?;
 
@@ -810,7 +810,7 @@ pub(crate) async fn add_role_binding(
     };
     
     // Check if role binding already exists
-    let existing_bindings = RoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
+    let existing_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
     if existing_bindings.iter().any(|b| b.role_type_id == role_type_id) {
         return Ok(Redirect::to(uri!(game_management(game_name))));
     }
