@@ -28,10 +28,11 @@ ALTER TABLE public.game_series OWNER TO mido;
 CREATE TABLE game_admins (
     id SERIAL PRIMARY KEY,
     game_id INTEGER REFERENCES games(id) ON DELETE CASCADE,
-    admin_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    admin_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     UNIQUE(game_id, admin_id)
 );
+
 
 ALTER TABLE public.game_admins OWNER TO mido;
 
