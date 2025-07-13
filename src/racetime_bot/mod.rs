@@ -2695,17 +2695,13 @@ impl Handler {
                 if let Some(category) = stripped.split('/').next() {
                     category
                 } else {
-                    eprintln!("DEBUG: Failed to extract category from URL: {}", race_data.url);
                     return false
                 }
             } else {
-                eprintln!("DEBUG: URL doesn't start with https://racetime.gg/: {}", race_data.url);
                 return false
             };
             
-            eprintln!("DEBUG: Race URL: {}, Race category: {}, Expected category: {}", race_data.url, race_category, expected_category);
             if race_category != expected_category {
-                eprintln!("DEBUG: Category mismatch, returning false");
                 return false
             }
         }
@@ -3038,29 +3034,19 @@ impl RaceHandler<GlobalState> for Handler {
     async fn should_handle(race_data: &RaceData, global_state: Arc<GlobalState>) -> Result<bool, Error> {
         // Extract category from the global state
         let category_slug = global_state.current_category.as_deref();
-        eprintln!("DEBUG: should_handle called for race: {}, category_slug: {:?}", race_data.url, category_slug);
-        let result = Self::should_handle_inner(race_data, global_state.clone(), None, category_slug).await;
-        eprintln!("DEBUG: should_handle result: {}", result);
-        Ok(result)
+        Ok(Self::should_handle_inner(race_data, global_state.clone(), None, category_slug).await)
     }
 
     async fn should_stop(&mut self, ctx: &RaceContext<GlobalState>) -> Result<bool, Error> {
         // Extract category from the global state
         let category_slug = ctx.global_state.current_category.as_deref();
-        let data = ctx.data().await;
-        eprintln!("DEBUG: should_stop called for race: {}, category_slug: {:?}", data.url, category_slug);
-        let result = !Self::should_handle_inner(&*data, ctx.global_state.clone(), Some(Some(self)), category_slug).await;
-        eprintln!("DEBUG: should_stop result: {}", result);
-        Ok(result)
+        Ok(!Self::should_handle_inner(&*ctx.data().await, ctx.global_state.clone(), Some(Some(self)), category_slug).await)
     }
 
     async fn task(global_state: Arc<GlobalState>, race_data: Arc<tokio::sync::RwLock<RaceData>>, join_handle: tokio::task::JoinHandle<()>) -> Result<(), Error> {
         let race_data = ArcRwLock::from(race_data);
         tokio::spawn(async move {
-            lock!(@read data = race_data; {
-                println!("race handler for https://{}{} started", racetime_host(), data.url);
-                eprintln!("DEBUG: Race handler started for URL: {}", data.url);
-            });
+            lock!(@read data = race_data; println!("race handler for https://{}{} started", racetime_host(), data.url));
             let res = join_handle.await;
             lock!(@read data = race_data; {
                 lock!(clean_shutdown = global_state.clean_shutdown; {
@@ -5632,27 +5618,9 @@ async fn handle_rooms(global_state: Arc<GlobalState>, racetime_config: &ConfigRa
             // Fallback to provided credentials if no database connection found
             let (category_slug, client_id, client_secret) = ("ootr".to_string(), racetime_config.client_id.clone(), racetime_config.client_secret.clone());
             
-            // Create a fallback global state without category filtering
-            let fallback_global_state = Arc::new(GlobalState::new(
-                global_state.new_room_lock.clone(),
-                global_state.racetime_config.clone(),
-                global_state.extra_room_tx.clone(),
-                global_state.db_pool.clone(),
-                global_state.http_client.clone(),
-                global_state.insecure_http_client.clone(),
-                global_state.league_api_key.clone(),
-                global_state.startgg_token.clone(),
-                global_state.ootr_api_client.clone(),
-                global_state.discord_ctx.clone(),
-                global_state.clean_shutdown.clone(),
-                global_state.seed_cache_tx.clone(),
-                global_state.seed_metadata.clone(),
-                None, // No category filtering in fallback mode
-            ).await);
-            
             match racetime::BotBuilder::new(&category_slug, &client_id, &client_secret)
-                .state(fallback_global_state.clone())
-                .host(fallback_global_state.host_info.clone())
+                .state(global_state.clone())
+                .host(global_state.host_info.clone())
                 .user_agent(concat!("MidosHouse/", env!("CARGO_PKG_VERSION"), " (https://github.com/midoshouse/midos.house)"))
                 .scan_races_every(Duration::from_secs(5))
                 .build().await
@@ -5687,8 +5655,6 @@ async fn handle_rooms(global_state: Arc<GlobalState>, racetime_config: &ConfigRa
             for connection in racetime_connections {
                 let shutdown = shutdown.clone();
                 
-                eprintln!("DEBUG: Creating bot for category: {}", connection.category_slug);
-                
                 // Create a separate global state for each bot instance with the appropriate category
                 let bot_global_state = Arc::new(GlobalState::new(
                     global_state.new_room_lock.clone(),
@@ -5707,7 +5673,6 @@ async fn handle_rooms(global_state: Arc<GlobalState>, racetime_config: &ConfigRa
                     Some(connection.category_slug.clone()),
                 ).await);
                 
-                eprintln!("DEBUG: Attempting to create bot for category: {} with client_id: {}", connection.category_slug, connection.client_id);
                 match racetime::BotBuilder::new(&connection.category_slug, &connection.client_id, &connection.client_secret)
                     .state(bot_global_state.clone())
                     .host(bot_global_state.host_info.clone())
