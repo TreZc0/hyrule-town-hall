@@ -50,8 +50,9 @@ use {
     },
     crate::{
         cal::Entrant,
-        config::ConfigRaceTime,
+        config::{Config, ConfigRaceTime},
         discord_bot::ADMIN_USER,
+        game::GameRacetimeConnection,
         hash_icon_db::HashIconData,
         prelude::*,
     },
@@ -2381,6 +2382,8 @@ async fn get_game_id_from_event(transaction: &mut Transaction<'_, Postgres>, ser
     // Default to OOTR (game_id = 1) if no mapping found
     Ok(game_id.unwrap_or(Some(1)).unwrap_or(1))
 }
+
+
 
 async fn format_hash_with_game_id(file_hash: [String; 5], transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<String, sqlx::Error> {
     let mut emojis = Vec::new();
@@ -4952,10 +4955,37 @@ impl RaceHandler<GlobalState> for Handler {
 }
 
 pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, discord_ctx: &DiscordCtx, host_info: &racetime::HostInfo, client_id: &str, client_secret: &str, extra_room_tx: &RwLock<mpsc::Sender<String>>, http_client: &reqwest::Client, clean_shutdown: Arc<Mutex<CleanShutdown>>, cal_event: &cal::Event, event: &event::Data<'static>) -> Result<Option<(bool, String)>, Error> {
+    // Get the game_id for the event's series
+    let game_id = get_game_id_from_event(&mut *transaction, &event.series.to_string()).await.to_racetime()?;
+    
+    // Get the racetime connection for this game (use the first one if multiple, or add logic as needed)
+    let racetime_connection = sqlx::query!(
+        r#"SELECT id, game_id, category_slug, client_id, client_secret, created_at, updated_at
+           FROM game_racetime_connection WHERE game_id = $1 LIMIT 1"#,
+        game_id
+    )
+    .fetch_optional(&mut **transaction)
+    .await.to_racetime()?
+    .map(|row| GameRacetimeConnection {
+        id: row.id,
+        game_id: row.game_id.expect("game_id should not be null"),
+        category_slug: row.category_slug,
+        client_id: row.client_id,
+        client_secret: row.client_secret,
+        created_at: row.created_at.expect("created_at should not be null"),
+        updated_at: row.updated_at.expect("updated_at should not be null"),
+    });
+
+    let (category_slug, client_id, client_secret) = if let Some(connection) = racetime_connection {
+        (connection.category_slug.clone(), connection.client_id.clone(), connection.client_secret.clone())
+    } else {
+        ("ootr".to_string(), client_id.to_string(), client_secret.to_string())
+    };
+    
     let room_url = match cal_event.should_create_room(&mut *transaction, event).await.to_racetime()? {
         cal::RaceHandleMode::None => return Ok(None),
         cal::RaceHandleMode::Notify => Err("please get your equipment and report to the tournament room"),
-        cal::RaceHandleMode::RaceTime => match racetime::authorize_with_host(host_info, client_id, client_secret, http_client).await {
+        cal::RaceHandleMode::RaceTime => match racetime::authorize_with_host(host_info, &client_id, &client_secret, http_client).await {
             Ok((access_token, _)) => {
                 let info_user = if_chain! {
                     if let French = event.language;
@@ -5063,8 +5093,8 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                     info_user,
                     String::default(),
                     cal_event.is_private_async_part() || cal_event.race.video_urls.is_empty(),
-                ).await.start_with_host(host_info, &access_token, &http_client, CATEGORY).await?;
-                let room_url = Url::parse(&format!("https://{}/{CATEGORY}/{race_slug}", host_info.hostname))?;
+                ).await.start_with_host(host_info, &access_token, &http_client, &category_slug).await?;
+                let room_url = Url::parse(&format!("https://{}/{}/{}", host_info.hostname, category_slug, race_slug))?;
                 match cal_event.kind {
                     cal::EventKind::Normal => { sqlx::query!("UPDATE races SET room = $1 WHERE id = $2", room_url.to_string(), cal_event.race.id as _).execute(&mut **transaction).await.to_racetime()?; }
                     cal::EventKind::Async1 => { sqlx::query!("UPDATE races SET async_room1 = $1 WHERE id = $2", room_url.to_string(), cal_event.race.id as _).execute(&mut **transaction).await.to_racetime()?; }
@@ -5535,34 +5565,113 @@ async fn handle_rooms(global_state: Arc<GlobalState>, racetime_config: &ConfigRa
     let mut last_crash = Instant::now();
     let mut wait_time = Duration::from_secs(1);
     loop {
-        match racetime::BotBuilder::new(CATEGORY, &racetime_config.client_id, &racetime_config.client_secret)
-            .state(global_state.clone())
-            .host(global_state.host_info.clone())
-            .user_agent(concat!("MidosHouse/", env!("CARGO_PKG_VERSION"), " (https://github.com/midoshouse/midos.house)"))
-            .scan_races_every(Duration::from_secs(5))
-            .build().await
-        {
-            Ok(bot) => {
-                lock!(@write extra_room_tx = global_state.extra_room_tx; *extra_room_tx = bot.extra_room_sender());
-                let () = bot.run_until::<Handler, _, _>(shutdown).await?;
-                break Ok(())
-            }
-            Err(e) if e.is_network_error() => {
-                if last_crash.elapsed() >= Duration::from_secs(60 * 60 * 24) {
-                    wait_time = Duration::from_secs(1); // reset wait time after no crash for a day
-                } else {
-                    wait_time *= 2; // exponential backoff
+        // Get all racetime connections from the database
+        let mut transaction = global_state.db_pool.begin().await.to_racetime()?;
+        let racetime_connections = sqlx::query!(
+            r#"SELECT id, game_id, category_slug, client_id, client_secret, created_at, updated_at
+               FROM game_racetime_connection"#
+        )
+        .fetch_all(&mut *transaction)
+        .await.to_racetime()?
+        .into_iter()
+        .map(|row| GameRacetimeConnection {
+            id: row.id,
+            game_id: row.game_id.expect("game_id should not be null"),
+            category_slug: row.category_slug,
+            client_id: row.client_id,
+            client_secret: row.client_secret,
+            created_at: row.created_at.expect("created_at should not be null"),
+            updated_at: row.updated_at.expect("updated_at should not be null"),
+        })
+        .collect::<Vec<_>>();
+        transaction.commit().await.to_racetime()?;
+        
+        if racetime_connections.is_empty() {
+            // Fallback to provided credentials if no database connection found
+            let (category_slug, client_id, client_secret) = ("ootr".to_string(), racetime_config.client_id.clone(), racetime_config.client_secret.clone());
+            
+            match racetime::BotBuilder::new(&category_slug, &client_id, &client_secret)
+                .state(global_state.clone())
+                .host(global_state.host_info.clone())
+                .user_agent(concat!("MidosHouse/", env!("CARGO_PKG_VERSION"), " (https://github.com/midoshouse/midos.house)"))
+                .scan_races_every(Duration::from_secs(5))
+                .build().await
+            {
+                Ok(bot) => {
+                    lock!(@write extra_room_tx = global_state.extra_room_tx; *extra_room_tx = bot.extra_room_sender());
+                    let () = bot.run_until::<Handler, _, _>(shutdown).await?;
+                    break Ok(())
                 }
-                eprintln!("failed to connect to racetime.gg (retrying in {}): {e} ({e:?})", English.format_duration(wait_time, true));
+                Err(e) if e.is_network_error() => {
+                    if last_crash.elapsed() >= Duration::from_secs(60 * 60 * 24) {
+                        wait_time = Duration::from_secs(1); // reset wait time after no crash for a day
+                    } else {
+                        wait_time *= 2; // exponential backoff
+                    }
+                    eprintln!("failed to connect to racetime.gg (retrying in {}): {e} ({e:?})", English.format_duration(wait_time, true));
+                    if wait_time >= Duration::from_secs(16) {
+                        wheel::night_report(&format!("{}/error", night_path()), Some(&format!("failed to connect to racetime.gg (retrying in {}): {e} ({e:?})", English.format_duration(wait_time, true)))).await?;
+                    }
+                    sleep(wait_time).await;
+                    last_crash = Instant::now();
+                }
+                Err(e) => {
+                    wheel::night_report(&format!("{}/error", night_path()), Some(&format!("error handling racetime.gg rooms: {e} ({e:?})"))).await?;
+                    break Err(e.into())
+                }
+            }
+        } else {
+            // Create multiple bot instances, one for each category
+            let mut bot_handles = Vec::new();
+            
+            for connection in racetime_connections {
+                let global_state = global_state.clone();
+                let shutdown = shutdown.clone();
+                
+                match racetime::BotBuilder::new(&connection.category_slug, &connection.client_id, &connection.client_secret)
+                    .state(global_state.clone())
+                    .host(global_state.host_info.clone())
+                    .user_agent(concat!("MidosHouse/", env!("CARGO_PKG_VERSION"), " (https://github.com/midoshouse/midos.house)"))
+                    .scan_races_every(Duration::from_secs(5))
+                    .build().await
+                {
+                    Ok(bot) => {
+                        // Use the first bot's extra_room_sender (they should all be the same)
+                        if bot_handles.is_empty() {
+                            lock!(@write extra_room_tx = global_state.extra_room_tx; *extra_room_tx = bot.extra_room_sender());
+                        }
+                        
+                        let handle = tokio::spawn(async move {
+                            let _ = bot.run_until::<Handler, _, _>(shutdown).await;
+                        });
+                        bot_handles.push(handle);
+                    }
+                    Err(e) => {
+                        eprintln!("failed to create bot for category {}: {e} ({e:?})", connection.category_slug);
+                        // Continue with other bots even if one fails
+                    }
+                }
+            }
+            
+            if bot_handles.is_empty() {
+                // All bots failed to start
+                if last_crash.elapsed() >= Duration::from_secs(60 * 60 * 24) {
+                    wait_time = Duration::from_secs(1);
+                } else {
+                    wait_time *= 2;
+                }
+                eprintln!("failed to connect any racetime.gg bots (retrying in {}): {}", English.format_duration(wait_time, true), wait_time.as_secs());
                 if wait_time >= Duration::from_secs(16) {
-                    wheel::night_report(&format!("{}/error", night_path()), Some(&format!("failed to connect to racetime.gg (retrying in {}): {e} ({e:?})", English.format_duration(wait_time, true)))).await?;
+                    wheel::night_report(&format!("{}/error", night_path()), Some(&format!("failed to connect any racetime.gg bots (retrying in {}): {}", English.format_duration(wait_time, true), wait_time.as_secs()))).await?;
                 }
                 sleep(wait_time).await;
                 last_crash = Instant::now();
-            }
-            Err(e) => {
-                wheel::night_report(&format!("{}/error", night_path()), Some(&format!("error handling racetime.gg rooms: {e} ({e:?})"))).await?;
-                break Err(e.into())
+            } else {
+                // Wait for all bots to complete
+                for handle in bot_handles {
+                    let _ = handle.await;
+                }
+                break Ok(())
             }
         }
     }
@@ -5575,11 +5684,17 @@ pub(crate) enum MainError {
     #[error(transparent)] PrepareSeeds(#[from] PrepareSeedsError),
 } 
 
-pub(crate) async fn main(config: Config, shutdown: rocket::Shutdown, global_state: Arc<GlobalState>, seed_cache_rx: watch::Receiver<()>) -> Result<(), MainError> {
+pub(crate) async fn main(_config: Config, shutdown: rocket::Shutdown, global_state: Arc<GlobalState>, seed_cache_rx: watch::Receiver<()>) -> Result<(), MainError> {
+    // Create a default racetime config for fallback (will be overridden by database-driven credentials)
+    let racetime_config = ConfigRaceTime {
+        client_id: String::new(),
+        client_secret: String::new(),
+    };
+    
     let ((), (), ()) = tokio::try_join!(
         prepare_seeds(global_state.clone(), seed_cache_rx, shutdown.clone()).err_into::<MainError>(),
         create_rooms(global_state.clone(), shutdown.clone()).err_into(),
-        handle_rooms(global_state, if Environment::default().is_dev() { &config.racetime_bot_dev } else { &config.racetime_bot_production }, shutdown).err_into(),
+        handle_rooms(global_state, &racetime_config, shutdown).err_into(),
     )?;
     Ok(())
 }

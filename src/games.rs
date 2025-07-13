@@ -154,11 +154,11 @@ pub(crate) async fn get(
                 }
             }
             
-            h2 : "Game Role Bindings";
-            p : "Game-level role bindings apply to all events in this game. Event-specific role bindings can override these.";
+            h2 : "Game Volunteer Roles";
+            p : "The coverage through restreams of matches and events requires volunteers. We are very grateful for anyone stepping up to help!";
             
             @if role_bindings.is_empty() {
-                p : "No game-level role bindings configured yet.";
+                p : "No game-level roles available.";
             } else {
                 @for binding in &role_bindings {
                     @let my_request = my_requests.iter()

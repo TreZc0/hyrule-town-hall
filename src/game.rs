@@ -19,6 +19,18 @@ pub(crate) struct Game {
     pub(crate) updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields are used in database queries, not read back from results
+pub(crate) struct GameRacetimeConnection {
+    pub(crate) id: i32,
+    pub(crate) game_id: i32,
+    pub(crate) category_slug: String,
+    pub(crate) client_id: String,
+    pub(crate) client_secret: String,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
+}
+
 impl Game {
     pub(crate) async fn all(transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<Self>, GameError> {
         let rows = sqlx::query!(
@@ -125,4 +137,6 @@ impl Game {
 
         Ok(count.unwrap_or(0) > 0)
     }
+
+
 } 
