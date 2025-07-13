@@ -2691,16 +2691,15 @@ impl Handler {
         
         // Check if this race belongs to the correct category
         if let Some(expected_category) = category_slug {
-            let host_prefix = format!("https://{}/", racetime_host());
-            let race_category = if let Some(stripped) = race_data.url.strip_prefix(&host_prefix) {
+            let race_category = if let Some(stripped) = race_data.url.strip_prefix('/') {
                 if let Some(category) = stripped.split('/').next() {
                     category
                 } else {
-                    eprintln!("DEBUG: Failed to extract category from URL: {}", race_data.url);
+                    eprintln!("DEBUG: Failed to extract category from URL path: {}", race_data.url);
                     return false
                 }
             } else {
-                eprintln!("DEBUG: URL doesn't start with {}: {}", host_prefix, race_data.url);
+                eprintln!("DEBUG: URL doesn't start with /: {}", race_data.url);
                 return false
             };
             
