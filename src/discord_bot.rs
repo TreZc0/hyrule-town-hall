@@ -1,6 +1,7 @@
 use {
     crate::{
         config::ConfigRaceTime,
+        hash_icon_db::HashIconData,
         prelude::*,
         racetime_bot::{CleanShutdown, CrosskeysRaceOptions, GlobalState},
     }, serenity::all::{
@@ -1931,7 +1932,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 Interaction::Component(interaction) => match &*interaction.data.custom_id {
                     "pronouns_he" => {
                         let member = interaction.member.clone().expect("/pronoun-roles called outside of a guild");
-                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "he/him").expect("missing “he/him” role");
+                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "he/him").expect("missing 'he/him' role");
                         if member.roles(ctx).expect("failed to look up member roles").contains(&role) {
                             member.remove_role(ctx, role).await?;
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -1948,7 +1949,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     }
                     "pronouns_she" => {
                         let member = interaction.member.clone().expect("/pronoun-roles called outside of a guild");
-                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "she/her").expect("missing “she/her” role");
+                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "she/her").expect("missing 'she/her' role");
                         if member.roles(ctx).expect("failed to look up member roles").contains(&role) {
                             member.remove_role(ctx, role).await?;
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -1965,7 +1966,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     }
                     "pronouns_they" => {
                         let member = interaction.member.clone().expect("/pronoun-roles called outside of a guild");
-                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "they/them").expect("missing “they/them” role");
+                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "they/them").expect("missing 'they/them' role");
                         if member.roles(ctx).expect("failed to look up member roles").contains(&role) {
                             member.remove_role(ctx, role).await?;
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -1982,7 +1983,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     }
                     "pronouns_other" => {
                         let member = interaction.member.clone().expect("/pronoun-roles called outside of a guild");
-                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "other pronouns").expect("missing “other pronouns” role");
+                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "other pronouns").expect("missing 'other pronouns' role");
                         if member.roles(ctx).expect("failed to look up member roles").contains(&role) {
                             member.remove_role(ctx, role).await?;
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -1999,7 +2000,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     }
                     "racingrole" => {
                         let member = interaction.member.clone().expect("/racing-role called outside of a guild");
-                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "racing").expect("missing “racing” role");
+                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "racing").expect("missing 'racing' role");
                         if member.roles(ctx).expect("failed to look up member roles").contains(&role) {
                             member.remove_role(ctx, role).await?;
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -2016,7 +2017,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     }
                     "watchrole_restream" => {
                         let member = interaction.member.clone().expect("/watch-roles called outside of a guild");
-                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "restream watcher").expect("missing “restream watcher” role");
+                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "restream watcher").expect("missing 'restream watcher' role");
                         if member.roles(ctx).expect("failed to look up member roles").contains(&role) {
                             member.remove_role(ctx, role).await?;
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -2033,7 +2034,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     }
                     "watchrole_party" => {
                         let member = interaction.member.clone().expect("/watch-roles called outside of a guild");
-                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "watch party watcher").expect("missing “watch party watcher” role");
+                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "watch party watcher").expect("missing 'watch party watcher' role");
                         if member.roles(ctx).expect("failed to look up member roles").contains(&role) {
                             member.remove_role(ctx, role).await?;
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -2337,6 +2338,18 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
     Ok(transaction)
 }
 
+async fn format_hash_with_game_id(file_hash: [String; 5], transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<String, sqlx::Error> {
+    let mut emojis = Vec::new();
+    for icon_name in file_hash {
+        if let Some(hash_icon_data) = HashIconData::by_name(transaction, game_id, &icon_name).await? {
+            if let Some(emoji) = hash_icon_data.racetime_emoji.as_ref() {
+                emojis.push(emoji.clone());
+            }
+        }
+    }
+    Ok(emojis.join(" "))
+}
+
 pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, event: event::Data<'_>) -> Result<(),Error > {
     // This is a temporary implementation. It checks the race and sees if a seed is rolled. 
     // If it is not, it rolls a seed and adds it to the database.
@@ -2406,7 +2419,23 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         content.push(format!(". Seed URL is {}. Please work with them in their async channel to run the race.",seed_url));
         if let Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) = file_hash {
             content.push_line("");
-            content.push(format!("The hash for the seed is {hash1}, {hash2}, {hash3}, {hash4}, {hash5}"));
+            // Get the game_id for the event's series
+            let game_id = sqlx::query_scalar!(
+                r#"
+                    SELECT gs.game_id
+                    FROM game_series gs
+                    WHERE gs.series = $1
+                "#,
+                cal_event.race.series as _
+            )
+            .fetch_optional(&mut *transaction)
+            .await?
+            .unwrap_or(Some(1))
+            .unwrap_or(1);
+            
+            // Convert hash icon names to racetime emojis
+            let hash_emojis = format_hash_with_game_id([hash1.clone(), hash2.clone(), hash3.clone(), hash4.clone(), hash5.clone()], &mut transaction, game_id).await?;
+            content.push(format!("The hash for this seed is {}", hash_emojis));
         }
         if second_half {
             content.push_line("");
