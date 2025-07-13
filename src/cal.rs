@@ -1217,25 +1217,96 @@ pub(crate) struct Event {
 
 impl Event {
     pub(crate) async fn from_room(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, room: Url) -> Result<Option<Self>, Error> {
-        if let Some(id) = sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE room = $1 AND start IS NOT NULL"#, room.to_string()).fetch_optional(&mut **transaction).await? {
+        // Extract category from room URL (format: https://racetime.gg/category/room-name)
+        let category = if let Some(stripped) = room.as_str().strip_prefix("https://racetime.gg/") {
+            if let Some(category) = stripped.split('/').next() {
+                category
+            } else {
+                return Ok(None)
+            }
+        } else {
+            return Ok(None)
+        };
+
+        // Get the game_id for this category to filter races properly
+        let game_id = sqlx::query_scalar!(
+            r#"SELECT game_id FROM game_racetime_connection WHERE category_slug = $1"#,
+            category
+        )
+        .fetch_optional(&mut **transaction)
+        .await?;
+
+        let game_id = if let Some(game_id) = game_id {
+            game_id
+        } else {
+            // If no game_id found for this category, fall back to looking up by room URL without category filtering
+            if let Some(id) = sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE room = $1 AND start IS NOT NULL"#, room.to_string()).fetch_optional(&mut **transaction).await? {
+                return Ok(Some(Self {
+                    race: Race::from_id(&mut *transaction, http_client, id).await?,
+                    kind: EventKind::Normal,
+                }))
+            }
+            if let Some(id) = sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE async_room1 = $1 AND async_start1 IS NOT NULL"#, room.to_string()).fetch_optional(&mut **transaction).await? {
+                return Ok(Some(Self {
+                    race: Race::from_id(&mut *transaction, http_client, id).await?,
+                    kind: EventKind::Async1,
+                }))
+            }
+            if let Some(id) = sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE async_room2 = $1 AND async_start2 IS NOT NULL"#, room.to_string()).fetch_optional(&mut **transaction).await? {
+                return Ok(Some(Self {
+                    race: Race::from_id(&mut *transaction, http_client, id).await?,
+                    kind: EventKind::Async2,
+                }))
+            }
+            if let Some(id) = sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE async_room3 = $1 AND async_start3 IS NOT NULL"#, room.to_string()).fetch_optional(&mut **transaction).await? {
+                return Ok(Some(Self {
+                    race: Race::from_id(&mut *transaction, http_client, id).await?,
+                    kind: EventKind::Async3,
+                }))
+            }
+            return Ok(None)
+        };
+
+        // Now look up races by room URL and game_id to ensure we only find races for the correct category
+        if let Some(id) = sqlx::query_scalar!(
+            r#"SELECT r.id AS "id: Id<Races>" FROM races r 
+               JOIN game_series gs ON r.series = gs.series 
+               WHERE r.room = $1 AND r.start IS NOT NULL AND gs.game_id = $2"#, 
+            room.to_string(), game_id
+        ).fetch_optional(&mut **transaction).await? {
             return Ok(Some(Self {
                 race: Race::from_id(&mut *transaction, http_client, id).await?,
                 kind: EventKind::Normal,
             }))
         }
-        if let Some(id) = sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE async_room1 = $1 AND async_start1 IS NOT NULL"#, room.to_string()).fetch_optional(&mut **transaction).await? {
+        if let Some(id) = sqlx::query_scalar!(
+            r#"SELECT r.id AS "id: Id<Races>" FROM races r 
+               JOIN game_series gs ON r.series = gs.series 
+               WHERE r.async_room1 = $1 AND r.async_start1 IS NOT NULL AND gs.game_id = $2"#, 
+            room.to_string(), game_id
+        ).fetch_optional(&mut **transaction).await? {
             return Ok(Some(Self {
                 race: Race::from_id(&mut *transaction, http_client, id).await?,
                 kind: EventKind::Async1,
             }))
         }
-        if let Some(id) = sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE async_room2 = $1 AND async_start2 IS NOT NULL"#, room.to_string()).fetch_optional(&mut **transaction).await? {
+        if let Some(id) = sqlx::query_scalar!(
+            r#"SELECT r.id AS "id: Id<Races>" FROM races r 
+               JOIN game_series gs ON r.series = gs.series 
+               WHERE r.async_room2 = $1 AND r.async_start2 IS NOT NULL AND gs.game_id = $2"#, 
+            room.to_string(), game_id
+        ).fetch_optional(&mut **transaction).await? {
             return Ok(Some(Self {
                 race: Race::from_id(&mut *transaction, http_client, id).await?,
                 kind: EventKind::Async2,
             }))
         }
-        if let Some(id) = sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE async_room3 = $1 AND async_start3 IS NOT NULL"#, room.to_string()).fetch_optional(&mut **transaction).await? {
+        if let Some(id) = sqlx::query_scalar!(
+            r#"SELECT r.id AS "id: Id<Races>" FROM races r 
+               JOIN game_series gs ON r.series = gs.series 
+               WHERE r.async_room3 = $1 AND r.async_start3 IS NOT NULL AND gs.game_id = $2"#, 
+            room.to_string(), game_id
+        ).fetch_optional(&mut **transaction).await? {
             return Ok(Some(Self {
                 race: Race::from_id(&mut *transaction, http_client, id).await?,
                 kind: EventKind::Async3,
