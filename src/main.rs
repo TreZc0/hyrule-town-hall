@@ -255,7 +255,6 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Arc::clone(&clean_shutdown),
             seed_cache_tx,
             seed_metadata,
-            None, // No category for the main global state (used for fallback mode)
         ).await);
         let discord_builder = discord_bot::configure_builder(discord_builder, global_state.clone(), db_pool.clone(), http_client.clone(), config.clone(), Arc::clone(&new_room_lock), extra_room_tx.clone(), Arc::clone(&clean_shutdown), rocket.shutdown());
         #[cfg(unix)] let unix_listener = unix_socket::listen(rocket.shutdown(), clean_shutdown, global_state.clone());
