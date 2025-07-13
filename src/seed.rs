@@ -6,6 +6,7 @@ use {
         CONTENT_DISPOSITION,
         LINK,
     },
+    ootr_utils::spoiler::OcarinaNote,
     rocket::{
         fs::NamedFile,
         http::Header,
@@ -21,11 +22,7 @@ use {
     },
     serde::Deserialize,
     crate::{
-        hash_icon::{
-            HashIcon,
-            OcarinaNote,
-            SpoilerLog,
-        },
+        hash_icon::SpoilerLog,
         hash_icon_db::HashIconData,
         prelude::*,
         racetime_bot::SeedMetadata,
@@ -33,37 +30,17 @@ use {
 };
 
 #[cfg(unix)] pub(crate) const DIR: &str = "/var/www/midos.house/seed";
-#[cfg(windows)] pub(crate) const DIR: &str = "G:/source/idos-house-seeds";
+#[cfg(windows)] pub(crate) const DIR: &str = "G:/source/hth-seeds";
 
 /// ootrandomizer.com seeds are deleted after 60 days (https://discord.com/channels/274180765816848384/1248210891636342846/1257367685658837126)
 const WEB_TIMEOUT: TimeDelta = TimeDelta::days(60);
 
 pub(crate) type Settings = serde_json::Map<String, serde_json::Value>;
 
-pub(crate) trait HashIconExt {
-    async fn to_html(&self, transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<RawHtml<String>, sqlx::Error>;
-}
-
-impl HashIconExt for HashIcon {
-    async fn to_html(&self, transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<RawHtml<String>, sqlx::Error> {
-        // Try to get the hash icon data from the database first
-        if let Some(hash_icon_data) = HashIconData::by_name(transaction, game_id, &self.to_string()).await? {
-            let file_name = &hash_icon_data.file_name;
-            let src = format!("/static/hash-icon/{}", file_name);
-            let srcset = format!("/static/hash-icon-500/{} 10x", file_name);
-            return Ok(html! {
-                img(class = "hash-icon", alt = self.to_string(), src = src, srcset = srcset);
-            });
-        }
-        // If no database record found, return empty HTML
-        Ok(html! {})
-    }
-}
-
 #[derive(Default, Debug, Clone)]
 #[cfg_attr(unix, derive(Protocol))]
 pub(crate) struct Data {
-    pub(crate) file_hash: Option<[HashIcon; 5]>,
+    pub(crate) file_hash: Option<[String; 5]>,
     pub(crate) password: Option<[OcarinaNote; 6]>,
     pub(crate) files: Option<Files>,
     pub(crate) progression_spoiler: bool,
@@ -107,11 +84,11 @@ impl Data {
         is_tfb_dev: bool,
         tfb_uuid: Option<Uuid>,
         xkeys_uuid: Option<Uuid>,
-        hash1: Option<HashIcon>,
-        hash2: Option<HashIcon>,
-        hash3: Option<HashIcon>,
-        hash4: Option<HashIcon>,
-        hash5: Option<HashIcon>,
+        hash1: Option<String>,
+        hash2: Option<String>,
+        hash3: Option<String>,
+        hash4: Option<String>,
+        hash5: Option<String>,
         password: Option<&str>,
         progression_spoiler: bool,
     ) -> Self {
@@ -121,7 +98,7 @@ impl Data {
                 (None, None, None, None, None) => None,
                 _ => unreachable!("only some hash icons present, should be prevented by SQL constraint"),
             },
-            password: password.map(|pw| pw.chars().map(|note| note.try_into().expect("invalid ocarina note in password, should be prevented by SQL constraint")).collect_vec().try_into().expect("invalid password length, should be prevented by SQL constraint")),
+            password: password.map(|pw| pw.chars().map(|note| OcarinaNote::try_from(note).expect("invalid ocarina note in password, should be prevented by SQL constraint")).collect_vec().try_into().expect("invalid password length, should be prevented by SQL constraint")),
             files: match (file_stem, locked_spoiler_log_path, web_id, web_gen_time, tfb_uuid, xkeys_uuid) {
                 (_, _, _, _, Some(uuid), None) => Some(Files::TriforceBlitz { is_dev: is_tfb_dev, uuid }),
                 (Some(file_stem), _, Some(id), Some(gen_time), None, None) => Some(Files::OotrWeb { id, gen_time, file_stem: Cow::Owned(file_stem) }),
@@ -142,7 +119,7 @@ impl Data {
         /// If some other part of the log like settings or version number can't be parsed, we may still be able to read the file hash and password from the log
         #[derive(Deserialize)]
         struct SparseSpoilerLog {
-            file_hash: [HashIcon; 5],
+            file_hash: [String; 5],
             password: Option<[OcarinaNote; 6]>,
         }
 
@@ -168,18 +145,18 @@ impl Data {
                 let (file_hash, password, world_count, chests) = if spoiler_path_exists {
                     let log = fs::read_to_string(&spoiler_path).await?;
                     if let Ok(log) = serde_json::from_str::<SpoilerLog>(&log) {
-                        (Some(log.file_hash), log.password, Some(log.settings[0].world_count), if spoiler_file_name.is_some() {
-                            ChestAppearances::from(log)
-                        } else {
-                            ChestAppearances::random() // keeping chests random for locked spoilers to avoid leaking seed info
-                        })
+                                            (Some(log.file_hash.clone()), log.password, Some(log.settings[0].world_count), if spoiler_file_name.is_some() {
+                        ChestAppearances::from(log)
+                    } else {
+                        ChestAppearances::random() // keeping chests random for locked spoilers to avoid leaking seed info
+                    })
                     } else if let Ok(log) = serde_json::from_str::<SparseSpoilerLog>(&log) {
                         (Some(log.file_hash), self.password.or(log.password), None, ChestAppearances::random())
                     } else {
-                        (self.file_hash, self.password, None, ChestAppearances::random())
+                        (self.file_hash.clone(), self.password, None, ChestAppearances::random())
                     }
                 } else {
-                    (self.file_hash, self.password, None, ChestAppearances::random())
+                    (self.file_hash.clone(), self.password, None, ChestAppearances::random())
                 };
                 //TODO if file_hash.is_none() and a patch file is available, read the file hash from the patched rom?
                 return Ok(ExtraData {
@@ -201,7 +178,7 @@ impl Data {
         //TODO if file_hash.is_none() and a patch file is available, read the file hash from the patched rom?
         Ok(ExtraData {
             spoiler_status: SpoilerStatus::NotFound,
-            file_hash: self.file_hash,
+            file_hash: self.file_hash.clone(),
             password: self.password,
             world_count: None,
             chests: ChestAppearances::random(),
@@ -228,7 +205,7 @@ impl IsNetworkError for ExtraDataError {
 
 pub(crate) struct ExtraData {
     spoiler_status: SpoilerStatus,
-    pub(crate) file_hash: Option<[HashIcon; 5]>,
+    pub(crate) file_hash: Option<[String; 5]>,
     pub(crate) password: Option<[OcarinaNote; 6]>,
     pub(crate) world_count: Option<NonZero<u8>>,
     chests: ChestAppearances,
@@ -305,16 +282,26 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
         (None, Some(seed_links)) => seed_links,
         (Some(file_hash), None) => html! {
             div(class = "hash") {
-                @for hash_icon in file_hash {
-                    : hash_icon.to_html(transaction, game_id).await?;
+                @for hash_icon_name in file_hash {
+                    @if let Some(hash_icon_data) = HashIconData::by_name(transaction, game_id, &hash_icon_name).await? {
+                        @let file_name = &hash_icon_data.file_name;
+                        @let src = format!("/static/hash-icon/{}", file_name);
+                        @let srcset = format!("/static/hash-icon-500/{} 10x", file_name);
+                        img(class = "hash-icon", alt = hash_icon_name, src = src, srcset = srcset);
+                    }
                 }
             }
         },
         (Some(file_hash), Some(seed_links)) => html! {
             div(class = "seed") {
                 div(class = "hash") {
-                    @for hash_icon in file_hash {
-                        : hash_icon.to_html(transaction, game_id).await?;
+                    @for hash_icon_name in file_hash {
+                        @if let Some(hash_icon_data) = HashIconData::by_name(transaction, game_id, &hash_icon_name).await? {
+                            @let file_name = &hash_icon_data.file_name;
+                            @let src = format!("/static/hash-icon/{}", file_name);
+                            @let srcset = format!("/static/hash-icon-500/{} 10x", file_name);
+                            img(class = "hash-icon", alt = hash_icon_name, src = src, srcset = srcset);
+                        }
                     }
                 }
                 div(class = "seed-links") : seed_links;
@@ -485,14 +472,15 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>,
                 "zpf"
             };
             let hash_html = if let Some(hash) = extra.file_hash {
-                let mut hash_parts = Vec::new();
-                for hash_icon in hash {
-                    hash_parts.push(hash_icon.to_html(&mut transaction, 1).await?);
-                }
                 html! {
                     h1(class = "hash") {
-                        @for hash_part in hash_parts {
-                            : hash_part;
+                        @for hash_icon_name in hash {
+                            @if let Some(hash_icon_data) = HashIconData::by_name(&mut transaction, 1, &hash_icon_name).await? {
+                                @let file_name = &hash_icon_data.file_name;
+                                @let src = format!("/static/hash-icon/{}", file_name);
+                                @let srcset = format!("/static/hash-icon-500/{} 10x", file_name);
+                                img(class = "hash-icon", alt = hash_icon_name, src = src, srcset = srcset);
+                            }
                         }
                     }
                 }

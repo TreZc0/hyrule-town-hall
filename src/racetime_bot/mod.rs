@@ -15,6 +15,7 @@ use {
     lazy_regex::regex_captures,
     mhstatus::OpenRoom,
     ootr_utils as rando,
+    ootr_utils::spoiler::OcarinaNote,
     racetime::{
         Error,
         ResultExt as _,
@@ -51,10 +52,7 @@ use {
         cal::Entrant,
         config::ConfigRaceTime,
         discord_bot::ADMIN_USER,
-        hash_icon::{
-            HashIcon,
-            OcarinaNote,
-        },
+        hash_icon_db::HashIconData,
         prelude::*,
     },
 };
@@ -757,11 +755,11 @@ impl Goal {
                         goal_name,
                         file_stem,
                         locked_spoiler_log_path,
-                        hash1 AS "hash1: HashIcon",
-                        hash2 AS "hash2: HashIcon",
-                        hash3 AS "hash3: HashIcon",
-                        hash4 AS "hash4: HashIcon",
-                        hash5 AS "hash5: HashIcon",
+                        hash1,
+                        hash2,
+                        hash3,
+                        hash4,
+                        hash5,
                         seed_password,
                         progression_spoiler
                     "#, self.as_str(), no_password).fetch_optional(&mut **transaction).await.to_racetime()? {
@@ -1552,7 +1550,7 @@ impl GlobalState {
         update_rx
     }
 
-    async fn retrieve_hash_and_clean_up_spoiler(uuid: Uuid) -> Result<[HashIcon; 5], RollError> {
+    async fn retrieve_hash_and_clean_up_spoiler(uuid: Uuid) -> Result<[String; 5], RollError> {
         let spoiler_path = format!("/var/www/midos.house/seed/DR_{uuid}_Spoiler.txt");
         let destination_path = format!("/var/www/midos.house/spoilers/DR_{uuid}_Spoiler.txt");
         let mut file = BufReader::new(File::open(spoiler_path.clone()).await?);
@@ -1563,7 +1561,7 @@ impl GlobalState {
                 return Err(RollError::AlttprHashLineNotFound)
             }
             if let Some((_, h1, h2, h3, h4, h5)) = regex_captures!("^Hash: (.+), (.+), (.+), (.+), (.+)\r?\n$", &line) {
-                break [h1.parse()?, h2.parse()?, h3.parse()?, h4.parse()?, h5.parse()?]
+                break [h1.to_string(), h2.to_string(), h3.to_string(), h4.to_string(), h5.to_string()]
             }
         };
         Command::new("mv").arg(spoiler_path).arg(destination_path).check("Moving spoiler file").await?;
@@ -2161,7 +2159,7 @@ impl SeedRollUpdate {
                         }
                         seed::Files::TfbSotd { .. } => unimplemented!("Triforce Blitz seed of the day not supported for official races"),
                     }
-                    if let Some([hash1, hash2, hash3, hash4, hash5]) = extra.file_hash {
+                    if let Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) = extra.file_hash {
                         sqlx::query!(
                             "UPDATE races SET hash1 = $1, hash2 = $2, hash3 = $3, hash4 = $4, hash5 = $5 WHERE id = $6",
                             hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,
@@ -2207,8 +2205,8 @@ impl SeedRollUpdate {
                 } else {
                     format!("@entrants Here is your seed: {seed_url}")
                 }).await?;
-                if let Some(file_hash) = extra.file_hash {
-                    ctx.say(format_hash(file_hash)).await?;
+                if let Some(ref file_hash) = extra.file_hash {
+                    ctx.say(format_hash(file_hash.clone())).await?;
                 }
                 match unlock_spoiler_log {
                     UnlockSpoilerLog::Now => ctx.say("The spoiler log is also available on the seed page.").await?,
@@ -2294,7 +2292,7 @@ impl SeedRollUpdate {
                                 mw_room_name.truncate(split_at);
                                 mw_room_name.push_str(ellipsis);
                             }
-                            if let Some([hash1, hash2, hash3, hash4, hash5]) = extra.file_hash {
+                            if let Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) = extra.file_hash {
                                 let tracker_room_name = restreams.values().any(|restream| restream.restreamer_racetime_id.is_some()).then(|| Alphanumeric.sample_string(&mut rng(), 32));
                                 let mut cmd = Command::new("/usr/local/share/midos-house/bin/ootrmwd");
                                 cmd.arg("create-tournament-room");
@@ -2384,21 +2382,22 @@ async fn get_game_id_from_event(transaction: &mut Transaction<'_, Postgres>, ser
     Ok(game_id.unwrap_or(Some(1)).unwrap_or(1))
 }
 
-async fn format_hash_with_game_id(file_hash: [HashIcon; 5], transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<String, sqlx::Error> {
+async fn format_hash_with_game_id(file_hash: [String; 5], transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<String, sqlx::Error> {
     let mut emojis = Vec::new();
-    for icon in file_hash {
-        if let Some(emoji) = icon.get_racetime_emoji(transaction, game_id).await? {
-            emojis.push(emoji);
-        } else {
-            // Fallback to hardcoded emoji
-            emojis.push(icon.to_racetime_emoji().to_string());
+    for icon_name in file_hash {
+        if let Some(hash_icon_data) = HashIconData::by_name(transaction, game_id, &icon_name).await? {
+            if let Some(emoji) = hash_icon_data.racetime_emoji.as_ref() {
+                emojis.push(emoji.clone());
+            }
         }
     }
     Ok(emojis.join(" "))
 }
 
-fn format_hash(file_hash: [HashIcon; 5]) -> impl fmt::Display {
-    file_hash.into_iter().map(|icon| icon.to_racetime_emoji()).format(" ")
+fn format_hash(file_hash: [String; 5]) -> impl fmt::Display {
+    // This function is used for fallback display when we don't have database access
+    // For now, just join the hash icon names with spaces
+    file_hash.join(" ")
 }
 
 fn format_password(password: [OcarinaNote; 6]) -> impl fmt::Display {
@@ -2451,8 +2450,8 @@ async fn room_options(goal: Goal, event: &event::Data<'_>, cal_event: &cal::Even
 async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl_preset: Option<rsl::Preset>, show_password: bool, transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<(), Error> {
     let extra = seed.extra(Utc::now()).await.to_racetime()?;
     
-    let file_hash_str = if let Some(hash) = extra.file_hash {
-        format_hash_with_game_id(hash, transaction, game_id).await.to_racetime()?
+    let file_hash_str = if let Some(ref hash) = extra.file_hash {
+        format_hash_with_game_id(hash.clone(), transaction, game_id).await.to_racetime()?
     } else {
         String::new()
     };
@@ -5402,7 +5401,7 @@ async fn prepare_seeds(global_state: Arc<GlobalState>, mut seed_cache_rx: watch:
                                         let extra = seed.extra(Utc::now()).await?;
                                         let [hash1, hash2, hash3, hash4, hash5] = match extra.file_hash {
                                             Some(hash) => hash.map(Some),
-                                            None => [None; 5],
+                                            None => [const { None }; 5],
                                         };
                                         match seed.files {
                                             Some(seed::Files::MidosHouse { file_stem, locked_spoiler_log_path }) => {

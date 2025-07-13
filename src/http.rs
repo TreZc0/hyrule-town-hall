@@ -306,9 +306,9 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
     let page_content = html! {
         h1 : "Welcome to the Hyrule Town Hall!";
         p {
-            : "HTH is a platform where speedrunning and randomizer";
-            : " events like tournaments or community races can be organized. ";
-            : "It is a fork of ";
+            : "This platform was created to allow easier and more automated organization of ";
+            : "speedrunning and randomizer events like tournaments or community races. ";
+            : "Hyrule Town Hall is a fork of ";
             a(href = "https://github.com/midoshouse/midos.house") : "Mido's House created by fenhl.";
         }
         p {
@@ -316,7 +316,7 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
             : "syncing to known tournament platforms like Challonge and start.gg, race automation in racetime.gg, and more!";
         }
         p {
-            : "HTH is tightly integrated with Discord to handle vital interactions in events like scheduling, async racing, and role management.";
+            : "Our service is tightly integrated with Discord to handle vital interactions in events like scheduling, async racing, and role management.";
         }
         div(class = "section-list") {
             div {

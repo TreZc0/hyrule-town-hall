@@ -2363,7 +2363,7 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
     // There is already a seed rolled. Access that seed instead.
     let (uuid, second_half, file_hash) = match cal_event.race.seed.files {
         // Seed already exists, get the message appropriately.
-        Some(seed::Files::AlttprDoorRando { uuid}) => (uuid, true, cal_event.race.seed.file_hash),
+        Some(seed::Files::AlttprDoorRando { uuid}) => (uuid, true, cal_event.race.seed.file_hash.as_ref().cloned()),
         Some(_) => unimplemented!("Haven't implemented asyncs for non-door rando yet"),
         // Roll a seed and put it in the database before returning the message.
         None => {
@@ -2388,11 +2388,11 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
             };
 
             let (hash1, hash2, hash3, hash4, hash5) = match seed.file_hash {
-                Some([hash1, hash2, hash3, hash4, hash5]) => (Some(hash1), Some(hash2), Some(hash3), Some(hash4), Some(hash5)),
+                Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) => (Some(hash1), Some(hash2), Some(hash3), Some(hash4), Some(hash5)),
                 None => (None, None, None, None, None)
             };
 
-            sqlx::query!("UPDATE races SET xkeys_uuid = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7",uuid, hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,).execute(&mut *transaction).await?;
+            sqlx::query!("UPDATE races SET xkeys_uuid = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7",uuid, hash1, hash2, hash3, hash4, hash5, cal_event.race.id as _,).execute(&mut *transaction).await?;
             (uuid, false, seed.file_hash)
         }
     };
@@ -2408,7 +2408,7 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         content.push("Async starting for ");
         content.mention_team(&mut transaction, event.discord_guild, team).await?;
         content.push(format!(". Seed URL is {}. Please work with them in their async channel to run the race.",seed_url));
-        if let Some([hash1, hash2, hash3, hash4, hash5]) = file_hash {
+        if let Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) = file_hash {
             content.push_line("");
             content.push(format!("The hash for the seed is {hash1}, {hash2}, {hash3}, {hash4}, {hash5}"));
         }

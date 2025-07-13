@@ -1,6 +1,7 @@
 //! A client for the ootrandomizer.com API, documented at <https://ootrandomizer.com/api/docs>
 
 use {
+    ootr_utils::spoiler::OcarinaNote,
     reqwest::{
         IntoUrl,
         StatusCode,
@@ -15,10 +16,6 @@ use {
         TryAcquireError,
     },
     crate::{
-        hash_icon::{
-            HashIcon,
-            OcarinaNote,
-        },
         prelude::*,
         racetime_bot::{
             SeedRollUpdate,
@@ -86,7 +83,7 @@ struct VersionsResponse {
 pub(crate) struct SeedInfo {
     pub(crate) id: i64,
     pub(crate) gen_time: DateTime<Utc>,
-    pub(crate) file_hash: [HashIcon; 5],
+    pub(crate) file_hash: [String; 5],
     pub(crate) file_stem: String,
     pub(crate) password: Option<[OcarinaNote; 6]>,
 }
@@ -341,7 +338,7 @@ impl ApiClient {
     pub(crate) async fn roll_seed_with_retry(&self, update_tx: mpsc::Sender<SeedRollUpdate>, delay_until: Option<DateTime<Utc>>, version: ootr_utils::Version, random_settings: bool, unlock_spoiler_log: UnlockSpoilerLog, mut settings: seed::Settings) -> Result<SeedInfo, Error> {
         #[derive(Deserialize)]
         struct SettingsLog {
-            file_hash: [HashIcon; 5],
+            file_hash: [String; 5],
         }
 
         #[serde_as]

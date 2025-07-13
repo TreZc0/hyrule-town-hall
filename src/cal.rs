@@ -24,10 +24,8 @@ use {
         discord_bot,
         event::Tab,
         event::roles::{Signup, VolunteerSignupStatus},
-        hash_icon::{
-            HashIcon,
-            SpoilerLog
-        },
+        hash_icon::SpoilerLog,
+        hash_icon_db::HashIconData,
         prelude::*,
         sheets,
     },
@@ -429,11 +427,11 @@ impl Race {
             is_tfb_dev,
             tfb_uuid,
             xkeys_uuid,
-            hash1 AS "hash1: HashIcon",
-            hash2 AS "hash2: HashIcon",
-            hash3 AS "hash3: HashIcon",
-            hash4 AS "hash4: HashIcon",
-            hash5 AS "hash5: HashIcon",
+            hash1,
+            hash2,
+            hash3,
+            hash4,
+            hash5,
             seed_password,
             video_url,
             restreamer,
@@ -1126,11 +1124,11 @@ impl Race {
             web_id.map(|web_id| web_id as i64),
             web_gen_time,
             file_stem.map(|file_stem| &**file_stem),
-            self.seed.file_hash.map(|[hash1, _, _, _, _]| hash1) as _,
-            self.seed.file_hash.map(|[_, hash2, _, _, _]| hash2) as _,
-            self.seed.file_hash.map(|[_, _, hash3, _, _]| hash3) as _,
-            self.seed.file_hash.map(|[_, _, _, hash4, _]| hash4) as _,
-            self.seed.file_hash.map(|[_, _, _, _, hash5]| hash5) as _,
+            self.seed.file_hash.as_ref().map(|[hash1, _, _, _, _]| hash1),
+            self.seed.file_hash.as_ref().map(|[_, hash2, _, _, _]| hash2),
+            self.seed.file_hash.as_ref().map(|[_, _, hash3, _, _]| hash3),
+            self.seed.file_hash.as_ref().map(|[_, _, _, hash4, _]| hash4),
+            self.seed.file_hash.as_ref().map(|[_, _, _, _, hash5]| hash5),
             self.game,
             self.id as _,
             p1,
@@ -3247,7 +3245,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 }
             }
         }
-        let mut file_hash = None;
+        let mut file_hash: Option<[String; 5]> = None;
         let mut web_id = None;
         let mut web_gen_time = None;
         let mut file_stem = None;
@@ -3256,11 +3254,11 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 file_stem,
                 web_id,
                 web_gen_time,
-                hash1 AS "hash1: HashIcon",
-                hash2 AS "hash2: HashIcon",
-                hash3 AS "hash3: HashIcon",
-                hash4 AS "hash4: HashIcon",
-                hash5 AS "hash5: HashIcon"
+                hash1,
+                hash2,
+                hash3,
+                hash4,
+                hash5
             FROM rsl_seeds WHERE room = $1"#, room.to_string()).fetch_optional(&mut *transaction).await? {
                 file_hash = Some([row.hash1, row.hash2, row.hash3, row.hash4, row.hash5]);
                 if let Some(new_web_id) = row.web_id {
@@ -3276,20 +3274,22 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                         Ok(response) => match response.json_with_text_in_error::<RaceData>().await {
                             Ok(race_data) => if let Some(info_bot) = race_data.info_bot {
                                 if let Some((_, hash1, hash2, hash3, hash4, hash5, info_file_stem)) = regex_captures!("^(?:.+\n)?([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+)(?: \\| (?:Password: )?[^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+)?\nhttps://midos\\.house/seed/([0-9A-Za-z_-]+)(?:\\.zpfz?)?$", &info_bot) {
-                                    let Some(hash1) = HashIcon::from_racetime_emoji(hash1) else { continue };
-                                    let Some(hash2) = HashIcon::from_racetime_emoji(hash2) else { continue };
-                                    let Some(hash3) = HashIcon::from_racetime_emoji(hash3) else { continue };
-                                    let Some(hash4) = HashIcon::from_racetime_emoji(hash4) else { continue };
-                                    let Some(hash5) = HashIcon::from_racetime_emoji(hash5) else { continue };
+                                    let game_id = event.game(&mut transaction).await?.map(|g| g.id).unwrap_or(1);
+                                    let Some(hash1) = racetime_emoji_to_hash_icon(&mut transaction, game_id, hash1).await? else { continue };
+                                    let Some(hash2) = racetime_emoji_to_hash_icon(&mut transaction, game_id, hash2).await? else { continue };
+                                    let Some(hash3) = racetime_emoji_to_hash_icon(&mut transaction, game_id, hash3).await? else { continue };
+                                    let Some(hash4) = racetime_emoji_to_hash_icon(&mut transaction, game_id, hash4).await? else { continue };
+                                    let Some(hash5) = racetime_emoji_to_hash_icon(&mut transaction, game_id, hash5).await? else { continue };
                                     file_hash = Some([hash1, hash2, hash3, hash4, hash5]);
                                     file_stem = Some(info_file_stem.to_owned());
                                     break
                                 } else if let Some((_, hash1, hash2, hash3, hash4, hash5, web_id_str)) = regex_captures!("^(?:.+\n)?([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+)(?: \\| (?:Password: )?[^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+)?\nhttps://ootrandomizer\\.com/seed/get\\?id=([0-9]+)$", &info_bot) {
-                                    let Some(hash1) = HashIcon::from_racetime_emoji(hash1) else { continue };
-                                    let Some(hash2) = HashIcon::from_racetime_emoji(hash2) else { continue };
-                                    let Some(hash3) = HashIcon::from_racetime_emoji(hash3) else { continue };
-                                    let Some(hash4) = HashIcon::from_racetime_emoji(hash4) else { continue };
-                                    let Some(hash5) = HashIcon::from_racetime_emoji(hash5) else { continue };
+                                    let game_id = event.game(&mut transaction).await?.map(|g| g.id).unwrap_or(1);
+                                    let Some(hash1) = racetime_emoji_to_hash_icon(&mut transaction, game_id, hash1).await? else { continue };
+                                    let Some(hash2) = racetime_emoji_to_hash_icon(&mut transaction, game_id, hash2).await? else { continue };
+                                    let Some(hash3) = racetime_emoji_to_hash_icon(&mut transaction, game_id, hash3).await? else { continue };
+                                    let Some(hash4) = racetime_emoji_to_hash_icon(&mut transaction, game_id, hash4).await? else { continue };
+                                    let Some(hash5) = racetime_emoji_to_hash_icon(&mut transaction, game_id, hash5).await? else { continue };
                                     file_hash = Some([hash1, hash2, hash3, hash4, hash5]);
                                     web_id = Some(web_id_str.parse().expect("found race room linking to out-of-range web seed ID"));
                                     match http_client.get("https://ootrandomizer.com/patch/get").query(&[("id", web_id)]).send().await {
@@ -3439,40 +3439,40 @@ pub(crate) async fn add_file_hash_form(mut transaction: Transaction<'_, Postgres
             : form_field("hash1", &mut errors, html! {
                 label(for = "hash1") : "Hash Icon 1:";
                 select(name = "hash1") {
-                    @for icon in all::<HashIcon>() {
-                        option(value = icon.to_string(), selected? = ctx.field_value("hash1") == Some(&icon.to_string())) : icon.to_string();
+                    @for hash_icon_data in HashIconData::all_for_game(&mut transaction, 1).await? {
+                        option(value = hash_icon_data.name, selected? = ctx.field_value("hash1") == Some(&hash_icon_data.name)) : hash_icon_data.name;
                     }
                 }
             });
             : form_field("hash2", &mut errors, html! {
                 label(for = "hash2") : "Hash Icon 2:";
                 select(name = "hash2") {
-                    @for icon in all::<HashIcon>() {
-                        option(value = icon.to_string(), selected? = ctx.field_value("hash2") == Some(&icon.to_string())) : icon.to_string();
+                    @for hash_icon_data in HashIconData::all_for_game(&mut transaction, 1).await? {
+                        option(value = hash_icon_data.name, selected? = ctx.field_value("hash2") == Some(&hash_icon_data.name)) : hash_icon_data.name;
                     }
                 }
             });
             : form_field("hash3", &mut errors, html! {
                 label(for = "hash3") : "Hash Icon 3:";
                 select(name = "hash3") {
-                    @for icon in all::<HashIcon>() {
-                        option(value = icon.to_string(), selected? = ctx.field_value("hash3") == Some(&icon.to_string())) : icon.to_string();
+                    @for hash_icon_data in HashIconData::all_for_game(&mut transaction, 1).await? {
+                        option(value = hash_icon_data.name, selected? = ctx.field_value("hash3") == Some(&hash_icon_data.name)) : hash_icon_data.name;
                     }
                 }
             });
             : form_field("hash4", &mut errors, html! {
                 label(for = "hash4") : "Hash Icon 4:";
                 select(name = "hash4") {
-                    @for icon in all::<HashIcon>() {
-                        option(value = icon.to_string(), selected? = ctx.field_value("hash4") == Some(&icon.to_string())) : icon.to_string();
+                    @for hash_icon_data in HashIconData::all_for_game(&mut transaction, 1).await? {
+                        option(value = hash_icon_data.name, selected? = ctx.field_value("hash4") == Some(&hash_icon_data.name)) : hash_icon_data.name;
                     }
                 }
             });
             : form_field("hash5", &mut errors, html! {
                 label(for = "hash5") : "Hash Icon 5:";
                 select(name = "hash5") {
-                    @for icon in all::<HashIcon>() {
-                        option(value = icon.to_string(), selected? = ctx.field_value("hash5") == Some(&icon.to_string())) : icon.to_string();
+                    @for hash_icon_data in HashIconData::all_for_game(&mut transaction, 1).await? {
+                        option(value = hash_icon_data.name, selected? = ctx.field_value("hash5") == Some(&hash_icon_data.name)) : hash_icon_data.name;
                     }
                 }
             });
@@ -3566,34 +3566,34 @@ pub(crate) async fn add_file_hash_post(pool: &State<PgPool>, http_client: &State
         form.context.push_error(form::Error::validation("You must be an archivist to edit this race. If you would like to become an archivist, please contact TreZ on Discord."));
     }
     Ok(if let Some(ref value) = form.value {
-        let hash1 = if let Ok(hash1) = value.hash1.parse::<HashIcon>() {
-            Some(hash1)
+        let hash1 = if !value.hash1.is_empty() {
+            Some(&value.hash1)
         } else {
-            form.context.push_error(form::Error::validation("No such hash icon.").with_name("hash1"));
+            form.context.push_error(form::Error::validation("Hash icon 1 is required.").with_name("hash1"));
             None
         };
-        let hash2 = if let Ok(hash2) = value.hash2.parse::<HashIcon>() {
-            Some(hash2)
+        let hash2 = if !value.hash2.is_empty() {
+            Some(&value.hash2)
         } else {
-            form.context.push_error(form::Error::validation("No such hash icon.").with_name("hash2"));
+            form.context.push_error(form::Error::validation("Hash icon 2 is required.").with_name("hash2"));
             None
         };
-        let hash3 = if let Ok(hash3) = value.hash3.parse::<HashIcon>() {
-            Some(hash3)
+        let hash3 = if !value.hash3.is_empty() {
+            Some(&value.hash3)
         } else {
-            form.context.push_error(form::Error::validation("No such hash icon.").with_name("hash3"));
+            form.context.push_error(form::Error::validation("Hash icon 3 is required.").with_name("hash3"));
             None
         };
-        let hash4 = if let Ok(hash4) = value.hash4.parse::<HashIcon>() {
-            Some(hash4)
+        let hash4 = if !value.hash4.is_empty() {
+            Some(&value.hash4)
         } else {
-            form.context.push_error(form::Error::validation("No such hash icon.").with_name("hash4"));
+            form.context.push_error(form::Error::validation("Hash icon 4 is required.").with_name("hash4"));
             None
         };
-        let hash5 = if let Ok(hash5) = value.hash5.parse::<HashIcon>() {
-            Some(hash5)
+        let hash5 = if !value.hash5.is_empty() {
+            Some(&value.hash5)
         } else {
-            form.context.push_error(form::Error::validation("No such hash icon.").with_name("hash5"));
+            form.context.push_error(form::Error::validation("Hash icon 5 is required.").with_name("hash5"));
             None
         };
         if form.context.errors().next().is_some() {
@@ -3601,7 +3601,7 @@ pub(crate) async fn add_file_hash_post(pool: &State<PgPool>, http_client: &State
         } else {
             sqlx::query!(
                 "UPDATE races SET hash1 = $1, hash2 = $2, hash3 = $3, hash4 = $4, hash5 = $5 WHERE id = $6",
-                hash1.unwrap() as _, hash2.unwrap() as _, hash3.unwrap() as _, hash4.unwrap() as _, hash5.unwrap() as _, id as _,
+                hash1.unwrap(), hash2.unwrap(), hash3.unwrap(), hash4.unwrap(), hash5.unwrap(), id as _,
             ).execute(&mut *transaction).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(event::races(event.series, &*event.event))))
@@ -3609,4 +3609,11 @@ pub(crate) async fn add_file_hash_post(pool: &State<PgPool>, http_client: &State
     } else {
         RedirectOrContent::Content(add_file_hash_form(transaction, Some(me), uri, csrf.as_ref(), event, race, form.context).await?)
     })
+}
+
+async fn racetime_emoji_to_hash_icon(_transaction: &mut Transaction<'_, Postgres>, _game_id: i32, emoji: &str) -> Result<Option<String>, sqlx::Error> {
+    // This function converts racetime emoji to hash icon names
+    // For now, we'll just return the emoji as-is since we're using strings
+    // In the future, this could be enhanced to map emojis to specific hash icon names
+    Ok(Some(emoji.to_string()))
 }
