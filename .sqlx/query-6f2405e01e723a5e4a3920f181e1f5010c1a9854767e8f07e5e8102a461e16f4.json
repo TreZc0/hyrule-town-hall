@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO role_bindings (series, event, role_type_id, min_count, max_count, discord_role_id) \n               VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+  "query": "INSERT INTO event_discord_role_overrides (series, event, role_type_id, discord_role_id) \n               VALUES ($1, $2, $3, $4) RETURNING id",
   "describe": {
     "columns": [
       {
@@ -14,8 +14,6 @@
         "Varchar",
         "Varchar",
         "Int4",
-        "Int4",
-        "Int4",
         "Int8"
       ]
     },
@@ -23,5 +21,5 @@
       false
     ]
   },
-  "hash": "d7e79169e6a72aaadbff2514ade1632cb5925c144092b512eefddfad136322f2"
+  "hash": "6f2405e01e723a5e4a3920f181e1f5010c1a9854767e8f07e5e8102a461e16f4"
 }

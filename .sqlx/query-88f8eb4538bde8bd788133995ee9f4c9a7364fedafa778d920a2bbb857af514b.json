@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                                        SELECT gs.game_id\n                                        FROM game_series gs\n                                        WHERE gs.series = $1\n                                    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "88f8eb4538bde8bd788133995ee9f4c9a7364fedafa778d920a2bbb857af514b"
+}

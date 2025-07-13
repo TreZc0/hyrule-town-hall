@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n            series AS \"series: Series\",\n            event,\n            challonge_match,\n            league_id,\n            sheet_timestamp,\n            startgg_event,\n            startgg_set AS \"startgg_set: startgg::ID\",\n            speedgaming_id,\n            game,\n            team1 AS \"team1: Id<Teams>\",\n            team2 AS \"team2: Id<Teams>\",\n            team3 AS \"team3: Id<Teams>\",\n            p1,\n            p2,\n            p3,\n            p1_discord AS \"p1_discord: PgSnowflake<UserId>\",\n            p2_discord AS \"p2_discord: PgSnowflake<UserId>\",\n            p1_racetime,\n            p2_racetime,\n            p1_twitch,\n            p2_twitch,\n            total,\n            finished,\n            phase,\n            round,\n            scheduling_thread AS \"scheduling_thread: PgSnowflake<ChannelId>\",\n            draft_state AS \"draft_state: Json<Draft>\",\n            start,\n            async_start1,\n            async_start2,\n            async_start3,\n            end_time,\n            async_end1,\n            async_end2,\n            async_end3,\n            room,\n            async_room1,\n            async_room2,\n            async_room3,\n            schedule_updated_at,\n            fpa_invoked,\n            breaks_used,\n            file_stem,\n            locked_spoiler_log_path,\n            web_id,\n            web_gen_time,\n            is_tfb_dev,\n            tfb_uuid,\n            xkeys_uuid,\n            hash1 AS \"hash1: HashIcon\",\n            hash2 AS \"hash2: HashIcon\",\n            hash3 AS \"hash3: HashIcon\",\n            hash4 AS \"hash4: HashIcon\",\n            hash5 AS \"hash5: HashIcon\",\n            seed_password,\n            video_url,\n            restreamer,\n            video_url_fr,\n            restreamer_fr,\n            video_url_de,\n            restreamer_de,\n            video_url_pt,\n            restreamer_pt,\n            last_edited_by AS \"last_edited_by: Id<Users>\",\n            last_edited_at,\n            ignored,\n            schedule_locked,\n            notified,\n            async_notified_1,\n            async_notified_2,\n            async_notified_3\n        FROM races WHERE id = $1",
+  "query": "SELECT\n            series AS \"series: Series\",\n            event,\n            challonge_match,\n            league_id,\n            sheet_timestamp,\n            startgg_event,\n            startgg_set AS \"startgg_set: startgg::ID\",\n            speedgaming_id,\n            game,\n            team1 AS \"team1: Id<Teams>\",\n            team2 AS \"team2: Id<Teams>\",\n            team3 AS \"team3: Id<Teams>\",\n            p1,\n            p2,\n            p3,\n            p1_discord AS \"p1_discord: PgSnowflake<UserId>\",\n            p2_discord AS \"p2_discord: PgSnowflake<UserId>\",\n            p1_racetime,\n            p2_racetime,\n            p1_twitch,\n            p2_twitch,\n            total,\n            finished,\n            phase,\n            round,\n            scheduling_thread AS \"scheduling_thread: PgSnowflake<ChannelId>\",\n            draft_state AS \"draft_state: Json<Draft>\",\n            start,\n            async_start1,\n            async_start2,\n            async_start3,\n            end_time,\n            async_end1,\n            async_end2,\n            async_end3,\n            room,\n            async_room1,\n            async_room2,\n            async_room3,\n            schedule_updated_at,\n            fpa_invoked,\n            breaks_used,\n            file_stem,\n            locked_spoiler_log_path,\n            web_id,\n            web_gen_time,\n            is_tfb_dev,\n            tfb_uuid,\n            xkeys_uuid,\n            hash1,\n            hash2,\n            hash3,\n            hash4,\n            hash5,\n            seed_password,\n            video_url,\n            restreamer,\n            video_url_fr,\n            restreamer_fr,\n            video_url_de,\n            restreamer_de,\n            video_url_pt,\n            restreamer_pt,\n            last_edited_by AS \"last_edited_by: Id<Users>\",\n            last_edited_at,\n            ignored,\n            schedule_locked,\n            notified,\n            async_notified_1,\n            async_notified_2,\n            async_notified_3\n        FROM races WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -250,228 +250,28 @@
       },
       {
         "ordinal": 49,
-        "name": "hash1: HashIcon",
-        "type_info": {
-          "Custom": {
-            "name": "hash_icon_alttp",
-            "kind": {
-              "Enum": [
-                "Bomb",
-                "Bombos",
-                "Boomerang",
-                "Bow",
-                "Hookshot",
-                "Mushroom",
-                "Pendant",
-                "Powder",
-                "Rod",
-                "Ether",
-                "Quake",
-                "Lamp",
-                "Hammer",
-                "Shovel",
-                "Ocarina",
-                "Bug Net",
-                "Book",
-                "Bottle",
-                "Potion",
-                "Cane",
-                "Cape",
-                "Mirror",
-                "Boots",
-                "Gloves",
-                "Flippers",
-                "Pearl",
-                "Shield",
-                "Tunic",
-                "Heart",
-                "Map",
-                "Compass",
-                "Key"
-              ]
-            }
-          }
-        }
+        "name": "hash1",
+        "type_info": "Text"
       },
       {
         "ordinal": 50,
-        "name": "hash2: HashIcon",
-        "type_info": {
-          "Custom": {
-            "name": "hash_icon_alttp",
-            "kind": {
-              "Enum": [
-                "Bomb",
-                "Bombos",
-                "Boomerang",
-                "Bow",
-                "Hookshot",
-                "Mushroom",
-                "Pendant",
-                "Powder",
-                "Rod",
-                "Ether",
-                "Quake",
-                "Lamp",
-                "Hammer",
-                "Shovel",
-                "Ocarina",
-                "Bug Net",
-                "Book",
-                "Bottle",
-                "Potion",
-                "Cane",
-                "Cape",
-                "Mirror",
-                "Boots",
-                "Gloves",
-                "Flippers",
-                "Pearl",
-                "Shield",
-                "Tunic",
-                "Heart",
-                "Map",
-                "Compass",
-                "Key"
-              ]
-            }
-          }
-        }
+        "name": "hash2",
+        "type_info": "Text"
       },
       {
         "ordinal": 51,
-        "name": "hash3: HashIcon",
-        "type_info": {
-          "Custom": {
-            "name": "hash_icon_alttp",
-            "kind": {
-              "Enum": [
-                "Bomb",
-                "Bombos",
-                "Boomerang",
-                "Bow",
-                "Hookshot",
-                "Mushroom",
-                "Pendant",
-                "Powder",
-                "Rod",
-                "Ether",
-                "Quake",
-                "Lamp",
-                "Hammer",
-                "Shovel",
-                "Ocarina",
-                "Bug Net",
-                "Book",
-                "Bottle",
-                "Potion",
-                "Cane",
-                "Cape",
-                "Mirror",
-                "Boots",
-                "Gloves",
-                "Flippers",
-                "Pearl",
-                "Shield",
-                "Tunic",
-                "Heart",
-                "Map",
-                "Compass",
-                "Key"
-              ]
-            }
-          }
-        }
+        "name": "hash3",
+        "type_info": "Text"
       },
       {
         "ordinal": 52,
-        "name": "hash4: HashIcon",
-        "type_info": {
-          "Custom": {
-            "name": "hash_icon_alttp",
-            "kind": {
-              "Enum": [
-                "Bomb",
-                "Bombos",
-                "Boomerang",
-                "Bow",
-                "Hookshot",
-                "Mushroom",
-                "Pendant",
-                "Powder",
-                "Rod",
-                "Ether",
-                "Quake",
-                "Lamp",
-                "Hammer",
-                "Shovel",
-                "Ocarina",
-                "Bug Net",
-                "Book",
-                "Bottle",
-                "Potion",
-                "Cane",
-                "Cape",
-                "Mirror",
-                "Boots",
-                "Gloves",
-                "Flippers",
-                "Pearl",
-                "Shield",
-                "Tunic",
-                "Heart",
-                "Map",
-                "Compass",
-                "Key"
-              ]
-            }
-          }
-        }
+        "name": "hash4",
+        "type_info": "Text"
       },
       {
         "ordinal": 53,
-        "name": "hash5: HashIcon",
-        "type_info": {
-          "Custom": {
-            "name": "hash_icon_alttp",
-            "kind": {
-              "Enum": [
-                "Bomb",
-                "Bombos",
-                "Boomerang",
-                "Bow",
-                "Hookshot",
-                "Mushroom",
-                "Pendant",
-                "Powder",
-                "Rod",
-                "Ether",
-                "Quake",
-                "Lamp",
-                "Hammer",
-                "Shovel",
-                "Ocarina",
-                "Bug Net",
-                "Book",
-                "Bottle",
-                "Potion",
-                "Cane",
-                "Cape",
-                "Mirror",
-                "Boots",
-                "Gloves",
-                "Flippers",
-                "Pearl",
-                "Shield",
-                "Tunic",
-                "Heart",
-                "Map",
-                "Compass",
-                "Key"
-              ]
-            }
-          }
-        }
+        "name": "hash5",
+        "type_info": "Text"
       },
       {
         "ordinal": 54,
@@ -638,5 +438,5 @@
       false
     ]
   },
-  "hash": "f91afdb2514332cbd4836f6960572b66c785f6e7efe5bf8d09cf103c881159d0"
+  "hash": "d37aa99ed1538cfea14a8200e1066203cf7b72d9c3e897bf0fcdae2b24d9cbba"
 }

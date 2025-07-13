@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT\n                    rb.id AS \"id: Id<RoleBindings>\",\n                    rb.series AS \"series: Series\",\n                    rb.event,\n                    rb.role_type_id AS \"role_type_id: Id<RoleTypes>\",\n                    rb.min_count,\n                    rb.max_count,\n                    rt.name AS \"role_type_name\",\n                    rb.discord_role_id\n                FROM role_bindings rb\n                JOIN role_types rt ON rb.role_type_id = rt.id\n                WHERE rb.series = $1 AND rb.event = $2\n                ORDER BY rt.name\n            ",
+  "query": "\n                SELECT\n                    rb.id AS \"id: Id<RoleBindings>\",\n                    rb.series AS \"series: Series\",\n                    rb.event,\n                    rb.game_id,\n                    rb.role_type_id AS \"role_type_id: Id<RoleTypes>\",\n                    rb.min_count,\n                    rb.max_count,\n                    rt.name AS \"role_type_name\",\n                    rb.discord_role_id\n                FROM role_bindings rb\n                JOIN role_types rt ON rb.role_type_id = rt.id\n                WHERE rb.series = $1 AND rb.event = $2\n                ORDER BY rt.name\n            ",
   "describe": {
     "columns": [
       {
@@ -20,26 +20,31 @@
       },
       {
         "ordinal": 3,
-        "name": "role_type_id: Id<RoleTypes>",
+        "name": "game_id",
         "type_info": "Int4"
       },
       {
         "ordinal": 4,
-        "name": "min_count",
+        "name": "role_type_id: Id<RoleTypes>",
         "type_info": "Int4"
       },
       {
         "ordinal": 5,
-        "name": "max_count",
+        "name": "min_count",
         "type_info": "Int4"
       },
       {
         "ordinal": 6,
+        "name": "max_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
         "name": "role_type_name",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "discord_role_id",
         "type_info": "Int8"
       }
@@ -54,6 +59,7 @@
       false,
       false,
       false,
+      true,
       false,
       false,
       false,
@@ -61,5 +67,5 @@
       true
     ]
   },
-  "hash": "b487975d243f1efa8c98c8a67b0741f91a198af74581f31c780d4c82ef4d37e6"
+  "hash": "d42aa77631f892e3ee351c14a36d4541c2aeccda5c6567e78f3b621c1240e3d1"
 }
