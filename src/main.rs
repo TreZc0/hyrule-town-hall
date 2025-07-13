@@ -232,7 +232,6 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             ootr_api_client.clone(),
         ).await?;
         let new_room_lock = Arc::default();
-        let extra_room_tx = Arc::new(RwLock::new(mpsc::channel(1).0));
         let clean_shutdown = Arc::default();
         // Create a default racetime config for fallback (will be overridden by database-driven credentials)
         let racetime_config = config::ConfigRaceTime {
@@ -244,7 +243,6 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
         let global_state = Arc::new(racetime_bot::GlobalState::new(
             Arc::clone(&new_room_lock),
             racetime_config,
-            extra_room_tx.clone(),
             db_pool.clone(),
             http_client.clone(),
             insecure_http_client,
@@ -256,7 +254,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             seed_cache_tx,
             seed_metadata,
         ).await);
-        let discord_builder = discord_bot::configure_builder(discord_builder, global_state.clone(), db_pool.clone(), http_client.clone(), config.clone(), Arc::clone(&new_room_lock), extra_room_tx.clone(), Arc::clone(&clean_shutdown), rocket.shutdown());
+        let discord_builder = discord_bot::configure_builder(discord_builder, global_state.clone(), db_pool.clone(), http_client.clone(), config.clone(), Arc::clone(&new_room_lock), Arc::clone(&clean_shutdown), rocket.shutdown());
         #[cfg(unix)] let unix_listener = unix_socket::listen(rocket.shutdown(), clean_shutdown, global_state.clone());
         let racetime_task = tokio::spawn(racetime_bot::main(config.clone(), rocket.shutdown(), global_state, seed_cache_rx)).map(|res| match res {
             Ok(Ok(())) => Ok(()),
