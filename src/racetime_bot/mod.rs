@@ -2691,7 +2691,8 @@ impl Handler {
         
         // Check if this race belongs to the correct category
         if let Some(expected_category) = category_slug {
-            let race_category = if let Some(stripped) = race_data.url.strip_prefix("https://racetime.gg/") {
+            let host_prefix = format!("https://{}/", racetime_host());
+            let race_category = if let Some(stripped) = race_data.url.strip_prefix(&host_prefix) {
                 if let Some(category) = stripped.split('/').next() {
                     category
                 } else {
@@ -2699,7 +2700,7 @@ impl Handler {
                     return false
                 }
             } else {
-                eprintln!("DEBUG: URL doesn't start with https://racetime.gg/: {}", race_data.url);
+                eprintln!("DEBUG: URL doesn't start with {}: {}", host_prefix, race_data.url);
                 return false
             };
             
