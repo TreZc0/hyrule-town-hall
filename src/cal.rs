@@ -2207,13 +2207,13 @@ pub(crate) async fn race_table(
                                     _ => false,
                                 };
                                 @if is_upcoming_live {
-                                    @let scheduled = match race.schedule {
-                                        RaceSchedule::Unscheduled => false,
-                                        RaceSchedule::Live { end, .. } => end.is_none_or(|end_time| end_time > Utc::now()),
-                                        RaceSchedule::Async { .. } => false, // asyncs not eligible
-                                    };
-                                    @let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
-                                    @if scheduled && all_teams_consented {
+                                                                    @let scheduled = match race.schedule {
+                                    RaceSchedule::Unscheduled => false,
+                                    RaceSchedule::Live { end, .. } => end.is_none_or(|end_time| end_time > Utc::now()),
+                                    RaceSchedule::Async { .. } => false, // asyncs not eligible
+                                };
+                                @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                @if scheduled && all_teams_consented {
                                         @if let Some(user) = user {
                                             @let is_organizer = event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(user));
                                             @let is_restreamer = event.restreamers(&mut *transaction).await.ok().map_or(false, |rest| rest.contains(user));
@@ -2250,6 +2250,8 @@ pub(crate) async fn race_table(
                                 @if let Some(mut teams) = race.teams_opt() {
                                     @if teams.all(|team| team.restream_consent) {
                                         : "✓";
+                                    } else {
+                                        : "?";
                                     }
                                 } else {
                                     : "?";
@@ -2265,7 +2267,7 @@ pub(crate) async fn race_table(
                                     } else {
                                         @match race.schedule {
                                             RaceSchedule::Live { .. } => {
-                                                @let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
+                                                @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
                                                 @if all_teams_consented {
                                                     a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
                                                 }
@@ -2279,7 +2281,7 @@ pub(crate) async fn race_table(
                         td {
                             @match race.schedule {
                                 RaceSchedule::Live { .. } => {
-                                    @let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
+                                    @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
                                     @if all_teams_consented {
                                         @let signups = Signup::for_race(&mut *transaction, race.id).await?;
                                         @let pending_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Pending)).collect::<Vec<_>>();
@@ -2287,9 +2289,7 @@ pub(crate) async fn race_table(
 
                                         @if !pending_signups.is_empty() && confirmed_signups.is_empty() {
                                             : "pending";
-                                        } else if signups.is_empty() || (pending_signups.is_empty() && confirmed_signups.is_empty()) { //no signups or all rejected
-                                            : "no volunteers";
-                                        } else {
+                                        } else if !confirmed_signups.is_empty() {
                                             @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
                                             @for binding in role_bindings {
                                                 @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
