@@ -1789,37 +1789,51 @@ pub(crate) async fn manage_roster(
                     let all_signups = Signup::for_race(&mut transaction, race_id).await?;
                     let confirmed_signups = all_signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
                     
-                    // Format race description
+                    // Format race description with round info
                     let race_description = match &race.entrants {
-                        cal::Entrants::Two([team1, team2]) => format!("{} vs {}",
-                            match team1 {
-                                cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                cal::Entrant::Named { name, .. } => name.clone(),
-                                cal::Entrant::Discord { .. } => "Discord User".to_string(),
-                            },
-                            match team2 {
-                                cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                cal::Entrant::Named { name, .. } => name.clone(),
-                                cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                        cal::Entrants::Two([team1, team2]) => {
+                            let matchup = format!("{} vs {}",
+                                match team1 {
+                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                },
+                                match team2 {
+                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                }
+                            );
+                            if let Some(round) = &race.round {
+                                format!("{} ({})", matchup, round)
+                            } else {
+                                matchup
                             }
-                        ),
-                        cal::Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
-                            match team1 {
-                                cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                cal::Entrant::Named { name, .. } => name.clone(),
-                                cal::Entrant::Discord { .. } => "Discord User".to_string(),
-                            },
-                            match team2 {
-                                cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                cal::Entrant::Named { name, .. } => name.clone(),
-                                cal::Entrant::Discord { .. } => "Discord User".to_string(),
-                            },
-                            match team3 {
-                                cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                cal::Entrant::Named { name, .. } => name.clone(),
-                                cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                        },
+                        cal::Entrants::Three([team1, team2, team3]) => {
+                            let matchup = format!("{} vs {} vs {}",
+                                match team1 {
+                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                },
+                                match team2 {
+                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                },
+                                match team3 {
+                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                }
+                            );
+                            if let Some(round) = &race.round {
+                                format!("{} ({})", matchup, round)
+                            } else {
+                                matchup
                             }
-                        ),
+                        },
                         _ => "Unknown entrants".to_string(),
                     };
                     
