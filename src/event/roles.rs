@@ -1785,6 +1785,10 @@ pub(crate) async fn manage_roster(
                     let race = Race::from_id(&mut transaction, &reqwest::Client::new(), race_id).await?;
                     let user = User::from_id(&mut *transaction, signup.user_id).await?;
                     
+                    // Get all confirmed volunteers for this race
+                    let all_signups = Signup::for_race(&mut transaction, race_id).await?;
+                    let confirmed_signups = all_signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
+                    
                     // Format race description
                     let race_description = match &race.entrants {
                         cal::Entrants::Two([team1, team2]) => format!("{} vs {}",
@@ -1819,15 +1823,21 @@ pub(crate) async fn manage_roster(
                         _ => "Unknown entrants".to_string(),
                     };
                     
+                    // Get race start time for timestamp
+                    let race_start_time = match race.schedule {
+                        cal::RaceSchedule::Live { start, .. } => start,
+                        _ => return Err(StatusOrError::Status(Status::BadRequest)), // Volunteers can't sign up for unscheduled races
+                    };
+                    
                     // Build Discord message
                     let mut msg = MessageBuilder::default();
                     msg.push("Volunteers selected for race ");
                     msg.push_mono(&race_description);
                     msg.push(" at ");
-                    msg.push_timestamp(Utc::now(), serenity_utils::message::TimestampStyle::Relative);
+                    msg.push_timestamp(race_start_time, serenity_utils::message::TimestampStyle::Relative);
                     msg.push("\n\n");
                     
-                    // Add role and user information
+                    // Add role and user information for the newly selected volunteer
                     msg.push("**Role:** ");
                     msg.push_mono(&signup.role_type_name);
                     msg.push("\n**Selected:** ");
@@ -1844,6 +1854,33 @@ pub(crate) async fn manage_roster(
                     } else {
                         // Fallback to user ID if user not found
                         msg.push(&signup.user_id.to_string());
+                    }
+                    
+                    // Add all confirmed volunteers section
+                    if confirmed_signups.len() > 1 {
+                        msg.push("\n\n**Confirmed volunteers for this race:**\n");
+                        
+                        // Group by role type
+                        let role_bindings = RoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
+                        for binding in role_bindings {
+                            let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                            if !binding_signups.is_empty() {
+                                msg.push("**");
+                                msg.push(&binding.role_type_name);
+                                msg.push(":** ");
+                                
+                                for (i, signup) in binding_signups.iter().enumerate() {
+                                    if i > 0 { msg.push(", "); }
+                                    let volunteer_user = User::from_id(&mut *transaction, signup.user_id).await?;
+                                    if let Some(volunteer_user) = volunteer_user {
+                                        msg.push(&volunteer_user.to_string());
+                                    } else {
+                                        msg.push(&signup.user_id.to_string());
+                                    }
+                                }
+                                msg.push("\n");
+                            }
+                        }
                     }
                     
                     // Send the message to Discord
