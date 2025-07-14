@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n            display_name,\n            short_name,\n            start,\n            end_time,\n            url,\n            challonge_community,\n            speedgaming_slug,\n            hide_races_tab,\n            hide_teams_tab,\n            teams_url,\n            enter_url,\n            video_url,\n            discord_guild AS \"discord_guild: PgSnowflake<GuildId>\",\n            discord_invite_url,\n            discord_race_room_channel AS \"discord_race_room_channel: PgSnowflake<ChannelId>\",\n            discord_race_results_channel AS \"discord_race_results_channel: PgSnowflake<ChannelId>\",\n            discord_organizer_channel AS \"discord_organizer_channel: PgSnowflake<ChannelId>\",\n            discord_scheduling_channel AS \"discord_scheduling_channel: PgSnowflake<ChannelId>\",\n            rando_version AS \"rando_version: Json<VersionedBranch>\",\n            single_settings AS \"single_settings: Json<seed::Settings>\",\n            team_config AS \"team_config: TeamConfig\",\n            enter_flow AS \"enter_flow: Json<enter::Flow>\",\n            show_opt_out,\n            show_qualifier_times,\n            default_game_count,\n            min_schedule_notice,\n            open_stream_delay,\n            invitational_stream_delay,\n            retime_window,\n            auto_import,\n            manual_reporting_with_breaks,\n            language AS \"language: Language\"\n        FROM events WHERE series = $1 AND event = $2",
+  "query": "SELECT\n            display_name,\n            short_name,\n            start,\n            end_time,\n            url,\n            challonge_community,\n            speedgaming_slug,\n            hide_races_tab,\n            hide_teams_tab,\n            teams_url,\n            enter_url,\n            video_url,\n            discord_guild AS \"discord_guild: PgSnowflake<GuildId>\",\n            discord_invite_url,\n            discord_race_room_channel AS \"discord_race_room_channel: PgSnowflake<ChannelId>\",\n            discord_race_results_channel AS \"discord_race_results_channel: PgSnowflake<ChannelId>\",\n            discord_organizer_channel AS \"discord_organizer_channel: PgSnowflake<ChannelId>\",\n            discord_scheduling_channel AS \"discord_scheduling_channel: PgSnowflake<ChannelId>\",\n            discord_volunteer_info_channel AS \"discord_volunteer_info_channel: PgSnowflake<ChannelId>\",\n            rando_version AS \"rando_version: Json<VersionedBranch>\",\n            single_settings AS \"single_settings: Json<seed::Settings>\",\n            team_config AS \"team_config: TeamConfig\",\n            enter_flow AS \"enter_flow: Json<enter::Flow>\",\n            show_opt_out,\n            show_qualifier_times,\n            default_game_count,\n            min_schedule_notice,\n            open_stream_delay,\n            invitational_stream_delay,\n            retime_window,\n            auto_import,\n            manual_reporting_with_breaks,\n            language AS \"language: Language\"\n        FROM events WHERE series = $1 AND event = $2",
   "describe": {
     "columns": [
       {
@@ -95,16 +95,21 @@
       },
       {
         "ordinal": 18,
+        "name": "discord_volunteer_info_channel: PgSnowflake<ChannelId>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 19,
         "name": "rando_version: Json<VersionedBranch>",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 19,
+        "ordinal": 20,
         "name": "single_settings: Json<seed::Settings>",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 20,
+        "ordinal": 21,
         "name": "team_config: TeamConfig",
         "type_info": {
           "Custom": {
@@ -122,57 +127,57 @@
         }
       },
       {
-        "ordinal": 21,
+        "ordinal": 22,
         "name": "enter_flow: Json<enter::Flow>",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 22,
+        "ordinal": 23,
         "name": "show_opt_out",
         "type_info": "Bool"
       },
       {
-        "ordinal": 23,
+        "ordinal": 24,
         "name": "show_qualifier_times",
         "type_info": "Bool"
       },
       {
-        "ordinal": 24,
+        "ordinal": 25,
         "name": "default_game_count",
         "type_info": "Int2"
       },
       {
-        "ordinal": 25,
+        "ordinal": 26,
         "name": "min_schedule_notice",
         "type_info": "Interval"
       },
       {
-        "ordinal": 26,
+        "ordinal": 27,
         "name": "open_stream_delay",
         "type_info": "Interval"
       },
       {
-        "ordinal": 27,
+        "ordinal": 28,
         "name": "invitational_stream_delay",
         "type_info": "Interval"
       },
       {
-        "ordinal": 28,
+        "ordinal": 29,
         "name": "retime_window",
         "type_info": "Interval"
       },
       {
-        "ordinal": 29,
+        "ordinal": 30,
         "name": "auto_import",
         "type_info": "Bool"
       },
       {
-        "ordinal": 30,
+        "ordinal": 31,
         "name": "manual_reporting_with_breaks",
         "type_info": "Bool"
       },
       {
-        "ordinal": 31,
+        "ordinal": 32,
         "name": "language: Language",
         "type_info": {
           "Custom": {
@@ -216,6 +221,7 @@
       true,
       true,
       true,
+      true,
       false,
       true,
       false,
@@ -230,5 +236,5 @@
       false
     ]
   },
-  "hash": "8bb2fe7f8e873c3c5b9bc8276e6f561aaded0757c0720408d7100e533df03f24"
+  "hash": "e3c6500830cdf25c34c494dc4deb15af79c9232273efcb2bb8ea7b2b6abfcd3d"
 }
