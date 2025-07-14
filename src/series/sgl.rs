@@ -253,6 +253,49 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                 }
             })
         }
+        "2025onl" => {
+            Some(html! {
+                article {
+                    p {
+                        : "Welcome to the 2025 SpeedGaming Live online OoTR tournament, organized by ";
+                        : English.join_html_opt(data.organizers(&mut *transaction).await?);
+                        : ".";
+                        h2 : "See also";
+                        ul {
+                            li {
+                                a(href = "https://sglive.speedgaming.org/") : "Main SGL event page";
+                            }
+                            li {
+                                a(href = "https://discord.gg/YGzQsUp") : "Main SGL Discord";
+                            }
+                        }
+                    }
+                }
+            })
+        }
+        "2025live" => {
+            Some(html! {
+                article {
+                    p {
+                        : "Welcome to the 2025 SpeedGaming Live in-person OoTR tournament, organized by ";
+                        : English.join_html_opt(data.organizers(&mut *transaction).await?);
+                        : ".";
+                        h2 : "See also";
+                        ul {
+                            li {
+                                a(href = "https://sglive.speedgaming.org/") : "Main SGL event page";
+                            }
+                            li {
+                                a(href = "https://matcherino.com/t/sglive25") : "Matcherino";
+                            }
+                            li {
+                                a(href = "https://discord.gg/YGzQsUp") : "Main SGL Discord";
+                            }
+                        }
+                    }
+                }
+            })
+        }
         _ => None,
     })
 }

@@ -1106,6 +1106,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User
                                 .flatten()
                                 .unwrap_or(1); // Default to OOTR if no mapping found
                                 
+                                let extra = seed.extra(Utc::now()).await?;
                                 let seed_table = seed::table(stream::iter(iter::once(seed)), false, &mut transaction, game_id).await?;
                                 let ctx = ctx.take_submit_async();
                                 let mut errors = ctx.errors().collect_vec();
@@ -1117,6 +1118,14 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User
                                             : ".";
                                         };
                                         : seed_table;
+                                        @if let Some(password) = extra.password {
+                                            p { //TODO replace this hack with password support in seed::table
+                                                : "Password: ";
+                                                @for note in password {
+                                                    : char::from(note);
+                                                }
+                                            };
+                                        }
                                         p : "After playing the async, fill out the form below.";
                                         : full_form(uri!(event::submit_async(data.series, &*data.event)), csrf, html! {
                                             @match data.team_config {

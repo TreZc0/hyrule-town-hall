@@ -239,6 +239,7 @@ impl Requirement {
                 let qualifier_kind = match (data.series, &*data.event) {
                     (Series::SpeedGaming, "2023onl") => teams::QualifierScoreKind::Sgl2023Online,
                     (Series::SpeedGaming, "2024onl") => teams::QualifierScoreKind::Sgl2024Online,
+                    (Series::SpeedGaming, "2025onl") => teams::QualifierScoreKind::Sgl2025Online,
                     (Series::Standard, "8") => teams::QualifierScoreKind::Standard,
                     (_, _) => unimplemented!("enter::Requirement::QualifierPlacement for event {}/{}", data.series.slug(), data.event),
                 };
