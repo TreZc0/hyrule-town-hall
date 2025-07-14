@@ -57,6 +57,12 @@ impl From<PageError> for StatusOrError<Error> {
     }
 }
 
+impl From<cal::Error> for StatusOrError<Error> {
+    fn from(err: cal::Error) -> Self {
+        StatusOrError::Err(Error::Cal(err))
+    }
+}
+
 #[derive(Debug, Clone, Copy, sqlx::Type)]
 #[sqlx(type_name = "role_request_status", rename_all = "lowercase")]
 pub(crate) enum RoleRequestStatus {
@@ -1696,6 +1702,7 @@ pub(crate) struct ManageRosterForm {
 )]
 pub(crate) async fn manage_roster(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     uri: Origin<'_>,
     csrf: Option<CsrfToken>,
@@ -1771,6 +1778,80 @@ pub(crate) async fn manage_roster(
                     .ok_or(StatusOrError::Status(Status::NotFound))?;
                 
                 Signup::auto_reject_overlapping_signups(&mut transaction, value.signup_id, signup.user_id).await?;
+                
+                // Send Discord notification to volunteer info channel
+                if let Some(discord_volunteer_info_channel) = data.discord_volunteer_info_channel {
+                    // Get race details for the notification
+                    let race = Race::from_id(&mut transaction, &reqwest::Client::new(), race_id).await?;
+                    let user = User::from_id(&mut *transaction, signup.user_id).await?;
+                    
+                    // Format race description
+                    let race_description = match &race.entrants {
+                        cal::Entrants::Two([team1, team2]) => format!("{} vs {}",
+                            match team1 {
+                                cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                cal::Entrant::Named { name, .. } => name.clone(),
+                                cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                            },
+                            match team2 {
+                                cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                cal::Entrant::Named { name, .. } => name.clone(),
+                                cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                            }
+                        ),
+                        cal::Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                            match team1 {
+                                cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                cal::Entrant::Named { name, .. } => name.clone(),
+                                cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                            },
+                            match team2 {
+                                cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                cal::Entrant::Named { name, .. } => name.clone(),
+                                cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                            },
+                            match team3 {
+                                cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                cal::Entrant::Named { name, .. } => name.clone(),
+                                cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                            }
+                        ),
+                        _ => "Unknown entrants".to_string(),
+                    };
+                    
+                    // Build Discord message
+                    let mut msg = MessageBuilder::default();
+                    msg.push("Volunteers selected for race ");
+                    msg.push_mono(&race_description);
+                    msg.push(" at ");
+                    msg.push_timestamp(Utc::now(), serenity_utils::message::TimestampStyle::Relative);
+                    msg.push("\n\n");
+                    
+                    // Add role and user information
+                    msg.push("**Role:** ");
+                    msg.push_mono(&signup.role_type_name);
+                    msg.push("\n**Selected:** ");
+                    
+                    if let Some(user) = user {
+                        // Check if user has Discord connected
+                        if let Some(discord) = user.discord {
+                            // Ping the user using their Discord ID
+                            msg.mention(&UserId::new(discord.id.get()));
+                        } else {
+                            // Just mention by display name
+                            msg.push(&user.to_string());
+                        }
+                    } else {
+                        // Fallback to user ID if user not found
+                        msg.push(&signup.user_id.to_string());
+                    }
+                    
+                    // Send the message to Discord
+                    let discord_ctx = discord_ctx.read().await;
+                    if let Err(e) = discord_volunteer_info_channel.say(&*discord_ctx, msg.build()).await {
+                        eprintln!("Failed to send volunteer notification to Discord: {}", e);
+                    }
+                }
             }
             
             transaction.commit().await?;

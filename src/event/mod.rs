@@ -168,6 +168,7 @@ pub(crate) struct Data<'a> {
     pub(crate) discord_race_results_channel: Option<ChannelId>,
     pub(crate) discord_organizer_channel: Option<ChannelId>,
     pub(crate) discord_scheduling_channel: Option<ChannelId>,
+    pub(crate) discord_volunteer_info_channel: Option<ChannelId>,
     pub(crate) rando_version: Option<VersionedBranch>,
     pub(crate) single_settings: Option<seed::Settings>,
     pub(crate) team_config: TeamConfig,
@@ -217,6 +218,7 @@ impl<'a> Data<'a> {
             discord_race_results_channel AS "discord_race_results_channel: PgSnowflake<ChannelId>",
             discord_organizer_channel AS "discord_organizer_channel: PgSnowflake<ChannelId>",
             discord_scheduling_channel AS "discord_scheduling_channel: PgSnowflake<ChannelId>",
+            discord_volunteer_info_channel AS "discord_volunteer_info_channel: PgSnowflake<ChannelId>",
             rando_version AS "rando_version: Json<VersionedBranch>",
             single_settings AS "single_settings: Json<seed::Settings>",
             team_config AS "team_config: TeamConfig",
@@ -251,6 +253,7 @@ impl<'a> Data<'a> {
                 discord_race_results_channel: row.discord_race_results_channel.map(|PgSnowflake(id)| id),
                 discord_organizer_channel: row.discord_organizer_channel.map(|PgSnowflake(id)| id),
                 discord_scheduling_channel: row.discord_scheduling_channel.map(|PgSnowflake(id)| id),
+                discord_volunteer_info_channel: row.discord_volunteer_info_channel.map(|PgSnowflake(id)| id),
                 rando_version: row.rando_version.map(|Json(rando_version)| rando_version),
                 single_settings: if series == Series::CopaDoBrasil && event == "1" {
                     Some(br::s1_settings()) // support for randomized starting song
