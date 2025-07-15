@@ -520,11 +520,9 @@ impl<'a> Data<'a> {
                 a(class = "nav", href? = (!matches!(tab, Tab::Info) || is_subpage).then(|| uri!(info(self.series, &*self.event)))) : &self.display_name;
             }
             @if let Some(start) = self.start(&mut *transaction).await? {
-                h2 {
-                    @if let (Series::Standard, "8") = (self.series, &*self.event) {
-                        : "Brackets: ";
-                    }
-                    : format_datetime(start, DateTimeFormat { long: true, running_text: false });
+                h4 {
+                    : "Event Start: ";
+                    : start.format("%Y-%m-%d").to_string();
                 }
             }
             div(class = "button-row") {

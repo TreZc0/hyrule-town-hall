@@ -2279,59 +2279,71 @@ pub(crate) async fn race_table(
                             }
                         }
                         td {
-                            @match race.schedule {
-                                RaceSchedule::Live { .. } => {
-                                    @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
-                                    @if all_teams_consented {
-                                        @let signups = Signup::for_race(&mut *transaction, race.id).await?;
-                                        @let pending_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Pending)).collect::<Vec<_>>();
-                                        @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
-
-                                        @if !pending_signups.is_empty() && confirmed_signups.is_empty() {
-                                            : "pending";
-                                        } else if !confirmed_signups.is_empty() {
-                                            @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
-                                            @for binding in role_bindings {
-                                                @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
-                                                @if !binding_signups.is_empty() {
-                                                    : binding.role_type_name;
-                                                    : ": ";
-                                                    @for (i, signup) in binding_signups.iter().enumerate() {
-                                                        @if i > 0 { : ", "; }
-                                                        @let user = User::from_id(&mut **transaction, signup.user_id).await?;
-                                                        : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                            @if race.is_ended() {
+                                @match race.schedule {
+                                    RaceSchedule::Live { .. } => {
+                                        @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                        @if all_teams_consented {
+                                            @let signups = Signup::for_race(&mut *transaction, race.id).await?;
+                                            @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
+                                            
+                                            @if !confirmed_signups.is_empty() {
+                                                @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
+                                                @for binding in role_bindings {
+                                                    @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                                                    @if !binding_signups.is_empty() {
+                                                        : binding.role_type_name;
+                                                        : ": ";
+                                                        @for (i, signup) in binding_signups.iter().enumerate() {
+                                                            @if i > 0 { : ", "; }
+                                                            @let user = User::from_id(&mut **transaction, signup.user_id).await?;
+                                                            : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                                        }
+                                                        br;
                                                     }
-                                                    br;
                                                 }
                                             }
+                                            // If no confirmed volunteers, show nothing (empty)
                                         }
-                                    } else {
-                                        : "no restream";
+                                        // If teams didn't consent to restream, show nothing (empty)
+                                    }
+                                    RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {
+                                        // No volunteer info for async/unscheduled races (empty)
                                     }
                                 }
-                                RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {
-                                    : "no restream";
-                                }
-                            }
-                            
-                            @if race.is_ended() && !race.video_urls.is_empty() {
-                                @let signups = Signup::for_race(&mut *transaction, race.id).await?;
-                                @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
-                                
-                                @if !confirmed_signups.is_empty() {
-                                    @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
-                                    @for binding in role_bindings {
-                                        @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
-                                        @if !binding_signups.is_empty() {
-                                            : binding.role_type_name;
-                                            : ": ";
-                                            @for (i, signup) in binding_signups.iter().enumerate() {
-                                                @if i > 0 { : ", "; }
-                                                @let user = User::from_id(&mut **transaction, signup.user_id).await?;
-                                                : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                            } else {
+                                @match race.schedule {
+                                    RaceSchedule::Live { .. } => {
+                                        @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                        @if all_teams_consented {
+                                            @let signups = Signup::for_race(&mut *transaction, race.id).await?;
+                                            @let pending_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Pending)).collect::<Vec<_>>();
+                                            @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
+
+                                            @if !pending_signups.is_empty() && confirmed_signups.is_empty() {
+                                                : "pending";
+                                            } else if !confirmed_signups.is_empty() {
+                                                @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
+                                                @for binding in role_bindings {
+                                                    @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                                                    @if !binding_signups.is_empty() {
+                                                        : binding.role_type_name;
+                                                        : ": ";
+                                                        @for (i, signup) in binding_signups.iter().enumerate() {
+                                                            @if i > 0 { : ", "; }
+                                                            @let user = User::from_id(&mut **transaction, signup.user_id).await?;
+                                                            : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                                        }
+                                                        br;
+                                                    }
+                                                }
                                             }
-                                            br;
+                                        } else {
+                                            : "no restream";
                                         }
+                                    }
+                                    RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {
+                                        : "no restream";
                                     }
                                 }
                             }
