@@ -4525,7 +4525,7 @@ impl RaceHandler<GlobalState> for Handler {
                         }).await?;
                     } else {
                         let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
-                        match goal.parse_seed_command(&mut transaction, &ctx.global_state, self.is_official(), cmd_name.to_ascii_lowercase() == "spoilerseed", false, &args).await.to_racetime()? {
+                        match goal.parse_seed_command(&mut transaction, &ctx.global_state, self.is_official(), cmd_name.eq_ignore_ascii_case("spoilerseed"), false, &args).await.to_racetime()? {
                             SeedCommandParseResult::Alttpr => {
                                 // TODO THIS NEEDS TO BE IMPLEMENTED -- call door rando .py and roll seed with arguments
                                 Command::new("echo").args(["hello", "world"]).check("echo").await.to_racetime()?;
