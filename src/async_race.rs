@@ -39,9 +39,17 @@ impl AsyncRaceManager {
             if let Some(async_channel) = event.discord_async_channel {
                 for (async_part, start_time) in Self::get_async_parts(&race) {
                     if let Some(start_time) = start_time {
-                                            let time_until_start = start_time - Utc::now();
-                    if time_until_start <= chrono::Duration::minutes(45) && time_until_start > chrono::Duration::minutes(44) {
-                            // Create thread 45 minutes before start
+                        let time_until_start = start_time - Utc::now();
+                        // Only create the thread for this part if:
+                        // - The thread does not exist
+                        // - The start time is in the future and less than 45 minutes away
+                        let thread_exists = match async_part {
+                            1 => sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM races WHERE id = $1 AND async_thread1 IS NOT NULL) AS "exists!""#, race.id as _).fetch_one(&mut *transaction).await?,
+                            2 => sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM races WHERE id = $1 AND async_thread2 IS NOT NULL) AS "exists!""#, race.id as _).fetch_one(&mut *transaction).await?,
+                            3 => sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM races WHERE id = $1 AND async_thread3 IS NOT NULL) AS "exists!""#, race.id as _).fetch_one(&mut *transaction).await?,
+                            _ => false,
+                        };
+                        if !thread_exists && time_until_start > chrono::Duration::zero() && time_until_start <= chrono::Duration::minutes(45) {
                             Self::create_async_thread(
                                 &mut transaction,
                                 discord_ctx,
@@ -81,8 +89,16 @@ impl AsyncRaceManager {
             for (async_part, start_time) in Self::get_async_parts(&race) {
                 if let Some(start_time) = start_time {
                     let time_until_start = start_time - Utc::now();
-                    if time_until_start <= chrono::Duration::minutes(10) && time_until_start > chrono::Duration::minutes(9) {
-                        // Distribute seed 10 minutes before start
+                    // Only distribute the seed for this part if:
+                    // - The seed has not been distributed
+                    // - The start time is in the future and less than 10 minutes away
+                    let seed_distributed = match async_part {
+                        1 => sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM races WHERE id = $1 AND async_seed1 = TRUE) AS "exists!""#, race.id as _).fetch_one(&mut *transaction).await?,
+                        2 => sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM races WHERE id = $1 AND async_seed2 = TRUE) AS "exists!""#, race.id as _).fetch_one(&mut *transaction).await?,
+                        3 => sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM races WHERE id = $1 AND async_seed3 = TRUE) AS "exists!""#, race.id as _).fetch_one(&mut *transaction).await?,
+                        _ => false,
+                    };
+                    if !seed_distributed && time_until_start > chrono::Duration::zero() && time_until_start <= chrono::Duration::minutes(10) {
                         Self::distribute_seed_to_thread(
                             &mut transaction,
                             discord_ctx,
@@ -328,7 +344,10 @@ impl AsyncRaceManager {
             AND (
                 (r.async_start1 IS NOT NULL AND r.async_thread1 IS NULL AND r.async_start1 <= NOW() + INTERVAL '45 minutes' AND r.async_start1 > NOW() + INTERVAL '44 minutes') OR
                 (r.async_start2 IS NOT NULL AND r.async_thread2 IS NULL AND r.async_start2 <= NOW() + INTERVAL '45 minutes' AND r.async_start2 > NOW() + INTERVAL '44 minutes') OR
-                (r.async_start3 IS NOT NULL AND r.async_thread3 IS NULL AND r.async_start3 <= NOW() + INTERVAL '45 minutes' AND r.async_start3 > NOW() + INTERVAL '44 minutes')
+                (r.async_start3 IS NOT NULL AND r.async_thread3 IS NULL AND r.async_start3 <= NOW() + INTERVAL '45 minutes' AND r.async_start3 > NOW() + INTERVAL '44 minutes') OR
+                (r.async_start1 IS NOT NULL AND r.async_thread1 IS NULL AND r.async_start1 <= NOW() + INTERVAL '30 minutes' AND r.async_start1 > NOW()) OR
+                (r.async_start2 IS NOT NULL AND r.async_thread2 IS NULL AND r.async_start2 <= NOW() + INTERVAL '30 minutes' AND r.async_start2 > NOW()) OR
+                (r.async_start3 IS NOT NULL AND r.async_thread3 IS NULL AND r.async_start3 <= NOW() + INTERVAL '30 minutes' AND r.async_start3 > NOW())
             )
             "#
         ).fetch_all(&mut **transaction).await?;
@@ -354,7 +373,10 @@ impl AsyncRaceManager {
             AND (
                 (r.async_start1 IS NOT NULL AND r.async_seed1 = FALSE AND r.async_start1 <= NOW() + INTERVAL '10 minutes' AND r.async_start1 > NOW() + INTERVAL '9 minutes') OR
                 (r.async_start2 IS NOT NULL AND r.async_seed2 = FALSE AND r.async_start2 <= NOW() + INTERVAL '10 minutes' AND r.async_start2 > NOW() + INTERVAL '9 minutes') OR
-                (r.async_start3 IS NOT NULL AND r.async_seed3 = FALSE AND r.async_start3 <= NOW() + INTERVAL '10 minutes' AND r.async_start3 > NOW() + INTERVAL '9 minutes')
+                (r.async_start3 IS NOT NULL AND r.async_seed3 = FALSE AND r.async_start3 <= NOW() + INTERVAL '10 minutes' AND r.async_start3 > NOW() + INTERVAL '9 minutes') OR
+                (r.async_start1 IS NOT NULL AND r.async_seed1 = FALSE AND r.async_start1 <= NOW() + INTERVAL '5 minutes' AND r.async_start1 > NOW()) OR
+                (r.async_start2 IS NOT NULL AND r.async_seed2 = FALSE AND r.async_start2 <= NOW() + INTERVAL '5 minutes' AND r.async_start2 > NOW()) OR
+                (r.async_start3 IS NOT NULL AND r.async_seed3 = FALSE AND r.async_start3 <= NOW() + INTERVAL '5 minutes' AND r.async_start3 > NOW())
             )
             "#
         ).fetch_all(&mut **transaction).await?;
