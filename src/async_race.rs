@@ -508,10 +508,19 @@ impl AsyncRaceManager {
             async_part,
         ).await?;
         
-        // Notify organizers
-        if let Some(organizer_channel) = event.discord_organizer_channel {
+        // Notify in the async thread
+        let thread_id = match async_part {
+            1 => sqlx::query_scalar!("SELECT async_thread1 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
+            2 => sqlx::query_scalar!("SELECT async_thread2 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
+            3 => sqlx::query_scalar!("SELECT async_thread3 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
+            _ => return Err(Error::InvalidAsyncPart),
+        };
+        
+        if let Some(thread_id) = thread_id {
+            let thread = ChannelId::new(thread_id as u64);
+            
             let mut content = MessageBuilder::default();
-            content.push("**Async Race Started**");
+            content.push("@here **Async Half is ready to start**");
             content.push_line("");
             content.push("Player ");
             content.mention_user(&player);
@@ -543,7 +552,7 @@ impl AsyncRaceManager {
             content.push_line("");
             content.push("The seed has been distributed and the player has 10 minutes to start their run.");
             
-            organizer_channel.say(discord_ctx, content.build()).await?;
+            thread.say(discord_ctx, content.build()).await?;
         }
         
         transaction.commit().await?;

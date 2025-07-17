@@ -2020,7 +2020,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         // Disable the button
                                         interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                             CreateInteractionResponseMessage::new()
-                                                .content("✅ You are now ready! The seed has been distributed and organizers have been notified.")
                                                 .components(vec![CreateActionRow::Buttons(vec![
                                                     CreateButton::new("async_ready")
                                                         .label("READY!")
@@ -2028,6 +2027,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         .disabled(true)
                                                 ])])
                                         )).await?;
+                                        
+                                        // Post a new message confirming readiness
+                                        interaction.channel_id.say(ctx, "✅ You are now ready! The seed has been distributed and organizers have been notified.").await?;
                                     }
                                     Err(e) => {
                                         let error_msg = match e {
