@@ -129,8 +129,11 @@ impl AsyncRaceManager {
         let player = team.members(transaction).await?.into_iter().next()
             .ok_or(Error::NoTeamMembers)?;
         
+        // Determine if this is first or second half based on scheduled start times
+        let is_first_half = Self::is_first_half(race, async_part, start_time);
+        
         let thread_name = format!("Async {} - {}", 
-            if async_part == 1 { "First Half" } else { "Second Half" },
+            if is_first_half { "First Half" } else { "Second Half" },
             team.name(transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into())
         );
         
@@ -141,6 +144,7 @@ impl AsyncRaceManager {
             async_part,
             start_time,
             &player,
+            is_first_half,
         ).await?;
         
         let thread = async_channel.create_thread(discord_ctx, CreateThread::new(&thread_name)
@@ -179,9 +183,10 @@ impl AsyncRaceManager {
         transaction: &mut Transaction<'_, Postgres>,
         event: &EventData<'_>,
         race: &Race,
-        async_part: u8,
+        _async_part: u8,
         start_time: DateTime<Utc>,
         player: &User,
+        is_first_half: bool,
     ) -> Result<MessageBuilder, Error> {
         let mut content = MessageBuilder::default();
         
@@ -200,44 +205,47 @@ impl AsyncRaceManager {
         }
         
         content.push("(");
-        for team in race.teams() {
+        let teams: Vec<_> = race.teams().collect();
+        for (i, team) in teams.iter().enumerate() {
             content.mention_team(transaction, event.discord_guild, team).await?;
-            content.push(' ');
+            if i < teams.len() - 1 {
+                content.push(" vs. ");
+            }
         }
         content.push(")");
         
         content.push_line("");
         content.push("You are considered Player ");
-        content.push(if async_part == 1 { "1" } else { "2" });
-        content.push(" of this round");
+        content.push(if is_first_half { "1" } else { "2" });
+        content.push(" of this round.");
         
         content.push_line("");
         content.push("The bot will hand out your seed 10 minutes before the designated start of <t:");
         content.push(start_time.timestamp().to_string());
-        content.push(":F>");
+        content.push(":F>.");
         
         content.push_line("");
         content.push("Please note in the interest of keeping a level playing field, even if running second, you will not be given the results of the match until after both players have run the seed.");
         
         // Instructions based on whether player goes first or second
-        if async_part == 1 {
+        if is_first_half {
             content.push_line("");
             content.push("**First Player Instructions:**");
             content.push_line("");
-            content.push("• Local record from OBS and upload to YouTube as unlisted");
+            content.push("• Local record from OBS and upload to YouTube as unlisted.");
             content.push_line("");
-            content.push("• When finished, inform us immediately with your finish time and a screenshot of the collection rate end scene");
+            content.push("• When finished, inform us immediately with your finish time and a screenshot of the collection rate end scene.");
             content.push_line("");
-            content.push("• We suggest using MKV format for recording (more crash-resistant than MP4)");
+            content.push("• We suggest using MKV format for recording (more crash-resistant than MP4).");
         } else {
             content.push_line("");
             content.push("**Second Player Instructions:**");
             content.push_line("");
-            content.push("• You can stream to Twitch/YouTube OR local record and upload to YouTube as unlisted");
+            content.push("• You can stream to Twitch/YouTube OR local record and upload to YouTube as unlisted.");
             content.push_line("");
-            content.push("• When finished, inform us immediately with your finish time and a screenshot of the collection rate end scene");
+            content.push("• When finished, inform us immediately with your finish time and a screenshot of the collection rate end scene.");
             content.push_line("");
-            content.push("• If streaming to Twitch, ensure VoDs are published for access for the organizers");
+            content.push("• If streaming to Twitch, ensure VoDs are published for access for the organizers.");
         }
         
         Ok(content)
@@ -309,6 +317,31 @@ impl AsyncRaceManager {
             2 => teams.get(1).copied().ok_or(Error::NoTeamFound),
             3 => teams.get(2).copied().ok_or(Error::NoTeamFound),
             _ => Err(Error::InvalidAsyncPart),
+        }
+    }
+
+    /// Determines if this async part is the first half based on scheduled start times
+    fn is_first_half(race: &Race, async_part: u8, _start_time: DateTime<Utc>) -> bool {
+        match &race.schedule {
+            RaceSchedule::Async { start1, start2, start3, .. } => {
+                // Get all scheduled start times that are not None
+                let mut scheduled_times = Vec::new();
+                if let Some(time) = start1 { scheduled_times.push((1, *time)); }
+                if let Some(time) = start2 { scheduled_times.push((2, *time)); }
+                if let Some(time) = start3 { scheduled_times.push((3, *time)); }
+                
+                // Sort by start time
+                scheduled_times.sort_by_key(|&(_, time)| time);
+                
+                // Find the position of this async part in the sorted list
+                if let Some(position) = scheduled_times.iter().position(|&(part, _)| part == async_part) {
+                    position == 0 // First position (earliest time) = first half
+                } else {
+                    // Fallback to async_part number if not found
+                    async_part == 1
+                }
+            }
+            _ => async_part == 1, // Fallback
         }
     }
 
