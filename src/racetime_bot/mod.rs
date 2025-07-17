@@ -5047,6 +5047,11 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
             Err("remember to send your video to an organizer once you're done") //TODO “please check your direct messages” for private async parts, “will be handled here in the match thread” for public async parts
         }
     };
+    let handle_mode = cal_event.should_create_room(&mut *transaction, event).await.ok();
+    if matches!(handle_mode, Some(cal::RaceHandleMode::Discord)) {
+        return Ok(None);
+    }
+    
     let is_room_url = room_url.is_ok();
     let msg = if_chain! {
         if let French = event.language;
