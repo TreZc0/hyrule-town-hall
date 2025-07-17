@@ -146,6 +146,7 @@ impl AsyncRaceManager {
         let player_name = player.display_name();
         
         // Build thread name: Async <Round>: <player> (<1st/2nd>) if round/phase exists, else Async <Matchup>: <player> (<1st/2nd>)
+        let display_order = Self::get_display_order(race, async_part);
         let thread_name = if race.phase.is_some() || race.round.is_some() {
             let round_str = if let Some(phase) = &race.phase {
                 if let Some(round) = &race.round {
@@ -158,9 +159,9 @@ impl AsyncRaceManager {
             } else {
                 String::new()
             };
-            format!("Async {}: {} ({})", round_str.trim(), player_name, if is_first_half { "1st" } else { "2nd" })
+            format!("Async {}: {} ({})", round_str.trim(), player_name, if display_order == 1 { "1st" } else if display_order == 2 { "2nd" } else { "3rd" })
         } else {
-            format!("Async {}: {} ({})", matchup, player_name, if is_first_half { "1st" } else { "2nd" })
+            format!("Async {}: {} ({})", matchup, player_name, if display_order == 1 { "1st" } else if display_order == 2 { "2nd" } else { "3rd" })
         };
         
         let mut content = Self::build_async_thread_content(
@@ -212,7 +213,7 @@ impl AsyncRaceManager {
         async_part: u8,
         start_time: DateTime<Utc>,
         player: &User,
-        is_first_half: bool,
+        _is_first_half: bool,
     ) -> Result<MessageBuilder, Error> {
         let mut content = MessageBuilder::default();
         
@@ -248,7 +249,8 @@ impl AsyncRaceManager {
         
         content.push_line("");
         content.push("You are considered Player ");
-        content.push(if is_first_half { "1" } else { "2" });
+        let display_order = Self::get_display_order(race, async_part);
+        content.push(display_order.to_string());
         content.push(" of this round.");
         
         content.push_line("");
@@ -259,8 +261,9 @@ impl AsyncRaceManager {
         content.push_line("");
         content.push("Please note in the interest of keeping a level playing field, even if running second, you will not be given the results of the match until after both players have run the seed.");
         
-        // Instructions based on whether player goes first or second
-        if is_first_half {
+        // Instructions based on display order
+        let display_order = Self::get_display_order(race, async_part);
+        if display_order == 1 {
             content.push_line("");
             content.push("**First Player Instructions:**");
             content.push_line("");
@@ -358,7 +361,7 @@ impl AsyncRaceManager {
         }
     }
 
-    /// Gets the team for a specific async part
+    /// Gets the team for a specific async part (database mapping - team order)
     fn get_team_for_async_part(race: &Race, async_part: u8) -> Result<&Team, Error> {
         let teams: Vec<_> = race.teams().collect();
         match async_part {
@@ -391,6 +394,31 @@ impl AsyncRaceManager {
                 }
             }
             _ => async_part == 1, // Fallback
+        }
+    }
+
+    /// Gets the display order (1st, 2nd, 3rd) for an async part based on scheduled start times
+    fn get_display_order(race: &Race, async_part: u8) -> u8 {
+        match &race.schedule {
+            RaceSchedule::Async { start1, start2, start3, .. } => {
+                // Get all scheduled start times that are not None
+                let mut scheduled_times = Vec::new();
+                if let Some(time) = start1 { scheduled_times.push((1, *time)); }
+                if let Some(time) = start2 { scheduled_times.push((2, *time)); }
+                if let Some(time) = start3 { scheduled_times.push((3, *time)); }
+                
+                // Sort by start time
+                scheduled_times.sort_by_key(|&(_, time)| time);
+                
+                // Find the position of this async part in the sorted list
+                if let Some(position) = scheduled_times.iter().position(|&(part, _)| part == async_part) {
+                    (position + 1) as u8 // Convert to 1-based display order
+                } else {
+                    // Fallback to async_part number if not found
+                    async_part
+                }
+            }
+            _ => async_part, // Fallback
         }
     }
 

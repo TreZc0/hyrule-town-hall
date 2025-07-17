@@ -2629,9 +2629,36 @@ pub(crate) async fn result_async_command(
         race_id
     ).fetch_all(&mut *transaction).await?;
 
+    // Load race data early so we can use it for display order
+    let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await.map_err(|_e| Error::Sql(sqlx::Error::RowNotFound))?;
+    
+    // Helper function to get display order for async part
+    fn get_display_order(race: &Race, async_part: i32) -> i32 {
+        match &race.schedule {
+            RaceSchedule::Async { start1, start2, start3, .. } => {
+                // Get all scheduled start times that are not None
+                let mut scheduled_times = Vec::new();
+                if let Some(time) = start1 { scheduled_times.push((1, *time)); }
+                if let Some(time) = start2 { scheduled_times.push((2, *time)); }
+                if let Some(time) = start3 { scheduled_times.push((3, *time)); }
+                
+                // Sort by start time
+                scheduled_times.sort_by_key(|&(_, time)| time);
+                
+                // Find the position of this async part in the sorted list
+                if let Some(position) = scheduled_times.iter().position(|&(part, _)| part == async_part as u8) {
+                    (position + 1) as i32 // Convert to 1-based display order
+                } else {
+                    // Fallback to async_part number if not found
+                    async_part
+                }
+            }
+            _ => async_part, // Fallback
+        }
+    }
+    
     if async_times.len() >= 2 {
         // Both parts are complete, finalize the race
-        let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await.map_err(|_e| Error::Sql(sqlx::Error::RowNotFound))?;
         let event_name = race.event.clone();
         let event = event::Data::new(&mut transaction, race.series, &event_name).await?
             .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
@@ -2673,6 +2700,8 @@ pub(crate) async fn result_async_command(
         }).collect::<Vec<_>>();
 
         // Send result to results channel
+
+        // Send result to results channel
         if let Some(results_channel) = event.discord_race_results_channel {
             let mut content = MessageBuilder::default();
             content.push("**Async Race Results**");
@@ -2688,8 +2717,9 @@ pub(crate) async fn result_async_command(
             content.push_line("");
             content.push_line("");
             for (part, time) in &results {
+                let display_order = get_display_order(&race, *part);
                 content.push("Player ");
-                content.push(part.to_string());
+                content.push(display_order.to_string());
                 content.push(": ");
                 content.push(format!("{:02}:{:02}:{:02}", 
                     time.as_secs() / 3600,
@@ -2720,8 +2750,9 @@ pub(crate) async fn result_async_command(
                 content.push("Your async race has been completed. Results:");
                 content.push_line("");
                 for (result_part, result_time) in &results {
+                    let display_order = get_display_order(&race, *result_part);
                     content.push("Player ");
-                    content.push(result_part.to_string());
+                    content.push(display_order.to_string());
                     content.push(": ");
                     content.push(format!("{:02}:{:02}:{:02}", 
                         result_time.as_secs() / 3600,
@@ -2839,9 +2870,16 @@ pub(crate) async fn result_async_command(
         }
     }
 
+    // Use display order for the response message, with ordinal
+    let display_order = get_display_order(&race, async_part as i32);
+    let ordinal = match display_order {
+        1 => "1st",
+        2 => "2nd",
+        3 => "3rd",
+        n => &format!("{}th", n),
+    };
     interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-        .ephemeral(true)
-        .content(format!("Async part {} time recorded: {}", async_part, time_str))
+        .content(format!("Time recorded for {} half of this async: {}", ordinal, time_str))
     )).await?;
 
     transaction.commit().await?;
