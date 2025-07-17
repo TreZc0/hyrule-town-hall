@@ -158,9 +158,9 @@ impl AsyncRaceManager {
             } else {
                 String::new()
             };
-            format!("Async <{}>: {} ({})", round_str.trim(), player_name, if is_first_half { "1st" } else { "2nd" })
+            format!("Async {}: {} ({})", round_str.trim(), player_name, if is_first_half { "1st" } else { "2nd" })
         } else {
-            format!("Async <{}>: {} ({})", matchup, player_name, if is_first_half { "1st" } else { "2nd" })
+            format!("Async {}: {} ({})", matchup, player_name, if is_first_half { "1st" } else { "2nd" })
         };
         
         let mut content = Self::build_async_thread_content(
@@ -233,7 +233,13 @@ impl AsyncRaceManager {
         content.push("(");
         let teams: Vec<_> = race.teams().collect();
         for (i, team) in teams.iter().enumerate() {
-            content.mention_team(transaction, event.discord_guild, team).await?;
+            if team.id == Self::get_team_for_async_part(race, async_part)?.id {
+                // Mention (ping) the current player's team
+                content.mention_team(transaction, event.discord_guild, team).await?;
+            } else {
+                // Just show the opponent's team name without pinging
+                content.push_safe(team.name(transaction).await?.unwrap_or_else(|| "Unknown Team".to_string()));
+            }
             if i < teams.len() - 1 {
                 content.push(" vs. ");
             }
