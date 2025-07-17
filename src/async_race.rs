@@ -132,10 +132,36 @@ impl AsyncRaceManager {
         // Determine if this is first or second half based on scheduled start times
         let is_first_half = Self::is_first_half(race, async_part, start_time);
         
-        let thread_name = format!("Async {} - {}", 
-            if is_first_half { "First Half" } else { "Second Half" },
-            team.name(transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into())
-        );
+        // Build matchup string
+        let teams: Vec<_> = race.teams().collect();
+        let mut matchup = String::new();
+        for (i, _team) in teams.iter().enumerate() {
+            if i > 0 {
+                matchup.push_str("v");
+            }
+            matchup.push_str(&format!("P{}", i + 1));
+        }
+        
+        // Get player name
+        let player_name = player.display_name();
+        
+        // Build thread name: Async <Round>: <player> (<1st/2nd>) if round/phase exists, else Async <Matchup>: <player> (<1st/2nd>)
+        let thread_name = if race.phase.is_some() || race.round.is_some() {
+            let round_str = if let Some(phase) = &race.phase {
+                if let Some(round) = &race.round {
+                    format!("{} {}", phase, round)
+                } else {
+                    phase.clone()
+                }
+            } else if let Some(round) = &race.round {
+                round.clone()
+            } else {
+                String::new()
+            };
+            format!("Async <{}>: {} ({})", round_str.trim(), player_name, if is_first_half { "1st" } else { "2nd" })
+        } else {
+            format!("Async <{}>: {} ({})", matchup, player_name, if is_first_half { "1st" } else { "2nd" })
+        };
         
         let mut content = Self::build_async_thread_content(
             transaction,
