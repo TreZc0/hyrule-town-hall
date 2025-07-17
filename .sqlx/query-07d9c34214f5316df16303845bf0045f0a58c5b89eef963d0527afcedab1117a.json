@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO async_times (race_id, async_part, finish_time, recorded_by)\n        VALUES ($1, $2, $3, $4)\n        ON CONFLICT (race_id, async_part) DO UPDATE SET\n            finish_time = EXCLUDED.finish_time,\n            recorded_at = NOW(),\n            recorded_by = EXCLUDED.recorded_by\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4",
+        "Interval",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "07d9c34214f5316df16303845bf0045f0a58c5b89eef963d0527afcedab1117a"
+}
