@@ -833,7 +833,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 commands.push(CreateCommand::new("result-async")
                     .kind(CommandType::ChatInput)
                     .add_context(InteractionContext::Guild)
-                    .description("Records the finish time for an async race part. When used in an async thread, only the time parameter is required.")
+                    .description("Records finish time for async race part. Only time needed in async thread.")
                     .add_option(CreateCommandOption::new(
                         CommandOptionType::String,
                         "time",
