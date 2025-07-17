@@ -303,10 +303,6 @@ async fn async_race_manager(
                 if let Ok(()) = async_race::AsyncRaceManager::create_async_threads(&db_pool, &discord_ctx, &http_client).await {
                     // Threads created successfully
                 }
-                
-                if let Ok(()) = async_race::AsyncRaceManager::distribute_seeds(&db_pool, &discord_ctx, &http_client).await {
-                    // Seeds distributed successfully
-                }
             }
             _ = shutdown.clone() => break,
         }

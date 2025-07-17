@@ -3,11 +3,13 @@ use {
         config::ConfigRaceTime,
         prelude::*,
         racetime_bot::{CleanShutdown, CrosskeysRaceOptions, GlobalState},
+        async_race::{AsyncRaceManager, Error as AsyncRaceError},
     }, serenity::all::{
         CacheHttp,
         CommandDataOptionValue,
         Content,
         CreateAllowedMentions,
+        CreateActionRow,
         CreateButton,
         CreateCommand,
         CreateCommandOption,
@@ -1977,6 +1979,86 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     }
                 }
                 Interaction::Component(interaction) => match &*interaction.data.custom_id {
+                    "async_ready" => {
+                        // Handle async ready button
+                        let mut transaction = {
+                            let discord_data = ctx.data.read().await;
+                            discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
+                        };
+                        
+                        // Extract race_id and async_part from the button's custom_id
+                        // We'll need to encode this in the button's custom_id
+                        // For now, we'll need to find the race by thread ID
+                        let thread_id = interaction.channel_id.get() as i64;
+                        
+                        // Find the race and async part for this thread
+                        let race_info = sqlx::query!(
+                            r#"
+                            SELECT id, 
+                                   CASE 
+                                       WHEN async_thread1 = $1 THEN 1
+                                       WHEN async_thread2 = $1 THEN 2
+                                       WHEN async_thread3 = $1 THEN 3
+                                       ELSE NULL
+                                   END as async_part
+                            FROM races 
+                            WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
+                            "#,
+                            thread_id
+                        ).fetch_optional(&mut *transaction).await?;
+                        
+                        if let Some(race_info) = race_info {
+                            if let Some(async_part) = race_info.async_part {
+                                match AsyncRaceManager::handle_ready_button(
+                                    &ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"),
+                                    ctx,
+                                    race_info.id,
+                                    async_part as u8,
+                                    interaction.user.id,
+                                ).await {
+                                    Ok(()) => {
+                                        // Disable the button
+                                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                            CreateInteractionResponseMessage::new()
+                                                .content("✅ You are now ready! The seed has been distributed and organizers have been notified.")
+                                                .components(vec![CreateActionRow::Buttons(vec![
+                                                    CreateButton::new("async_ready")
+                                                        .label("READY!")
+                                                        .style(ButtonStyle::Secondary)
+                                                        .disabled(true)
+                                                ])])
+                                        )).await?;
+                                    }
+                                    Err(e) => {
+                                        let error_msg = match e {
+                                            AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
+                                            AsyncRaceError::AlreadyReady => "You have already clicked ready for this race.",
+                                            _ => "An error occurred while processing your ready status.",
+                                        };
+                                        interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                            CreateInteractionResponseMessage::new()
+                                                .ephemeral(true)
+                                                .content(error_msg)
+                                        )).await?;
+                                    }
+                                }
+                            } else {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("Could not determine which async part this thread is for.")
+                                )).await?;
+                            }
+                        } else {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content("This thread is not associated with an async race.")
+                            )).await?;
+                        }
+                        
+                        transaction.rollback().await?;
+                    }
                     "pronouns_he" => {
                         let member = interaction.member.clone().expect("/pronoun-roles called outside of a guild");
                         let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "he/him").expect("missing 'he/him' role");
@@ -2794,12 +2876,22 @@ pub(crate) async fn result_async_command(
                 
                 if let Some(winner_team) = winner_team {
                     if let Some(startgg_id) = &winner_team.startgg_id {
+                        // Extract set ID from URL (e.g., "https://start.gg/tournament/hth-test/event/main-event/set/90052950" -> "90052950")
+                        let set_id = if let Some(set_id) = startgg_set_url.path_segments()
+                            .and_then(|segments| segments.last())
+                            .and_then(|last| last.parse::<u64>().ok())
+                        {
+                            startgg::ID(set_id.to_string())
+                        } else {
+                            startgg::ID(startgg_set_url.to_string())
+                        };
+                        
                         // Use the existing start.gg reporting function
                         match startgg::query_uncached::<startgg::ReportOneGameResultMutation>(
                             http_client,
                             startgg_token,
                             startgg::report_one_game_result_mutation::Variables {
-                                set_id: startgg::ID(startgg_set_url.to_string()),
+                                set_id,
                                 winner_entrant_id: startgg_id.clone(),
                             }
                         ).await {

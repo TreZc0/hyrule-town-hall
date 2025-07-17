@@ -9,7 +9,10 @@ ADD COLUMN async_thread2 BIGINT,
 ADD COLUMN async_thread3 BIGINT,
 ADD COLUMN async_seed1 BOOLEAN DEFAULT false NOT NULL,
 ADD COLUMN async_seed2 BOOLEAN DEFAULT false NOT NULL,
-ADD COLUMN async_seed3 BOOLEAN DEFAULT false NOT NULL; 
+ADD COLUMN async_seed3 BOOLEAN DEFAULT false NOT NULL,
+ADD COLUMN async_ready1 BOOLEAN DEFAULT false NOT NULL,
+ADD COLUMN async_ready2 BOOLEAN DEFAULT false NOT NULL,
+ADD COLUMN async_ready3 BOOLEAN DEFAULT false NOT NULL; 
 
 -- Create table for storing async race times
 CREATE TABLE async_times (

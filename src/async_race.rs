@@ -1,8 +1,8 @@
 use {
     chrono::{DateTime, Utc},
     serenity::all::{
-        ChannelId, CreateThread, MessageBuilder,
-        ChannelType, AutoArchiveDuration,
+        ChannelId, CreateThread, MessageBuilder, CreateMessage,
+        ChannelType, AutoArchiveDuration, CreateActionRow, CreateButton, ButtonStyle,
     },
     sqlx::{PgPool, Transaction, Postgres},
 
@@ -19,7 +19,7 @@ use {
 pub(crate) struct AsyncRaceManager;
 
 impl AsyncRaceManager {
-    /// Creates async threads 45 minutes before the scheduled start time
+    /// Creates async threads 30 minutes before the scheduled start time
     pub(crate) async fn create_async_threads(
         pool: &PgPool,
         discord_ctx: &DiscordCtx,
@@ -42,14 +42,14 @@ impl AsyncRaceManager {
                         let time_until_start = start_time - Utc::now();
                         // Only create the thread for this part if:
                         // - The thread does not exist
-                        // - The start time is in the future and less than 45 minutes away
+                        // - The start time is in the future and less than 30 minutes away
                         let thread_exists = match async_part {
                             1 => sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM races WHERE id = $1 AND async_thread1 IS NOT NULL) AS "exists!""#, race.id as _).fetch_one(&mut *transaction).await?,
                             2 => sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM races WHERE id = $1 AND async_thread2 IS NOT NULL) AS "exists!""#, race.id as _).fetch_one(&mut *transaction).await?,
                             3 => sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM races WHERE id = $1 AND async_thread3 IS NOT NULL) AS "exists!""#, race.id as _).fetch_one(&mut *transaction).await?,
                             _ => false,
                         };
-                        if !thread_exists && time_until_start > chrono::Duration::zero() && time_until_start <= chrono::Duration::minutes(45) {
+                        if !thread_exists && time_until_start > chrono::Duration::zero() && time_until_start <= chrono::Duration::minutes(30) {
                             Self::create_async_thread(
                                 &mut transaction,
                                 discord_ctx,
@@ -69,51 +69,7 @@ impl AsyncRaceManager {
         Ok(())
     }
 
-    /// Distributes seeds 10 minutes before the scheduled start time
-    pub(crate) async fn distribute_seeds(
-        pool: &PgPool,
-        discord_ctx: &DiscordCtx,
-        _http_client: &reqwest::Client,
-    ) -> Result<(), Error> {
-        let mut transaction = pool.begin().await?;
-        
-        // Find races that need seeds distributed
-        let races = Self::get_races_needing_seeds(&mut transaction).await?;
-        
-        for race in races {
-            let event = EventData::new(&mut transaction, race.series, &race.event)
-                .await
-                .map_err(|e| Error::Event(event::Error::Data(e)))?
-                .ok_or(Error::EventNotFound)?;
-            
-            for (async_part, start_time) in Self::get_async_parts(&race) {
-                if let Some(start_time) = start_time {
-                    let time_until_start = start_time - Utc::now();
-                    // Only distribute the seed for this part if:
-                    // - The seed has not been distributed
-                    // - The start time is in the future and less than 10 minutes away
-                    let seed_distributed = match async_part {
-                        1 => sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM races WHERE id = $1 AND async_seed1 = TRUE) AS "exists!""#, race.id as _).fetch_one(&mut *transaction).await?,
-                        2 => sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM races WHERE id = $1 AND async_seed2 = TRUE) AS "exists!""#, race.id as _).fetch_one(&mut *transaction).await?,
-                        3 => sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM races WHERE id = $1 AND async_seed3 = TRUE) AS "exists!""#, race.id as _).fetch_one(&mut *transaction).await?,
-                        _ => false,
-                    };
-                    if !seed_distributed && time_until_start > chrono::Duration::zero() && time_until_start <= chrono::Duration::minutes(10) {
-                        Self::distribute_seed_to_thread(
-                            &mut transaction,
-                            discord_ctx,
-                            &event,
-                            &race,
-                            async_part,
-                        ).await?;
-                    }
-                }
-            }
-        }
-        
-        transaction.commit().await?;
-        Ok(())
-    }
+
 
     /// Creates a private thread for an async race part
     async fn create_async_thread(
@@ -188,18 +144,33 @@ impl AsyncRaceManager {
             _ => return Ok(()),
         };
         
-        thread.say(discord_ctx, content.build()).await?;
+        // Create the READY button
+        let ready_button = CreateActionRow::Buttons(vec![
+            CreateButton::new("async_ready")
+                .label("READY!")
+                .style(ButtonStyle::Primary)
+        ]);
+
+        // Send the initial message with the READY button
+        thread.send_message(discord_ctx, CreateMessage::new()
+            .content(content.build())
+            .components(vec![ready_button])
+        ).await?;
         
         // Add organizers and player to thread
         let organizers = event.organizers(transaction).await.map_err(Error::Event)?;
         for organizer in organizers {
             if let Some(discord) = &organizer.discord {
-                let _ = thread.guild_id.member(discord_ctx, discord.id).await;
+                if let Ok(member) = thread.guild_id.member(discord_ctx, discord.id).await {
+                    let _ = thread.id.add_thread_member(discord_ctx, member.user.id).await;
+                }
             }
         }
         
         if let Some(discord) = &player.discord {
-            let _ = thread.guild_id.member(discord_ctx, discord.id).await;
+            if let Ok(member) = thread.guild_id.member(discord_ctx, discord.id).await {
+                let _ = thread.id.add_thread_member(discord_ctx, member.user.id).await;
+            }
         }
         
         Ok(())
@@ -211,7 +182,7 @@ impl AsyncRaceManager {
         event: &EventData<'_>,
         race: &Race,
         async_part: u8,
-        start_time: DateTime<Utc>,
+        _start_time: DateTime<Utc>,
         player: &User,
         _is_first_half: bool,
     ) -> Result<MessageBuilder, Error> {
@@ -254,10 +225,17 @@ impl AsyncRaceManager {
         content.push(" of this round.");
         
         content.push_line("");
-        content.push("The bot will hand out your seed 10 minutes before the designated start of <t:");
-        content.push(start_time.timestamp().to_string());
-        content.push(":F>.");
-        
+        content.push("**IMPORTANT:** To prevent seed leaks, you must signal that you are ready before the seed will be distributed.");
+        content.push_line("");
+        content.push("Click the **READY!** button below when you are ready to receive your seed. Once you click ready:");
+        content.push_line("");
+        content.push("• The seed will be posted immediately");
+        content.push_line("");
+        content.push("• Organizers will be notified that you are starting");
+        content.push_line("");
+        content.push("• You have **10 minutes** from when you click ready to start your run");
+        content.push_line("");
+        content.push("• This is when we start counting your time");
         content.push_line("");
         content.push("Please note in the interest of keeping a level playing field, even if running second, you will not be given the results of the match until after both players have run the seed.");
         
@@ -452,12 +430,12 @@ impl AsyncRaceManager {
             AND (r.async_start1 IS NOT NULL OR r.async_start2 IS NOT NULL OR r.async_start3 IS NOT NULL)
             AND (r.async_thread1 IS NULL OR r.async_thread2 IS NULL OR r.async_thread3 IS NULL)
             AND (
-                (r.async_start1 IS NOT NULL AND r.async_thread1 IS NULL AND r.async_start1 <= NOW() + INTERVAL '45 minutes' AND r.async_start1 > NOW() + INTERVAL '44 minutes') OR
-                (r.async_start2 IS NOT NULL AND r.async_thread2 IS NULL AND r.async_start2 <= NOW() + INTERVAL '45 minutes' AND r.async_start2 > NOW() + INTERVAL '44 minutes') OR
-                (r.async_start3 IS NOT NULL AND r.async_thread3 IS NULL AND r.async_start3 <= NOW() + INTERVAL '45 minutes' AND r.async_start3 > NOW() + INTERVAL '44 minutes') OR
-                (r.async_start1 IS NOT NULL AND r.async_thread1 IS NULL AND r.async_start1 <= NOW() + INTERVAL '30 minutes' AND r.async_start1 > NOW()) OR
-                (r.async_start2 IS NOT NULL AND r.async_thread2 IS NULL AND r.async_start2 <= NOW() + INTERVAL '30 minutes' AND r.async_start2 > NOW()) OR
-                (r.async_start3 IS NOT NULL AND r.async_thread3 IS NULL AND r.async_start3 <= NOW() + INTERVAL '30 minutes' AND r.async_start3 > NOW())
+                (r.async_start1 IS NOT NULL AND r.async_thread1 IS NULL AND r.async_start1 <= NOW() + INTERVAL '30 minutes' AND r.async_start1 > NOW() + INTERVAL '29 minutes') OR
+                (r.async_start2 IS NOT NULL AND r.async_thread2 IS NULL AND r.async_start2 <= NOW() + INTERVAL '30 minutes' AND r.async_start2 > NOW() + INTERVAL '29 minutes') OR
+                (r.async_start3 IS NOT NULL AND r.async_thread3 IS NULL AND r.async_start3 <= NOW() + INTERVAL '30 minutes' AND r.async_start3 > NOW() + INTERVAL '29 minutes') OR
+                (r.async_start1 IS NOT NULL AND r.async_thread1 IS NULL AND r.async_start1 <= NOW() + INTERVAL '15 minutes' AND r.async_start1 > NOW()) OR
+                (r.async_start2 IS NOT NULL AND r.async_thread2 IS NULL AND r.async_start2 <= NOW() + INTERVAL '15 minutes' AND r.async_start2 > NOW()) OR
+                (r.async_start3 IS NOT NULL AND r.async_thread3 IS NULL AND r.async_start3 <= NOW() + INTERVAL '15 minutes' AND r.async_start3 > NOW())
             )
             "#
         ).fetch_all(&mut **transaction).await?;
@@ -469,34 +447,110 @@ impl AsyncRaceManager {
         Ok(races)
     }
 
-    /// Gets races that need seeds distributed
-    async fn get_races_needing_seeds(
-        transaction: &mut Transaction<'_, Postgres>,
-    ) -> Result<Vec<Race>, Error> {
-        let race_rows = sqlx::query!(
-            r#"
-            SELECT r.id, r.series, r.event
-            FROM races r
-            JOIN events e ON r.series = e.series AND r.event = e.event
-            WHERE e.discord_async_channel IS NOT NULL
-            AND (r.async_start1 IS NOT NULL OR r.async_start2 IS NOT NULL OR r.async_start3 IS NOT NULL)
-            AND (
-                (r.async_start1 IS NOT NULL AND r.async_seed1 = FALSE AND r.async_start1 <= NOW() + INTERVAL '10 minutes' AND r.async_start1 > NOW() + INTERVAL '9 minutes') OR
-                (r.async_start2 IS NOT NULL AND r.async_seed2 = FALSE AND r.async_start2 <= NOW() + INTERVAL '10 minutes' AND r.async_start2 > NOW() + INTERVAL '9 minutes') OR
-                (r.async_start3 IS NOT NULL AND r.async_seed3 = FALSE AND r.async_start3 <= NOW() + INTERVAL '10 minutes' AND r.async_start3 > NOW() + INTERVAL '9 minutes') OR
-                (r.async_start1 IS NOT NULL AND r.async_seed1 = FALSE AND r.async_start1 <= NOW() + INTERVAL '5 minutes' AND r.async_start1 > NOW()) OR
-                (r.async_start2 IS NOT NULL AND r.async_seed2 = FALSE AND r.async_start2 <= NOW() + INTERVAL '5 minutes' AND r.async_start2 > NOW()) OR
-                (r.async_start3 IS NOT NULL AND r.async_seed3 = FALSE AND r.async_start3 <= NOW() + INTERVAL '5 minutes' AND r.async_start3 > NOW())
-            )
-            "#
-        ).fetch_all(&mut **transaction).await?;
-        let mut races = Vec::new();
-        for race_row in race_rows {
-            let race = Race::from_id(transaction, &reqwest::Client::new(), Id::from(race_row.id)).await?;
-            races.push(race);
+    /// Handles the READY button click for async races
+    pub(crate) async fn handle_ready_button(
+        pool: &PgPool,
+        discord_ctx: &DiscordCtx,
+        race_id: i64,
+        async_part: u8,
+        user_id: UserId,
+    ) -> Result<(), Error> {
+        let mut transaction = pool.begin().await?;
+        
+        // Load the race
+        let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await?;
+        
+        // Verify the user is the correct player for this async part
+        let team = Self::get_team_for_async_part(&race, async_part)?;
+        let player = team.members(&mut transaction).await?.into_iter().next()
+            .ok_or(Error::NoTeamMembers)?;
+        
+        if let Some(discord) = &player.discord {
+            if discord.id != user_id {
+                return Err(Error::UnauthorizedUser);
+            }
+        } else {
+            return Err(Error::NoTeamMembers);
         }
-        Ok(races)
+        
+        // Check if already ready
+        let already_ready = match async_part {
+            1 => sqlx::query_scalar!("SELECT async_ready1 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
+            2 => sqlx::query_scalar!("SELECT async_ready2 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
+            3 => sqlx::query_scalar!("SELECT async_ready3 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
+            _ => return Err(Error::InvalidAsyncPart),
+        };
+        
+        if already_ready {
+            return Err(Error::AlreadyReady);
+        }
+        
+        // Mark as ready
+        match async_part {
+            1 => sqlx::query!("UPDATE races SET async_ready1 = TRUE WHERE id = $1", race_id).execute(&mut *transaction).await?,
+            2 => sqlx::query!("UPDATE races SET async_ready2 = TRUE WHERE id = $1", race_id).execute(&mut *transaction).await?,
+            3 => sqlx::query!("UPDATE races SET async_ready3 = TRUE WHERE id = $1", race_id).execute(&mut *transaction).await?,
+            _ => return Ok(()),
+        };
+        
+        // Load event data
+        let event = EventData::new(&mut transaction, race.series, &race.event)
+            .await
+            .map_err(|e| Error::Event(event::Error::Data(e)))?
+            .ok_or(Error::EventNotFound)?;
+        
+        // Distribute seed and notify organizers
+        Self::distribute_seed_to_thread(
+            &mut transaction,
+            discord_ctx,
+            &event,
+            &race,
+            async_part,
+        ).await?;
+        
+        // Notify organizers
+        if let Some(organizer_channel) = event.discord_organizer_channel {
+            let mut content = MessageBuilder::default();
+            content.push("**Async Race Started**");
+            content.push_line("");
+            content.push("Player ");
+            content.mention_user(&player);
+            content.push(" has clicked READY for ");
+            
+            if let Some(phase) = &race.phase {
+                content.push_safe(phase.clone());
+                content.push(' ');
+            }
+            if let Some(round) = &race.round {
+                content.push_safe(round.clone());
+                content.push(' ');
+            }
+            
+            content.push("(");
+            let teams: Vec<_> = race.teams().collect();
+            for (i, team) in teams.iter().enumerate() {
+                if team.id == Self::get_team_for_async_part(&race, async_part)?.id {
+                    content.mention_team(&mut transaction, event.discord_guild, team).await?;
+                } else {
+                    content.push_safe(team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()));
+                }
+                if i < teams.len() - 1 {
+                    content.push(" vs. ");
+                }
+            }
+            content.push(")");
+            
+            content.push_line("");
+            content.push("The seed has been distributed and the player has 10 minutes to start their run.");
+            
+            organizer_channel.say(discord_ctx, content.build()).await?;
+        }
+        
+        transaction.commit().await?;
+        Ok(())
     }
+
+
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -519,4 +573,8 @@ pub(crate) enum Error {
     NoSeedAvailable,
     #[error("unsupported seed type")]
     UnsupportedSeedType,
+    #[error("unauthorized user")]
+    UnauthorizedUser,
+    #[error("already ready")]
+    AlreadyReady,
 } 
