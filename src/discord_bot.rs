@@ -833,29 +833,29 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 commands.push(CreateCommand::new("result-async")
                     .kind(CommandType::ChatInput)
                     .add_context(InteractionContext::Guild)
-                    .description("Records the finish time for an async race part.")
-                    .add_option(CreateCommandOption::new(
-                        CommandOptionType::String,
-                        "race_id",
-                        "The ID of the race",
-                    )
-                        .required(true)
-                    )
-                    .add_option(CreateCommandOption::new(
-                        CommandOptionType::Integer,
-                        "async_part",
-                        "The async part number (1, 2, or 3)",
-                    )
-                        .min_int_value(1)
-                        .max_int_value(3)
-                        .required(true)
-                    )
+                    .description("Records the finish time for an async race part. When used in an async thread, only the time parameter is required.")
                     .add_option(CreateCommandOption::new(
                         CommandOptionType::String,
                         "time",
                         "Finish time in format hh:mm:ss",
                     )
                         .required(true)
+                    )
+                    .add_option(CreateCommandOption::new(
+                        CommandOptionType::String,
+                        "race_id",
+                        "The ID of the race (optional when used in async thread)",
+                    )
+                        .required(false)
+                    )
+                    .add_option(CreateCommandOption::new(
+                        CommandOptionType::Integer,
+                        "async_part",
+                        "The async part number (1, 2, or 3) (optional when used in async thread)",
+                    )
+                        .min_int_value(1)
+                        .max_int_value(3)
+                        .required(false)
                     )
                 );
                 idx
@@ -2487,7 +2487,30 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
     Ok(())
 }
 
-/// Handles the /result_async command for recording async race times
+/// Helper function to find race and async part from thread ID
+async fn find_race_from_thread(
+    transaction: &mut Transaction<'_, Postgres>,
+    thread_id: i64,
+) -> Result<Option<(i64, i32)>, sqlx::Error> {
+    // Check each async thread column to find which one matches
+    let race_row = sqlx::query!(
+        r#"
+        SELECT id, 
+               CASE 
+                   WHEN async_thread1 = $1 THEN 1
+                   WHEN async_thread2 = $1 THEN 2
+                   WHEN async_thread3 = $1 THEN 3
+                   ELSE NULL
+               END as async_part
+        FROM races 
+        WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
+        "#,
+        thread_id
+    ).fetch_optional(&mut **transaction).await?;
+    
+    Ok(race_row.map(|row| (row.id, row.async_part.unwrap_or(0))))
+}
+
 pub(crate) async fn result_async_command(
     ctx: &DiscordCtx,
     interaction: &CommandInteraction,
@@ -2519,20 +2542,35 @@ pub(crate) async fn result_async_command(
         return Ok(());
     }
 
-    // Get the race ID and async part from the command options
-    let race_id = interaction.data.options.iter()
-        .find(|opt| opt.name == "race_id")
-        .and_then(|opt| opt.value.as_str())
-        .and_then(|s| s.parse::<i64>().ok())
-        .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
-
-    let async_part = interaction.data.options.iter()
-        .find(|opt| opt.name == "async_part")
-        .and_then(|opt| match opt.value {
-            CommandDataOptionValue::Integer(part) => Some(part),
-            _ => None,
-        })
-        .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
+    // Try to get race_id and async_part from command options first (for backward compatibility)
+    let (race_id, async_part) = if let (Some(race_id_opt), Some(async_part_opt)) = (
+        interaction.data.options.iter()
+            .find(|opt| opt.name == "race_id")
+            .and_then(|opt| opt.value.as_str())
+            .and_then(|s| s.parse::<i64>().ok()),
+        interaction.data.options.iter()
+            .find(|opt| opt.name == "async_part")
+            .and_then(|opt| match opt.value {
+                CommandDataOptionValue::Integer(part) => Some(part),
+                _ => None,
+            })
+    ) {
+        (race_id_opt, async_part_opt)
+    } else {
+        // Try to get from thread context
+        let thread_id = interaction.channel_id.get() as i64;
+        match find_race_from_thread(&mut transaction, thread_id).await? {
+            Some((race_id, async_part)) => (race_id, async_part as i64),
+            None => {
+                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                    .ephemeral(true)
+                    .content("This command must be used in an async race thread, or you must provide race_id and async_part parameters.")
+                )).await?;
+                transaction.rollback().await?;
+                return Ok(());
+            }
+        }
+    };
 
     let time_str = interaction.data.options.iter()
         .find(|opt| opt.name == "time")
@@ -2588,7 +2626,7 @@ pub(crate) async fn result_async_command(
 
     if async_times.len() >= 2 {
         // Both parts are complete, finalize the race
-        let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id)).await.map_err(|_e| Error::Sql(sqlx::Error::RowNotFound))?;
+        let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await.map_err(|_e| Error::Sql(sqlx::Error::RowNotFound))?;
         let event_name = race.event.clone();
         let event = event::Data::new(&mut transaction, race.series, &event_name).await?
             .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
