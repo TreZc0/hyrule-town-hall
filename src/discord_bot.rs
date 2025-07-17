@@ -2701,68 +2701,67 @@ pub(crate) async fn result_async_command(
 
         // Send result to results channel
 
-        // Send result to results channel
+        // Find the winning and losing players
+        let mut total_times: Vec<(i32, Duration, &Team)> = results.iter()
+            .map(|(part, time)| {
+                let team = match part {
+                    1 => race.teams().next(),
+                    2 => race.teams().nth(1),
+                    3 => race.teams().nth(2),
+                    _ => None,
+                };
+                (*part, *time, team.unwrap())
+            })
+            .collect();
+        total_times.sort_by(|a, b| a.1.cmp(&b.1));
+        
+        let (_winner_part, winner_time, winner_team) = &total_times[0];
+        let (_loser_part, loser_time, loser_team) = &total_times[1];
+        
+        // Get player names
+        let winner_player = winner_team.members(&mut transaction).await?.into_iter().next()
+            .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
+        let loser_player = loser_team.members(&mut transaction).await?.into_iter().next()
+            .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
+        
+        // Format the results message like live races
+        let mut content = MessageBuilder::default();
+        content.push("Async results for ");
+        
+        if let Some(phase) = &race.phase {
+            content.push_safe(phase.clone());
+            content.push(' ');
+        }
+        if let Some(round) = &race.round {
+            content.push_safe(round.clone());
+            content.push(' ');
+        }
+        
+        content.mention_user(&winner_player);
+        content.push(" (");
+        content.push(format!("{:02}:{:02}:{:02}", 
+            winner_time.as_secs() / 3600,
+            (winner_time.as_secs() % 3600) / 60,
+            winner_time.as_secs() % 60
+        ));
+        content.push(") defeats ");
+        content.mention_user(&loser_player);
+        content.push(" (");
+        content.push(format!("{:02}:{:02}:{:02}", 
+            loser_time.as_secs() / 3600,
+            (loser_time.as_secs() % 3600) / 60,
+            loser_time.as_secs() % 60
+        ));
+        content.push(")");
+        
+        // Send to race results channel
         if let Some(results_channel) = event.discord_race_results_channel {
-            let mut content = MessageBuilder::default();
-            content.push("**Async Race Results**");
-            content.push_line("");
-            content.push_line("");
-            content.push("This was an async race between: ");
-            
-            for team in race.teams() {
-                content.mention_team(&mut transaction, event.discord_guild, team).await?;
-                content.push(' ');
-            }
-            
-            content.push_line("");
-            content.push_line("");
-            for (part, time) in &results {
-                let display_order = get_display_order(&race, *part);
-                content.push("Player ");
-                content.push(display_order.to_string());
-                content.push(": ");
-                content.push(format!("{:02}:{:02}:{:02}", 
-                    time.as_secs() / 3600,
-                    (time.as_secs() % 3600) / 60,
-                    time.as_secs() % 60
-                ));
-                content.push_line("");
-            }
-
             results_channel.say(ctx, content.build()).await?;
         }
-
-        // Notify runners in their respective async threads
-        for (part, _time) in &results {
-            let thread_id = match part {
-                1 => sqlx::query_scalar!("SELECT async_thread1 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
-                2 => sqlx::query_scalar!("SELECT async_thread2 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
-                3 => sqlx::query_scalar!("SELECT async_thread3 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
-                _ => continue,
-            };
-
-            if let Some(thread_id) = thread_id {
-                let thread = ChannelId::new(thread_id as u64);
-                let mut content = MessageBuilder::default();
-                content.push("**Async Race Complete!**");
-                content.push_line("");
-                content.push_line("");
-                content.push("Your async race has been completed. Results:");
-                content.push_line("");
-                for (result_part, result_time) in &results {
-                    let display_order = get_display_order(&race, *result_part);
-                    content.push("Player ");
-                    content.push(display_order.to_string());
-                    content.push(": ");
-                    content.push(format!("{:02}:{:02}:{:02}", 
-                        result_time.as_secs() / 3600,
-                        (result_time.as_secs() % 3600) / 60,
-                        result_time.as_secs() % 60
-                    ));
-                    content.push_line("");
-                }
-                thread.say(ctx, content.build()).await?;
-            }
+        
+        // Send to scheduling thread
+        if let Some(scheduling_thread) = race.scheduling_thread {
+            scheduling_thread.say(ctx, content.build()).await?;
         }
 
         // Report to external platforms (start.gg, challonge, etc.)
