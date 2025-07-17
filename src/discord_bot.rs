@@ -21,7 +21,7 @@ use {
         builder::ErrorNotifier,
         handler::HandlerMethods as _,
     }, sqlx::{
-        types::Json, Database, Decode, Encode
+        types::Json, Database, Decode, Encode, postgres::types::PgInterval
     }
 };
 
@@ -2599,6 +2599,11 @@ pub(crate) async fn result_async_command(
     let user = User::from_discord(&mut *transaction, user_id).await?;
 
     // Insert the async time
+    let pg_interval = PgInterval {
+        months: 0,
+        days: 0,
+        microseconds: duration.as_secs() as i64 * 1_000_000,
+    };
     sqlx::query!(
         r#"
         INSERT INTO async_times (race_id, async_part, finish_time, recorded_by)
@@ -2610,7 +2615,7 @@ pub(crate) async fn result_async_command(
         "#,
         race_id,
         async_part as i32,
-        duration.as_secs() as i64,
+        pg_interval,
         user.unwrap().id as _,
     ).execute(&mut *transaction).await?;
 
