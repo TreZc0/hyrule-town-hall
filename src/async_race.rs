@@ -209,7 +209,7 @@ impl AsyncRaceManager {
         transaction: &mut Transaction<'_, Postgres>,
         event: &EventData<'_>,
         race: &Race,
-        _async_part: u8,
+        async_part: u8,
         start_time: DateTime<Utc>,
         player: &User,
         is_first_half: bool,
@@ -238,7 +238,7 @@ impl AsyncRaceManager {
                 content.mention_team(transaction, event.discord_guild, team).await?;
             } else {
                 // Just show the opponent's team name without pinging
-                content.push_safe(team.name(transaction).await?.unwrap_or_else(|| "Unknown Team".to_string()));
+                content.push_safe(team.name(transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()));
             }
             if i < teams.len() - 1 {
                 content.push(" vs. ");
