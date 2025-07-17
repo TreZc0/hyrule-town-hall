@@ -2451,7 +2451,7 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         let mut content = MessageBuilder::default();
         content.push("Async starting for ");
         content.mention_team(&mut transaction, event.discord_guild, team).await?;
-        content.push(format!(". Seed URL is {}. Please work with them in their async channel to run the race.",seed_url));
+        content.push(format!(". Seed URL is {}. The seed will be distributed to the runner 10 minutes before their scheduled start time. Please work with them in their async channel to run the race.",seed_url));
         if let Some([hash1, hash2, hash3, hash4, hash5]) = file_hash {
             content.push_line("");
             content.push(format!("The hash for the seed is {hash1}, {hash2}, {hash3}, {hash4}, {hash5}"));

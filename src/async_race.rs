@@ -293,11 +293,28 @@ impl AsyncRaceManager {
     ) -> Result<(), Error> {
         let seed_url = Self::get_seed_url(race)?;
         
+        // Get the player for this async part
+        let team = Self::get_team_for_async_part(race, async_part)?;
+        let player = team.members(transaction).await?.into_iter().next()
+            .ok_or(Error::NoTeamMembers)?;
+        
         let mut content = MessageBuilder::default();
+        content.push("Hey ");
+        content.mention_user(&player);
+        content.push(", ");
         content.push("**Seed Distribution**");
         content.push_line("");
         content.push("Your seed is ready! Please use this URL: ");
         content.push(seed_url);
+        
+        // Add hash if available
+        if let Some(file_hash) = race.seed.file_hash {
+            content.push_line("");
+            content.push("The hash for this seed is: ");
+            content.push(format!("{}, {}, {}, {}, {}", 
+                file_hash[0], file_hash[1], file_hash[2], file_hash[3], file_hash[4]));
+        }
+        
         content.push_line("");
         content.push("Good luck with your run!");
         
