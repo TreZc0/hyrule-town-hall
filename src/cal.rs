@@ -2251,10 +2251,8 @@ pub(crate) async fn race_table(
                                     @if teams.all(|team| team.restream_consent) {
                                         : "✓";
                                     } else {
-                                        : "?";
+                                        : "x";
                                     }
-                                } else {
-                                    : "?";
                                 }
                             }
                         }
@@ -2964,6 +2962,20 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                     }
                 }
             }
+            
+            // Race management section
+            fieldset {
+                legend : "Race management";
+                p(style = "font-size: 0.9em; color: #666; margin-bottom: 1em;") : "If a race will not take place at all, you can set it being canceled and hidden from view here.";
+                : form_field("is_canceled", &mut errors, html! {
+                    input(type = "checkbox", id = "is_canceled", name = "is_canceled", checked? = if let Some(ref ctx) = ctx {
+                        ctx.field_value("is_canceled").map_or(false, |value| value == "on")
+                    } else {
+                        race.ignored
+                    });
+                    label(for = "is_canceled") : "Cancel race permanently";
+                });
+            }
         }, errors, "Save")
     } else {
         html! {
@@ -3162,6 +3174,8 @@ pub(crate) struct EditRaceForm {
     video_urls: HashMap<Language, String>,
     #[field(default = HashMap::new())]
     restreamers: HashMap<Language, String>,
+    #[field(default = false)]
+    is_canceled: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/races/<id>/edit?<redirect_to>", data = "<form>")]
@@ -3431,6 +3445,11 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
             }
             race.last_edited_by = Some(me.id);
             race.last_edited_at = Some(Utc::now());
+            race.ignored = value.is_canceled;
+            
+            // Save original video URLs to check if they changed
+            let original_video_urls = race.video_urls.clone();
+            
             if race.series != Series::League || race.has_any_room() {
                 race.video_urls = value.video_urls.iter().filter(|(_, video_url)| !video_url.is_empty()).map(|(language, video_url)| (*language, Url::parse(video_url).expect("validated"))).collect();
                 race.restreamers = restreamers;
@@ -3442,6 +3461,80 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 race.seed.files = Some(seed::Files::OotrWeb { id, gen_time, file_stem: Cow::Owned(file_stem) });
             }
             race.save(&mut transaction).await?;
+            
+            // Send Discord notification if restream URLs were newly assigned or changed
+            if !race.video_urls.is_empty() && race.video_urls != original_video_urls {
+                if let Some(discord_volunteer_info_channel) = event.discord_volunteer_info_channel {
+                    // Build race description
+                    let race_description = match &race.entrants {
+                        Entrants::Two([team1, team2]) => format!("{} vs {}",
+                            match team1 {
+                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                Entrant::Named { name, .. } => name.clone(),
+                                Entrant::Discord { .. } => "Discord User".to_string(),
+                            },
+                            match team2 {
+                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                Entrant::Named { name, .. } => name.clone(),
+                                Entrant::Discord { .. } => "Discord User".to_string(),
+                            }
+                        ),
+                        Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                            match team1 {
+                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                Entrant::Named { name, .. } => name.clone(),
+                                Entrant::Discord { .. } => "Discord User".to_string(),
+                            },
+                            match team2 {
+                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                Entrant::Named { name, .. } => name.clone(),
+                                Entrant::Discord { .. } => "Discord User".to_string(),
+                            },
+                            match team3 {
+                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                Entrant::Named { name, .. } => name.clone(),
+                                Entrant::Discord { .. } => "Discord User".to_string(),
+                            }
+                        ),
+                        _ => "Unknown entrants".to_string(),
+                    };
+                    
+                    // Get race start time for timestamp
+                    let race_start_time = match race.schedule {
+                        RaceSchedule::Live { start, .. } => start,
+                        _ => return Ok(RedirectOrContent::Redirect(Redirect::to(redirect_to.map(|Origin(uri)| uri.into_owned()).unwrap_or_else(|| uri!(event::races(event.series, &*event.event)))))),
+                    };
+                    
+                    // Build Discord message
+                    let mut msg = MessageBuilder::default();
+                    msg.push("restream channel assigned for race ");
+                    msg.push_mono(&race_description);
+                    if let Some(phase) = &race.phase {
+                        msg.push(" (");
+                        msg.push(phase);
+                        msg.push(")");
+                    }
+                    msg.push(" at ");
+                    msg.push_timestamp(race_start_time, serenity_utils::message::TimestampStyle::LongDateTime);
+                    msg.push(":\n");
+                    
+                    // Add restream URLs
+                    for (language, video_url) in &race.video_urls {
+                        msg.push("**");
+                        msg.push(&language.to_string());
+                        msg.push(":** ");
+                        msg.push_mono(&video_url.to_string());
+                        msg.push("\n");
+                    }
+                    
+                    // Send the message to Discord
+                    let discord_ctx = discord_ctx.read().await;
+                    if let Err(e) = discord_volunteer_info_channel.say(&*discord_ctx, msg.build()).await {
+                        eprintln!("Failed to send restream notification to Discord: {}", e);
+                    }
+                }
+            }
+            
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(redirect_to.map(|Origin(uri)| uri.into_owned()).unwrap_or_else(|| uri!(event::races(event.series, &*event.event)))))
         }

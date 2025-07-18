@@ -1848,7 +1848,7 @@ pub(crate) async fn manage_roster(
                     msg.push("Volunteers selected for race ");
                     msg.push_mono(&race_description);
                     msg.push(" at ");
-                    msg.push_timestamp(race_start_time, serenity_utils::message::TimestampStyle::Relative);
+                    msg.push_timestamp(race_start_time, serenity_utils::message::TimestampStyle::LongDateTime);
                     msg.push("\n\n");
                     
                     // Add role and user information for the newly selected volunteer
@@ -1894,6 +1894,20 @@ pub(crate) async fn manage_roster(
                                 }
                                 msg.push("\n");
                             }
+                        }
+                    }
+                    
+                    // Add restream information if the race has restream URLs
+                    if !race.video_urls.is_empty() {
+                        msg.push("\n**The race will be restreamed on:**\n");
+                        for (language, video_url) in &race.video_urls {
+                            msg.push("**");
+                            msg.push(&language.to_string());
+                            msg.push(":** ");
+                            msg.push("<");
+                            msg.push_mono(&video_url.to_string());
+                            msg.push(">");
+                            msg.push("\n");
                         }
                     }
                     
