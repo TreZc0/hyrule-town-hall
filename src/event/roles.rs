@@ -1909,6 +1909,8 @@ pub(crate) async fn manage_roster(
                             msg.push(">");
                             msg.push("\n");
                         }
+                    } else {
+                        msg.push("\n**No restream has been scheduled for this race so far.**");
                     }
                     
                     // Send the message to Discord
