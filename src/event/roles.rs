@@ -1905,7 +1905,7 @@ pub(crate) async fn manage_roster(
                             msg.push(&language.to_string());
                             msg.push(":** ");
                             msg.push("<");
-                            msg.push_mono(&video_url.to_string());
+                            msg.push(&video_url.to_string());
                             msg.push(">");
                             msg.push("\n");
                         }

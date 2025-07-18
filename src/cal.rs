@@ -3507,7 +3507,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                     
                     // Build Discord message
                     let mut msg = MessageBuilder::default();
-                    msg.push("restream channel assigned for race ");
+                    msg.push("Restream channel assigned for race ");
                     msg.push_mono(&race_description);
                     if let Some(phase) = &race.phase {
                         msg.push(" (");
@@ -3523,7 +3523,9 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                         msg.push("**");
                         msg.push(&language.to_string());
                         msg.push(":** ");
-                        msg.push_mono(&video_url.to_string());
+                        msg.push("<");
+                        msg.push(&video_url.to_string());
+                        msg.push(">");
                         msg.push("\n");
                     }
                     
