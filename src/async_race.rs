@@ -489,6 +489,15 @@ impl AsyncRaceManager {
             _ => return Ok(()),
         };
         
+        // Create initial async_times record (without start_time)
+        let user = User::from_discord(&mut *transaction, user_id).await?;
+        sqlx::query!(
+            "INSERT INTO async_times (race_id, async_part, recorded_by) VALUES ($1, $2, $3) ON CONFLICT (race_id, async_part) DO NOTHING",
+            race_id,
+            async_part as i32,
+            user.unwrap().id as _,
+        ).execute(&mut *transaction).await?;
+        
         // Load event data
         let event = EventData::new(&mut transaction, race.series, &race.event)
             .await
