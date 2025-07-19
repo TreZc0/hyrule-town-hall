@@ -1336,15 +1336,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             async_notified_1: race.async_notified_1 && !reset_schedule,
                                             async_notified_2: race.async_notified_2 && !reset_schedule,
                                             async_notified_3: race.async_notified_3 && !reset_schedule,
-                                            async_thread1: if reset_schedule { None } else { race.async_thread1 },
-                                            async_thread2: if reset_schedule { None } else { race.async_thread2 },
-                                            async_thread3: if reset_schedule { None } else { race.async_thread3 },
-                                            async_seed1: if reset_schedule { false } else { race.async_seed1 },
-                                            async_seed2: if reset_schedule { false } else { race.async_seed2 },
-                                            async_seed3: if reset_schedule { false } else { race.async_seed3 },
-                                            async_ready1: if reset_schedule { false } else { race.async_ready1 },
-                                            async_ready2: if reset_schedule { false } else { race.async_ready2 },
-                                            async_ready3: if reset_schedule { false } else { race.async_ready3 },
                                             // explicitly listing remaining fields here instead of using `..race` so if the fields change they're kept/reset correctly
                                             id: race.id,
                                             series: race.series,
@@ -1364,8 +1355,14 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         };
                                         race.save(&mut transaction).await?;
                                         
-                                        // Delete async_times records when resetting schedule
+                                        // Reset async fields in database when resetting schedule
                                         if reset_schedule {
+                                            sqlx::query!(
+                                                "UPDATE races SET async_thread1 = NULL, async_thread2 = NULL, async_thread3 = NULL, async_seed1 = FALSE, async_seed2 = FALSE, async_seed3 = FALSE, async_ready1 = FALSE, async_ready2 = FALSE, async_ready3 = FALSE WHERE id = $1",
+                                                race.id as _
+                                            ).execute(&mut *transaction).await?;
+                                            
+                                            // Delete async_times records when resetting schedule
                                             sqlx::query!("DELETE FROM async_times WHERE race_id = $1", race.id as _)
                                                 .execute(&mut *transaction).await?;
                                         }
