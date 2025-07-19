@@ -1556,7 +1556,7 @@ impl GlobalState {
                         let last_error = Some(String::from_utf8_lossy(&output.stderr).into_owned());
                         if attempt < MAX_RETRIES {
                             // Wait a bit before retrying (exponential backoff)
-                            sleep(Duration::from_secs(2u64.pow(attempt as u32))).await;
+                            sleep(Duration::from_secs(10 + 2u64.pow(attempt as u32))).await;
                             continue;
                         }
                         // Max retries reached
