@@ -1527,7 +1527,54 @@ impl GlobalState {
             let yaml_file = tempfile::Builder::new().prefix("alttpr_").suffix(".yml").tempfile().at_unknown()?;
             let yaml_path = yaml_file.path();
             tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(serde_yml::to_string(&crosskeys_yaml)?.as_bytes()).await.at(&yaml_file)?;
-            Command::new(PYTHON).current_dir("../alttpr").arg("DungeonRandomizer.py").arg("--customizer").arg(yaml_path).arg("--outputpath").arg("/var/www/midos.house/seed").check("DungeonRandomizer.py").await?;
+            
+            // Add retry logic with 2 retries
+            const MAX_RETRIES: u8 = 2;
+            
+            for attempt in 0..=MAX_RETRIES {
+                let output = Command::new(PYTHON)
+                    .current_dir("../alttpr")
+                    .arg("DungeonRandomizer.py")
+                    .arg("--customizer")
+                    .arg(yaml_path)
+                    .arg("--outputpath")
+                    .arg("/var/www/midos.house/seed")
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .at_command("DungeonRandomizer.py")?
+                    .wait_with_output()
+                    .await
+                    .at_command("DungeonRandomizer.py")?;
+                
+                match output.status.code() {
+                    Some(0) => {
+                        break;
+                    }
+                    Some(1) => {
+                        // Randomizer failed to generate a seed, lets retry.
+                        let last_error = Some(String::from_utf8_lossy(&output.stderr).into_owned());
+                        if attempt < MAX_RETRIES {
+                            // Wait a bit before retrying (exponential backoff)
+                            sleep(Duration::from_secs(2u64.pow(attempt as u32))).await;
+                            continue;
+                        }
+                        // Max retries reached
+                        return Err(RollError::Retries {
+                            num_retries: MAX_RETRIES + 1,
+                            last_error,
+                        });
+                    }
+                    _ => {
+                        // Other error codes - fail immediately
+                        return Err(RollError::Wheel(wheel::Error::CommandExit { 
+                            name: Cow::Borrowed("DungeonRandomizer.py"), 
+                            output 
+                        }));
+                    }
+                }
+            }
+            
             // This swallows the hash error and just makes it empty--maybe we should surface this somehow?
             let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await.ok();
             update_tx.send(SeedRollUpdate::Done {
