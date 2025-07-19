@@ -707,7 +707,8 @@ impl AsyncRaceManager {
             if record.start_time.is_none() {
                 return Err(Error::NotStarted);
             }
-            if record.finish_time.is_some() {
+            // Check if finish_time has a non-zero value (indicating already finished)
+            if record.finish_time.microseconds != 0 || record.finish_time.days != 0 || record.finish_time.months != 0 {
                 return Err(Error::AlreadyFinished);
             }
         } else {
