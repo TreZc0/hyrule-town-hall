@@ -772,7 +772,7 @@ impl AsyncRaceManager {
             content.mention_user(&player);
             content.push_line("");
             content.push("**Finish Time:** ");
-            content.push(formatted_time);
+            content.push(&formatted_time);
             content.push_line("");
             content.push("Organizers have been notified of your completion.");
             
