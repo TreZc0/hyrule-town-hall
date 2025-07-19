@@ -2048,7 +2048,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         let error_msg = match e {
                                             AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
                                             AsyncRaceError::AlreadyReady => "You have already clicked ready for this race.",
-                                            _ => "An error occurred while processing your ready status.",
+                                            _ => {
+                                                eprintln!("Async ready error: {:?}", e);
+                                                "An error occurred while processing your ready status."
+                                            },
                                         };
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(
                                             CreateInteractionResponseMessage::new()
