@@ -2890,6 +2890,8 @@ impl Handler {
                     Duration::from_secs(15 * 60)
                 } else if delay > Duration::from_secs(44 * 60) && delay < Duration::from_secs(46 * 60) {
                     Duration::from_secs(45 * 60)
+                } else if delay > Duration::from_secs(19 * 60) && delay < Duration::from_secs(21 * 60) {
+                    Duration::from_secs(20 * 60)
                 } else {
                     delay
                 };
