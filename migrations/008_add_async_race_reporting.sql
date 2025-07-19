@@ -22,6 +22,7 @@ CREATE TABLE async_times (
     finish_time INTERVAL NOT NULL,
     recorded_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     recorded_by BIGINT NOT NULL REFERENCES users(id),
+    start_time TIMESTAMP WITH TIME ZONE,
     UNIQUE(race_id, async_part)
 ); 
 

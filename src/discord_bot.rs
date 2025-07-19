@@ -2061,6 +2061,159 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         
                         transaction.rollback().await?;
                     }
+                    "async_start_countdown" => {
+                        // Handle async start countdown button
+                        let mut transaction = {
+                            let discord_data = ctx.data.read().await;
+                            discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
+                        };
+                        
+                        let thread_id = interaction.channel_id.get() as i64;
+                        
+                        // Find the race and async part for this thread
+                        let race_info = sqlx::query!(
+                            r#"
+                            SELECT id, 
+                                   CASE 
+                                       WHEN async_thread1 = $1 THEN 1
+                                       WHEN async_thread2 = $1 THEN 2
+                                       WHEN async_thread3 = $1 THEN 3
+                                       ELSE NULL
+                                   END as async_part
+                            FROM races 
+                            WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
+                            "#,
+                            thread_id
+                        ).fetch_optional(&mut *transaction).await?;
+                        
+                        if let Some(race_info) = race_info {
+                            if let Some(async_part) = race_info.async_part {
+                                match AsyncRaceManager::handle_start_countdown_button(
+                                    &ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"),
+                                    ctx,
+                                    race_info.id,
+                                    async_part as u8,
+                                    interaction.user.id,
+                                ).await {
+                                    Ok(()) => {
+                                        // Disable the button
+                                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                            CreateInteractionResponseMessage::new()
+                                                .components(vec![CreateActionRow::Buttons(vec![
+                                                    CreateButton::new("async_start_countdown")
+                                                        .label("START COUNTDOWN")
+                                                        .style(ButtonStyle::Secondary)
+                                                        .disabled(true)
+                                                ])])
+                                        )).await?;
+                                    }
+                                    Err(e) => {
+                                        let error_msg = match e {
+                                            AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
+                                            AsyncRaceError::AlreadyStarted => "The countdown has already been started for this race.",
+                                            _ => "An error occurred while processing your countdown request.",
+                                        };
+                                        interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                            CreateInteractionResponseMessage::new()
+                                                .ephemeral(true)
+                                                .content(error_msg)
+                                        )).await?;
+                                    }
+                                }
+                            } else {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("Could not determine which async part this thread is for.")
+                                )).await?;
+                            }
+                        } else {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content("This thread is not associated with an async race.")
+                            )).await?;
+                        }
+                        
+                        transaction.rollback().await?;
+                    }
+                    "async_finish" => {
+                        // Handle async finish button
+                        let mut transaction = {
+                            let discord_data = ctx.data.read().await;
+                            discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
+                        };
+                        
+                        let thread_id = interaction.channel_id.get() as i64;
+                        
+                        // Find the race and async part for this thread
+                        let race_info = sqlx::query!(
+                            r#"
+                            SELECT id, 
+                                   CASE 
+                                       WHEN async_thread1 = $1 THEN 1
+                                       WHEN async_thread2 = $1 THEN 2
+                                       WHEN async_thread3 = $1 THEN 3
+                                       ELSE NULL
+                                   END as async_part
+                            FROM races 
+                            WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
+                            "#,
+                            thread_id
+                        ).fetch_optional(&mut *transaction).await?;
+                        
+                        if let Some(race_info) = race_info {
+                            if let Some(async_part) = race_info.async_part {
+                                match AsyncRaceManager::handle_finish_button(
+                                    &ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"),
+                                    ctx,
+                                    race_info.id,
+                                    async_part as u8,
+                                    interaction.user.id,
+                                ).await {
+                                    Ok(()) => {
+                                        // Disable the button
+                                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                            CreateInteractionResponseMessage::new()
+                                                .components(vec![CreateActionRow::Buttons(vec![
+                                                    CreateButton::new("async_finish")
+                                                        .label("FINISH")
+                                                        .style(ButtonStyle::Secondary)
+                                                        .disabled(true)
+                                                ])])
+                                        )).await?;
+                                    }
+                                    Err(e) => {
+                                        let error_msg = match e {
+                                            AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
+                                            AsyncRaceError::NotStarted => "You must start the countdown before finishing.",
+                                            AsyncRaceError::AlreadyFinished => "You have already finished this race.",
+                                            _ => "An error occurred while processing your finish request.",
+                                        };
+                                        interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                            CreateInteractionResponseMessage::new()
+                                                .ephemeral(true)
+                                                .content(error_msg)
+                                        )).await?;
+                                    }
+                                }
+                            } else {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("Could not determine which async part this thread is for.")
+                                )).await?;
+                            }
+                        } else {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content("This thread is not associated with an async race.")
+                            )).await?;
+                        }
+                        
+                        transaction.rollback().await?;
+                    }
                     "pronouns_he" => {
                         let member = interaction.member.clone().expect("/pronoun-roles called outside of a guild");
                         let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "he/him").expect("missing 'he/him' role");

@@ -4,7 +4,7 @@ use {
         ChannelId, CreateThread, MessageBuilder, CreateMessage,
         ChannelType, AutoArchiveDuration, CreateActionRow, CreateButton, ButtonStyle,
     },
-    sqlx::{PgPool, Transaction, Postgres},
+    sqlx::{PgPool, Transaction, Postgres, postgres::types::PgInterval},
 
     crate::{
         cal::{Race, RaceSchedule},
@@ -68,8 +68,6 @@ impl AsyncRaceManager {
         transaction.commit().await?;
         Ok(())
     }
-
-
 
     /// Creates a private thread for an async race part
     async fn create_async_thread(
@@ -233,9 +231,9 @@ impl AsyncRaceManager {
         content.push_line("");
         content.push("• Organizers will be notified that you are starting");
         content.push_line("");
-        content.push("• You have **10 minutes** from when you click ready to start your run");
+        content.push("• You can then start a 5-second countdown when you're ready to begin");
         content.push_line("");
-        content.push("• This is when we start counting your time");
+        content.push("• After the countdown, you can finish your run and report your time");
         content.push_line("");
         content.push("Please note in the interest of keeping a level playing field, even if running second, you will not be given the results of the match until after both players have run the seed.");
         
@@ -322,8 +320,6 @@ impl AsyncRaceManager {
         
         Ok(())
     }
-
-
 
     /// Gets async parts and their start times
     fn get_async_parts(race: &Race) -> Vec<(u8, Option<DateTime<Utc>>)> {
@@ -550,16 +546,272 @@ impl AsyncRaceManager {
             content.push(")");
             
             content.push_line("");
-            content.push("The seed has been distributed and the player has 10 minutes to start their run.");
+            content.push("The seed has been distributed. Click the START COUNTDOWN button when you're ready to begin your run.");
             
-            thread.say(discord_ctx, content.build()).await?;
+            // Create the START COUNTDOWN button
+            let start_countdown_button = CreateActionRow::Buttons(vec![
+                CreateButton::new("async_start_countdown")
+                    .label("START COUNTDOWN")
+                    .style(ButtonStyle::Success)
+            ]);
+            
+            thread.send_message(discord_ctx, CreateMessage::new()
+                .content(content.build())
+                .components(vec![start_countdown_button])
+            ).await?;
         }
         
         transaction.commit().await?;
         Ok(())
     }
 
+    /// Handles the START COUNTDOWN button click for async races
+    pub(crate) async fn handle_start_countdown_button(
+        pool: &PgPool,
+        discord_ctx: &DiscordCtx,
+        race_id: i64,
+        async_part: u8,
+        user_id: UserId,
+    ) -> Result<(), Error> {
+        let mut transaction = pool.begin().await?;
+        
+        // Load the race
+        let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await?;
+        
+        // Verify the user is the correct player for this async part
+        let team = Self::get_team_for_async_part(&race, async_part)?;
+        let player = team.members(&mut transaction).await?.into_iter().next()
+            .ok_or(Error::NoTeamMembers)?;
+        
+        if let Some(discord) = &player.discord {
+            if discord.id != user_id {
+                return Err(Error::UnauthorizedUser);
+            }
+        } else {
+            return Err(Error::NoTeamMembers);
+        }
+        
+        // Check if countdown has already been started
+        let existing_record = sqlx::query!(
+            "SELECT start_time FROM async_times WHERE race_id = $1 AND async_part = $2",
+            race_id,
+            async_part as i32
+        ).fetch_optional(&mut *transaction).await?;
+        
+        if let Some(record) = existing_record {
+            if record.start_time.is_some() {
+                return Err(Error::AlreadyStarted);
+            }
+        }
+        
+        // Get the user who clicked the button
+        let user = User::from_discord(&mut *transaction, user_id).await?;
+        
+        // Insert or update the async_times record with start_time
+        let now = Utc::now();
+        sqlx::query!(
+            r#"
+            INSERT INTO async_times (race_id, async_part, start_time, recorded_by)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (race_id, async_part) DO UPDATE SET
+                start_time = EXCLUDED.start_time,
+                recorded_at = NOW(),
+                recorded_by = EXCLUDED.recorded_by
+            "#,
+            race_id,
+            async_part as i32,
+            now,
+            user.unwrap().id as _,
+        ).execute(&mut *transaction).await?;
+        
+        // Get thread ID
+        let thread_id = match async_part {
+            1 => sqlx::query_scalar!("SELECT async_thread1 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
+            2 => sqlx::query_scalar!("SELECT async_thread2 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
+            3 => sqlx::query_scalar!("SELECT async_thread3 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
+            _ => return Err(Error::InvalidAsyncPart),
+        };
+        
+        if let Some(thread_id) = thread_id {
+            let thread = ChannelId::new(thread_id as u64);
+            
+            // Send countdown messages
+            for i in (1..=5).rev() {
+                let countdown_content = if i == 1 {
+                    "**GO!** 🏃‍♂️"
+                } else {
+                    &format!("**{}**", i)
+                };
+                
+                thread.say(discord_ctx, countdown_content).await?;
+                
+                if i > 1 {
+                    sleep(Duration::from_secs(1)).await;
+                }
+            }
+            
+            // Send the FINISH button
+            let finish_button = CreateActionRow::Buttons(vec![
+                CreateButton::new("async_finish")
+                    .label("FINISH")
+                    .style(ButtonStyle::Danger)
+            ]);
+            
+            let mut content = MessageBuilder::default();
+            content.push("**Your run has started!** Click the FINISH button when you complete your run.");
+            
+            thread.send_message(discord_ctx, CreateMessage::new()
+                .content(content.build())
+                .components(vec![finish_button])
+            ).await?;
+        }
+        
+        transaction.commit().await?;
+        Ok(())
+    }
 
+    /// Handles the FINISH button click for async races
+    pub(crate) async fn handle_finish_button(
+        pool: &PgPool,
+        discord_ctx: &DiscordCtx,
+        race_id: i64,
+        async_part: u8,
+        user_id: UserId,
+    ) -> Result<(), Error> {
+        let mut transaction = pool.begin().await?;
+        
+        // Load the race
+        let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await?;
+        
+        // Verify the user is the correct player for this async part
+        let team = Self::get_team_for_async_part(&race, async_part)?;
+        let player = team.members(&mut transaction).await?.into_iter().next()
+            .ok_or(Error::NoTeamMembers)?;
+        
+        if let Some(discord) = &player.discord {
+            if discord.id != user_id {
+                return Err(Error::UnauthorizedUser);
+            }
+        } else {
+            return Err(Error::NoTeamMembers);
+        }
+        
+        // Get the async_times record
+        let async_time_record = sqlx::query!(
+            "SELECT start_time, finish_time FROM async_times WHERE race_id = $1 AND async_part = $2",
+            race_id,
+            async_part as i32
+        ).fetch_optional(&mut *transaction).await?;
+        
+        if let Some(record) = async_time_record {
+            if record.start_time.is_none() {
+                return Err(Error::NotStarted);
+            }
+            if record.finish_time.is_some() {
+                return Err(Error::AlreadyFinished);
+            }
+        } else {
+            return Err(Error::NotStarted);
+        }
+        
+        // Calculate finish time and duration
+        let now = Utc::now();
+        let start_time = async_time_record.unwrap().start_time.unwrap();
+        let duration = now.signed_duration_since(start_time);
+        
+        // Format duration as hh:mm:ss
+        let total_seconds = duration.num_seconds();
+        let hours = total_seconds / 3600;
+        let minutes = (total_seconds % 3600) / 60;
+        let seconds = total_seconds % 60;
+        let formatted_time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
+        
+        // Get the user who clicked the button
+        let user = User::from_discord(&mut *transaction, user_id).await?;
+        
+        // Update the async_times record with finish_time
+        let pg_interval = PgInterval {
+            months: 0,
+            days: 0,
+            microseconds: duration.num_seconds() * 1_000_000,
+        };
+        
+        sqlx::query!(
+            r#"
+            UPDATE async_times 
+            SET finish_time = $1, recorded_at = NOW(), recorded_by = $2
+            WHERE race_id = $3 AND async_part = $4
+            "#,
+            pg_interval,
+            user.unwrap().id as _,
+            race_id,
+            async_part as i32,
+        ).execute(&mut *transaction).await?;
+        
+        // Load event data for organizer notification
+        let event = EventData::new(&mut transaction, race.series, &race.event)
+            .await
+            .map_err(|e| Error::Event(event::Error::Data(e)))?
+            .ok_or(Error::EventNotFound)?;
+        
+        // Get thread ID
+        let thread_id = match async_part {
+            1 => sqlx::query_scalar!("SELECT async_thread1 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
+            2 => sqlx::query_scalar!("SELECT async_thread2 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
+            3 => sqlx::query_scalar!("SELECT async_thread3 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
+            _ => return Err(Error::InvalidAsyncPart),
+        };
+        
+        if let Some(thread_id) = thread_id {
+            let thread = ChannelId::new(thread_id as u64);
+            
+            // Send finish notification to thread
+            let mut content = MessageBuilder::default();
+            content.push("🎉 **Run Complete!** ");
+            content.mention_user(&player);
+            content.push_line("");
+            content.push("**Finish Time:** ");
+            content.push(formatted_time);
+            content.push_line("");
+            content.push("Organizers have been notified of your completion.");
+            
+            thread.say(discord_ctx, content.build()).await?;
+            
+            // Send silent notification to organizers
+            let organizers = event.organizers(&mut transaction).await.map_err(Error::Event)?;
+            for organizer in organizers {
+                if let Some(discord) = &organizer.discord {
+                    let mut dm_content = MessageBuilder::default();
+                    dm_content.push("**Async Race Finish Notification**");
+                    dm_content.push_line("");
+                    dm_content.push("Player ");
+                    dm_content.mention_user(&player);
+                    dm_content.push(" has finished their run with a time of ");
+                    dm_content.push(formatted_time);
+                    dm_content.push_line("");
+                    dm_content.push("Race: ");
+                    if let Some(phase) = &race.phase {
+                        dm_content.push_safe(phase.clone());
+                        dm_content.push(' ');
+                    }
+                    if let Some(round) = &race.round {
+                        dm_content.push_safe(round.clone());
+                        dm_content.push(' ');
+                    }
+                    dm_content.push_line("");
+                    dm_content.push("This is a rough time for validation purposes.");
+                    
+                    // Try to send DM to organizer
+                    if let Ok(dm_channel) = discord.id.create_dm_channel(discord_ctx).await {
+                        let _ = dm_channel.say(discord_ctx, dm_content.build()).await;
+                    }
+                }
+            }
+        }
+        
+        transaction.commit().await?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -586,4 +838,10 @@ pub(crate) enum Error {
     UnauthorizedUser,
     #[error("already ready")]
     AlreadyReady,
+    #[error("already started")]
+    AlreadyStarted,
+    #[error("not started")]
+    NotStarted,
+    #[error("already finished")]
+    AlreadyFinished,
 } 
