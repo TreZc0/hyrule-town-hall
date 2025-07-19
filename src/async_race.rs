@@ -703,7 +703,7 @@ impl AsyncRaceManager {
             async_part as i32
         ).fetch_optional(&mut *transaction).await?;
         
-        if let Some(record) = async_time_record {
+        if let Some(ref record) = async_time_record {
             if record.start_time.is_none() {
                 return Err(Error::NotStarted);
             }
@@ -788,7 +788,7 @@ impl AsyncRaceManager {
                     dm_content.push("Player ");
                     dm_content.mention_user(&player);
                     dm_content.push(" has finished their run with a time of ");
-                    dm_content.push(formatted_time);
+                    dm_content.push(&formatted_time);
                     dm_content.push_line("");
                     dm_content.push("Race: ");
                     if let Some(phase) = &race.phase {
