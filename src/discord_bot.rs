@@ -2111,7 +2111,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         let error_msg = match e {
                                             AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
                                             AsyncRaceError::AlreadyStarted => "The countdown has already been started for this race.",
-                                            _ => "An error occurred while processing your countdown request.",
+                                            _ => {
+                                                eprintln!("Async countdown error: {:?}", e);
+                                                "An error occurred while processing your countdown request."
+                                            },
                                         };
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(
                                             CreateInteractionResponseMessage::new()

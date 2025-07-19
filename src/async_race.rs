@@ -602,26 +602,21 @@ impl AsyncRaceManager {
             if record.start_time.is_some() {
                 return Err(Error::AlreadyStarted);
             }
+        } else {
+            return Err(Error::NotStarted);
         }
         
         // Get the user who clicked the button
         let user = User::from_discord(&mut *transaction, user_id).await?;
         
-        // Insert or update the async_times record with start_time
+        // Update the async_times record with start_time
         let now = Utc::now();
         sqlx::query!(
-            r#"
-            INSERT INTO async_times (race_id, async_part, start_time, recorded_by)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (race_id, async_part) DO UPDATE SET
-                start_time = EXCLUDED.start_time,
-                recorded_at = NOW(),
-                recorded_by = EXCLUDED.recorded_by
-            "#,
-            race_id,
-            async_part as i32,
+            "UPDATE async_times SET start_time = $1, recorded_at = NOW(), recorded_by = $2 WHERE race_id = $3 AND async_part = $4",
             now,
             user.unwrap().id as _,
+            race_id,
+            async_part as i32,
         ).execute(&mut *transaction).await?;
         
         // Get thread ID
