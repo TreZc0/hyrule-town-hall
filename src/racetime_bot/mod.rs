@@ -1527,7 +1527,54 @@ impl GlobalState {
             let yaml_file = tempfile::Builder::new().prefix("alttpr_").suffix(".yml").tempfile().at_unknown()?;
             let yaml_path = yaml_file.path();
             tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(serde_yml::to_string(&crosskeys_yaml)?.as_bytes()).await.at(&yaml_file)?;
-            Command::new(PYTHON).current_dir("../alttpr").arg("DungeonRandomizer.py").arg("--customizer").arg(yaml_path).arg("--outputpath").arg("/var/www/midos.house/seed").check("DungeonRandomizer.py").await?;
+            
+            // Add retry logic with 2 retries
+            const MAX_RETRIES: u8 = 2;
+            
+            for attempt in 0..=MAX_RETRIES {
+                let output = Command::new(PYTHON)
+                    .current_dir("../alttpr")
+                    .arg("DungeonRandomizer.py")
+                    .arg("--customizer")
+                    .arg(yaml_path)
+                    .arg("--outputpath")
+                    .arg("/var/www/midos.house/seed")
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .at_command("DungeonRandomizer.py")?
+                    .wait_with_output()
+                    .await
+                    .at_command("DungeonRandomizer.py")?;
+                
+                match output.status.code() {
+                    Some(0) => {
+                        break;
+                    }
+                    Some(1) => {
+                        // Randomizer failed to generate a seed, lets retry.
+                        let last_error = Some(String::from_utf8_lossy(&output.stderr).into_owned());
+                        if attempt < MAX_RETRIES {
+                            // Wait a bit before retrying (exponential backoff)
+                            sleep(Duration::from_secs(10 + 2u64.pow(attempt as u32))).await;
+                            continue;
+                        }
+                        // Max retries reached
+                        return Err(RollError::Retries {
+                            num_retries: MAX_RETRIES + 1,
+                            last_error,
+                        });
+                    }
+                    _ => {
+                        // Other error codes - fail immediately
+                        return Err(RollError::Wheel(wheel::Error::CommandExit { 
+                            name: Cow::Borrowed("DungeonRandomizer.py"), 
+                            output 
+                        }));
+                    }
+                }
+            }
+            
             // This swallows the hash error and just makes it empty--maybe we should surface this somehow?
             let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await.ok();
             update_tx.send(SeedRollUpdate::Done {
@@ -2843,6 +2890,8 @@ impl Handler {
                     Duration::from_secs(15 * 60)
                 } else if delay > Duration::from_secs(44 * 60) && delay < Duration::from_secs(46 * 60) {
                     Duration::from_secs(45 * 60)
+                } else if delay > Duration::from_secs(19 * 60) && delay < Duration::from_secs(21 * 60) {
+                    Duration::from_secs(20 * 60)
                 } else {
                     delay
                 };
@@ -2887,9 +2936,9 @@ impl Handler {
 
         let crosskeys_options = CrosskeysRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race).await;
         self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2025_seed(crosskeys_options), language, article, format!("seed with {}", crosskeys_options.as_seed_options_str())).await;
-        ctx.say(format!("@entrants Remember: this race will be played with {}!",
+        ctx.send_message(format!("@entrants Remember: this race will be played with {}!",
                                     crosskeys_options.as_race_options_str()
-                                )).await.expect("failed to send race options");
+                                ), true, Vec::default()).await.expect("failed to send race options");
     }
 
     async fn roll_rsl_seed(&self, ctx: &RaceContext<GlobalState>, preset: rsl::VersionedPreset, world_count: u8, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
@@ -3062,7 +3111,7 @@ impl RaceHandler<GlobalState> for Handler {
                             )
                         }
                     }
-                }, true, Vec::default()).await?;
+                }, goal != Goal::Crosskeys2025, Vec::default()).await?;
                 let (race_state, high_seed_name, low_seed_name) = if let Some(draft_kind) = event.draft_kind() {
                     let state = cal_event.race.draft.clone().expect("missing draft state");
                     let [high_seed_name, low_seed_name] = if let draft::StepKind::Done(_) | draft::StepKind::DoneRsl { .. } = state.next_step(draft_kind, cal_event.race.game, &mut draft::MessageContext::None).await.to_racetime()?.kind {
@@ -4476,7 +4525,7 @@ impl RaceHandler<GlobalState> for Handler {
                         }).await?;
                     } else {
                         let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
-                        match goal.parse_seed_command(&mut transaction, &ctx.global_state, self.is_official(), cmd_name.to_ascii_lowercase() == "spoilerseed", false, &args).await.to_racetime()? {
+                        match goal.parse_seed_command(&mut transaction, &ctx.global_state, self.is_official(), cmd_name.eq_ignore_ascii_case("spoilerseed"), false, &args).await.to_racetime()? {
                             SeedCommandParseResult::Alttpr => {
                                 // TODO THIS NEEDS TO BE IMPLEMENTED -- call door rando .py and roll seed with arguments
                                 Command::new("echo").args(["hello", "world"]).check("echo").await.to_racetime()?;

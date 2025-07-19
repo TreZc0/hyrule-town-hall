@@ -87,13 +87,13 @@ impl Player {
                 if let Some(Some(user_data)) = member.racetime_user_data(http_client).await?;
                 if let Some(twitch_name) = user_data.twitch_name;
                 then {
-                    twitch_name.to_ascii_lowercase() == self.streaming_from.to_ascii_lowercase()
+                    twitch_name.eq_ignore_ascii_case(&self.streaming_from)
                 } else {
                     false
                 }
             },
             Entrant::Discord { twitch_username: None, .. } | Entrant::Named { twitch_username: None, .. } => false,
-            Entrant::Discord { twitch_username: Some(username), .. } | Entrant::Named { twitch_username: Some(username), .. } => username.to_ascii_lowercase() == self.streaming_from.to_ascii_lowercase(),
+            Entrant::Discord { twitch_username: Some(username), .. } | Entrant::Named { twitch_username: Some(username), .. } => username.eq_ignore_ascii_case(&self.streaming_from),
         })
     }
 }
