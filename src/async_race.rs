@@ -164,7 +164,7 @@ impl AsyncRaceManager {
         eprintln!("Current team ID: {}", current_team.id);
         
         // Track which Discord users we've already added to avoid duplicates
-        let mut added_users = std::collections::HashSet::new();
+        let mut added_users = HashSet::new();
         
         // First, add the current player
         if let Some(discord) = &player.discord {

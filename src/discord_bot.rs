@@ -9,7 +9,6 @@ use {
         CommandDataOptionValue,
         Content,
         CreateAllowedMentions,
-        CreateActionRow,
         CreateButton,
         CreateCommand,
         CreateCommandOption,
