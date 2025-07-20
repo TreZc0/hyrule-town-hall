@@ -527,6 +527,9 @@ impl<'a> Data<'a> {
                     : "Event Start: ";
                     : start.format("%Y-%m-%d").to_string();
                 }
+                p(class = "timezone-info") {
+                    : timezone_info_html();
+                }
             }
             div(class = "button-row") {
                 @if let Tab::Info = tab {

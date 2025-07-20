@@ -217,3 +217,13 @@ where Z::Offset: fmt::Display {
         }
     }
 }
+
+pub(crate) fn timezone_info_html() -> RawHtml<String> {
+    html! {
+        span(class = "timezone-wrapper") {
+            : "Times shown in your timezone (detected as ";
+            span(class = "timezone") : "[unknown]";
+            : ")";
+        }
+    }
+}

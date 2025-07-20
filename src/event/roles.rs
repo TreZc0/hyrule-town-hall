@@ -2015,6 +2015,9 @@ async fn match_signup_page(
                     RaceSchedule::Async { .. } => : "Async Race";
                 }
             }
+            p {
+                : timezone_info_html();
+            }
 
             @if role_bindings.is_empty() {
                 p : "No volunteer roles are configured for this event.";
