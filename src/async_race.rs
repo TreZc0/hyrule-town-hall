@@ -723,8 +723,10 @@ impl AsyncRaceManager {
                 return Err(Error::NotStarted);
             }
             // Check if finish_time has a non-zero value (indicating already finished)
-            if record.finish_time.microseconds != 0 || record.finish_time.days != 0 || record.finish_time.months != 0 {
-                return Err(Error::AlreadyFinished);
+            if let Some(finish_time) = record.finish_time {
+                if finish_time.microseconds != 0 || finish_time.days != 0 || finish_time.months != 0 {
+                    return Err(Error::AlreadyFinished);
+                }
             }
         } else {
             return Err(Error::NotStarted);

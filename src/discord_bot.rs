@@ -2934,28 +2934,34 @@ pub(crate) async fn result_async_command(
             
             if let Some(start_time) = start_time {
                 // Calculate finish time in seconds
-                let finish_seconds = async_time.finish_time.microseconds / 1_000_000
-                    + (async_time.finish_time.days as i64) * 86400
-                    + (async_time.finish_time.months as i64) * 30 * 86400;
-                
-                let end_time = start_time + chrono::Duration::seconds(finish_seconds);
-                
-                match async_time.async_part {
-                    1 => sqlx::query!("UPDATE races SET async_end1 = $1 WHERE id = $2", end_time, race_id).execute(&mut *transaction).await?,
-                    2 => sqlx::query!("UPDATE races SET async_end2 = $1 WHERE id = $2", end_time, race_id).execute(&mut *transaction).await?,
-                    3 => sqlx::query!("UPDATE races SET async_end3 = $1 WHERE id = $2", end_time, race_id).execute(&mut *transaction).await?,
-                    _ => return Ok(()),
-                };
+                if let Some(finish_time) = &async_time.finish_time {
+                    let finish_seconds = finish_time.microseconds / 1_000_000
+                        + (finish_time.days as i64) * 86400
+                        + (finish_time.months as i64) * 30 * 86400;
+                    
+                    let end_time = start_time + chrono::Duration::seconds(finish_seconds);
+                    
+                    match async_time.async_part {
+                        1 => sqlx::query!("UPDATE races SET async_end1 = $1 WHERE id = $2", end_time, race_id).execute(&mut *transaction).await?,
+                        2 => sqlx::query!("UPDATE races SET async_end2 = $1 WHERE id = $2", end_time, race_id).execute(&mut *transaction).await?,
+                        3 => sqlx::query!("UPDATE races SET async_end3 = $1 WHERE id = $2", end_time, race_id).execute(&mut *transaction).await?,
+                        _ => return Ok(()),
+                    };
+                }
             }
         }
 
         // Report the results
-        let results = async_times.iter().map(|at| {
-            // finish_time is PgInterval, calculate total seconds
-            let seconds = at.finish_time.microseconds / 1_000_000
-                + (at.finish_time.days as i64) * 86400
-                + (at.finish_time.months as i64) * 30 * 86400;
-            (at.async_part, Duration::from_secs(seconds as u64))
+        let results = async_times.iter().filter_map(|at| {
+            // finish_time is Option<PgInterval>, calculate total seconds
+            if let Some(finish_time) = &at.finish_time {
+                let seconds = finish_time.microseconds / 1_000_000
+                    + (finish_time.days as i64) * 86400
+                    + (finish_time.months as i64) * 30 * 86400;
+                Some((at.async_part, Duration::from_secs(seconds as u64)))
+            } else {
+                None // Skip records without finish times
+            }
         }).collect::<Vec<_>>();
 
         // Send result to results channel
