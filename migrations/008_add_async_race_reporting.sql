@@ -19,7 +19,7 @@ CREATE TABLE async_times (
     id BIGSERIAL PRIMARY KEY,
     race_id BIGINT NOT NULL REFERENCES races(id) ON DELETE CASCADE,
     async_part INTEGER NOT NULL CHECK (async_part IN (1, 2, 3)),
-    finish_time INTERVAL NOT NULL,
+    finish_time INTERVAL,
     recorded_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     recorded_by BIGINT NOT NULL REFERENCES users(id),
     start_time TIMESTAMP WITH TIME ZONE,

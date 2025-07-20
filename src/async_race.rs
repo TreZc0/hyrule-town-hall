@@ -5,6 +5,7 @@ use {
         ChannelType, AutoArchiveDuration, CreateActionRow, CreateButton, ButtonStyle,
     },
     sqlx::{PgPool, Transaction, Postgres, postgres::types::PgInterval},
+    tokio::time::{sleep, Duration},
 
     crate::{
         cal::{Race, RaceSchedule},
@@ -639,9 +640,15 @@ impl AsyncRaceManager {
         if let Some(thread_id) = thread_id {
             let thread = ChannelId::new(thread_id as u64);
             
+            // Send "about to start" message
+            thread.say(discord_ctx, "**Your async is about to start!**").await?;
+            sleep(Duration::from_secs(1)).await;
+            
             // Send countdown messages
             for i in (1..=5).rev() {
                 let countdown_content = if i == 1 {
+                    "**1**"
+                } else if i == 0 {
                     "**GO!** 🏃‍♂️"
                 } else {
                     &format!("**{}**", i)
@@ -653,6 +660,10 @@ impl AsyncRaceManager {
                     sleep(Duration::from_secs(1)).await;
                 }
             }
+            
+            // Send GO! message
+            sleep(Duration::from_secs(1)).await;
+            thread.say(discord_ctx, "**GO!** 🏃‍♂️").await?;
             
             // Send the FINISH button
             let finish_button = CreateActionRow::Buttons(vec![
