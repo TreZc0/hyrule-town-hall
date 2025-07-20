@@ -816,7 +816,7 @@ impl AsyncRaceManager {
             content.push_line("");
             content.push_line("");
             content.mention_user(&player);
-            content.push(", please provide a link to the recording or VoD here as soon as you can. ");
+            content.push(", please provide a screenshot of the collection rate end screen and a link to the recording or VoD here as soon as you can. ");
             content.push("Organizers will then verify and record your final time.");
 
             
