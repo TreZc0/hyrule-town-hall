@@ -783,48 +783,26 @@ impl AsyncRaceManager {
         if let Some(thread_id) = thread_id {
             let thread = ChannelId::new(thread_id as u64);
             
-            // Send finish notification to thread
+            // Send finish notification to thread with organizer ping
+            let organizers = event.organizers(&mut transaction).await.map_err(Error::Event)?;
             let mut content = MessageBuilder::default();
             content.push("🎉 **Run Complete!** ");
             content.mention_user(&player);
             content.push_line("");
-            content.push("**Finish Time:** ");
+            content.push("**Estimated finish time:** ");
             content.push(&formatted_time);
             content.push_line("");
-            content.push("Organizers have been notified of your completion.");
+            content.push("Organizers will verify your final time shortly.");
             
-            thread.say(discord_ctx, content.build()).await?;
-            
-            // Send silent notification to organizers
-            let organizers = event.organizers(&mut transaction).await.map_err(Error::Event)?;
+            // Add organizer mentions
             for organizer in organizers {
                 if let Some(discord) = &organizer.discord {
-                    let mut dm_content = MessageBuilder::default();
-                    dm_content.push("**Async Race Finish Notification**");
-                    dm_content.push_line("");
-                    dm_content.push("Player ");
-                    dm_content.mention_user(&player);
-                    dm_content.push(" has finished their run with a time of ");
-                    dm_content.push(&formatted_time);
-                    dm_content.push_line("");
-                    dm_content.push("Race: ");
-                    if let Some(phase) = &race.phase {
-                        dm_content.push_safe(phase.clone());
-                        dm_content.push(' ');
-                    }
-                    if let Some(round) = &race.round {
-                        dm_content.push_safe(round.clone());
-                        dm_content.push(' ');
-                    }
-                    dm_content.push_line("");
-                    dm_content.push("This is a rough time for validation purposes.");
-                    
-                    // Try to send DM to organizer
-                    if let Ok(dm_channel) = discord.id.create_dm_channel(discord_ctx).await {
-                        let _ = dm_channel.say(discord_ctx, dm_content.build()).await;
-                    }
+                    content.push(" ");
+                    content.mention_user(&organizer);
                 }
             }
+            
+            thread.say(discord_ctx, content.build()).await?;
         }
         
         transaction.commit().await?;

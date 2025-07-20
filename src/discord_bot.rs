@@ -2104,6 +2104,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         
                         if let Some(race_info) = race_info {
                             if let Some(async_part) = race_info.async_part {
+                                // Defer the interaction immediately
+                                interaction.defer(&ctx.http).await?;
+                                
                                 match AsyncRaceManager::handle_start_countdown_button(
                                     &ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"),
                                     ctx,
@@ -2112,15 +2115,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     interaction.user.id,
                                 ).await {
                                     Ok(()) => {
-                                        // Disable the button
+                                        // Remove the button completely
                                         interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                             CreateInteractionResponseMessage::new()
-                                                .components(vec![CreateActionRow::Buttons(vec![
-                                                    CreateButton::new("async_start_countdown")
-                                                        .label("START COUNTDOWN")
-                                                        .style(ButtonStyle::Secondary)
-                                                        .disabled(true)
-                                                ])])
+                                                .components(vec![]) // Empty components removes all buttons
                                         )).await?;
                                     }
                                     Err(e) => {
@@ -2183,6 +2181,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         
                         if let Some(race_info) = race_info {
                             if let Some(async_part) = race_info.async_part {
+                                // Defer the interaction immediately
+                                interaction.defer(&ctx.http).await?;
+                                
                                 match AsyncRaceManager::handle_finish_button(
                                     &ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"),
                                     ctx,
@@ -2191,15 +2192,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     interaction.user.id,
                                 ).await {
                                     Ok(()) => {
-                                        // Disable the button
+                                        // Remove the button completely
                                         interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                             CreateInteractionResponseMessage::new()
-                                                .components(vec![CreateActionRow::Buttons(vec![
-                                                    CreateButton::new("async_finish")
-                                                        .label("FINISH")
-                                                        .style(ButtonStyle::Secondary)
-                                                        .disabled(true)
-                                                ])])
+                                                .components(vec![]) // Empty components removes all buttons
                                         )).await?;
                                     }
                                     Err(e) => {
