@@ -2031,19 +2031,11 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     interaction.user.id,
                                 ).await {
                                     Ok(()) => {
-                                        // Disable the button
+                                        // Remove the button completely by editing the original message
                                         interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                             CreateInteractionResponseMessage::new()
-                                                .components(vec![CreateActionRow::Buttons(vec![
-                                                    CreateButton::new("async_ready")
-                                                        .label("READY!")
-                                                        .style(ButtonStyle::Secondary)
-                                                        .disabled(true)
-                                                ])])
+                                                .components(vec![]) // Empty components removes all buttons
                                         )).await?;
-                                        
-                                        // Post a new message confirming readiness
-                                        interaction.channel_id.say(ctx, "✅ You are now ready! The seed has been distributed and organizers have been notified.").await?;
                                     }
                                     Err(e) => {
                                         let error_msg = match e {

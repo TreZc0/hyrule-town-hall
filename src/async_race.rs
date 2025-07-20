@@ -315,7 +315,6 @@ impl AsyncRaceManager {
         content.push("Hey ");
         content.mention_user(&player);
         content.push(", ");
-        content.push("**Seed Distribution**");
         content.push_line("");
         content.push("Your seed is ready! Please use this URL: ");
         content.push(seed_url);
@@ -327,9 +326,6 @@ impl AsyncRaceManager {
             content.push(format!("{}, {}, {}, {}, {}", 
                 file_hash[0], file_hash[1], file_hash[2], file_hash[3], file_hash[4]));
         }
-        
-        content.push_line("");
-        content.push("Good luck with your run!");
         
         // Get thread ID from database
         let thread_id = match async_part {
@@ -559,20 +555,11 @@ impl AsyncRaceManager {
             let thread = ChannelId::new(thread_id as u64);
             
             let mut content = MessageBuilder::default();
-            content.push("@here **Async Half is ready to start**");
+            content.push("@here **This part of the async is ready to start**");
             content.push_line("");
             content.push("Player ");
             content.mention_user(&player);
-            content.push(" has clicked READY for ");
-            
-            if let Some(phase) = &race.phase {
-                content.push_safe(phase.clone());
-                content.push(' ');
-            }
-            if let Some(round) = &race.round {
-                content.push_safe(round.clone());
-                content.push(' ');
-            }
+            content.push(" is ready for their portion of the async");
             
             content.push("(");
             let teams: Vec<_> = race.teams().collect();
@@ -586,10 +573,20 @@ impl AsyncRaceManager {
                     content.push(" vs. ");
                 }
             }
+                        
+            if let Some(phase) = &race.phase {
+                content.push(", ");
+                content.push_safe(phase.clone());
+            }
+            if let Some(round) = &race.round {
+                content.push(", ");
+                content.push_safe(round.clone());
+            }
             content.push(")");
             
             content.push_line("");
-            content.push("The seed has been distributed. Click the START COUNTDOWN button when you're ready to begin your run.");
+            content.push_line("");
+            content.push("Click the START COUNTDOWN button when you're ready to begin your run.");
             
             // Create the START COUNTDOWN button
             let start_countdown_button = CreateActionRow::Buttons(vec![
@@ -706,7 +703,7 @@ impl AsyncRaceManager {
             ]);
             
             let mut content = MessageBuilder::default();
-            content.push("**Your run has started!** Click the FINISH button when you complete your run.");
+            content.push("**Good luck!** Click the FINISH button once you have completed your run.");
             
             thread.send_message(discord_ctx, CreateMessage::new()
                 .content(content.build())
@@ -818,15 +815,16 @@ impl AsyncRaceManager {
             
             // Send finish notification to thread with @here ping
             let mut content = MessageBuilder::default();
-            content.push("🎉 **Run Complete!** ");
-            content.mention_user(&player);
+            content.push("@here - **This part of the async race is complete!** ");
             content.push_line("");
             content.push("**Estimated finish time:** ");
             content.push(&formatted_time);
             content.push_line("");
-            content.push("Organizers will verify your final time shortly.");
             content.push_line("");
-            content.push("@here");
+            content.mention_user(&player);
+            content.push(", please provide a link to the recording or VoD here as soon as you can. ");
+            content.push("Organizers will then verify and record your final time.");
+
             
             thread.say(discord_ctx, content.build()).await?;
         }
