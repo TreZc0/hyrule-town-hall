@@ -163,8 +163,27 @@ impl AsyncRaceManager {
         eprintln!("Adding organizers to thread. Total organizers: {}", organizers.len());
         eprintln!("Current team ID: {}", current_team.id);
         
+        // Track which Discord users we've already added to avoid duplicates
+        let mut added_users = std::collections::HashSet::new();
+        
+        // First, add the current player
+        if let Some(discord) = &player.discord {
+            eprintln!("Adding current player: {} (Discord ID: {})", player.display_name(), discord.id);
+            if let Ok(member) = thread.guild_id.member(discord_ctx, discord.id).await {
+                let _ = thread.id.add_thread_member(discord_ctx, member.user.id).await;
+                added_users.insert(discord.id);
+            }
+        }
+        
+        // Then add organizers who are not opponents
         for organizer in organizers {
             if let Some(discord) = &organizer.discord {
+                // Skip if we already added this user (e.g., if they're the current player)
+                if added_users.contains(&discord.id) {
+                    eprintln!("Skipping organizer {} (already added as player)", organizer.display_name());
+                    continue;
+                }
+                
                 eprintln!("Checking organizer: {} (Discord ID: {})", organizer.display_name(), discord.id);
                 
                 // Check if this organizer is part of any opponent team (not the current team)
@@ -192,16 +211,11 @@ impl AsyncRaceManager {
                     eprintln!("  Adding organizer to thread");
                     if let Ok(member) = thread.guild_id.member(discord_ctx, discord.id).await {
                         let _ = thread.id.add_thread_member(discord_ctx, member.user.id).await;
+                        added_users.insert(discord.id);
                     }
                 } else {
                     eprintln!("  Skipping organizer (is opponent)");
                 }
-            }
-        }
-        
-        if let Some(discord) = &player.discord {
-            if let Ok(member) = thread.guild_id.member(discord_ctx, discord.id).await {
-                let _ = thread.id.add_thread_member(discord_ctx, member.user.id).await;
             }
         }
         
