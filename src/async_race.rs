@@ -156,12 +156,45 @@ impl AsyncRaceManager {
             .components(vec![ready_button])
         ).await?;
         
-        // Add organizers and player to thread
+        // Add organizers and player to thread (but exclude organizers who are opponents)
         let organizers = event.organizers(transaction).await.map_err(Error::Event)?;
+        let current_team = Self::get_team_for_async_part(race, async_part)?;
+        
+        eprintln!("Adding organizers to thread. Total organizers: {}", organizers.len());
+        eprintln!("Current team ID: {}", current_team.id);
+        
         for organizer in organizers {
             if let Some(discord) = &organizer.discord {
-                if let Ok(member) = thread.guild_id.member(discord_ctx, discord.id).await {
-                    let _ = thread.id.add_thread_member(discord_ctx, member.user.id).await;
+                eprintln!("Checking organizer: {} (Discord ID: {})", organizer.display_name(), discord.id);
+                
+                // Check if this organizer is part of any opponent team (not the current team)
+                let mut is_opponent = false;
+                for team in race.teams() {
+                    if team.id == current_team.id {
+                        continue; // Skip current team
+                    } else {
+                        // Check if organizer is a member of this opponent team
+                        if let Ok(members) = team.members(transaction).await {
+                            if members.iter().any(|member| {
+                                member.discord.as_ref().map(|d| d.id) == Some(discord.id)
+                            }) {
+                                is_opponent = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                eprintln!("  Is opponent: {}", is_opponent);
+                
+                // Only add organizers who are NOT opponents
+                if !is_opponent {
+                    eprintln!("  Adding organizer to thread");
+                    if let Ok(member) = thread.guild_id.member(discord_ctx, discord.id).await {
+                        let _ = thread.id.add_thread_member(discord_ctx, member.user.id).await;
+                    }
+                } else {
+                    eprintln!("  Skipping organizer (is opponent)");
                 }
             }
         }
@@ -783,8 +816,7 @@ impl AsyncRaceManager {
         if let Some(thread_id) = thread_id {
             let thread = ChannelId::new(thread_id as u64);
             
-            // Send finish notification to thread with organizer ping
-            let organizers = event.organizers(&mut transaction).await.map_err(Error::Event)?;
+            // Send finish notification to thread with @here ping
             let mut content = MessageBuilder::default();
             content.push("🎉 **Run Complete!** ");
             content.mention_user(&player);
@@ -793,14 +825,8 @@ impl AsyncRaceManager {
             content.push(&formatted_time);
             content.push_line("");
             content.push("Organizers will verify your final time shortly.");
-            
-            // Add organizer mentions
-            for organizer in organizers {
-                if let Some(_discord) = &organizer.discord {
-                    content.push(" ");
-                    content.mention_user(&organizer);
-                }
-            }
+            content.push_line("");
+            content.push("@here");
             
             thread.say(discord_ctx, content.build()).await?;
         }

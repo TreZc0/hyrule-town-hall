@@ -18,6 +18,7 @@ use {
         CreateInteractionResponseMessage,
         CreateMessage,
         CreateThread,
+        EditInteractionResponse,
         EditRole,
     }, serenity_utils::{
         builder::ErrorNotifier,
@@ -2104,7 +2105,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         
                         if let Some(race_info) = race_info {
                             if let Some(async_part) = race_info.async_part {
-                                // Defer the interaction immediately
+                                // Defer the interaction to prevent timeout
                                 interaction.defer(&ctx.http).await?;
                                 
                                 match AsyncRaceManager::handle_start_countdown_button(
@@ -2115,11 +2116,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     interaction.user.id,
                                 ).await {
                                     Ok(()) => {
-                                        // Remove the button completely
-                                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                                            CreateInteractionResponseMessage::new()
-                                                .components(vec![]) // Empty components removes all buttons
-                                        )).await?;
+                                        // Remove the button completely by editing the original message
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                                            .components(vec![]) // Empty components removes all buttons
+                                        ).await?;
                                     }
                                     Err(e) => {
                                         let error_msg = match e {
@@ -2130,11 +2130,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                 "An error occurred while processing your countdown request."
                                             },
                                         };
-                                        interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                            CreateInteractionResponseMessage::new()
-                                                .ephemeral(true)
-                                                .content(error_msg)
-                                        )).await?;
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                                            .content(error_msg)
+                                        ).await?;
                                     }
                                 }
                             } else {
@@ -2181,7 +2179,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         
                         if let Some(race_info) = race_info {
                             if let Some(async_part) = race_info.async_part {
-                                // Defer the interaction immediately
+                                // Defer the interaction to prevent timeout
                                 interaction.defer(&ctx.http).await?;
                                 
                                 match AsyncRaceManager::handle_finish_button(
@@ -2192,11 +2190,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     interaction.user.id,
                                 ).await {
                                     Ok(()) => {
-                                        // Remove the button completely
-                                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                                            CreateInteractionResponseMessage::new()
-                                                .components(vec![]) // Empty components removes all buttons
-                                        )).await?;
+                                        // Remove the button completely by editing the original message
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                                            .components(vec![]) // Empty components removes all buttons
+                                        ).await?;
                                     }
                                     Err(e) => {
                                         let error_msg = match e {
@@ -2208,11 +2205,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                 "An error occurred while processing your finish request."
                                             },
                                         };
-                                        interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                            CreateInteractionResponseMessage::new()
-                                                .ephemeral(true)
-                                                .content(error_msg)
-                                        )).await?;
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                                            .content(error_msg)
+                                        ).await?;
                                     }
                                 }
                             } else {
