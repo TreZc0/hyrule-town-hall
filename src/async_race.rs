@@ -796,7 +796,7 @@ impl AsyncRaceManager {
             
             // Add organizer mentions
             for organizer in organizers {
-                if let Some(discord) = &organizer.discord {
+                if let Some(_discord) = &organizer.discord {
                     content.push(" ");
                     content.mention_user(&organizer);
                 }
