@@ -2839,6 +2839,9 @@ pub(crate) async fn result_async_command(
     // Get the user who ran the command
     let user = User::from_discord(&mut *transaction, user_id).await?;
 
+    // Load race data early so we can use it for display order
+    let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await.map_err(|_e| Error::Sql(sqlx::Error::RowNotFound))?;
+
     // Insert the async time
     let pg_interval = PgInterval {
         months: 0,
@@ -2860,6 +2863,18 @@ pub(crate) async fn result_async_command(
         user.unwrap().id as _,
     ).execute(&mut *transaction).await?;
 
+    // Send immediate response for the time recording
+    let display_order = get_display_order(&race, async_part as i32);
+    let ordinal = match display_order {
+        1 => "1st",
+        2 => "2nd", 
+        3 => "3rd",
+        n => &format!("{}th", n),
+    };
+    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+        .content(format!("Time recorded for {} half of this async: {}", ordinal, time_str))
+    )).await?;
+
     // Check if both async parts are complete
     let async_times = sqlx::query!(
         r#"
@@ -2869,9 +2884,6 @@ pub(crate) async fn result_async_command(
         "#,
         race_id
     ).fetch_all(&mut *transaction).await?;
-
-    // Load race data early so we can use it for display order
-    let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await.map_err(|_e| Error::Sql(sqlx::Error::RowNotFound))?;
     
     // Helper function to get display order for async part
     fn get_display_order(race: &Race, async_part: i32) -> i32 {
@@ -3125,18 +3137,6 @@ pub(crate) async fn result_async_command(
             }
         }
     }
-
-    // Use display order for the response message, with ordinal
-    let display_order = get_display_order(&race, async_part as i32);
-    let ordinal = match display_order {
-        1 => "1st",
-        2 => "2nd",
-        3 => "3rd",
-        n => &format!("{}th", n),
-    };
-    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-        .content(format!("Time recorded for {} half of this async: {}", ordinal, time_str))
-    )).await?;
 
     transaction.commit().await?;
     Ok(())
