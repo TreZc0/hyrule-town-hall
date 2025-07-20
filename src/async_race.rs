@@ -800,7 +800,7 @@ impl AsyncRaceManager {
         ).execute(&mut *transaction).await?;
         
         // Load event data for organizer notification
-        let event = EventData::new(&mut transaction, race.series, &race.event)
+        let _event = EventData::new(&mut transaction, race.series, &race.event)
             .await
             .map_err(|e| Error::Event(event::Error::Data(e)))?
             .ok_or(Error::EventNotFound)?;
