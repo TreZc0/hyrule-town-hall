@@ -2207,26 +2207,25 @@ pub(crate) async fn swiss_standings(
     
     let content = html! {
         : header;
-        div(class = "swiss-standings") {
-            h2 : "Swiss Standings";
-            @if standings.is_empty() {
-                p : "No Swiss standings available at this time.";
-            } else {
-                table(class = "standings-table") {
-                    thead {
-                        tr {
-                            th : "Placement";
-                            th : "Name";
-                            th : "Swiss Result";
-                        }
+        h2 : "Swiss Standings";
+        p(style = "font-style: italic; color: var(--text-muted); margin-bottom: 1rem;") : "This page automatically updates every 5 minutes.";
+        @if standings.is_empty() {
+            p : "No Swiss standings available at this time.";
+        } else {
+            table {
+                thead {
+                    tr {
+                        th : "Placement";
+                        th : "Name";
+                        th : "Swiss Result";
                     }
-                    tbody {
-                        @for standing in &standings {
-                            tr {
-                                td : standing.placement.to_string();
-                                td : &standing.name;
-                                td : format!("{}:{}", standing.wins, standing.losses);
-                            }
+                }
+                tbody {
+                    @for standing in &standings {
+                        tr {
+                            td : standing.placement.to_string();
+                            td : &standing.name;
+                            td : format!("{}:{}", standing.wins, standing.losses);
                         }
                     }
                 }
