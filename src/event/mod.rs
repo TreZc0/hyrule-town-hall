@@ -551,6 +551,13 @@ impl<'a> Data<'a> {
                         a(class = "button", href = uri!(races(self.series, &*self.event))) : "Races";
                     }
                 }
+                @if matches!(self.match_source(), MatchSource::StartGG(_)) {
+                    @if let Tab::SwissStandings = tab {
+                        a(class = "button selected", href? = is_subpage.then(|| uri!(swiss_standings(self.series, &*self.event)))) : "Swiss Standings";
+                    } else {
+                        a(class = "button", href = uri!(swiss_standings(self.series, &*self.event))) : "Swiss Standings";
+                    }
+                }
                 @if signed_up {
                     @if let Tab::MyStatus = tab {
                         a(class = "button selected", href? = is_subpage.then(|| uri!(status(self.series, &*self.event)))) : "My Status";
@@ -666,13 +673,6 @@ impl<'a> Data<'a> {
                         } else {
                             a(class = "button", href = uri!(roles::get(self.series, &*self.event))) : "Roles";
                         }
-                    }
-                }
-                @if matches!(self.match_source(), MatchSource::StartGG(_)) {
-                    @if let Tab::SwissStandings = tab {
-                        a(class = "button selected", href? = is_subpage.then(|| uri!(swiss_standings(self.series, &*self.event)))) : "Swiss Standings";
-                    } else {
-                        a(class = "button", href = uri!(swiss_standings(self.series, &*self.event))) : "Swiss Standings";
                     }
                 }
             }
@@ -2176,7 +2176,7 @@ pub(crate) async fn swiss_standings(
         return Err(StatusOrError::Status(Status::NotFound));
     }
     
-    let _header = data.header(&mut transaction, me.as_ref(), Tab::SwissStandings, false).await?;
+    let header = data.header(&mut transaction, me.as_ref(), Tab::SwissStandings, false).await?;
     
     // Extract the Startgg slug from the event URL
     let slug = match data.url.as_ref().and_then(|url| url.path().strip_prefix('/').map(|s| s.to_string())) {
@@ -2206,6 +2206,7 @@ pub(crate) async fn swiss_standings(
     };
     
     let content = html! {
+        : header;
         div(class = "swiss-standings") {
             h2 : "Swiss Standings";
             @if standings.is_empty() {
