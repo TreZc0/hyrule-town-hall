@@ -339,7 +339,8 @@ pub(crate) async fn fetch_event_entrants(http_client: &reqwest::Client, config: 
             let entrants_query::EntrantsQueryEventEntrantsNodes { 
                 id: Some(entrant_id), 
                 name: Some(entrant_name), 
-                participants: Some(participants) 
+                participants: Some(participants),
+                paginated_sets: _,
             } = entrant else { continue };
             
             let user_ids: Vec<Option<ID>> = participants.into_iter()
@@ -364,4 +365,112 @@ pub(crate) async fn fetch_event_entrants(http_client: &reqwest::Client, config: 
     }
     
     Ok(all_entrants)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SwissStanding {
+    pub placement: usize,
+    pub name: String,
+    pub wins: usize,
+    pub losses: usize,
+}
+
+/// Computes Swiss standings for a Startgg Swiss event
+pub(crate) async fn swiss_standings(
+    http_client: &reqwest::Client,
+    _config: &Config,
+    event_slug: &str,
+    startgg_token: &str,
+) -> Result<Vec<SwissStanding>, Error> {
+    use entrants_query::EntrantsQueryEventEntrantsNodesPaginatedSetsNodes as SetNode;
+    use entrants_query::EntrantsQueryEventEntrantsNodesPaginatedSetsNodesPhaseGroup as PhaseGroup;
+    use entrants_query::EntrantsQueryEventEntrantsNodes as EntrantNode;
+    use entrants_query::EntrantsQueryEventEntrantsPageInfo as PageInfo;
+    use entrants_query::EntrantsQueryEventEntrants as Entrants;
+    use entrants_query::EntrantsQueryEvent as Event;
+    use entrants_query::ResponseData as ResponseData;
+
+    let mut all_entrants = Vec::new();
+    let mut page = 1;
+    loop {
+        let response = query_cached::<EntrantsQuery>(
+            http_client,
+            startgg_token,
+            entrants_query::Variables {
+                slug: Some(event_slug.to_owned()),
+                page: Some(page),
+            },
+        )
+        .await?;
+        let ResponseData {
+            event: Some(Event {
+                entrants: Some(Entrants {
+                    page_info: Some(PageInfo { page: Some(_), total_pages: Some(tp) }),
+                    nodes: Some(entrants),
+                }),
+                ..
+            }),
+            ..
+        } = response else {
+            break;
+        };
+        for entrant in entrants.into_iter().filter_map(|e| e) {
+            let EntrantNode {
+                id: Some(entrant_id),
+                name: Some(entrant_name),
+                paginated_sets: Some(paginated_sets),
+                ..
+            } = entrant else { continue };
+            let mut wins = 0;
+            let mut losses = 0;
+            if let Some(set_nodes) = paginated_sets.nodes {
+                for set in set_nodes.into_iter().filter_map(|s| s) {
+                    let SetNode {
+                        winner_id,
+                        phase_group: Some(PhaseGroup { bracket_type, .. }),
+                        ..
+                    } = set else { continue };
+                    if bracket_type != Some(entrants_query::BracketType::SWISS) { continue; }
+                    match winner_id {
+                        Some(wid) if wid.to_string() == entrant_id.to_string() => wins += 1,
+                        Some(_) => losses += 1,
+                        None => {}, // not played
+                    }
+                }
+            }
+            all_entrants.push((entrant_name, wins, losses));
+        }
+        if page >= tp {
+            break;
+        }
+        page += 1;
+    }
+    // Sort: wins desc, losses asc, name asc
+    all_entrants.sort_by(|a, b| {
+        b.1.cmp(&a.1) // wins desc
+            .then(a.2.cmp(&b.2)) // losses asc
+            .then(a.0.cmp(&b.0)) // name asc
+    });
+    // Assign placements with ties
+    let mut standings = Vec::new();
+    let mut last_wins = None;
+    let mut last_losses = None;
+    let mut placement = 1;
+    for (i, (name, wins, losses)) in all_entrants.iter().enumerate() {
+        if i == 0 {
+            last_wins = Some(*wins);
+            last_losses = Some(*losses);
+        } else if *wins != last_wins.unwrap() || *losses != last_losses.unwrap() {
+            placement = i + 1;
+            last_wins = Some(*wins);
+            last_losses = Some(*losses);
+        }
+        standings.push(SwissStanding {
+            placement,
+            name: name.clone(),
+            wins: *wins,
+            losses: *losses,
+        });
+    }
+    Ok(standings)
 }

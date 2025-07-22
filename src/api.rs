@@ -25,6 +25,7 @@ use {
         GraphQLResponse,
     },
     rocket::http::ContentType,
+    rocket::serde::json::Json,
     crate::{
         auth::Discriminator,
         event::teams,
@@ -586,4 +587,40 @@ pub(crate) async fn entrants_csv(db_pool: &State<PgPool>, http_client: &State<re
         }
     }
     Ok((ContentType::CSV, csv.into_inner()?))
+}
+
+#[rocket::get("/api/v1/event/<series>/<event>/swiss-standings?<api_key>")]
+pub(crate) async fn swiss_standings_endpoint(
+    db_pool: &State<PgPool>,
+    http_client: &State<reqwest::Client>,
+    config: &State<Config>,
+    series: crate::series::Series,
+    event: &str,
+    api_key: &str,
+) -> Result<Json<Vec<startgg::SwissStanding>>, StatusOrError<CsvError>> {
+    use crate::event::Data;
+    let mut transaction = db_pool.begin().await?;
+    let _me = Scopes { entrants_read: true, ..Scopes::default() }.validate(&mut transaction, api_key).await?.ok_or(StatusOrError::Status(Status::Forbidden))?;
+    let event_data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    // Only allow for Startgg events
+    if !matches!(event_data.match_source(), MatchSource::StartGG(_)) {
+        return Err(StatusOrError::Status(Status::NotFound));
+    }
+    let startgg_token = if Environment::default().is_dev() {
+        &config.startgg_dev
+    } else {
+        &config.startgg_production
+    };
+    // Extract slug from the event's URL
+    let slug = match event_data.url.as_ref().and_then(|url| url.path().strip_prefix('/').map(|s| s.to_string())) {
+        Some(s) if !s.is_empty() => s,
+        _ => return Err(StatusOrError::Status(Status::NotFound)),
+    };
+    let standings = startgg::swiss_standings(
+        http_client.inner(),
+        &*config,
+        &slug,
+        startgg_token,
+    ).await.map_err(|_| StatusOrError::Status(Status::NotFound))?;
+    Ok(Json(standings))
 }

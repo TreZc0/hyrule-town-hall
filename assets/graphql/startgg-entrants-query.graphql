@@ -9,6 +9,14 @@ query EntrantsQuery($slug: String, $page: Int) {
       nodes {
         id
         name
+        paginatedSets {
+          nodes {
+            winnerId
+            phaseGroup {
+              bracketType
+            }
+          }
+        }
         participants {
           user {
             id

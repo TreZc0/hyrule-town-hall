@@ -396,5 +396,66 @@ p.error {
 
 .suggestion-item small {
   color: var(--text-muted);
-  font-size: 0.8em;
+  font-size: 0.875em;
+}
+
+/* Swiss Standings Styles */
+.swiss-standings {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.swiss-standings h2 {
+  text-align: center;
+  margin-bottom: 1.5rem;
+  color: var(--text-primary);
+}
+
+.standings-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+  background-color: var(--bg-secondary);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.standings-table thead {
+  background-color: var(--bg-surface);
+}
+
+.standings-table th {
+  padding: 12px 16px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 2px solid var(--border);
+}
+
+.standings-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.standings-table tbody tr:hover {
+  background-color: var(--hover-bg);
+}
+
+.standings-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Placement column styling */
+.standings-table td:first-child {
+  font-weight: 600;
+  text-align: center;
+  min-width: 80px;
+}
+
+/* Swiss Result column styling */
+.standings-table td:last-child {
+  font-family: monospace;
+  text-align: center;
+  min-width: 100px;
 }

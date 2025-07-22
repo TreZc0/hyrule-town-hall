@@ -668,6 +668,13 @@ impl<'a> Data<'a> {
                         }
                     }
                 }
+                @if matches!(self.match_source(), MatchSource::StartGG(_)) {
+                    @if let Tab::SwissStandings = tab {
+                        a(class = "button selected", href? = is_subpage.then(|| uri!(swiss_standings(self.series, &*self.event)))) : "Swiss Standings";
+                    } else {
+                        a(class = "button", href = uri!(swiss_standings(self.series, &*self.event))) : "Swiss Standings";
+                    }
+                }
             }
         })
     }
@@ -693,6 +700,7 @@ pub(crate) enum Tab {
     Volunteer,
     Configure,
     Roles,
+    SwissStandings,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -2107,4 +2115,123 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, ootr_api_client: &State<
     let web_version = ootr_api_client.can_roll_on_web(None, &version, world_count, UnlockSpoilerLog::Now).await.ok_or(StatusOrError::Status(Status::NotFound))?;
     let id = Arc::clone(ootr_api_client).roll_practice_seed(web_version, false, settings).await?;
     Ok(Redirect::to(format!("https://ootrandomizer.com/seed/get?id={id}")))
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SwissStandingsError {
+    #[error(transparent)] Data(#[from] DataError),
+    #[error(transparent)] Event(#[from] Error),
+    #[error(transparent)] Page(#[from] PageError),
+    #[error(transparent)] Reqwest(#[from] reqwest::Error),
+    #[error(transparent)] Sql(#[from] sqlx::Error),
+}
+
+impl<E: Into<SwissStandingsError>> From<E> for StatusOrError<SwissStandingsError> {
+    fn from(e: E) -> Self {
+        Self::Err(e.into())
+    }
+}
+
+impl IsNetworkError for SwissStandingsError {
+    fn is_network_error(&self) -> bool {
+        match self {
+            Self::Data(_) => false,
+            Self::Event(e) => e.is_network_error(),
+            Self::Page(e) => e.is_network_error(),
+            Self::Reqwest(e) => e.is_network_error(),
+            Self::Sql(_) => false,
+        }
+    }
+}
+
+impl<'r> rocket::response::Responder<'r, 'static> for SwissStandingsError {
+    fn respond_to(self, request: &'r Request<'_>) -> rocket::response::Result<'static> {
+        let status = if self.is_network_error() {
+            Status::BadGateway
+        } else {
+            Status::InternalServerError
+        };
+        eprintln!("responded with {status} to request to {}", request.uri());
+        eprintln!("display: {self}");
+        eprintln!("debug: {self:?}");
+        Err(status)
+    }
+}
+
+#[rocket::get("/event/<series>/<event>/swiss-standings")]
+pub(crate) async fn swiss_standings(
+    pool: &State<PgPool>,
+    http_client: &State<reqwest::Client>,
+    config: &State<Config>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    series: Series,
+    event: &str,
+) -> Result<RawHtml<String>, StatusOrError<SwissStandingsError>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    
+    // Only show for Startgg events
+    if !matches!(data.match_source(), MatchSource::StartGG(_)) {
+        return Err(StatusOrError::Status(Status::NotFound));
+    }
+    
+    let _header = data.header(&mut transaction, me.as_ref(), Tab::SwissStandings, false).await?;
+    
+    // Extract the Startgg slug from the event URL
+    let slug = match data.url.as_ref().and_then(|url| url.path().strip_prefix('/').map(|s| s.to_string())) {
+        Some(s) if !s.is_empty() => s,
+        _ => return Err(StatusOrError::Status(Status::NotFound)),
+    };
+    
+    // Get the Startgg token
+    let startgg_token = if Environment::default().is_dev() {
+        &config.startgg_dev
+    } else {
+        &config.startgg_production
+    };
+    
+    // Fetch Swiss standings
+    let standings = match startgg::swiss_standings(
+        http_client.inner(),
+        &*config,
+        &slug,
+        startgg_token,
+    ).await {
+        Ok(standings) => standings,
+        Err(_) => {
+            // Return empty standings if API call fails
+            Vec::new()
+        }
+    };
+    
+    let content = html! {
+        div(class = "swiss-standings") {
+            h2 : "Swiss Standings";
+            @if standings.is_empty() {
+                p : "No Swiss standings available at this time.";
+            } else {
+                table(class = "standings-table") {
+                    thead {
+                        tr {
+                            th : "Placement";
+                            th : "Name";
+                            th : "Swiss Result";
+                        }
+                    }
+                    tbody {
+                        @for standing in &standings {
+                            tr {
+                                td : standing.placement.to_string();
+                                td : &standing.name;
+                                td : format!("{}:{}", standing.wins, standing.losses);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+    
+    Ok(page(transaction, &me, &uri, PageStyle::default(), "Swiss Standings", content).await?)
 }
