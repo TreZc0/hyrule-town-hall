@@ -338,11 +338,8 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
         }
         h1 : "Ongoing/Upcoming races";
         p {
-            span(class = "timezone-wrapper") {
-                : "Times shown in your timezone (detected as ";
-                span(class = "timezone") : "[unknown]";
-                : ") • ";
-            }
+            : timezone_info_html();
+            : " • ";
             a(href = uri!(cal::index_help)) : "Add to calendar";
         }
         @if races.is_empty() {

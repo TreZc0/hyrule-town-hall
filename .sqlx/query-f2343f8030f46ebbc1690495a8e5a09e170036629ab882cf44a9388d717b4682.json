@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id AS \"id: Id<Teams>\", series AS \"series: Series\", event, name, racetime_slug, teams.startgg_id AS \"startgg_id: startgg::ID\", plural_name, restream_consent, mw_impl AS \"mw_impl: mw::Impl\", qualifier_rank FROM teams, team_members WHERE\n            id = team\n            AND series = $1\n            AND event = $2\n            AND member = $3\n            AND NOT resigned\n            AND NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')\n        ",
+  "query": "\n        SELECT id AS \"id: Id<Teams>\", series AS \"series: Series\", event, name, racetime_slug, startgg_id AS \"startgg_id: startgg::ID\", NULL as challonge_id, plural_name, restream_consent, mw_impl AS \"mw_impl: mw::Impl\", qualifier_rank \n        FROM teams \n        WHERE series = $1 AND event = $2 AND startgg_id IS NULL AND NOT resigned\n    ",
   "describe": {
     "columns": [
       {
@@ -35,16 +35,21 @@
       },
       {
         "ordinal": 6,
+        "name": "challonge_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
         "name": "plural_name",
         "type_info": "Bool"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "restream_consent",
         "type_info": "Bool"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "mw_impl: mw::Impl",
         "type_info": {
           "Custom": {
@@ -59,7 +64,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "qualifier_rank",
         "type_info": "Int2"
       }
@@ -67,8 +72,7 @@
     "parameters": {
       "Left": [
         "Text",
-        "Text",
-        "Int8"
+        "Text"
       ]
     },
     "nullable": [
@@ -78,11 +82,12 @@
       true,
       true,
       true,
+      null,
       true,
       false,
       true,
       true
     ]
   },
-  "hash": "e1fbe6fb53949c0e2a1804a034e1d777656a32e4de4c17a31413f87caa92dc0f"
+  "hash": "f2343f8030f46ebbc1690495a8e5a09e170036629ab882cf44a9388d717b4682"
 }

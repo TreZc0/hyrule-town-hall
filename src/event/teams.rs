@@ -576,7 +576,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
 
             let teams = if let QualifierKind::Rank = qualifier_kind {
                 // teams are manually ranked so include ones that haven't submitted qualifier asyncs
-                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", plural_name, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams WHERE
+                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams WHERE
                     series = $1
                     AND event = $2
                     AND NOT resigned
@@ -593,6 +593,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                             name: row.name,
                             racetime_slug: row.racetime_slug,
                             startgg_id: row.startgg_id,
+                            challonge_id: row.challonge_id,
                             plural_name: row.plural_name,
                             restream_consent: row.restream_consent,
                             mw_impl: row.mw_impl,
@@ -615,7 +616,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     })
                     .try_collect::<Vec<_>>().await?
             } else {
-                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", plural_name, submitted IS NOT NULL AS "qualified!", pieces, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams LEFT OUTER JOIN async_teams ON (id = team) WHERE
+                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, submitted IS NOT NULL AS "qualified!", pieces, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams LEFT OUTER JOIN async_teams ON (id = team) WHERE
                     series = $1
                     AND event = $2
                     AND NOT resigned
@@ -634,6 +635,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                             name: row.name,
                             racetime_slug: row.racetime_slug,
                             startgg_id: row.startgg_id,
+                            challonge_id: row.challonge_id,
                             plural_name: row.plural_name,
                             restream_consent: row.restream_consent,
                             mw_impl: row.mw_impl,

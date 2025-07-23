@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id AS \"id: Id<Teams>\", name, racetime_slug, startgg_id AS \"startgg_id: startgg::ID\", plural_name, submitted IS NOT NULL AS \"qualified!\", pieces, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS \"mw_impl: mw::Impl\", qualifier_rank FROM teams LEFT OUTER JOIN async_teams ON (id = team) WHERE\n                    series = $1\n                    AND event = $2\n                    AND NOT resigned\n                    AND (\n                        $3\n                        OR EXISTS (SELECT 1 FROM team_members WHERE team = id AND member = $4)\n                        OR NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')\n                    )\n                    AND (kind = 'qualifier' OR kind IS NULL)\n                ",
+  "query": "SELECT id AS \"id: Id<Teams>\", name, racetime_slug, startgg_id AS \"startgg_id: startgg::ID\", challonge_id, plural_name, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS \"mw_impl: mw::Impl\", qualifier_rank FROM teams WHERE\n                    series = $1\n                    AND event = $2\n                    AND NOT resigned\n                    AND (\n                        EXISTS (SELECT 1 FROM team_members WHERE team = id AND member = $3)\n                        OR NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')\n                    )\n                ",
   "describe": {
     "columns": [
       {
@@ -25,86 +25,81 @@
       },
       {
         "ordinal": 4,
+        "name": "challonge_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
         "name": "plural_name",
         "type_info": "Bool"
       },
       {
-        "ordinal": 5,
-        "name": "qualified!",
-        "type_info": "Bool"
-      },
-      {
         "ordinal": 6,
-        "name": "pieces",
-        "type_info": "Int2"
-      },
-      {
-        "ordinal": 7,
         "name": "hard_settings_ok",
         "type_info": "Bool"
       },
       {
-        "ordinal": 8,
+        "ordinal": 7,
         "name": "mq_ok",
         "type_info": "Bool"
       },
       {
-        "ordinal": 9,
+        "ordinal": 8,
         "name": "lite_ok",
         "type_info": "Bool"
       },
       {
-        "ordinal": 10,
+        "ordinal": 9,
         "name": "all_dungeons_ok",
         "type_info": "Bool"
       },
       {
-        "ordinal": 11,
+        "ordinal": 10,
         "name": "flute_ok",
         "type_info": "Bool"
       },
       {
-        "ordinal": 12,
+        "ordinal": 11,
         "name": "hover_ok",
         "type_info": "Bool"
       },
       {
-        "ordinal": 13,
+        "ordinal": 12,
         "name": "inverted_ok",
         "type_info": "Bool"
       },
       {
-        "ordinal": 14,
+        "ordinal": 13,
         "name": "keydrop_ok",
         "type_info": "Bool"
       },
       {
-        "ordinal": 15,
+        "ordinal": 14,
         "name": "mirror_scroll_ok",
         "type_info": "Bool"
       },
       {
-        "ordinal": 16,
+        "ordinal": 15,
         "name": "no_delay_ok",
         "type_info": "Bool"
       },
       {
-        "ordinal": 17,
+        "ordinal": 16,
         "name": "pb_ok",
         "type_info": "Bool"
       },
       {
-        "ordinal": 18,
+        "ordinal": 17,
         "name": "zw_ok",
         "type_info": "Bool"
       },
       {
-        "ordinal": 19,
+        "ordinal": 18,
         "name": "restream_consent",
         "type_info": "Bool"
       },
       {
-        "ordinal": 20,
+        "ordinal": 19,
         "name": "mw_impl: mw::Impl",
         "type_info": {
           "Custom": {
@@ -119,7 +114,7 @@
         }
       },
       {
-        "ordinal": 21,
+        "ordinal": 20,
         "name": "qualifier_rank",
         "type_info": "Int2"
       }
@@ -128,7 +123,6 @@
       "Left": [
         "Text",
         "Text",
-        "Bool",
         "Int8"
       ]
     },
@@ -138,7 +132,6 @@
       true,
       true,
       true,
-      null,
       true,
       false,
       false,
@@ -157,5 +150,5 @@
       true
     ]
   },
-  "hash": "f066bb87eaa7621f2d8acd292879320fb853e7ffd4e6286361e52b1bfafd5ddd"
+  "hash": "a179b25dc3de29d2453e730009dce91440da064370a9f0525be6e16c512f1934"
 }

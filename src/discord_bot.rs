@@ -3,8 +3,10 @@ use {
         config::ConfigRaceTime,
         prelude::*,
         racetime_bot::{CleanShutdown, CrosskeysRaceOptions, GlobalState},
+        async_race::{AsyncRaceManager, Error as AsyncRaceError},
     }, serenity::all::{
         CacheHttp,
+        CommandDataOptionValue,
         Content,
         CreateAllowedMentions,
         CreateButton,
@@ -15,12 +17,13 @@ use {
         CreateInteractionResponseMessage,
         CreateMessage,
         CreateThread,
+        EditInteractionResponse,
         EditRole,
     }, serenity_utils::{
         builder::ErrorNotifier,
         handler::HandlerMethods as _,
     }, sqlx::{
-        types::Json, Database, Decode, Encode
+        types::Json, Database, Decode, Encode, postgres::types::PgInterval
     }
 };
 
@@ -164,6 +167,12 @@ impl TypeMapKey for StartggToken {
     type Value = String;
 }
 
+enum ChallongeApiKey {}
+
+impl TypeMapKey for ChallongeApiKey {
+    type Value = String;
+}
+
 enum NewRoomLock {}
 
 impl TypeMapKey for NewRoomLock {
@@ -190,6 +199,7 @@ pub(crate) struct CommandIds {
     reset_race: CommandId,
     pub(crate) schedule: CommandId,
     pub(crate) schedule_async: CommandId,
+    pub(crate) result_async: CommandId,
     pub(crate) schedule_remove: CommandId,
     pub(crate) second: Option<CommandId>,
     pub(crate) skip: Option<CommandId>,
@@ -542,7 +552,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             ..racetime::HostInfo::default()
         })
         .data::<ConfigRaceTime>(if Environment::default().is_dev() { &config.racetime_bot_dev } else { &config.racetime_bot_production }.clone())
-        .data::<StartggToken>(if Environment::default().is_dev() { config.startgg_dev } else { config.startgg_production })
+        .data::<StartggToken>(if Environment::default().is_dev() { config.startgg_dev.clone() } else { config.startgg_production.clone() })
+        .data::<ChallongeApiKey>(config.challonge_api_key.clone())
         .data::<NewRoomLock>(new_room_lock)
         .data::<ExtraRoomTx>(extra_room_tx)
         .data::<CleanShutdown>(clean_shutdown)
@@ -819,6 +830,38 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 );
                 idx
             };
+            let result_async = {
+                let idx = commands.len();
+                commands.push(CreateCommand::new("result-async")
+                    .kind(CommandType::ChatInput)
+                    .add_context(InteractionContext::Guild)
+                    .description("Records finish time for async race part. Only time needed in async thread.")
+                    .add_option(CreateCommandOption::new(
+                        CommandOptionType::String,
+                        "time",
+                        "Finish time in format hh:mm:ss",
+                    )
+                        .required(true)
+                    )
+                    .add_option(CreateCommandOption::new(
+                        CommandOptionType::String,
+                        "race_id",
+                        "The ID of the race (optional when used in async thread)",
+                    )
+                        .required(false)
+                    )
+                    .add_option(CreateCommandOption::new(
+                        CommandOptionType::Integer,
+                        "async_part",
+                        "The async part number (1, 2, or 3) (optional when used in async thread)",
+                    )
+                        .min_int_value(1)
+                        .max_int_value(3)
+                        .required(false)
+                    )
+                );
+                idx
+            };
             let schedule_remove = {
                 let idx = commands.len();
                 commands.push(CreateCommand::new("schedule-remove")
@@ -959,6 +1002,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 reset_race: commands[reset_race].id,
                 schedule: commands[schedule].id,
                 schedule_async: commands[schedule_async].id,
+                result_async: commands[result_async].id,
                 schedule_remove: commands[schedule_remove].id,
                 second: second.map(|idx| commands[idx].id),
                 skip: skip.map(|idx| commands[idx].id),
@@ -1029,7 +1073,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         } else if Some(interaction.data.id) == command_ids.draft || Some(interaction.data.id) == command_ids.pick {
                             send_draft_settings_page(ctx, interaction, "draft", 0).await?;
                         } else if Some(interaction.data.id) == command_ids.first {
-                            if let Some((_, mut race, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction).await? {
+                              if let Some((_, mut race, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction).await? {
                                 match draft_kind {
                                     draft::Kind::RslS7 => {
                                         let settings = &mut race.draft.as_mut().unwrap().settings;
@@ -1310,6 +1354,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             schedule_locked: race.schedule_locked,
                                         };
                                         race.save(&mut transaction).await?;
+                                        
+                                        // Reset async fields in database when resetting schedule
+                                        if reset_schedule {
+                                            sqlx::query!(
+                                                "UPDATE races SET async_thread1 = NULL, async_thread2 = NULL, async_thread3 = NULL, async_seed1 = FALSE, async_seed2 = FALSE, async_seed3 = FALSE, async_ready1 = FALSE, async_ready2 = FALSE, async_ready3 = FALSE WHERE id = $1",
+                                                race.id as _
+                                            ).execute(&mut *transaction).await?;
+                                            
+                                            // Delete async_times records when resetting schedule
+                                            sqlx::query!("DELETE FROM async_times WHERE race_id = $1", race.id as _)
+                                                .execute(&mut *transaction).await?;
+                                        }
+                                        
                                         transaction.commit().await?;
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                             .ephemeral(true)
@@ -1468,6 +1525,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     transaction.rollback().await?;
                                 }
                             }
+                        } else if interaction.data.id == command_ids.result_async {
+                            result_async_command(ctx, &interaction).await?;
                         } else if interaction.data.id == command_ids.schedule_async {
                             let game = interaction.data.options.get(1).map(|option| match option.value {
                                 CommandDataOptionValue::Integer(game) => i16::try_from(game).expect("game number out of range"),
@@ -1933,9 +1992,235 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     }
                 }
                 Interaction::Component(interaction) => match &*interaction.data.custom_id {
+                    "async_ready" => {
+                        // Handle async ready button
+                        let mut transaction = {
+                            let discord_data = ctx.data.read().await;
+                            discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
+                        };
+                        
+                        // Extract race_id and async_part from the button's custom_id
+                        // We'll need to encode this in the button's custom_id
+                        // For now, we'll need to find the race by thread ID
+                        let thread_id = interaction.channel_id.get() as i64;
+                        
+                        // Find the race and async part for this thread
+                        let race_info = sqlx::query!(
+                            r#"
+                            SELECT id, 
+                                   CASE 
+                                       WHEN async_thread1 = $1 THEN 1
+                                       WHEN async_thread2 = $1 THEN 2
+                                       WHEN async_thread3 = $1 THEN 3
+                                       ELSE NULL
+                                   END as async_part
+                            FROM races 
+                            WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
+                            "#,
+                            thread_id
+                        ).fetch_optional(&mut *transaction).await?;
+                        
+                        if let Some(race_info) = race_info {
+                            if let Some(async_part) = race_info.async_part {
+                                match AsyncRaceManager::handle_ready_button(
+                                    &ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"),
+                                    ctx,
+                                    race_info.id,
+                                    async_part as u8,
+                                    interaction.user.id,
+                                ).await {
+                                    Ok(()) => {
+                                        // Remove the button completely by editing the original message
+                                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                            CreateInteractionResponseMessage::new()
+                                                .components(vec![]) // Empty components removes all buttons
+                                        )).await?;
+                                    }
+                                    Err(e) => {
+                                        let error_msg = match e {
+                                            AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
+                                            AsyncRaceError::AlreadyReady => "You have already clicked ready for this race.",
+                                            _ => {
+                                                eprintln!("Async ready error: {:?}", e);
+                                                "An error occurred while processing your ready status."
+                                            },
+                                        };
+                                        interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                            CreateInteractionResponseMessage::new()
+                                                .ephemeral(true)
+                                                .content(error_msg)
+                                        )).await?;
+                                    }
+                                }
+                            } else {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("Could not determine which async part this thread is for.")
+                                )).await?;
+                            }
+                        } else {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content("This thread is not associated with an async race.")
+                            )).await?;
+                        }
+                        
+                        transaction.rollback().await?;
+                    }
+                    "async_start_countdown" => {
+                        // Handle async start countdown button
+                        let mut transaction = {
+                            let discord_data = ctx.data.read().await;
+                            discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
+                        };
+                        
+                        let thread_id = interaction.channel_id.get() as i64;
+                        
+                        // Find the race and async part for this thread
+                        let race_info = sqlx::query!(
+                            r#"
+                            SELECT id, 
+                                   CASE 
+                                       WHEN async_thread1 = $1 THEN 1
+                                       WHEN async_thread2 = $1 THEN 2
+                                       WHEN async_thread3 = $1 THEN 3
+                                       ELSE NULL
+                                   END as async_part
+                            FROM races 
+                            WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
+                            "#,
+                            thread_id
+                        ).fetch_optional(&mut *transaction).await?;
+                        
+                        if let Some(race_info) = race_info {
+                            if let Some(async_part) = race_info.async_part {
+                                // Defer the interaction to prevent timeout
+                                interaction.defer(&ctx.http).await?;
+                                
+                                match AsyncRaceManager::handle_start_countdown_button(
+                                    &ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"),
+                                    ctx,
+                                    race_info.id,
+                                    async_part as u8,
+                                    interaction.user.id,
+                                ).await {
+                                    Ok(()) => {
+                                        // Remove the button completely by editing the original message
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                                            .components(vec![]) // Empty components removes all buttons
+                                        ).await?;
+                                    }
+                                    Err(e) => {
+                                        let error_msg = match e {
+                                            AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
+                                            AsyncRaceError::AlreadyStarted => "The countdown has already been started for this race.",
+                                            _ => {
+                                                eprintln!("Async countdown error: {:?}", e);
+                                                "An error occurred while processing your countdown request."
+                                            },
+                                        };
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                                            .content(error_msg)
+                                        ).await?;
+                                    }
+                                }
+                            } else {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("Could not determine which async part this thread is for.")
+                                )).await?;
+                            }
+                        } else {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content("This thread is not associated with an async race.")
+                            )).await?;
+                        }
+                        
+                        transaction.rollback().await?;
+                    }
+                    "async_finish" => {
+                        // Handle async finish button
+                        let mut transaction = {
+                            let discord_data = ctx.data.read().await;
+                            discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
+                        };
+                        
+                        let thread_id = interaction.channel_id.get() as i64;
+                        
+                        // Find the race and async part for this thread
+                        let race_info = sqlx::query!(
+                            r#"
+                            SELECT id, 
+                                   CASE 
+                                       WHEN async_thread1 = $1 THEN 1
+                                       WHEN async_thread2 = $1 THEN 2
+                                       WHEN async_thread3 = $1 THEN 3
+                                       ELSE NULL
+                                   END as async_part
+                            FROM races 
+                            WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
+                            "#,
+                            thread_id
+                        ).fetch_optional(&mut *transaction).await?;
+                        
+                        if let Some(race_info) = race_info {
+                            if let Some(async_part) = race_info.async_part {
+                                // Defer the interaction to prevent timeout
+                                interaction.defer(&ctx.http).await?;
+                                
+                                match AsyncRaceManager::handle_finish_button(
+                                    &ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"),
+                                    ctx,
+                                    race_info.id,
+                                    async_part as u8,
+                                    interaction.user.id,
+                                ).await {
+                                    Ok(()) => {
+                                        // Remove the button completely by editing the original message
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                                            .components(vec![]) // Empty components removes all buttons
+                                        ).await?;
+                                    }
+                                    Err(e) => {
+                                        let error_msg = match e {
+                                            AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
+                                            AsyncRaceError::NotStarted => "You must start the countdown before finishing.",
+                                            AsyncRaceError::AlreadyFinished => "You have already finished this race.",
+                                            _ => {
+                                                eprintln!("Async finish error: {:?}", e);
+                                                "An error occurred while processing your finish request."
+                                            },
+                                        };
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                                            .content(error_msg)
+                                        ).await?;
+                                    }
+                                }
+                            } else {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("Could not determine which async part this thread is for.")
+                                )).await?;
+                            }
+                        } else {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content("This thread is not associated with an async race.")
+                            )).await?;
+                        }
+                        
+                        transaction.rollback().await?;
+                    }
                     "pronouns_he" => {
                         let member = interaction.member.clone().expect("/pronoun-roles called outside of a guild");
-                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "he/him").expect("missing “he/him” role");
+                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "he/him").expect("missing 'he/him' role");
                         if member.roles(ctx).expect("failed to look up member roles").contains(&role) {
                             member.remove_role(ctx, role).await?;
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -1952,7 +2237,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     }
                     "pronouns_she" => {
                         let member = interaction.member.clone().expect("/pronoun-roles called outside of a guild");
-                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "she/her").expect("missing “she/her” role");
+                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "she/her").expect("missing 'she/her' role");
                         if member.roles(ctx).expect("failed to look up member roles").contains(&role) {
                             member.remove_role(ctx, role).await?;
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -1969,7 +2254,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     }
                     "pronouns_they" => {
                         let member = interaction.member.clone().expect("/pronoun-roles called outside of a guild");
-                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "they/them").expect("missing “they/them” role");
+                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "they/them").expect("missing 'they/them' role");
                         if member.roles(ctx).expect("failed to look up member roles").contains(&role) {
                             member.remove_role(ctx, role).await?;
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -1986,7 +2271,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     }
                     "pronouns_other" => {
                         let member = interaction.member.clone().expect("/pronoun-roles called outside of a guild");
-                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "other pronouns").expect("missing “other pronouns” role");
+                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "other pronouns").expect("missing 'other pronouns' role");
                         if member.roles(ctx).expect("failed to look up member roles").contains(&role) {
                             member.remove_role(ctx, role).await?;
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -2003,7 +2288,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     }
                     "racingrole" => {
                         let member = interaction.member.clone().expect("/racing-role called outside of a guild");
-                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "racing").expect("missing “racing” role");
+                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "racing").expect("missing 'racing' role");
                         if member.roles(ctx).expect("failed to look up member roles").contains(&role) {
                             member.remove_role(ctx, role).await?;
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -2020,7 +2305,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     }
                     "watchrole_restream" => {
                         let member = interaction.member.clone().expect("/watch-roles called outside of a guild");
-                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "restream watcher").expect("missing “restream watcher” role");
+                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "restream watcher").expect("missing 'restream watcher' role");
                         if member.roles(ctx).expect("failed to look up member roles").contains(&role) {
                             member.remove_role(ctx, role).await?;
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -2037,7 +2322,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     }
                     "watchrole_party" => {
                         let member = interaction.member.clone().expect("/watch-roles called outside of a guild");
-                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "watch party watcher").expect("missing “watch party watcher” role");
+                        let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "watch party watcher").expect("missing 'watch party watcher' role");
                         if member.roles(ctx).expect("failed to look up member roles").contains(&role) {
                             member.remove_role(ctx, role).await?;
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -2407,7 +2692,7 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         let mut content = MessageBuilder::default();
         content.push("Async starting for ");
         content.mention_team(&mut transaction, event.discord_guild, team).await?;
-        content.push(format!(". Seed URL is {}. Please work with them in their async channel to run the race.",seed_url));
+        content.push(format!(". Seed URL is {}. The seed will be distributed to the runner 10 minutes before their scheduled start time. Please work with them in their async channel to run the race.",seed_url));
         if let Some([hash1, hash2, hash3, hash4, hash5]) = file_hash {
             content.push_line("");
             content.push(format!("The hash for the seed is {hash1}, {hash2}, {hash3}, {hash4}, {hash5}"));
@@ -2441,12 +2726,418 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
     
     transaction.commit().await?;
     Ok(())
-    // Leave the TODO below for posterity.
+}
 
-    //TODO start Discord race handler (in DMs for private async parts, in scheduling thread for public ones):
-    // * post seed 15 minutes before start
-    // * reminder to go live for public async parts
-    // * Ready button to post password and start countdown
-    // * Done/Forfeit/FPA buttons
-    // * reminder to send vod to organizers
+/// Helper function to find race and async part from thread ID
+async fn find_race_from_thread(
+    transaction: &mut Transaction<'_, Postgres>,
+    thread_id: i64,
+) -> Result<Option<(i64, i32)>, sqlx::Error> {
+    // Check each async thread column to find which one matches
+    let race_row = sqlx::query!(
+        r#"
+        SELECT id, 
+               CASE 
+                   WHEN async_thread1 = $1 THEN 1
+                   WHEN async_thread2 = $1 THEN 2
+                   WHEN async_thread3 = $1 THEN 3
+                   ELSE NULL
+               END as async_part
+        FROM races 
+        WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
+        "#,
+        thread_id
+    ).fetch_optional(&mut **transaction).await?;
+    
+    Ok(race_row.map(|row| (row.id, row.async_part.unwrap_or(0))))
+}
+
+pub(crate) async fn result_async_command(
+    ctx: &DiscordCtx,
+    interaction: &CommandInteraction,
+) -> Result<(), Error> {
+    let mut transaction = {
+        let discord_data = ctx.data.read().await;
+        discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
+    };
+
+    // Check if user is an organizer
+    let user_id = interaction.user.id;
+    let is_organizer = sqlx::query!(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM organizers eo
+            JOIN users u ON eo.organizer = u.id
+            WHERE u.discord_id = $1
+        ) as "exists!"
+        "#,
+        user_id.get() as i64
+    ).fetch_one(&mut *transaction).await?.exists;
+
+    if !is_organizer {
+        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+            .ephemeral(true)
+            .content("You must be an event organizer to use this command.")
+        )).await?;
+        transaction.rollback().await?;
+        return Ok(());
+    }
+
+    // Try to get race_id and async_part from command options first (for backward compatibility)
+    let (race_id, async_part) = if let (Some(race_id_opt), Some(async_part_opt)) = (
+        interaction.data.options.iter()
+            .find(|opt| opt.name == "race_id")
+            .and_then(|opt| opt.value.as_str())
+            .and_then(|s| s.parse::<i64>().ok()),
+        interaction.data.options.iter()
+            .find(|opt| opt.name == "async_part")
+            .and_then(|opt| match opt.value {
+                CommandDataOptionValue::Integer(part) => Some(part),
+                _ => None,
+            })
+    ) {
+        (race_id_opt, async_part_opt)
+    } else {
+        // Try to get from thread context
+        let thread_id = interaction.channel_id.get() as i64;
+        match find_race_from_thread(&mut transaction, thread_id).await? {
+            Some((race_id, async_part)) => (race_id, async_part as i64),
+            None => {
+                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                    .ephemeral(true)
+                    .content("This command must be used in an async race thread, or you must provide race_id and async_part parameters.")
+                )).await?;
+                transaction.rollback().await?;
+                return Ok(());
+            }
+        }
+    };
+
+    let time_str = interaction.data.options.iter()
+        .find(|opt| opt.name == "time")
+        .and_then(|opt| opt.value.as_str())
+        .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
+
+    // Parse the time (format: hh:mm:ss)
+    let time_parts: Vec<&str> = time_str.split(':').collect();
+    if time_parts.len() != 3 {
+        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+            .ephemeral(true)
+            .content("Time must be in format hh:mm:ss")
+        )).await?;
+        transaction.rollback().await?;
+        return Ok(());
+    }
+
+    let hours: i32 = time_parts[0].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+    let minutes: i32 = time_parts[1].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+    let seconds: i32 = time_parts[2].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+
+    let total_seconds = hours * 3600 + minutes * 60 + seconds;
+    let duration = Duration::from_secs(total_seconds as u64);
+
+    // Get the user who ran the command
+    let user = User::from_discord(&mut *transaction, user_id).await?;
+
+    // Load race data early so we can use it for display order
+    let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await.map_err(|_e| Error::Sql(sqlx::Error::RowNotFound))?;
+
+    // Insert the async time
+    let pg_interval = PgInterval {
+        months: 0,
+        days: 0,
+        microseconds: duration.as_secs() as i64 * 1_000_000,
+    };
+    sqlx::query!(
+        r#"
+        INSERT INTO async_times (race_id, async_part, finish_time, recorded_by)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (race_id, async_part) DO UPDATE SET
+            finish_time = EXCLUDED.finish_time,
+            recorded_at = NOW(),
+            recorded_by = EXCLUDED.recorded_by
+        "#,
+        race_id,
+        async_part as i32,
+        pg_interval,
+        user.unwrap().id as _,
+    ).execute(&mut *transaction).await?;
+
+    // Send immediate response for the time recording
+    let display_order = get_display_order(&race, async_part as i32);
+    let ordinal = match display_order {
+        1 => "1st",
+        2 => "2nd", 
+        3 => "3rd",
+        n => &format!("{}th", n),
+    };
+    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+        .content(format!("Time recorded for {} half of this async: {}", ordinal, time_str))
+    )).await?;
+
+    // Check if both async parts are complete
+    let async_times = sqlx::query!(
+        r#"
+        SELECT async_part, finish_time FROM async_times
+        WHERE race_id = $1
+        ORDER BY async_part
+        "#,
+        race_id
+    ).fetch_all(&mut *transaction).await?;
+    
+    // Helper function to get display order for async part
+    fn get_display_order(race: &Race, async_part: i32) -> i32 {
+        match &race.schedule {
+            RaceSchedule::Async { start1, start2, start3, .. } => {
+                // Get all scheduled start times that are not None
+                let mut scheduled_times = Vec::new();
+                if let Some(time) = start1 { scheduled_times.push((1, *time)); }
+                if let Some(time) = start2 { scheduled_times.push((2, *time)); }
+                if let Some(time) = start3 { scheduled_times.push((3, *time)); }
+                
+                // Sort by start time
+                scheduled_times.sort_by_key(|&(_, time)| time);
+                
+                // Find the position of this async part in the sorted list
+                if let Some(position) = scheduled_times.iter().position(|&(part, _)| part == async_part as u8) {
+                    (position + 1) as i32 // Convert to 1-based display order
+                } else {
+                    // Fallback to async_part number if not found
+                    async_part
+                }
+            }
+            _ => async_part, // Fallback
+        }
+    }
+    
+    if async_times.len() >= 2 {
+        // Both parts are complete, finalize the race
+        let event_name = race.event.clone();
+        let event = event::Data::new(&mut transaction, race.series, &event_name).await?
+            .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
+
+        // Update race end times
+        for async_time in &async_times {
+            // Calculate end time based on start time + finish time
+            let start_time = match async_time.async_part {
+                1 => sqlx::query_scalar!("SELECT async_start1 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
+                2 => sqlx::query_scalar!("SELECT async_start2 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
+                3 => sqlx::query_scalar!("SELECT async_start3 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
+                _ => continue,
+            };
+            
+            if let Some(start_time) = start_time {
+                // Calculate finish time in seconds
+                if let Some(finish_time) = &async_time.finish_time {
+                    let finish_seconds = finish_time.microseconds / 1_000_000
+                        + (finish_time.days as i64) * 86400
+                        + (finish_time.months as i64) * 30 * 86400;
+                    
+                    let end_time = start_time + chrono::Duration::seconds(finish_seconds);
+                    
+                    match async_time.async_part {
+                        1 => sqlx::query!("UPDATE races SET async_end1 = $1 WHERE id = $2", end_time, race_id).execute(&mut *transaction).await?,
+                        2 => sqlx::query!("UPDATE races SET async_end2 = $1 WHERE id = $2", end_time, race_id).execute(&mut *transaction).await?,
+                        3 => sqlx::query!("UPDATE races SET async_end3 = $1 WHERE id = $2", end_time, race_id).execute(&mut *transaction).await?,
+                        _ => return Ok(()),
+                    };
+                }
+            }
+        }
+
+        // Report the results
+        let results = async_times.iter().filter_map(|at| {
+            // finish_time is Option<PgInterval>, calculate total seconds
+            if let Some(finish_time) = &at.finish_time {
+                let seconds = finish_time.microseconds / 1_000_000
+                    + (finish_time.days as i64) * 86400
+                    + (finish_time.months as i64) * 30 * 86400;
+                Some((at.async_part, Duration::from_secs(seconds as u64)))
+            } else {
+                None // Skip records without finish times
+            }
+        }).collect::<Vec<_>>();
+
+        // Send result to results channel
+
+        // Find the winning and losing players
+        let mut total_times: Vec<(i32, Duration, &Team)> = results.iter()
+            .map(|(part, time)| {
+                let team = match part {
+                    1 => race.teams().next(),
+                    2 => race.teams().nth(1),
+                    3 => race.teams().nth(2),
+                    _ => None,
+                };
+                (*part, *time, team.unwrap())
+            })
+            .collect();
+        total_times.sort_by(|a, b| a.1.cmp(&b.1));
+        
+        let (_winner_part, winner_time, winner_team) = &total_times[0];
+        let (_loser_part, loser_time, loser_team) = &total_times[1];
+        
+        // Get player names
+        let winner_player = winner_team.members(&mut transaction).await?.into_iter().next()
+            .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
+        let loser_player = loser_team.members(&mut transaction).await?.into_iter().next()
+            .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
+        
+        // Format the results message like live races
+        let mut content = MessageBuilder::default();
+        content.push("Async results for ");
+        
+        if let Some(phase) = &race.phase {
+            content.push_safe(phase.clone());
+            content.push(' ');
+        }
+        if let Some(round) = &race.round {
+            content.push_safe(round.clone());
+            content.push(' ');
+        }
+        
+        content.mention_user(&winner_player);
+        content.push(" (");
+        content.push(format!("{:02}:{:02}:{:02}", 
+            winner_time.as_secs() / 3600,
+            (winner_time.as_secs() % 3600) / 60,
+            winner_time.as_secs() % 60
+        ));
+        content.push(") defeats ");
+        content.mention_user(&loser_player);
+        content.push(" (");
+        content.push(format!("{:02}:{:02}:{:02}", 
+            loser_time.as_secs() / 3600,
+            (loser_time.as_secs() % 3600) / 60,
+            loser_time.as_secs() % 60
+        ));
+        content.push(")");
+        
+        // Send to race results channel
+        if let Some(results_channel) = event.discord_race_results_channel {
+            results_channel.say(ctx, content.build()).await?;
+        }
+        
+        // Send to scheduling thread
+        if let Some(scheduling_thread) = race.scheduling_thread {
+            scheduling_thread.say(ctx, content.build()).await?;
+        }
+
+        // Report to external platforms (start.gg, challonge, etc.)
+        // For async races, we need to handle external reporting manually since the existing
+        // racetime_bot reporting functions expect different data structures
+        let cal_event = cal::Event { race: race.clone(), kind: cal::EventKind::Normal };
+        
+        // Get global state components
+        let discord_data = ctx.data.read().await;
+        let http_client = discord_data.get::<HttpClient>().expect("HTTP client missing from Discord context");
+        let startgg_token = discord_data.get::<StartggToken>().expect("start.gg token missing from Discord context");
+        let challonge_api_key = discord_data.get::<ChallongeApiKey>().expect("Challonge API key missing from Discord context");
+        
+        // Report to start.gg if applicable
+        if let Ok(Some(startgg_set_url)) = cal_event.race.startgg_set_url() {
+            // Find the winning team based on total time
+            let mut total_times: Vec<(i32, Duration)> = results.iter()
+                .map(|(part, time)| (*part, *time))
+                .collect();
+            total_times.sort_by(|a, b| a.1.cmp(&b.1));
+            
+            if let Some((winner_part, _)) = total_times.first() {
+                // Find the team for the winning part
+                let winner_team = match winner_part {
+                    1 => race.teams().next(),
+                    2 => race.teams().nth(1),
+                    3 => race.teams().nth(2),
+                    _ => None,
+                };
+                
+                if let Some(winner_team) = winner_team {
+                    if let Some(startgg_id) = &winner_team.startgg_id {
+                        // Extract set ID from URL (e.g., "https://start.gg/tournament/hth-test/event/main-event/set/90052950" -> "90052950")
+                        let set_id = if let Some(set_id) = startgg_set_url.path_segments()
+                            .and_then(|segments| segments.last())
+                            .and_then(|last| last.parse::<u64>().ok())
+                        {
+                            startgg::ID(set_id.to_string())
+                        } else {
+                            startgg::ID(startgg_set_url.to_string())
+                        };
+                        
+                        // Use the existing start.gg reporting function
+                        match startgg::query_uncached::<startgg::ReportOneGameResultMutation>(
+                            http_client,
+                            startgg_token,
+                            startgg::report_one_game_result_mutation::Variables {
+                                set_id,
+                                winner_entrant_id: startgg_id.clone(),
+                            }
+                        ).await {
+                            Ok(_) => {
+                                // Success - could log this
+                            }
+                            Err(e) => {
+                                // Log error but don't fail the command
+                                eprintln!("Failed to report async race result to start.gg: {:?}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Report to challonge if applicable
+        if let cal::Source::Challonge { ref id } = cal_event.race.source {
+            // Find the winning team based on total time
+            let mut total_times: Vec<(i32, Duration)> = results.iter()
+                .map(|(part, time)| (*part, *time))
+                .collect();
+            total_times.sort_by(|a, b| a.1.cmp(&b.1));
+            
+            if let Some((winner_part, _)) = total_times.first() {
+                // Find the team for the winning part
+                let winner_team = match winner_part {
+                    1 => race.teams().next(),
+                    2 => race.teams().nth(1),
+                    3 => race.teams().nth(2),
+                    _ => None,
+                };
+                
+                if let Some(winner_team) = winner_team {
+                    // Report to challonge API
+                    let match_id = id.clone();
+                    let winner_id = winner_team.challonge_id.clone();
+                    
+                    if let Some(winner_id) = winner_id {
+                        let endpoint = format!("https://api.challonge.com/v2/matches/{}/report", match_id);
+                        let payload = serde_json::json!({
+                            "match": {
+                                "winner_id": winner_id,
+                                "scores_csv": "1-0" // For async races, we report as 1-0 since it's a single game
+                            }
+                        });
+                        
+                        match http_client.put(&endpoint)
+                            .header(reqwest::header::ACCEPT, "application/json")
+                            .header(reqwest::header::CONTENT_TYPE, "application/vnd.api+json")
+                            .header("Authorization-Type", "v1")
+                            .header(reqwest::header::AUTHORIZATION, challonge_api_key)
+                            .json(&payload)
+                            .send()
+                            .await {
+                                Ok(_) => {
+                                    // Success - could log this
+                                }
+                                Err(e) => {
+                                    // Log error but don't fail the command
+                                    eprintln!("Failed to report async race result to challonge: {:?}", e);
+                                }
+                            }
+                    }
+                }
+            }
+        }
+    }
+
+    transaction.commit().await?;
+    Ok(())
 }

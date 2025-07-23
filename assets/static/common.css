@@ -398,3 +398,10 @@ p.error {
   color: var(--text-muted);
   font-size: 0.875em;
 }
+
+.timezone-info {
+  font-size: 0.875em;
+  font-style: italic;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+}

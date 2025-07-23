@@ -33,6 +33,7 @@ use {
 };
 
 mod api;
+mod async_race;
 mod auth;
 mod cal;
 mod challonge;
@@ -255,10 +256,15 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Ok(Err(e)) => Err(Error::from(e)),
             Err(e) => Err(Error::from(e)),
         });
-        let import_task = tokio::spawn(cal::auto_import_races(db_pool, http_client, config, rocket.shutdown(), discord_builder.ctx_fut.clone(), new_room_lock)).map(|res| match res {
+        let import_task = tokio::spawn(cal::auto_import_races(db_pool.clone(), http_client.clone(), config, rocket.shutdown(), discord_builder.ctx_fut.clone(), new_room_lock)).map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(Error::from(e)),
-            Err(e) => Err(Error::from(e)),
+            Err(e) => Err(Error::Task(e)),
+        });
+        let async_race_task = tokio::spawn(async_race_manager(db_pool, discord_builder.ctx_fut.clone(), http_client, rocket.shutdown())).map(|res| match res {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(e),
+            Err(e) => Err(Error::Task(e)),
         });
         let rocket_task = tokio::spawn(rocket.launch()).map(|res| match res {
             Ok(Ok(Rocket { .. })) => Ok(()),
@@ -276,7 +282,31 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Err(e) => Err(Error::from(e)),
         });
         #[cfg(not(unix))] let unix_socket_task = future::ok(());
-        let ((), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, rocket_task, unix_socket_task)?;
+        let ((), (), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, async_race_task, rocket_task, unix_socket_task)?;
     }
+    Ok(())
+}
+
+/// Background task for managing async races
+async fn async_race_manager(
+    db_pool: PgPool,
+    discord_ctx: RwFuture<DiscordCtx>,
+    http_client: reqwest::Client,
+    shutdown: rocket::Shutdown,
+) -> Result<(), Error> {
+    let mut interval = tokio::time::interval(Duration::from_secs(60)); // Check every minute
+    
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                let discord_ctx = discord_ctx.read().await;
+                if let Ok(()) = async_race::AsyncRaceManager::create_async_threads(&db_pool, &discord_ctx, &http_client).await {
+                    // Threads created successfully
+                }
+            }
+            _ = shutdown.clone() => break,
+        }
+    }
+    
     Ok(())
 }

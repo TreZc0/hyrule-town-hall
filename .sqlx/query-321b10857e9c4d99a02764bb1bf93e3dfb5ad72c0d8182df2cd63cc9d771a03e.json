@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id AS \"id: Id<Teams>\", series AS \"series: Series\", event, name, racetime_slug, \n               startgg_id AS \"startgg_id: startgg::ID\", plural_name, restream_consent, \n               mw_impl AS \"mw_impl: mw::Impl\", qualifier_rank \n        FROM teams \n        WHERE series = $1 AND event = $2 AND startgg_id IS NULL AND NOT resigned\n    ",
+  "query": "SELECT id AS \"id: Id<Teams>\", series AS \"series: Series\", event, name, racetime_slug, startgg_id AS \"startgg_id: startgg::ID\", challonge_id, plural_name, restream_consent, mw_impl AS \"mw_impl: mw::Impl\", qualifier_rank FROM teams WHERE series = $1 AND event = $2 AND racetime_slug = $3",
   "describe": {
     "columns": [
       {
@@ -35,16 +35,21 @@
       },
       {
         "ordinal": 6,
+        "name": "challonge_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
         "name": "plural_name",
         "type_info": "Bool"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "restream_consent",
         "type_info": "Bool"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "mw_impl: mw::Impl",
         "type_info": {
           "Custom": {
@@ -59,13 +64,14 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "qualifier_rank",
         "type_info": "Int2"
       }
     ],
     "parameters": {
       "Left": [
+        "Text",
         "Text",
         "Text"
       ]
@@ -78,10 +84,11 @@
       true,
       true,
       true,
+      true,
       false,
       true,
       true
     ]
   },
-  "hash": "d892c61373529aa11118806312ba712568be77b3d748aad39e70d23cc14fb8e7"
+  "hash": "321b10857e9c4d99a02764bb1bf93e3dfb5ad72c0d8182df2cd63cc9d771a03e"
 }

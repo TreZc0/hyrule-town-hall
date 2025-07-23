@@ -169,6 +169,7 @@ pub(crate) struct Data<'a> {
     pub(crate) discord_organizer_channel: Option<ChannelId>,
     pub(crate) discord_scheduling_channel: Option<ChannelId>,
     pub(crate) discord_volunteer_info_channel: Option<ChannelId>,
+    pub(crate) discord_async_channel: Option<ChannelId>,
     pub(crate) rando_version: Option<VersionedBranch>,
     pub(crate) single_settings: Option<seed::Settings>,
     pub(crate) team_config: TeamConfig,
@@ -219,6 +220,7 @@ impl<'a> Data<'a> {
             discord_organizer_channel AS "discord_organizer_channel: PgSnowflake<ChannelId>",
             discord_scheduling_channel AS "discord_scheduling_channel: PgSnowflake<ChannelId>",
             discord_volunteer_info_channel AS "discord_volunteer_info_channel: PgSnowflake<ChannelId>",
+            discord_async_channel AS "discord_async_channel: PgSnowflake<ChannelId>",
             rando_version AS "rando_version: Json<VersionedBranch>",
             single_settings AS "single_settings: Json<seed::Settings>",
             team_config AS "team_config: TeamConfig",
@@ -254,6 +256,7 @@ impl<'a> Data<'a> {
                 discord_organizer_channel: row.discord_organizer_channel.map(|PgSnowflake(id)| id),
                 discord_scheduling_channel: row.discord_scheduling_channel.map(|PgSnowflake(id)| id),
                 discord_volunteer_info_channel: row.discord_volunteer_info_channel.map(|PgSnowflake(id)| id),
+                discord_async_channel: row.discord_async_channel.map(|PgSnowflake(id)| id),
                 rando_version: row.rando_version.map(|Json(rando_version)| rando_version),
                 single_settings: if series == Series::CopaDoBrasil && event == "1" {
                     Some(br::s1_settings()) // support for randomized starting song
@@ -523,6 +526,9 @@ impl<'a> Data<'a> {
                 h4 {
                     : "Event Start: ";
                     : start.format("%Y-%m-%d").to_string();
+                }
+                p(class = "timezone-info") {
+                    : timezone_info_html();
                 }
             }
             div(class = "button-row") {
@@ -1861,7 +1867,7 @@ pub(crate) async fn request_async(pool: &State<PgPool>, me: User, uri: Origin<'_
     let mut form = form.into_inner();
     form.verify(&csrf);
     Ok(if let Some(ref value) = form.value {
-        let team = sqlx::query_as!(Team, r#"SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, teams.startgg_id AS "startgg_id: startgg::ID", plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams, team_members WHERE
+        let team = sqlx::query_as!(Team, r#"SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, teams.startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams, team_members WHERE
             id = team
             AND series = $1
             AND event = $2
@@ -1932,7 +1938,7 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, discord_ctx: &State<RwFut
     let mut form = form.into_inner();
     form.verify(&csrf);
     Ok(if let Some(ref value) = form.value {
-        let team = sqlx::query_as!(Team, r#"SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, teams.startgg_id AS "startgg_id: startgg::ID", plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams, team_members WHERE
+        let team = sqlx::query_as!(Team, r#"SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, teams.startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams, team_members WHERE
             id = team
             AND series = $1
             AND event = $2
