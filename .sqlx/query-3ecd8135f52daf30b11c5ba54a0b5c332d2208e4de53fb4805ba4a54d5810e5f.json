@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM async_times WHERE race_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3ecd8135f52daf30b11c5ba54a0b5c332d2208e4de53fb4805ba4a54d5810e5f"
+}

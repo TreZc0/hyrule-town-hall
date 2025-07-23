@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT start_time FROM async_times WHERE race_id = $1 AND async_part = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "start_time",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "d7af9f16afc20eed22c93d1ae292627c138502ed1a11fc33eceb8d263b07e8e6"
+}
