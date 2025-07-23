@@ -2,6 +2,7 @@ use {
     graphql_client::GraphQLQuery,
     typemap_rev::TypeMap,
     crate::prelude::*,
+    std::collections::{HashMap, HashSet},
 };
 
 /// From https://dev.start.gg/docs/rate-limits:
@@ -389,9 +390,65 @@ pub(crate) async fn swiss_standings(
     use entrants_query::EntrantsQueryEventEntrants as Entrants;
     use entrants_query::EntrantsQueryEvent as Event;
     use entrants_query::ResponseData as ResponseData;
+    use event_sets_query::EventSetsQueryEventSetsNodes as EventSetNode;
+    use event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup as EventSetPhaseGroup;
+    use event_sets_query::EventSetsQueryEventSets as EventSets;
+    use event_sets_query::EventSetsQueryEvent as EventSetsEvent;
+    use event_sets_query::ResponseData as EventSetsResponseData;
 
-    let mut all_entrants = Vec::new();
+    // First, get tournament structure to understand what rounds should exist
+    let mut swiss_rounds = HashSet::<String>::new();
     let mut page = 1;
+    loop {
+        let response = query_cached::<EventSetsQuery>(
+            http_client,
+            startgg_token,
+            event_sets_query::Variables {
+                event_slug: event_slug.to_owned(),
+                page,
+            },
+        )
+        .await?;
+        let EventSetsResponseData {
+            event: Some(EventSetsEvent {
+                sets: Some(EventSets {
+                    page_info: Some(event_sets_query::EventSetsQueryEventSetsPageInfo { total_pages: Some(tp) }),
+                    nodes: Some(sets),
+                }),
+                ..
+            }),
+            ..
+        } = response else {
+            break;
+        };
+        
+        for set in sets.into_iter().filter_map(|s| s) {
+            let EventSetNode {
+                phase_group: Some(EventSetPhaseGroup { 
+                    phase: Some(phase),
+                    rounds: Some(_rounds),
+                    ..
+                }),
+                full_round_text: Some(round_text),
+                ..
+            } = set else { continue };
+            
+            // Check if this is a Swiss phase
+            if phase.name == Some("Swiss".to_string()) {
+                swiss_rounds.insert(round_text);
+            }
+        }
+        
+        if page >= tp {
+            break;
+        }
+        page += 1;
+    }
+
+    // Now get all entrants and their actual matches
+    let mut all_entrants = Vec::new();
+    let mut entrant_matches = std::collections::HashMap::new();
+    page = 1;
     loop {
         let response = query_cached::<EntrantsQuery>(
             http_client,
@@ -414,6 +471,7 @@ pub(crate) async fn swiss_standings(
         } = response else {
             break;
         };
+        
         for entrant in entrants.into_iter().filter_map(|e| e) {
             let EntrantNode {
                 id: Some(entrant_id),
@@ -421,8 +479,12 @@ pub(crate) async fn swiss_standings(
                 paginated_sets: Some(paginated_sets),
                 ..
             } = entrant else { continue };
+            
             let mut wins = 0;
             let mut losses = 0;
+            // Note: played_rounds is not currently used but kept for future enhancement
+            let _played_rounds = HashSet::<String>::new();
+            
             if let Some(set_nodes) = paginated_sets.nodes {
                 for set in set_nodes.into_iter().filter_map(|s| s) {
                     let SetNode {
@@ -430,7 +492,10 @@ pub(crate) async fn swiss_standings(
                         phase_group: Some(PhaseGroup { bracket_type, .. }),
                         ..
                     } = set else { continue };
+                    
                     if bracket_type != Some(entrants_query::BracketType::SWISS) { continue; }
+                    
+                    // We can't determine the round from this query, but we can count wins/losses
                     match winner_id {
                         Some(wid) if wid.to_string() == entrant_id.to_string() => wins += 1,
                         Some(_) => losses += 1,
@@ -438,19 +503,48 @@ pub(crate) async fn swiss_standings(
                     }
                 }
             }
+            
+            // Store the matches for this entrant
+            entrant_matches.insert(entrant_id.to_string(), (entrant_name.clone(), wins, losses));
             all_entrants.push((entrant_name, wins, losses));
         }
+        
         if page >= tp {
             break;
         }
         page += 1;
     }
+
+    // Now we need to infer byes. For each Swiss round, check if any entrant is missing a match
+    // This is a simplified approach - in a real implementation, you'd need to track actual pairings
+    // For now, we'll use a heuristic: if an entrant has fewer total matches than expected rounds,
+    // and they haven't dropped (they have at least one match), they likely got byes
+    
+    let expected_rounds = swiss_rounds.len();
+    if expected_rounds > 0 {
+        for (_entrant_id, (name, wins, losses)) in &mut entrant_matches {
+            let total_matches = *wins + *losses;
+            if total_matches < expected_rounds && total_matches > 0 {
+                // This entrant is missing matches but hasn't dropped - likely got byes
+                let missing_matches = expected_rounds - total_matches;
+                *wins += missing_matches;
+                
+                // Update the all_entrants list
+                if let Some(entrant) = all_entrants.iter_mut().find(|(n, _, _)| n == name) {
+                    entrant.1 = *wins;
+                    entrant.2 = *losses;
+                }
+            }
+        }
+    }
+
     // Sort: wins desc, losses asc, name asc
     all_entrants.sort_by(|a, b| {
         b.1.cmp(&a.1) // wins desc
             .then(a.2.cmp(&b.2)) // losses asc
             .then(a.0.cmp(&b.0)) // name asc
     });
+    
     // Assign placements with ties
     let mut standings = Vec::new();
     let mut last_wins = None;
