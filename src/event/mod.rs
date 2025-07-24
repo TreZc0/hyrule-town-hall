@@ -508,7 +508,6 @@ impl<'a> Data<'a> {
 
     /// Returns Swiss standings for this event, if it's a Startgg event
     pub(crate) async fn swiss_standings(&self, _transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config) -> Result<Option<Vec<startgg::SwissStanding>>, Error> {
-        // Only available for Startgg events
         if !matches!(self.match_source(), MatchSource::StartGG(_)) {
             return Ok(None);
         }

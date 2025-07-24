@@ -497,7 +497,7 @@ pub(crate) async fn swiss_standings(
                     match winner_id {
                         Some(wid) if wid.to_string() == entrant_id.to_string() => wins += 1,
                         Some(_) => losses += 1,
-                        None => {}, // not played
+                        None => {}, // winnerId null means the match hasn't been played yet
                     }
                 }
             }
@@ -513,14 +513,15 @@ pub(crate) async fn swiss_standings(
         page += 1;
     }
 
-    // Now we need to infer byes. For each Swiss round, check if any entrant is missing a match and is still part of the tournament, that match was a bye    
+    // Now we need to infer byes. For each Swiss round, check if any entrant is missing matches
+    // This happens when opponents drop and their matches get wiped from the API
     let expected_rounds = swiss_rounds.len();
     if expected_rounds > 0 {
         for (_entrant_id, (name, wins, losses)) in &mut entrant_matches {
-            let total_matches = *wins + *losses;
-            if total_matches < expected_rounds && total_matches > 0 {
+            let played_matches = *wins + *losses;
+            if played_matches < expected_rounds && played_matches > 0 {
                 // This entrant is missing matches but hasn't dropped - likely got byes
-                let missing_matches = expected_rounds - total_matches;
+                let missing_matches = expected_rounds - played_matches;
                 *wins += missing_matches;
                 
                 // Update the all_entrants list
