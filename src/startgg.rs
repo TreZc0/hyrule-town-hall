@@ -482,8 +482,6 @@ pub(crate) async fn swiss_standings(
             
             let mut wins = 0;
             let mut losses = 0;
-            // Note: played_rounds is not currently used but kept for future enhancement
-            let _played_rounds = HashSet::<String>::new();
             
             if let Some(set_nodes) = paginated_sets.nodes {
                 for set in set_nodes.into_iter().filter_map(|s| s) {
@@ -515,11 +513,7 @@ pub(crate) async fn swiss_standings(
         page += 1;
     }
 
-    // Now we need to infer byes. For each Swiss round, check if any entrant is missing a match
-    // This is a simplified approach - in a real implementation, you'd need to track actual pairings
-    // For now, we'll use a heuristic: if an entrant has fewer total matches than expected rounds,
-    // and they haven't dropped (they have at least one match), they likely got byes
-    
+    // Now we need to infer byes. For each Swiss round, check if any entrant is missing a match and is still part of the tournament, that match was a bye    
     let expected_rounds = swiss_rounds.len();
     if expected_rounds > 0 {
         for (_entrant_id, (name, wins, losses)) in &mut entrant_matches {

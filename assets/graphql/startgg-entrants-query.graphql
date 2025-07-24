@@ -1,7 +1,7 @@
 query EntrantsQuery($slug: String, $page: Int) {
   event(slug: $slug) {
     id
-    entrants(query: { page: $page, perPage: 128 }) {
+    entrants(query: { page: $page, perPage: 32 }) {
       pageInfo {
         page
         totalPages

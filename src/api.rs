@@ -218,6 +218,14 @@ impl ScalarType for UtcTimestamp {
     }
 }
 
+#[derive(SimpleObject)]
+struct SwissStanding {
+    placement: usize,
+    name: String,
+    wins: usize,
+    losses: usize,
+}
+
 type MidosHouseSchema = Schema<Query, Mutation, EmptySubscription>;
 
 pub(crate) struct Query;
@@ -310,6 +318,22 @@ struct Event(event::Data<'static>);
     /// All past, upcoming, and unscheduled races for this event, sorted chronologically.
     async fn races(&self, ctx: &Context<'_>) -> Result<Vec<Race>, cal::Error> {
         Ok(db!(db = ctx; cal::Race::for_event(&mut *db, ctx.data_unchecked(), &self.0).await?).into_iter().map(Race).collect())
+    }
+
+    #[graphql(guard = Scopes { entrants_read: true, ..Scopes::default() })]
+    async fn swiss_standings(&self, ctx: &Context<'_>) -> Result<Option<Vec<SwissStanding>>, event::DataError> {
+        let http_client = ctx.data_unchecked::<reqwest::Client>();
+        let config = ctx.data_unchecked::<Config>();
+        match db!(db = ctx; self.0.swiss_standings(&mut *db, http_client, config).await) {
+            Ok(Some(standings)) => Ok(Some(standings.into_iter().map(|s| SwissStanding {
+                placement: s.placement,
+                name: s.name,
+                wins: s.wins,
+                losses: s.losses,
+            }).collect())),
+            Ok(None) => Ok(None),
+            Err(_) => Ok(None),
+        }
     }
 }
 

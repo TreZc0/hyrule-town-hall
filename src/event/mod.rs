@@ -506,6 +506,40 @@ impl<'a> Data<'a> {
         Ok(count.unwrap_or(0) > 0)
     }
 
+    /// Returns Swiss standings for this event, if it's a Startgg event
+    pub(crate) async fn swiss_standings(&self, _transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config) -> Result<Option<Vec<startgg::SwissStanding>>, Error> {
+        // Only available for Startgg events
+        if !matches!(self.match_source(), MatchSource::StartGG(_)) {
+            return Ok(None);
+        }
+
+        // Extract the Startgg slug from the event URL
+        let slug = match self.url.as_ref().and_then(|url| url.path().strip_prefix('/').map(|s| s.to_string())) {
+            Some(s) if !s.is_empty() => s,
+            _ => return Ok(None),
+        };
+
+        // Get the Startgg token
+        let startgg_token = if Environment::default().is_dev() {
+            &config.startgg_dev
+        } else {
+            &config.startgg_production
+        };
+
+        // Fetch Swiss standings
+        match startgg::swiss_standings(http_client, config, &slug, startgg_token).await {
+            Ok(standings) => Ok(Some(standings)),
+            Err(startgg::Error::GraphQL(errors)) => {
+                // Check if it's a query complexity error
+                if errors.iter().any(|e| e.message.contains("query complexity is too high")) {
+                    log::warn!("Startgg API query complexity too high for event {}", slug);
+                }
+                Ok(None) // Return None if API call fails
+            },
+            Err(_) => Ok(None), // Return None for other errors
+        }
+    }
+
     pub(crate) async fn header(&self, transaction: &mut Transaction<'_, Postgres>, me: Option<&User>, tab: Tab, is_subpage: bool) -> Result<RawHtml<String>, Error> {
         let signed_up = if let Some(me) = me {
             sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams, team_members WHERE
