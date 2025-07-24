@@ -20,6 +20,7 @@ use {
         CreateSelectMenuOption,
     },
     sqlx::types::Json,
+    chrono::LocalResult,
     crate::{
         discord_bot,
         event::Tab,
@@ -3082,13 +3083,22 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                         RaceSchedule::Unscheduled => {
                             p : "Not yet scheduled";
                             : form_field("start_date", &mut errors, html! {
-                                label(for = "start_date") : "Start date (YYYY-MM-DD HH:MM UTC):";
+                                label(for = "start_date") : "Start date (YYYY-MM-DD HH:MM in your timezone):";
                                 input(type = "text", name = "start_date", value? = if let Some(ref ctx) = ctx {
                                     ctx.field_value("start_date").map(|date| date.to_string())
                                 } else {
                                     Some(String::new())
                                 });
-                                small : "Leave empty to keep unscheduled";
+                                small : "input in your local time (name of timezone)";
+                            });
+                            : form_field("timezone", &mut errors, html! {
+                                label(for = "timezone") : "Your timezone (e.g., America/New_York, Europe/London):";
+                                input(type = "text", name = "timezone", value? = if let Some(ref ctx) = ctx {
+                                    ctx.field_value("timezone").map(|tz| tz.to_string())
+                                } else {
+                                    Some(String::new())
+                                });
+                                small : "Leave empty to use UTC";
                             });
                         }
                         RaceSchedule::Live { start, end, room: _ } => {
@@ -3097,7 +3107,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                                 : format_datetime(start, DateTimeFormat { long: true, running_text: false });
                             }
                             : form_field("start_date", &mut errors, html! {
-                                label(for = "start_date") : "New start date (YYYY-MM-DD HH:MM UTC):";
+                                label(for = "start_date") : "New start date (YYYY-MM-DD HH:MM in your timezone):";
                                 input(type = "text", name = "start_date", value? = if let Some(ref ctx) = ctx {
                                     ctx.field_value("start_date").map(|date| date.to_string())
                                 } else {
@@ -3105,14 +3115,16 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                                 });
                                 small : "Leave empty to keep current time";
                             });
-                            @if let Some(end) = end {
-                                p {
-                                    : "End: ";
-                                    : format_datetime(end, DateTimeFormat { long: true, running_text: false });
-                                }
-                            } else {
-                                p : "Not yet ended (will be updated automatically from the racetime.gg room, if any)";
-                            }
+                            : form_field("timezone", &mut errors, html! {
+                                label(for = "timezone") : "Your timezone (e.g., America/New_York, Europe/London):";
+                                input(type = "text", name = "timezone", value? = if let Some(ref ctx) = ctx {
+                                    ctx.field_value("timezone").map(|tz| tz.to_string())
+                                } else {
+                                    Some(String::new())
+                                });
+                                small : "Leave empty to use UTC";
+                            });
+
                         }
                         RaceSchedule::Async { start1, start2, start3, end1, end2, end3, room1: _, room2: _, room3: _ } => {
                             @if let Some(start1) = start1 {
@@ -3124,13 +3136,13 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                                 p : "Team A not yet started";
                             }
                             : form_field("async_start1_date", &mut errors, html! {
-                                label(for = "async_start1_date") : "New start (team A) (YYYY-MM-DD HH:MM UTC):";
+                                label(for = "async_start1_date") : "New start (team A) (YYYY-MM-DD HH:MM in your timezone):";
                                 input(type = "text", name = "async_start1_date", value? = if let Some(ref ctx) = ctx {
                                     ctx.field_value("async_start1_date").map(|date| date.to_string())
                                 } else {
                                     Some(start1.map(|s| s.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default())
                                 });
-                                small : "Leave empty to keep current time";
+                                small : "input in your local time (name of timezone)";
                             });
                             @if let Some(start2) = start2 {
                                 p {
@@ -3141,13 +3153,13 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                                 p : "Team B not yet started";
                             }
                             : form_field("async_start2_date", &mut errors, html! {
-                                label(for = "async_start2_date") : "New start (team B) (YYYY-MM-DD HH:MM UTC):";
+                                label(for = "async_start2_date") : "New start (team B) (YYYY-MM-DD HH:MM in your timezone):";
                                 input(type = "text", name = "async_start2_date", value? = if let Some(ref ctx) = ctx {
                                     ctx.field_value("async_start2_date").map(|date| date.to_string())
                                 } else {
                                     Some(start2.map(|s| s.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default())
                                 });
-                                small : "Leave empty to keep current time";
+                                small : "input in your local time (name of timezone)";
                             });
                             @if let Entrants::Three(_) = race.entrants {
                                 @if let Some(start3) = start3 {
@@ -3159,62 +3171,29 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                                     p : "Team C not yet started";
                                 }
                                 : form_field("async_start3_date", &mut errors, html! {
-                                    label(for = "async_start3_date") : "New start (team C) (YYYY-MM-DD HH:MM UTC):";
+                                    label(for = "async_start3_date") : "New start (team C) (YYYY-MM-DD HH:MM in your timezone):";
                                     input(type = "text", name = "async_start3_date", value? = if let Some(ref ctx) = ctx {
                                         ctx.field_value("async_start3_date").map(|date| date.to_string())
                                     } else {
                                         Some(start3.map(|s| s.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default())
                                     });
-                                    small : "Leave empty to keep current time";
+                                    small : "input in your local time (name of timezone)";
                                 });
                             }
-                            @if let Some(end1) = end1 {
-                                p {
-                                    : "End (team A): ";
-                                    : format_datetime(end1, DateTimeFormat { long: true, running_text: false });
-                                }
-                            } else {
-                                p : "Team A not yet ended (will be updated automatically from the racetime.gg room, if any)";
-                            }
-                            @if let Some(end2) = end2 {
-                                p {
-                                    : "End (team B): ";
-                                    : format_datetime(end2, DateTimeFormat { long: true, running_text: false });
-                                }
-                            } else {
-                                p : "Team B not yet ended (will be updated automatically from the racetime.gg room, if any)";
-                            }
-                            @if let Entrants::Three(_) = race.entrants {
-                                @if let Some(end3) = end3 {
-                                    p {
-                                        : "End (team C): ";
-                                        : format_datetime(end3, DateTimeFormat { long: true, running_text: false });
-                                    }
-                                } else {
-                                    p : "Team C not yet ended (will be updated automatically from the racetime.gg room, if any)";
-                                }
-                            }
+
                         }
                     }
                 }
             } else {
                 @match race.schedule {
                     RaceSchedule::Unscheduled => p : "Not yet scheduled";
-                    RaceSchedule::Live { start, end, room: _ } => {
+                    RaceSchedule::Live { start, end: _, room: _ } => {
                         p {
                             : "Start: ";
                             : format_datetime(start, DateTimeFormat { long: true, running_text: false });
                         }
-                        @if let Some(end) = end {
-                            p {
-                                : "End: ";
-                                : format_datetime(end, DateTimeFormat { long: true, running_text: false });
-                            }
-                        } else {
-                            p : "Not yet ended (will be updated automatically from the racetime.gg room, if any)";
-                        }
                     }
-                    RaceSchedule::Async { start1, start2, start3, end1, end2, end3, room1: _, room2: _, room3: _ } => {
+                    RaceSchedule::Async { start1, start2, start3, end1: _, end2: _, end3: _, room1: _, room2: _, room3: _ } => {
                         @if let Some(start1) = start1 {
                             p {
                                 : "Start (team A): ";
@@ -3239,32 +3218,6 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                                 }
                             } else {
                                 p : "Team C not yet started";
-                            }
-                        }
-                        @if let Some(end1) = end1 {
-                            p {
-                                : "End (team A): ";
-                                : format_datetime(end1, DateTimeFormat { long: true, running_text: false });
-                            }
-                        } else {
-                            p : "Team A not yet ended (will be updated automatically from the racetime.gg room, if any)";
-                        }
-                        @if let Some(end2) = end2 {
-                            p {
-                                : "End (team B): ";
-                                : format_datetime(end2, DateTimeFormat { long: true, running_text: false });
-                            }
-                        } else {
-                            p : "Team B not yet ended (will be updated automatically from the racetime.gg room, if any)";
-                        }
-                        @if let Entrants::Three(_) = race.entrants {
-                            @if let Some(end3) = end3 {
-                                p {
-                                    : "End (team C): ";
-                                    : format_datetime(end3, DateTimeFormat { long: true, running_text: false });
-                                }
-                            } else {
-                                p : "Team C not yet ended (will be updated automatically from the racetime.gg room, if any)";
                             }
                         }
                     }
@@ -3395,6 +3348,8 @@ pub(crate) struct EditRaceForm {
     async_start2_date: String,
     #[field(default = String::new())]
     async_start3_date: String,
+    #[field(default = String::new())]
+    timezone: String,
 }
 
 #[rocket::post("/event/<series>/<event>/races/<id>/edit?<redirect_to>", data = "<form>")]
@@ -3423,47 +3378,111 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
         if is_organizer {
             // Parse live race start date
             if !value.start_date.is_empty() {
-                match NaiveDateTime::parse_from_str(&value.start_date, "%Y-%m-%d %H:%M") {
-                    Ok(naive_datetime) => {
+                if let Ok(naive_datetime) = NaiveDateTime::parse_from_str(&value.start_date, "%Y-%m-%d %H:%M") {
+                    if value.timezone.is_empty() {
                         new_start_date = Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_datetime, Utc));
+                    } else {
+                        match value.timezone.parse::<Tz>() {
+                            Ok(tz) => {
+                                match tz.from_local_datetime(&naive_datetime) {
+                                    LocalResult::Single(dt) => new_start_date = Some(dt.with_timezone(&Utc)),
+                                    LocalResult::None => {
+                                        form.context.push_error(form::Error::validation(format!("Invalid datetime for timezone {}: {}", value.timezone, value.start_date)).with_name("start_date"));
+                                    }
+                                    LocalResult::Ambiguous(dt1, _) => {
+                                        new_start_date = Some(dt1.with_timezone(&Utc));
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                form.context.push_error(form::Error::validation(format!("Invalid timezone: {}. Use format like America/New_York or Europe/London", value.timezone)).with_name("timezone"));
+                            }
+                        }
                     }
-                    Err(_) => {
-                        form.context.push_error(form::Error::validation("Start date must be in format YYYY-MM-DD HH:MM UTC").with_name("start_date"));
-                    }
+                } else {
+                    form.context.push_error(form::Error::validation("Start date must be in format YYYY-MM-DD HH:MM").with_name("start_date"));
                 }
             }
             
             // Parse async race start dates
             if !value.async_start1_date.is_empty() {
-                match NaiveDateTime::parse_from_str(&value.async_start1_date, "%Y-%m-%d %H:%M") {
-                    Ok(naive_datetime) => {
+                if let Ok(naive_datetime) = NaiveDateTime::parse_from_str(&value.async_start1_date, "%Y-%m-%d %H:%M") {
+                    if value.timezone.is_empty() {
                         new_async_start1_date = Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_datetime, Utc));
+                    } else {
+                        match value.timezone.parse::<Tz>() {
+                            Ok(tz) => {
+                                match tz.from_local_datetime(&naive_datetime) {
+                                    LocalResult::Single(dt) => new_async_start1_date = Some(dt.with_timezone(&Utc)),
+                                    LocalResult::None => {
+                                        form.context.push_error(form::Error::validation(format!("Invalid datetime for timezone {}: {}", value.timezone, value.async_start1_date)).with_name("async_start1_date"));
+                                    }
+                                    LocalResult::Ambiguous(dt1, _) => {
+                                        new_async_start1_date = Some(dt1.with_timezone(&Utc));
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                form.context.push_error(form::Error::validation(format!("Invalid timezone: {}. Use format like America/New_York or Europe/London", value.timezone)).with_name("timezone"));
+                            }
+                        }
                     }
-                    Err(_) => {
-                        form.context.push_error(form::Error::validation("Async start 1 date must be in format YYYY-MM-DD HH:MM UTC").with_name("async_start1_date"));
-                    }
+                } else {
+                    form.context.push_error(form::Error::validation("Async start 1 date must be in format YYYY-MM-DD HH:MM").with_name("async_start1_date"));
                 }
             }
             
             if !value.async_start2_date.is_empty() {
-                match NaiveDateTime::parse_from_str(&value.async_start2_date, "%Y-%m-%d %H:%M") {
-                    Ok(naive_datetime) => {
+                if let Ok(naive_datetime) = NaiveDateTime::parse_from_str(&value.async_start2_date, "%Y-%m-%d %H:%M") {
+                    if value.timezone.is_empty() {
                         new_async_start2_date = Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_datetime, Utc));
+                    } else {
+                        match value.timezone.parse::<Tz>() {
+                            Ok(tz) => {
+                                match tz.from_local_datetime(&naive_datetime) {
+                                    LocalResult::Single(dt) => new_async_start2_date = Some(dt.with_timezone(&Utc)),
+                                    LocalResult::None => {
+                                        form.context.push_error(form::Error::validation(format!("Invalid datetime for timezone {}: {}", value.timezone, value.async_start2_date)).with_name("async_start2_date"));
+                                    }
+                                    LocalResult::Ambiguous(dt1, _) => {
+                                        new_async_start2_date = Some(dt1.with_timezone(&Utc));
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                form.context.push_error(form::Error::validation(format!("Invalid timezone: {}. Use format like America/New_York or Europe/London", value.timezone)).with_name("timezone"));
+                            }
+                        }
                     }
-                    Err(_) => {
-                        form.context.push_error(form::Error::validation("Async start 2 date must be in format YYYY-MM-DD HH:MM UTC").with_name("async_start2_date"));
-                    }
+                } else {
+                    form.context.push_error(form::Error::validation("Async start 2 date must be in format YYYY-MM-DD HH:MM").with_name("async_start2_date"));
                 }
             }
             
             if !value.async_start3_date.is_empty() {
-                match NaiveDateTime::parse_from_str(&value.async_start3_date, "%Y-%m-%d %H:%M") {
-                    Ok(naive_datetime) => {
+                if let Ok(naive_datetime) = NaiveDateTime::parse_from_str(&value.async_start3_date, "%Y-%m-%d %H:%M") {
+                    if value.timezone.is_empty() {
                         new_async_start3_date = Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_datetime, Utc));
+                    } else {
+                        match value.timezone.parse::<Tz>() {
+                            Ok(tz) => {
+                                match tz.from_local_datetime(&naive_datetime) {
+                                    LocalResult::Single(dt) => new_async_start3_date = Some(dt.with_timezone(&Utc)),
+                                    LocalResult::None => {
+                                        form.context.push_error(form::Error::validation(format!("Invalid datetime for timezone {}: {}", value.timezone, value.async_start3_date)).with_name("async_start3_date"));
+                                    }
+                                    LocalResult::Ambiguous(dt1, _) => {
+                                        new_async_start3_date = Some(dt1.with_timezone(&Utc));
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                form.context.push_error(form::Error::validation(format!("Invalid timezone: {}. Use format like America/New_York or Europe/London", value.timezone)).with_name("timezone"));
+                            }
+                        }
                     }
-                    Err(_) => {
-                        form.context.push_error(form::Error::validation("Async start 3 date must be in format YYYY-MM-DD HH:MM UTC").with_name("async_start3_date"));
-                    }
+                } else {
+                    form.context.push_error(form::Error::validation("Async start 3 date must be in format YYYY-MM-DD HH:MM").with_name("async_start3_date"));
                 }
             }
         }
