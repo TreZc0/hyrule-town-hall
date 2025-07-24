@@ -2985,6 +2985,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                     label(for = "is_canceled") : "Cancel race permanently";
                 });
             }
+
         }, errors.clone(), "Save")
     } else {
         html! {
@@ -3091,15 +3092,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                                 });
                                 small : "input in your local time (name of timezone)";
                             });
-                            : form_field("timezone", &mut errors, html! {
-                                label(for = "timezone") : "Your timezone (e.g., America/New_York, Europe/London):";
-                                input(type = "text", name = "timezone", value? = if let Some(ref ctx) = ctx {
-                                    ctx.field_value("timezone").map(|tz| tz.to_string())
-                                } else {
-                                    Some(String::new())
-                                });
-                                small : "Leave empty to use UTC";
-                            });
+                            input(type = "hidden", name = "timezone", id = "timezone-field");
                         }
                         RaceSchedule::Live { start, end, room: _ } => {
                             p {
@@ -3115,15 +3108,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                                 });
                                 small : "Leave empty to keep current time";
                             });
-                            : form_field("timezone", &mut errors, html! {
-                                label(for = "timezone") : "Your timezone (e.g., America/New_York, Europe/London):";
-                                input(type = "text", name = "timezone", value? = if let Some(ref ctx) = ctx {
-                                    ctx.field_value("timezone").map(|tz| tz.to_string())
-                                } else {
-                                    Some(String::new())
-                                });
-                                small : "Leave empty to use UTC";
-                            });
+                            input(type = "hidden", name = "timezone", id = "timezone-field");
 
                         }
                         RaceSchedule::Async { start1, start2, start3, end1, end2, end3, room1: _, room2: _, room3: _ } => {
