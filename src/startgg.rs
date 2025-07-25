@@ -482,6 +482,7 @@ pub(crate) async fn swiss_standings(
             
             let mut wins = 0;
             let mut losses = 0;
+            let mut total_matches = 0; // Track ALL matches (including null winnerId)
             
             if let Some(set_nodes) = paginated_sets.nodes {
                 for set in set_nodes.into_iter().filter_map(|s| s) {
@@ -493,7 +494,10 @@ pub(crate) async fn swiss_standings(
                     
                     if bracket_type != Some(entrants_query::BracketType::SWISS) { continue; }
                     
-                    // We can't determine the round from this query, but we can count wins/losses
+                    // Count ALL matches (including null winnerId)
+                    total_matches += 1;
+                    
+                    // Count wins/losses based on winner_id
                     match winner_id {
                         Some(wid) if wid.to_string() == entrant_id.to_string() => wins += 1,
                         Some(_) => losses += 1,
@@ -503,7 +507,7 @@ pub(crate) async fn swiss_standings(
             }
             
             // Store the matches for this entrant
-            entrant_matches.insert(entrant_id.to_string(), (entrant_name.clone(), wins, losses));
+            entrant_matches.insert(entrant_id.to_string(), (entrant_name.clone(), wins, losses, total_matches));
             all_entrants.push((entrant_name, wins, losses));
         }
         
@@ -513,15 +517,14 @@ pub(crate) async fn swiss_standings(
         page += 1;
     }
 
-    // Now we need to infer byes. For each Swiss round, check if any entrant is missing matches
-    // This happens when opponents drop and their matches get wiped from the API
+    // Now apply the correct bye detection logic
     let expected_rounds = swiss_rounds.len();
     if expected_rounds > 0 {
-        for (_entrant_id, (name, wins, losses)) in &mut entrant_matches {
-            let played_matches = *wins + *losses;
-            if played_matches < expected_rounds && played_matches > 0 {
-                // This entrant is missing matches but hasn't dropped - likely got byes
-                let missing_matches = expected_rounds - played_matches;
+        for (_entrant_id, (name, wins, losses, total_matches)) in &mut entrant_matches {
+            // Only apply byes if the total number of matches is less than expected rounds
+            // This indicates that some matches were wiped from the API
+            if *total_matches < expected_rounds {
+                let missing_matches = expected_rounds - *total_matches;
                 *wins += missing_matches;
                 
                 // Update the all_entrants list
