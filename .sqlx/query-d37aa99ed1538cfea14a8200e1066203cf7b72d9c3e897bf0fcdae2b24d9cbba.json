@@ -250,27 +250,27 @@
       },
       {
         "ordinal": 49,
-        "name": "hash1: HashIcon",
+        "name": "hash1",
         "type_info": "Text"
       },
       {
         "ordinal": 50,
-        "name": "hash2: HashIcon",
+        "name": "hash2",
         "type_info": "Text"
       },
       {
         "ordinal": 51,
-        "name": "hash3: HashIcon",
+        "name": "hash3",
         "type_info": "Text"
       },
       {
         "ordinal": 52,
-        "name": "hash4: HashIcon",
+        "name": "hash4",
         "type_info": "Text"
       },
       {
         "ordinal": 53,
-        "name": "hash5: HashIcon",
+        "name": "hash5",
         "type_info": "Text"
       },
       {
