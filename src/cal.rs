@@ -2302,11 +2302,15 @@ pub(crate) async fn race_table(
                                                 }
                                             }
                                             // If no confirmed volunteers, show nothing (empty)
+                                        } else {
+                                            : "no restream";
                                         }
-                                        // If teams didn't consent to restream, show nothing (empty)
                                     }
-                                    RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {
-                                        // No volunteer info for async/unscheduled races (empty)
+                                    RaceSchedule::Async { .. } => {
+                                        : "no restream";
+                                    }
+                                    RaceSchedule::Unscheduled => {
+                                        // Unscheduled live races: show nothing (empty)
                                     }
                                 }
                             } else {
@@ -2340,8 +2344,11 @@ pub(crate) async fn race_table(
                                             : "no restream";
                                         }
                                     }
-                                    RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {
+                                    RaceSchedule::Async { .. } => {
                                         : "no restream";
+                                    }
+                                    RaceSchedule::Unscheduled => {
+                                        // Unscheduled live races: show nothing (empty)
                                     }
                                 }
                             }
