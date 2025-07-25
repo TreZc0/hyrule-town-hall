@@ -6094,6 +6094,7 @@ dependencies = [
  "rustls 0.23.29",
  "s2n-quic-h3",
  "serde",
+ "serde_json",
  "state",
  "tempfile",
  "thread_local",

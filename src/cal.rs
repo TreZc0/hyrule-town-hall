@@ -23,7 +23,10 @@ use {
     crate::{
         discord_bot,
         event::Tab,
-        event::roles::{Signup, VolunteerSignupStatus},
+        event::roles::{
+            Signup, 
+            VolunteerSignupStatus
+        },
         hash_icon::SpoilerLog,
         hash_icon_db::HashIconData,
         prelude::*,
@@ -1592,14 +1595,7 @@ async fn add_event_races(transaction: &mut Transaction<'_, Postgres>, discord_ct
                     summary_prefix
                 })));
                 cal_event.push(dtstart(start));
-                cal_event.push(dtend(race_event.end().filter(|_| !race_event.is_private_async_part() || race.cal_events().all(|event| event.end().is_some())).unwrap_or_else(|| start + match event.series {
-                    Series::TriforceBlitz => TimeDelta::hours(2),
-                    Series::BattleRoyale | Series::Crosskeys => TimeDelta::hours(2) + TimeDelta::minutes(30),
-                    Series::CoOp | Series::MixedPools | Series::Scrubs | Series::SpeedGaming | Series::WeTryToBeBetter => TimeDelta::hours(3),
-                    Series::CopaDoBrasil | Series::League | Series::NineDaysOfSaws | Series::SongsOfHope | Series::Standard | Series::TournoiFrancophone => TimeDelta::hours(3) + TimeDelta::minutes(30),
-                    Series::Mq | Series::Multiworld | Series::Pictionary => TimeDelta::hours(4),
-                    Series::Rsl => TimeDelta::hours(4) + TimeDelta::minutes(30),
-                }))); //TODO better fallback duration estimates depending on participants
+                cal_event.push(dtend(race_event.end().filter(|_| !race_event.is_private_async_part() || race.cal_events().all(|event| event.end().is_some())).unwrap_or_else(|| start + event.series.default_race_duration())));
                 let mut urls = Vec::default();
                 for (language, video_url) in &race.video_urls {
                     urls.push((Cow::Owned(format!("{language} restream")), video_url.clone()));
@@ -1635,7 +1631,7 @@ async fn add_event_races(transaction: &mut Transaction<'_, Postgres>, discord_ct
         cal_event.push(Summary::new(format!("{kind} Weekly")));
         let start = kind.next_weekly_after(start);
         cal_event.push(dtstart(start));
-        cal_event.push(dtend(start + TimeDelta::hours(3) + TimeDelta::minutes(30)));
+        cal_event.push(dtend(start + Series::Standard.default_race_duration()));
         cal_event.push(RRule::new("FREQ=WEEKLY;INTERVAL=2"));
         cal.add_event(cal_event);
     }
@@ -2209,13 +2205,13 @@ pub(crate) async fn race_table(
                                     _ => false,
                                 };
                                 @if is_upcoming_live {
-                                    @let scheduled = match race.schedule {
-                                        RaceSchedule::Unscheduled => false,
-                                        RaceSchedule::Live { end, .. } => end.is_none_or(|end_time| end_time > Utc::now()),
-                                        RaceSchedule::Async { .. } => false, // asyncs not eligible
-                                    };
-                                    @let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
-                                    @if scheduled && all_teams_consented {
+                                                                    @let scheduled = match race.schedule {
+                                    RaceSchedule::Unscheduled => false,
+                                    RaceSchedule::Live { end, .. } => end.is_none_or(|end_time| end_time > Utc::now()),
+                                    RaceSchedule::Async { .. } => false, // asyncs not eligible
+                                };
+                                @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                @if scheduled && all_teams_consented {
                                         @if let Some(user) = user {
                                             @let is_organizer = event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(user));
                                             @let is_restreamer = event.restreamers(&mut *transaction).await.ok().map_or(false, |rest| rest.contains(user));
@@ -2253,75 +2249,105 @@ pub(crate) async fn race_table(
                                 @if let Some(mut teams) = race.teams_opt() {
                                     @if teams.all(|team| team.restream_consent) {
                                         : "✓";
+                                    } else {
+                                        : "x";
                                     }
-                                } else {
-                                    : "?";
                                 }
                             }
                         }
                         @if has_buttons {
                             td {
                                 @if options.can_edit {
-                                    a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
+                                    @let is_admin = user.map_or(false, |u| u.id == Id::from(16287394041462225947_u64));
+                                    @if is_admin {
+                                        a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
+                                    } else {
+                                        @match race.schedule {
+                                            RaceSchedule::Live { .. } => {
+                                                @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                                @if all_teams_consented {
+                                                    a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
+                                                }
+                                            }
+                                            RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {}
+                                        }
+                                    }
                                 }
                             }
                         }
                         td {
-                            @match race.schedule {
-                                RaceSchedule::Live { .. } => {
-                                    @let all_teams_consented = race.teams_opt().map_or(false, |mut teams| teams.all(|team| team.restream_consent));
-                                    @if all_teams_consented {
-                                        @let signups = Signup::for_race(&mut *transaction, race.id).await?;
-                                        @let pending_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Pending)).collect::<Vec<_>>();
-                                        @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
-                                        
-                                        @if !pending_signups.is_empty() && confirmed_signups.is_empty() {
-                                            : "pending";
-                                        } else if signups.is_empty() {
-                                            : "no volunteers";
-                                        } else {
-                                            @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
-                                            @for binding in role_bindings {
-                                                @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
-                                                @if !binding_signups.is_empty() {
-                                                    : binding.role_type_name;
-                                                    : ": ";
-                                                    @for (i, signup) in binding_signups.iter().enumerate() {
-                                                        @if i > 0 { : ", "; }
-                                                        @let user = User::from_id(&mut **transaction, signup.user_id).await?;
-                                                        : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                            @if race.is_ended() {
+                                @match race.schedule {
+                                    RaceSchedule::Live { .. } => {
+                                        @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                        @if all_teams_consented {
+                                            @let signups = Signup::for_race(&mut *transaction, race.id).await?;
+                                            @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
+                                            
+                                            @if !confirmed_signups.is_empty() {
+                                                @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
+                                                @for binding in role_bindings {
+                                                    @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                                                    @if !binding_signups.is_empty() {
+                                                        : binding.role_type_name;
+                                                        : ": ";
+                                                        @for (i, signup) in binding_signups.iter().enumerate() {
+                                                            @if i > 0 { : ", "; }
+                                                            @let user = User::from_id(&mut **transaction, signup.user_id).await?;
+                                                            : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                                        }
+                                                        br;
                                                     }
-                                                    br;
                                                 }
                                             }
+                                            // If no confirmed volunteers, show nothing (empty)
+                                        } else {
+                                            : "no restream";
                                         }
-                                    } else {
+                                    }
+                                    RaceSchedule::Async { .. } => {
                                         : "no restream";
                                     }
+                                    RaceSchedule::Unscheduled => {
+                                        // Unscheduled live races: show nothing (empty)
+                                    }
                                 }
-                                RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {
-                                    : "no restream";
-                                }
-                            }
-                            
-                            @if race.is_ended() && !race.video_urls.is_empty() {
-                                @let signups = Signup::for_race(&mut *transaction, race.id).await?;
-                                @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
-                                
-                                @if !confirmed_signups.is_empty() {
-                                    @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
-                                    @for binding in role_bindings {
-                                        @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
-                                        @if !binding_signups.is_empty() {
-                                            : binding.role_type_name;
-                                            : ": ";
-                                            @for (i, signup) in binding_signups.iter().enumerate() {
-                                                @if i > 0 { : ", "; }
-                                                @let user = User::from_id(&mut **transaction, signup.user_id).await?;
-                                                : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                            } else {
+                                @match race.schedule {
+                                    RaceSchedule::Live { .. } => {
+                                        @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                        @if all_teams_consented {
+                                            @let signups = Signup::for_race(&mut *transaction, race.id).await?;
+                                            @let pending_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Pending)).collect::<Vec<_>>();
+                                            @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
+
+                                            @if !pending_signups.is_empty() && confirmed_signups.is_empty() {
+                                                : "pending";
+                                            } else if !confirmed_signups.is_empty() {
+                                                @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
+                                                @for binding in role_bindings {
+                                                    @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                                                    @if !binding_signups.is_empty() {
+                                                        : binding.role_type_name;
+                                                        : ": ";
+                                                        @for (i, signup) in binding_signups.iter().enumerate() {
+                                                            @if i > 0 { : ", "; }
+                                                            @let user = User::from_id(&mut **transaction, signup.user_id).await?;
+                                                            : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                                        }
+                                                        br;
+                                                    }
+                                                }
                                             }
-                                            br;
+                                        } else {
+                                            : "no restream";
                                         }
+                                    }
+                                    RaceSchedule::Async { .. } => {
+                                        : "no restream";
+                                    }
+                                    RaceSchedule::Unscheduled => {
+                                        // Unscheduled live races: show nothing (empty)
                                     }
                                 }
                             }
@@ -2942,6 +2968,20 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                     }
                 }
             }
+            
+            // Race management section
+            fieldset {
+                legend : "Race management";
+                p(style = "font-size: 0.9em; color: #666; margin-bottom: 1em;") : "If a race will not take place at all, you can set it being canceled and hidden from view here.";
+                : form_field("is_canceled", &mut errors, html! {
+                    input(type = "checkbox", id = "is_canceled", name = "is_canceled", checked? = if let Some(ref ctx) = ctx {
+                        ctx.field_value("is_canceled").map_or(false, |value| value == "on")
+                    } else {
+                        race.ignored
+                    });
+                    label(for = "is_canceled") : "Cancel race permanently";
+                });
+            }
         }, errors, "Save")
     } else {
         html! {
@@ -3140,6 +3180,8 @@ pub(crate) struct EditRaceForm {
     video_urls: HashMap<Language, String>,
     #[field(default = HashMap::new())]
     restreamers: HashMap<Language, String>,
+    #[field(default = false)]
+    is_canceled: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/races/<id>/edit?<redirect_to>", data = "<form>")]
@@ -3411,6 +3453,11 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
             }
             race.last_edited_by = Some(me.id);
             race.last_edited_at = Some(Utc::now());
+            race.ignored = value.is_canceled;
+            
+            // Save original video URLs to check if they changed
+            let original_video_urls = race.video_urls.clone();
+            
             if race.series != Series::League || race.has_any_room() {
                 race.video_urls = value.video_urls.iter().filter(|(_, video_url)| !video_url.is_empty()).map(|(language, video_url)| (*language, Url::parse(video_url).expect("validated"))).collect();
                 race.restreamers = restreamers;
@@ -3422,6 +3469,82 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 race.seed.files = Some(seed::Files::OotrWeb { id, gen_time, file_stem: Cow::Owned(file_stem) });
             }
             race.save(&mut transaction).await?;
+            
+            // Send Discord notification if restream URLs were newly assigned or changed
+            if !race.video_urls.is_empty() && race.video_urls != original_video_urls {
+                if let Some(discord_volunteer_info_channel) = event.discord_volunteer_info_channel {
+                    // Build race description
+                    let race_description = match &race.entrants {
+                        Entrants::Two([team1, team2]) => format!("{} vs {}",
+                            match team1 {
+                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                Entrant::Named { name, .. } => name.clone(),
+                                Entrant::Discord { .. } => "Discord User".to_string(),
+                            },
+                            match team2 {
+                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                Entrant::Named { name, .. } => name.clone(),
+                                Entrant::Discord { .. } => "Discord User".to_string(),
+                            }
+                        ),
+                        Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                            match team1 {
+                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                Entrant::Named { name, .. } => name.clone(),
+                                Entrant::Discord { .. } => "Discord User".to_string(),
+                            },
+                            match team2 {
+                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                Entrant::Named { name, .. } => name.clone(),
+                                Entrant::Discord { .. } => "Discord User".to_string(),
+                            },
+                            match team3 {
+                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                Entrant::Named { name, .. } => name.clone(),
+                                Entrant::Discord { .. } => "Discord User".to_string(),
+                            }
+                        ),
+                        _ => "Unknown entrants".to_string(),
+                    };
+                    
+                    // Get race start time for timestamp
+                    let race_start_time = match race.schedule {
+                        RaceSchedule::Live { start, .. } => start,
+                        _ => return Ok(RedirectOrContent::Redirect(Redirect::to(redirect_to.map(|Origin(uri)| uri.into_owned()).unwrap_or_else(|| uri!(event::races(event.series, &*event.event)))))),
+                    };
+                    
+                    // Build Discord message
+                    let mut msg = MessageBuilder::default();
+                    msg.push("Restream channel assigned for race ");
+                    msg.push_mono(&race_description);
+                    if let Some(phase) = &race.phase {
+                        msg.push(" (");
+                        msg.push(phase);
+                        msg.push(")");
+                    }
+                    msg.push(" at ");
+                    msg.push_timestamp(race_start_time, serenity_utils::message::TimestampStyle::LongDateTime);
+                    msg.push(":\n");
+                    
+                    // Add restream URLs
+                    for (language, video_url) in &race.video_urls {
+                        msg.push("**");
+                        msg.push(&language.to_string());
+                        msg.push(":** ");
+                        msg.push("<");
+                        msg.push(&video_url.to_string());
+                        msg.push(">");
+                        msg.push("\n");
+                    }
+                    
+                    // Send the message to Discord
+                    let discord_ctx = discord_ctx.read().await;
+                    if let Err(e) = discord_volunteer_info_channel.say(&*discord_ctx, msg.build()).await {
+                        eprintln!("Failed to send restream notification to Discord: {}", e);
+                    }
+                }
+            }
+            
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(redirect_to.map(|Origin(uri)| uri.into_owned()).unwrap_or_else(|| uri!(event::races(event.series, &*event.event)))))
         }

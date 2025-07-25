@@ -477,7 +477,14 @@ p.error {
 
 .suggestion-item small {
   color: var(--text-muted);
-  font-size: 0.8em;
+  font-size: 0.875em;
+}
+
+.timezone-info {
+  font-size: 0.875em;
+  font-style: italic;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
 }
 
 .game-grid {

@@ -1,0 +1,246 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n            display_name,\n            short_name,\n            start,\n            end_time,\n            url,\n            challonge_community,\n            speedgaming_slug,\n            hide_races_tab,\n            hide_teams_tab,\n            teams_url,\n            enter_url,\n            video_url,\n            discord_guild AS \"discord_guild: PgSnowflake<GuildId>\",\n            discord_invite_url,\n            discord_race_room_channel AS \"discord_race_room_channel: PgSnowflake<ChannelId>\",\n            discord_race_results_channel AS \"discord_race_results_channel: PgSnowflake<ChannelId>\",\n            discord_organizer_channel AS \"discord_organizer_channel: PgSnowflake<ChannelId>\",\n            discord_scheduling_channel AS \"discord_scheduling_channel: PgSnowflake<ChannelId>\",\n            discord_volunteer_info_channel AS \"discord_volunteer_info_channel: PgSnowflake<ChannelId>\",\n            discord_async_channel AS \"discord_async_channel: PgSnowflake<ChannelId>\",\n            rando_version AS \"rando_version: Json<VersionedBranch>\",\n            single_settings AS \"single_settings: Json<seed::Settings>\",\n            team_config AS \"team_config: TeamConfig\",\n            enter_flow AS \"enter_flow: Json<enter::Flow>\",\n            show_opt_out,\n            show_qualifier_times,\n            default_game_count,\n            min_schedule_notice,\n            open_stream_delay,\n            invitational_stream_delay,\n            retime_window,\n            auto_import,\n            manual_reporting_with_breaks,\n            language AS \"language: Language\"\n        FROM events WHERE series = $1 AND event = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "display_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "short_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "end_time",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "challonge_community",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "speedgaming_slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "hide_races_tab",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "hide_teams_tab",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "teams_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "enter_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "video_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "discord_guild: PgSnowflake<GuildId>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 13,
+        "name": "discord_invite_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "discord_race_room_channel: PgSnowflake<ChannelId>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 15,
+        "name": "discord_race_results_channel: PgSnowflake<ChannelId>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 16,
+        "name": "discord_organizer_channel: PgSnowflake<ChannelId>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 17,
+        "name": "discord_scheduling_channel: PgSnowflake<ChannelId>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 18,
+        "name": "discord_volunteer_info_channel: PgSnowflake<ChannelId>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 19,
+        "name": "discord_async_channel: PgSnowflake<ChannelId>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 20,
+        "name": "rando_version: Json<VersionedBranch>",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 21,
+        "name": "single_settings: Json<seed::Settings>",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 22,
+        "name": "team_config: TeamConfig",
+        "type_info": {
+          "Custom": {
+            "name": "team_config",
+            "kind": {
+              "Enum": [
+                "solo",
+                "coop",
+                "pictionary",
+                "multiworld",
+                "tfbcoop"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "enter_flow: Json<enter::Flow>",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 24,
+        "name": "show_opt_out",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 25,
+        "name": "show_qualifier_times",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 26,
+        "name": "default_game_count",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 27,
+        "name": "min_schedule_notice",
+        "type_info": "Interval"
+      },
+      {
+        "ordinal": 28,
+        "name": "open_stream_delay",
+        "type_info": "Interval"
+      },
+      {
+        "ordinal": 29,
+        "name": "invitational_stream_delay",
+        "type_info": "Interval"
+      },
+      {
+        "ordinal": 30,
+        "name": "retime_window",
+        "type_info": "Interval"
+      },
+      {
+        "ordinal": 31,
+        "name": "auto_import",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 32,
+        "name": "manual_reporting_with_breaks",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 33,
+        "name": "language: Language",
+        "type_info": {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3facc2b0b62278ab34b26c93543001546ae5c98d109136039afc1def8399c657"
+}

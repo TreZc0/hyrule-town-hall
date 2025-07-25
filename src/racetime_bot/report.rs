@@ -315,6 +315,7 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
             },
             cal::Source::StartGG { ref set, .. } => if cal_event.race.game.is_none() { //TODO also auto-report multi-game matches (report all games but the last as match progress)
                 if let Entrant::MidosHouseTeam(Team { startgg_id: Some(winner_entrant_id), .. }) = &winner {
+                    // The set ID from the database should already be just the numeric ID, not the full URL
                     startgg::query_uncached::<startgg::ReportOneGameResultMutation>(&ctx.global_state.http_client, &ctx.global_state.startgg_token, startgg::report_one_game_result_mutation::Variables {
                         set_id: set.clone(),
                         winner_entrant_id: winner_entrant_id.clone(),

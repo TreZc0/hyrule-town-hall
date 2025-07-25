@@ -19,6 +19,7 @@ use {
         prelude::*,
         time::format_datetime,
         user::User,
+        series::Series,
         game,
         cal::{Race, RaceSchedule, Entrants, Entrant},
     },
@@ -77,6 +78,12 @@ impl From<PageError> for StatusOrError<Error> {
     }
 }
 
+impl From<cal::Error> for StatusOrError<Error> {
+    fn from(err: cal::Error) -> Self {
+        StatusOrError::Err(Error::Cal(err))
+    }
+}
+
 #[derive(Debug, Clone, Copy, sqlx::Type)]
 #[sqlx(type_name = "role_request_status", rename_all = "lowercase")]
 pub(crate) enum RoleRequestStatus {
@@ -86,7 +93,7 @@ pub(crate) enum RoleRequestStatus {
     Aborted,
 }
 
-#[derive(Debug, Clone, Copy, sqlx::Type)]
+#[derive(Debug, Clone, Copy, sqlx::Type, PartialEq)]
 #[sqlx(type_name = "volunteer_signup_status", rename_all = "lowercase")]
 pub(crate) enum VolunteerSignupStatus {
     Pending,
@@ -728,6 +735,61 @@ impl Signup {
         )
         .fetch_optional(&mut **pool)
         .await
+    }
+
+    /// Auto-reject overlapping signups for a user when they are confirmed for a race
+    async fn auto_reject_overlapping_signups(
+        pool: &mut Transaction<'_, Postgres>,
+        confirmed_signup_id: Id<Signups>,
+        user_id: Id<Users>,
+    ) -> sqlx::Result<()> {
+        let confirmed_signup = sqlx::query!(
+            r#"SELECT s.race_id, s.role_binding_id, r.series as "series: Series", r.start
+               FROM signups s
+               JOIN races r ON s.race_id = r.id
+               WHERE s.id = $1"#,
+            confirmed_signup_id as _
+        )
+        .fetch_one(&mut **pool)
+        .await?;
+
+        if let Some(start_time) = confirmed_signup.start {
+            let duration = confirmed_signup.series.default_race_duration();
+            let end_time = start_time + duration;
+
+         
+            let all_user_signups = sqlx::query!(
+                r#"SELECT s.id, s.race_id, r.series as "series: Series", r.start
+                   FROM signups s
+                   JOIN races r ON s.race_id = r.id
+                   WHERE s.user_id = $1 
+                   AND s.id != $2
+                   AND s.status = 'pending'
+                   AND r.start IS NOT NULL"#,
+                user_id as _,
+                confirmed_signup_id as _
+            )
+            .fetch_all(&mut **pool)
+            .await?;
+
+            for signup in all_user_signups {
+                if let Some(signup_start_time) = signup.start {
+                    let signup_duration = signup.series.default_race_duration();
+                    let signup_end_time = signup_start_time + signup_duration;
+
+                    if start_time < signup_end_time && signup_start_time < end_time {
+                        sqlx::query!(
+                            r#"UPDATE signups SET status = 'declined', updated_at = NOW() WHERE id = $1"#,
+                            signup.id
+                        )
+                        .execute(&mut **pool)
+                        .await?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -1902,6 +1964,7 @@ pub(crate) struct ManageRosterForm {
 )]
 pub(crate) async fn manage_roster(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     series: Series,
     event: &str,
@@ -1968,6 +2031,157 @@ pub(crate) async fn manage_roster(
             };
 
             Signup::update_status(&mut transaction, value.signup_id, status).await?;
+            
+            // If the signup is being confirmed, auto-reject overlapping signups for the same user
+            if status == VolunteerSignupStatus::Confirmed {
+                // Get the user ID for the confirmed signup
+                let signup = Signup::from_id(&mut transaction, value.signup_id).await?
+                    .ok_or(StatusOrError::Status(Status::NotFound))?;
+                
+                Signup::auto_reject_overlapping_signups(&mut transaction, value.signup_id, signup.user_id).await?;
+                
+                // Send Discord notification to volunteer info channel
+                if let Some(discord_volunteer_info_channel) = data.discord_volunteer_info_channel {
+                    // Get race details for the notification
+                    let race = Race::from_id(&mut transaction, &reqwest::Client::new(), race_id).await?;
+                    let user = User::from_id(&mut *transaction, signup.user_id).await?;
+                    
+                    // Get all confirmed volunteers for this race
+                    let all_signups = Signup::for_race(&mut transaction, race_id).await?;
+                    let confirmed_signups = all_signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
+                    
+                    // Format race description with round info
+                    let race_description = match &race.entrants {
+                        cal::Entrants::Two([team1, team2]) => {
+                            let matchup = format!("{} vs {}",
+                                match team1 {
+                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                },
+                                match team2 {
+                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                }
+                            );
+                            if let Some(round) = &race.round {
+                                format!("{} ({})", matchup, round)
+                            } else {
+                                matchup
+                            }
+                        },
+                        cal::Entrants::Three([team1, team2, team3]) => {
+                            let matchup = format!("{} vs {} vs {}",
+                                match team1 {
+                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                },
+                                match team2 {
+                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                },
+                                match team3 {
+                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                }
+                            );
+                            if let Some(round) = &race.round {
+                                format!("{} ({})", matchup, round)
+                            } else {
+                                matchup
+                            }
+                        },
+                        _ => "Unknown entrants".to_string(),
+                    };
+                    
+                    // Get race start time for timestamp
+                    let race_start_time = match race.schedule {
+                        cal::RaceSchedule::Live { start, .. } => start,
+                        _ => return Err(StatusOrError::Status(Status::BadRequest)), // Volunteers can't sign up for unscheduled races
+                    };
+                    
+                    // Build Discord message
+                    let mut msg = MessageBuilder::default();
+                    msg.push("Volunteers selected for race ");
+                    msg.push_mono(&race_description);
+                    msg.push(" at ");
+                    msg.push_timestamp(race_start_time, serenity_utils::message::TimestampStyle::LongDateTime);
+                    msg.push("\n\n");
+                    
+                    // Add role and user information for the newly selected volunteer
+                    msg.push("**Role:** ");
+                    msg.push_mono(&signup.role_type_name);
+                    msg.push("\n**Selected:** ");
+                    
+                    if let Some(user) = user {
+                        // Check if user has Discord connected
+                        if let Some(discord) = user.discord {
+                            // Ping the user using their Discord ID
+                            msg.mention(&UserId::new(discord.id.get()));
+                        } else {
+                            // Just mention by display name
+                            msg.push(&user.to_string());
+                        }
+                    } else {
+                        // Fallback to user ID if user not found
+                        msg.push(&signup.user_id.to_string());
+                    }
+                    
+                    // Add all confirmed volunteers section
+                    if confirmed_signups.len() > 1 {
+                        msg.push("\n\n**Confirmed volunteers for this race:**\n");
+                        
+                        // Group by role type
+                        let role_bindings = RoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
+                        for binding in role_bindings {
+                            let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                            if !binding_signups.is_empty() {
+                                msg.push("**");
+                                msg.push(&binding.role_type_name);
+                                msg.push(":** ");
+                                
+                                for (i, signup) in binding_signups.iter().enumerate() {
+                                    if i > 0 { msg.push(", "); }
+                                    let volunteer_user = User::from_id(&mut *transaction, signup.user_id).await?;
+                                    if let Some(volunteer_user) = volunteer_user {
+                                        msg.push(&volunteer_user.to_string());
+                                    } else {
+                                        msg.push(&signup.user_id.to_string());
+                                    }
+                                }
+                                msg.push("\n");
+                            }
+                        }
+                    }
+                    
+                    // Add restream information if the race has restream URLs
+                    if !race.video_urls.is_empty() {
+                        msg.push("\n**The race will be restreamed on:**\n");
+                        for (language, video_url) in &race.video_urls {
+                            msg.push("**");
+                            msg.push(&language.to_string());
+                            msg.push(":** ");
+                            msg.push("<");
+                            msg.push(&video_url.to_string());
+                            msg.push(">");
+                            msg.push("\n");
+                        }
+                    } else {
+                        msg.push("\nNo restream has been scheduled for this race so far.");
+                    }
+                    
+                    // Send the message to Discord
+                    let discord_ctx = discord_ctx.read().await;
+                    if let Err(e) = discord_volunteer_info_channel.say(&*discord_ctx, msg.build()).await {
+                        eprintln!("Failed to send volunteer notification to Discord: {}", e);
+                    }
+                }
+            }
+            
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(
                 series, &*event, race_id
@@ -2061,6 +2275,9 @@ async fn match_signup_page(
                     }
                     RaceSchedule::Async { .. } => : "Async Race";
                 }
+            }
+            p {
+                : timezone_info_html();
             }
 
             @if can_manage {

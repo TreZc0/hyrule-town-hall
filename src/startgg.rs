@@ -2,6 +2,7 @@ use {
     graphql_client::GraphQLQuery,
     typemap_rev::TypeMap,
     crate::prelude::*,
+    std::collections::{HashMap, HashSet},
 };
 
 /// From https://dev.start.gg/docs/rate-limits:
@@ -339,7 +340,8 @@ pub(crate) async fn fetch_event_entrants(http_client: &reqwest::Client, config: 
             let entrants_query::EntrantsQueryEventEntrantsNodes { 
                 id: Some(entrant_id), 
                 name: Some(entrant_name), 
-                participants: Some(participants) 
+                participants: Some(participants),
+                paginated_sets: _,
             } = entrant else { continue };
             
             let user_ids: Vec<Option<ID>> = participants.into_iter()
@@ -364,4 +366,203 @@ pub(crate) async fn fetch_event_entrants(http_client: &reqwest::Client, config: 
     }
     
     Ok(all_entrants)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SwissStanding {
+    pub placement: usize,
+    pub name: String,
+    pub wins: usize,
+    pub losses: usize,
+}
+
+/// Computes Swiss standings for a Startgg Swiss event
+pub(crate) async fn swiss_standings(
+    http_client: &reqwest::Client,
+    _config: &Config,
+    event_slug: &str,
+    startgg_token: &str,
+) -> Result<Vec<SwissStanding>, Error> {
+    use entrants_query::EntrantsQueryEventEntrantsNodesPaginatedSetsNodes as SetNode;
+    use entrants_query::EntrantsQueryEventEntrantsNodesPaginatedSetsNodesPhaseGroup as PhaseGroup;
+    use entrants_query::EntrantsQueryEventEntrantsNodes as EntrantNode;
+    use entrants_query::EntrantsQueryEventEntrantsPageInfo as PageInfo;
+    use entrants_query::EntrantsQueryEventEntrants as Entrants;
+    use entrants_query::EntrantsQueryEvent as Event;
+    use entrants_query::ResponseData as ResponseData;
+    use event_sets_query::EventSetsQueryEventSetsNodes as EventSetNode;
+    use event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup as EventSetPhaseGroup;
+    use event_sets_query::EventSetsQueryEventSets as EventSets;
+    use event_sets_query::EventSetsQueryEvent as EventSetsEvent;
+    use event_sets_query::ResponseData as EventSetsResponseData;
+
+    // First, get tournament structure to understand what rounds should exist
+    let mut swiss_rounds = HashSet::<String>::new();
+    let mut page = 1;
+    loop {
+        let response = query_cached::<EventSetsQuery>(
+            http_client,
+            startgg_token,
+            event_sets_query::Variables {
+                event_slug: event_slug.to_owned(),
+                page,
+            },
+        )
+        .await?;
+        let EventSetsResponseData {
+            event: Some(EventSetsEvent {
+                sets: Some(EventSets {
+                    page_info: Some(event_sets_query::EventSetsQueryEventSetsPageInfo { total_pages: Some(tp) }),
+                    nodes: Some(sets),
+                }),
+                ..
+            }),
+            ..
+        } = response else {
+            break;
+        };
+        
+        for set in sets.into_iter().filter_map(|s| s) {
+            let EventSetNode {
+                phase_group: Some(EventSetPhaseGroup { 
+                    phase: Some(phase),
+                    rounds: Some(_rounds),
+                    ..
+                }),
+                full_round_text: Some(round_text),
+                ..
+            } = set else { continue };
+            
+            // Check if this is a Swiss phase
+            if phase.name == Some("Swiss".to_string()) {
+                swiss_rounds.insert(round_text);
+            }
+        }
+        
+        if page >= tp {
+            break;
+        }
+        page += 1;
+    }
+
+    // Now get all entrants and their actual matches
+    let mut all_entrants = Vec::new();
+    let mut entrant_matches = std::collections::HashMap::new();
+    page = 1;
+    loop {
+        let response = query_cached::<EntrantsQuery>(
+            http_client,
+            startgg_token,
+            entrants_query::Variables {
+                slug: Some(event_slug.to_owned()),
+                page: Some(page),
+            },
+        )
+        .await?;
+        let ResponseData {
+            event: Some(Event {
+                entrants: Some(Entrants {
+                    page_info: Some(PageInfo { page: Some(_), total_pages: Some(tp) }),
+                    nodes: Some(entrants),
+                }),
+                ..
+            }),
+            ..
+        } = response else {
+            break;
+        };
+        
+        for entrant in entrants.into_iter().filter_map(|e| e) {
+            let EntrantNode {
+                id: Some(entrant_id),
+                name: Some(entrant_name),
+                paginated_sets: Some(paginated_sets),
+                ..
+            } = entrant else { continue };
+            
+            let mut wins = 0;
+            let mut losses = 0;
+            let mut total_matches = 0; // Track ALL matches (including null winnerId)
+            
+            if let Some(set_nodes) = paginated_sets.nodes {
+                for set in set_nodes.into_iter().filter_map(|s| s) {
+                    let SetNode {
+                        winner_id,
+                        phase_group: Some(PhaseGroup { bracket_type, .. }),
+                        ..
+                    } = set else { continue };
+                    
+                    if bracket_type != Some(entrants_query::BracketType::SWISS) { continue; }
+                    
+                    // Count ALL matches (including null winnerId)
+                    total_matches += 1;
+                    
+                    // Count wins/losses based on winner_id
+                    match winner_id {
+                        Some(wid) if wid.to_string() == entrant_id.to_string() => wins += 1,
+                        Some(_) => losses += 1,
+                        None => {}, // winnerId null means the match hasn't been played yet
+                    }
+                }
+            }
+            
+            // Store the matches for this entrant
+            entrant_matches.insert(entrant_id.to_string(), (entrant_name.clone(), wins, losses, total_matches));
+            all_entrants.push((entrant_name, wins, losses));
+        }
+        
+        if page >= tp {
+            break;
+        }
+        page += 1;
+    }
+
+    // Now apply the correct bye detection logic
+    let expected_rounds = swiss_rounds.len();
+    if expected_rounds > 0 {
+        for (_entrant_id, (name, wins, losses, total_matches)) in &mut entrant_matches {
+            // Only apply byes if the total number of matches is less than expected rounds
+            // This indicates that some matches were wiped from the API
+            if *total_matches < expected_rounds {
+                let missing_matches = expected_rounds - *total_matches;
+                *wins += missing_matches;
+                
+                // Update the all_entrants list
+                if let Some(entrant) = all_entrants.iter_mut().find(|(n, _, _)| n == name) {
+                    entrant.1 = *wins;
+                    entrant.2 = *losses;
+                }
+            }
+        }
+    }
+
+    // Sort: wins desc, losses asc, name asc
+    all_entrants.sort_by(|a, b| {
+        b.1.cmp(&a.1) // wins desc
+            .then(a.2.cmp(&b.2)) // losses asc
+            .then(a.0.cmp(&b.0)) // name asc
+    });
+    
+    // Assign placements with ties
+    let mut standings = Vec::new();
+    let mut last_wins = None;
+    let mut last_losses = None;
+    let mut placement = 1;
+    for (i, (name, wins, losses)) in all_entrants.iter().enumerate() {
+        if i == 0 {
+            last_wins = Some(*wins);
+            last_losses = Some(*losses);
+        } else if *wins != last_wins.unwrap() || *losses != last_losses.unwrap() {
+            placement = i + 1;
+            last_wins = Some(*wins);
+            last_losses = Some(*losses);
+        }
+        standings.push(SwissStanding {
+            placement,
+            name: name.clone(),
+            wins: *wins,
+            losses: *losses,
+        });
+    }
+    Ok(standings)
 }

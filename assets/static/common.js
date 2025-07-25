@@ -1,6 +1,6 @@
 document.querySelectorAll('.datetime').forEach(function(dateTime) {
     var longFormat = dateTime.dataset.long == 'true';
-    dateTime.textContent = new Date(parseInt(dateTime.dataset.timestamp)).toLocaleString([], {
+    dateTime.textContent = new Date(parseInt(dateTime.dataset.timestamp)).toLocaleString(['en'], {
         dateStyle: longFormat ? 'full' : 'medium',
         timeStyle: longFormat ? 'full' : 'short',
     });
@@ -13,7 +13,7 @@ document.querySelectorAll('.daterange').forEach(function(dateRange) {
 });
 
 document.querySelectorAll('.timezone').forEach(function(timezone) {
-    timezone.textContent = Intl.DateTimeFormat([], {timeZoneName: 'longGeneric'}).formatToParts().find(part => part.type == 'timeZoneName').value;
+    timezone.textContent = Intl.DateTimeFormat(['en'], {timeZoneName: 'longGeneric'}).formatToParts().find(part => part.type == 'timeZoneName').value;
 });
 
 document.querySelectorAll('.timezone-wrapper').forEach(function(timezoneWrapper) {

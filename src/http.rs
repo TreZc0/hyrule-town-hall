@@ -372,11 +372,8 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
         }
         h1 : "Ongoing/Upcoming races";
         p {
-            span(class = "timezone-wrapper") {
-                : "Times shown in your timezone (detected as ";
-                span(class = "timezone") : "[unknown]";
-                : ") • ";
-            }
+            : timezone_info_html();
+            : " • ";
             a(href = uri!(cal::index_help)) : "Add to calendar";
         }
         @if races.is_empty() {
@@ -580,6 +577,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         api::graphql_query,
         api::graphql_playground,
         api::entrants_csv,
+        api::swiss_standings_endpoint,
         auth::racetime_callback,
         auth::discord_callback,
         auth::challonge_callback,
@@ -620,6 +618,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::request_async,
         event::submit_async,
         event::practice_seed,
+        event::swiss_standings,
         event::enter::get,
         event::enter::post,
         event::teams::get,

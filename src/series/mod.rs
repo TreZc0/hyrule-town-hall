@@ -20,6 +20,7 @@ use {
         },
     },
     crate::prelude::*,
+    chrono::TimeDelta,
 };
 
 pub(crate) mod br;
@@ -107,6 +108,17 @@ impl Series {
             Self::TournoiFrancophone => "Tournois Francophones",
             Self::TriforceBlitz => "Triforce Blitz",
             Self::WeTryToBeBetter => "WeTryToBeBetter",
+        }
+    }
+
+    pub(crate) fn default_race_duration(&self) -> TimeDelta {
+        match self {
+            Self::TriforceBlitz => TimeDelta::hours(2),
+            Self::BattleRoyale | Self::Crosskeys => TimeDelta::hours(2) + TimeDelta::minutes(30),
+            Self::CoOp | Self::MixedPools | Self::Scrubs | Self::SpeedGaming | Self::WeTryToBeBetter => TimeDelta::hours(3),
+            Self::CopaDoBrasil | Self::League | Self::NineDaysOfSaws | Self::SongsOfHope | Self::Standard | Self::TournoiFrancophone => TimeDelta::hours(3) + TimeDelta::minutes(30),
+            Self::Mq | Self::Multiworld | Self::Pictionary => TimeDelta::hours(4),
+            Self::Rsl => TimeDelta::hours(4) + TimeDelta::minutes(30),
         }
     }
 }

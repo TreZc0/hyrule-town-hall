@@ -169,6 +169,8 @@ pub(crate) struct Data<'a> {
     pub(crate) discord_race_results_channel: Option<ChannelId>,
     pub(crate) discord_organizer_channel: Option<ChannelId>,
     pub(crate) discord_scheduling_channel: Option<ChannelId>,
+    pub(crate) discord_volunteer_info_channel: Option<ChannelId>,
+    pub(crate) discord_async_channel: Option<ChannelId>,
     pub(crate) rando_version: Option<VersionedBranch>,
     pub(crate) single_settings: Option<seed::Settings>,
     pub(crate) team_config: TeamConfig,
@@ -219,6 +221,8 @@ impl<'a> Data<'a> {
             discord_race_results_channel AS "discord_race_results_channel: PgSnowflake<ChannelId>",
             discord_organizer_channel AS "discord_organizer_channel: PgSnowflake<ChannelId>",
             discord_scheduling_channel AS "discord_scheduling_channel: PgSnowflake<ChannelId>",
+            discord_volunteer_info_channel AS "discord_volunteer_info_channel: PgSnowflake<ChannelId>",
+            discord_async_channel AS "discord_async_channel: PgSnowflake<ChannelId>",
             rando_version AS "rando_version: Json<VersionedBranch>",
             single_settings AS "single_settings: Json<seed::Settings>",
             team_config AS "team_config: TeamConfig",
@@ -253,6 +257,8 @@ impl<'a> Data<'a> {
                 discord_race_results_channel: row.discord_race_results_channel.map(|PgSnowflake(id)| id),
                 discord_organizer_channel: row.discord_organizer_channel.map(|PgSnowflake(id)| id),
                 discord_scheduling_channel: row.discord_scheduling_channel.map(|PgSnowflake(id)| id),
+                discord_volunteer_info_channel: row.discord_volunteer_info_channel.map(|PgSnowflake(id)| id),
+                discord_async_channel: row.discord_async_channel.map(|PgSnowflake(id)| id),
                 rando_version: row.rando_version.map(|Json(rando_version)| rando_version),
                 single_settings: if series == Series::CopaDoBrasil && event == "1" {
                     Some(br::s1_settings()) // support for randomized starting song
@@ -507,6 +513,39 @@ impl<'a> Data<'a> {
         Ok(count.unwrap_or(0) > 0)
     }
 
+    /// Returns Swiss standings for this event, if it's a Startgg event
+    pub(crate) async fn swiss_standings(&self, _transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config) -> Result<Option<Vec<startgg::SwissStanding>>, Error> {
+        if !matches!(self.match_source(), MatchSource::StartGG(_)) {
+            return Ok(None);
+        }
+
+        // Extract the Startgg slug from the event URL
+        let slug = match self.url.as_ref().and_then(|url| url.path().strip_prefix('/').map(|s| s.to_string())) {
+            Some(s) if !s.is_empty() => s,
+            _ => return Ok(None),
+        };
+
+        // Get the Startgg token
+        let startgg_token = if Environment::default().is_dev() {
+            &config.startgg_dev
+        } else {
+            &config.startgg_production
+        };
+
+        // Fetch Swiss standings
+        match startgg::swiss_standings(http_client, config, &slug, startgg_token).await {
+            Ok(standings) => Ok(Some(standings)),
+            Err(startgg::Error::GraphQL(errors)) => {
+                // Check if it's a query complexity error
+                if errors.iter().any(|e| e.message.contains("query complexity is too high")) {
+                    log::warn!("Startgg API query complexity too high for event {}", slug);
+                }
+                Ok(None) // Return None if API call fails
+            },
+            Err(_) => Ok(None), // Return None for other errors
+        }
+    }
+
     pub(crate) async fn header(&self, transaction: &mut Transaction<'_, Postgres>, me: Option<&User>, tab: Tab, is_subpage: bool) -> Result<RawHtml<String>, Error> {
         let signed_up = if let Some(me) = me {
             sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams, team_members WHERE
@@ -524,11 +563,12 @@ impl<'a> Data<'a> {
                 a(class = "nav", href? = (!matches!(tab, Tab::Info) || is_subpage).then(|| uri!(info(self.series, &*self.event)))) : &self.display_name;
             }
             @if let Some(start) = self.start(&mut *transaction).await? {
-                h2 {
-                    @if let (Series::Standard, "8") = (self.series, &*self.event) {
-                        : "Brackets: ";
-                    }
-                    : format_datetime(start, DateTimeFormat { long: true, running_text: false });
+                h4 {
+                    : "Event Start: ";
+                    : start.format("%Y-%m-%d").to_string();
+                }
+                p(class = "timezone-info") {
+                    : timezone_info_html();
                 }
             }
             div(class = "button-row") {
@@ -555,6 +595,13 @@ impl<'a> Data<'a> {
                         a(class = "button selected", href? = is_subpage.then(|| uri!(races(self.series, &*self.event)))) : "Races";
                     } else {
                         a(class = "button", href = uri!(races(self.series, &*self.event))) : "Races";
+                    }
+                }
+                @if matches!(self.match_source(), MatchSource::StartGG(_)) {
+                    @if let Tab::SwissStandings = tab {
+                        a(class = "button selected", href? = is_subpage.then(|| uri!(swiss_standings(self.series, &*self.event)))) : "Swiss Standings";
+                    } else {
+                        a(class = "button", href = uri!(swiss_standings(self.series, &*self.event))) : "Swiss Standings";
                     }
                 }
                 @if signed_up {
@@ -699,6 +746,7 @@ pub(crate) enum Tab {
     Volunteer,
     Configure,
     Roles,
+    SwissStandings,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1875,7 +1923,7 @@ pub(crate) async fn request_async(pool: &State<PgPool>, me: User, uri: Origin<'_
     let mut form = form.into_inner();
     form.verify(&csrf);
     Ok(if let Some(ref value) = form.value {
-        let team = sqlx::query_as!(Team, r#"SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, teams.startgg_id AS "startgg_id: startgg::ID", plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams, team_members WHERE
+        let team = sqlx::query_as!(Team, r#"SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, teams.startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams, team_members WHERE
             id = team
             AND series = $1
             AND event = $2
@@ -1946,7 +1994,7 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, discord_ctx: &State<RwFut
     let mut form = form.into_inner();
     form.verify(&csrf);
     Ok(if let Some(ref value) = form.value {
-        let team = sqlx::query_as!(Team, r#"SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, teams.startgg_id AS "startgg_id: startgg::ID", plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams, team_members WHERE
+        let team = sqlx::query_as!(Team, r#"SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, teams.startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams, team_members WHERE
             id = team
             AND series = $1
             AND event = $2
@@ -2129,4 +2177,123 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, ootr_api_client: &State<
     let web_version = ootr_api_client.can_roll_on_web(None, &version, world_count, UnlockSpoilerLog::Now).await.ok_or(StatusOrError::Status(Status::NotFound))?;
     let id = Arc::clone(ootr_api_client).roll_practice_seed(web_version, false, settings).await?;
     Ok(Redirect::to(format!("https://ootrandomizer.com/seed/get?id={id}")))
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SwissStandingsError {
+    #[error(transparent)] Data(#[from] DataError),
+    #[error(transparent)] Event(#[from] Error),
+    #[error(transparent)] Page(#[from] PageError),
+    #[error(transparent)] Reqwest(#[from] reqwest::Error),
+    #[error(transparent)] Sql(#[from] sqlx::Error),
+}
+
+impl<E: Into<SwissStandingsError>> From<E> for StatusOrError<SwissStandingsError> {
+    fn from(e: E) -> Self {
+        Self::Err(e.into())
+    }
+}
+
+impl IsNetworkError for SwissStandingsError {
+    fn is_network_error(&self) -> bool {
+        match self {
+            Self::Data(_) => false,
+            Self::Event(e) => e.is_network_error(),
+            Self::Page(e) => e.is_network_error(),
+            Self::Reqwest(e) => e.is_network_error(),
+            Self::Sql(_) => false,
+        }
+    }
+}
+
+impl<'r> rocket::response::Responder<'r, 'static> for SwissStandingsError {
+    fn respond_to(self, request: &'r Request<'_>) -> rocket::response::Result<'static> {
+        let status = if self.is_network_error() {
+            Status::BadGateway
+        } else {
+            Status::InternalServerError
+        };
+        eprintln!("responded with {status} to request to {}", request.uri());
+        eprintln!("display: {self}");
+        eprintln!("debug: {self:?}");
+        Err(status)
+    }
+}
+
+#[rocket::get("/event/<series>/<event>/swiss-standings")]
+pub(crate) async fn swiss_standings(
+    pool: &State<PgPool>,
+    http_client: &State<reqwest::Client>,
+    config: &State<Config>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    series: Series,
+    event: &str,
+) -> Result<RawHtml<String>, StatusOrError<SwissStandingsError>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    
+    // Only show for Startgg events
+    if !matches!(data.match_source(), MatchSource::StartGG(_)) {
+        return Err(StatusOrError::Status(Status::NotFound));
+    }
+    
+    let header = data.header(&mut transaction, me.as_ref(), Tab::SwissStandings, false).await?;
+    
+    // Extract the Startgg slug from the event URL
+    let slug = match data.url.as_ref().and_then(|url| url.path().strip_prefix('/').map(|s| s.to_string())) {
+        Some(s) if !s.is_empty() => s,
+        _ => return Err(StatusOrError::Status(Status::NotFound)),
+    };
+    
+    // Get the Startgg token
+    let startgg_token = if Environment::default().is_dev() {
+        &config.startgg_dev
+    } else {
+        &config.startgg_production
+    };
+    
+    // Fetch Swiss standings
+    let standings = match startgg::swiss_standings(
+        http_client.inner(),
+        &*config,
+        &slug,
+        startgg_token,
+    ).await {
+        Ok(standings) => standings,
+        Err(_) => {
+            // Return empty standings if API call fails
+            Vec::new()
+        }
+    };
+    
+    let content = html! {
+        : header;
+        h2 : "Swiss Standings";
+        p(style = "font-style: italic; color: var(--text-muted); margin-bottom: 1rem;") : "This page automatically updates every 5 minutes.";
+        @if standings.is_empty() {
+            p : "No Swiss standings available at this time.";
+        } else {
+            table {
+                thead {
+                    tr {
+                        th : "Placement";
+                        th : "Name";
+                        th : "Swiss Result";
+                    }
+                }
+                tbody {
+                    @for standing in &standings {
+                        tr {
+                            td : standing.placement.to_string();
+                            td : &standing.name;
+                            td : format!("{}:{}", standing.wins, standing.losses);
+                        }
+                    }
+                }
+            }
+        }
+    };
+    
+    Ok(page(transaction, &me, &uri, PageStyle::default(), "Swiss Standings", content).await?)
 }
