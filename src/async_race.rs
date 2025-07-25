@@ -322,7 +322,7 @@ impl AsyncRaceManager {
         content.push(seed_url);
         
         // Add hash if available
-        if let Some(file_hash) = race.seed.file_hash {
+        if let Some(file_hash) = race.seed.file_hash.as_ref() {
             content.push_line("");
             content.push("The hash for this seed is: ");
             content.push(format!("{}, {}, {}, {}, {}", 
