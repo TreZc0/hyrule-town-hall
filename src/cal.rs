@@ -20,6 +20,7 @@ use {
         CreateSelectMenuOption,
     },
     sqlx::types::Json,
+    chrono::LocalResult,
     crate::{
         discord_bot,
         event::Tab,
@@ -2875,8 +2876,16 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, http_client: &State<reqw
 pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, discord_ctx: &DiscordCtx, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: event::Data<'_>, race: Race, redirect_to: Option<Origin<'_>>, ctx: Option<Context<'_>>) -> Result<RawHtml<String>, event::Error> {
     let header = event.header(&mut transaction, me.as_ref(), Tab::Races, true).await?;
     let trez = User::from_id(&mut *transaction, Id::<Users>::from(16287394041462225947_u64)).await?.ok_or(PageError::TrezUserData(0))?;
+    
+    // Check if user is an organizer for start date editing
+    let is_organizer = if let Some(ref me) = me {
+        event.organizers(&mut transaction).await?.contains(me)
+    } else {
+        false
+    };
+    
+    let mut errors = ctx.as_ref().map(|ctx| ctx.errors().collect()).unwrap_or_default();
     let form = if me.is_some() {
-        let mut errors = ctx.as_ref().map(|ctx| ctx.errors().collect()).unwrap_or_default();
         full_form(uri!(edit_race_post(event.series, &*event.event, race.id, redirect_to)), csrf, html! {
             @match race.schedule {
                 RaceSchedule::Unscheduled => {}
@@ -2982,7 +2991,8 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                     label(for = "is_canceled") : "Cancel race permanently";
                 });
             }
-        }, errors, "Save")
+
+        }, errors.clone(), "Save")
     } else {
         html! {
             article {
@@ -3072,81 +3082,220 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                 : game;
             }
         }
-        @match race.schedule {
-            RaceSchedule::Unscheduled => p : "Not yet scheduled";
-            RaceSchedule::Live { start, end, room: _ } => {
+        @if let Some(ref me) = me {
+            @if is_organizer {
+                fieldset {
+                    legend : "Race Schedule (Organizers Only)";
+                    @match race.schedule {
+                        RaceSchedule::Unscheduled => {
+                            p : "Not yet scheduled";
+                            : form_field("start_date", &mut errors, html! {
+                                label(for = "start_date") : "Start date (YYYY-MM-DD HH:MM in your timezone):";
+                                input(type = "text", name = "start_date", value? = if let Some(ref ctx) = ctx {
+                                    ctx.field_value("start_date").map(|date| date.to_string())
+                                } else {
+                                    Some(String::new())
+                                });
+                                small : "input in your local time (name of timezone)";
+                            });
+                            input(type = "hidden", name = "timezone", id = "timezone-field");
+                        }
+                        RaceSchedule::Live { start, end, room: _ } => {
+                            p {
+                                : "Current start: ";
+                                : format_datetime(start, DateTimeFormat { long: true, running_text: false });
+                            }
+                            : form_field("start_date", &mut errors, html! {
+                                label(for = "start_date") : "New start date (YYYY-MM-DD HH:MM in your timezone):";
+                                input(type = "text", name = "start_date", value? = if let Some(ref ctx) = ctx {
+                                    ctx.field_value("start_date").map(|date| date.to_string())
+                                } else {
+                                    Some(start.format("%Y-%m-%d %H:%M").to_string())
+                                });
+                                small : "Leave empty to keep current time";
+                            });
+                            input(type = "hidden", name = "timezone", id = "timezone-field");
+
+                        }
+                        RaceSchedule::Async { start1, start2, start3, end1, end2, end3, room1: _, room2: _, room3: _ } => {
+                            @if let Some(start1) = start1 {
+                                p {
+                                    : "Current start (team A): ";
+                                    : format_datetime(start1, DateTimeFormat { long: true, running_text: false });
+                                }
+                            } else {
+                                p : "Team A not yet started";
+                            }
+                            : form_field("async_start1_date", &mut errors, html! {
+                                label(for = "async_start1_date") : "New start (team A) (YYYY-MM-DD HH:MM in your timezone):";
+                                input(type = "text", name = "async_start1_date", value? = if let Some(ref ctx) = ctx {
+                                    ctx.field_value("async_start1_date").map(|date| date.to_string())
+                                } else {
+                                    Some(start1.map(|s| s.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default())
+                                });
+                                small : "input in your local time (name of timezone)";
+                            });
+                            @if let Some(start2) = start2 {
+                                p {
+                                    : "Current start (team B): ";
+                                    : format_datetime(start2, DateTimeFormat { long: true, running_text: false });
+                                }
+                            } else {
+                                p : "Team B not yet started";
+                            }
+                            : form_field("async_start2_date", &mut errors, html! {
+                                label(for = "async_start2_date") : "New start (team B) (YYYY-MM-DD HH:MM in your timezone):";
+                                input(type = "text", name = "async_start2_date", value? = if let Some(ref ctx) = ctx {
+                                    ctx.field_value("async_start2_date").map(|date| date.to_string())
+                                } else {
+                                    Some(start2.map(|s| s.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default())
+                                });
+                                small : "input in your local time (name of timezone)";
+                            });
+                            @if let Entrants::Three(_) = race.entrants {
+                                @if let Some(start3) = start3 {
+                                    p {
+                                        : "Current start (team C): ";
+                                        : format_datetime(start3, DateTimeFormat { long: true, running_text: false });
+                                    }
+                                } else {
+                                    p : "Team C not yet started";
+                                }
+                                : form_field("async_start3_date", &mut errors, html! {
+                                    label(for = "async_start3_date") : "New start (team C) (YYYY-MM-DD HH:MM in your timezone):";
+                                    input(type = "text", name = "async_start3_date", value? = if let Some(ref ctx) = ctx {
+                                        ctx.field_value("async_start3_date").map(|date| date.to_string())
+                                    } else {
+                                        Some(start3.map(|s| s.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default())
+                                    });
+                                    small : "input in your local time (name of timezone)";
+                                });
+                            }
+
+                        }
+                    }
+                }
+            } else {
+                @match race.schedule {
+                    RaceSchedule::Unscheduled => p : "Not yet scheduled";
+                    RaceSchedule::Live { start, end: _, room: _ } => {
+                        p {
+                            : "Start: ";
+                            : format_datetime(start, DateTimeFormat { long: true, running_text: false });
+                        }
+                    }
+                    RaceSchedule::Async { start1, start2, start3, end1: _, end2: _, end3: _, room1: _, room2: _, room3: _ } => {
+                        @if let Some(start1) = start1 {
+                            p {
+                                : "Start (team A): ";
+                                : format_datetime(start1, DateTimeFormat { long: true, running_text: false });
+                            }
+                        } else {
+                            p : "Team A not yet started";
+                        }
+                        @if let Some(start2) = start2 {
+                            p {
+                                : "Start (team B): ";
+                                : format_datetime(start2, DateTimeFormat { long: true, running_text: false });
+                            }
+                        } else {
+                            p : "Team B not yet started";
+                        }
+                        @if let Entrants::Three(_) = race.entrants {
+                            @if let Some(start3) = start3 {
+                                p {
+                                    : "Start (team C): ";
+                                    : format_datetime(start3, DateTimeFormat { long: true, running_text: false });
+                                }
+                            } else {
+                                p : "Team C not yet started";
+                            }
+                        }
+                    }
+                }
                 p {
-                    : "Start: ";
-                    : format_datetime(start, DateTimeFormat { long: true, running_text: false });
-                }
-                @if let Some(end) = end {
-                    p {
-                        : "End: ";
-                        : format_datetime(end, DateTimeFormat { long: true, running_text: false });
-                    }
-                } else {
-                    p : "Not yet ended (will be updated automatically from the racetime.gg room, if any)";
+                    : "The data above is currently not editable for technical reasons. Please contact ";
+                    : trez;
+                    : " if you've spotted an error in it.";
                 }
             }
-            RaceSchedule::Async { start1, start2, start3, end1, end2, end3, room1: _, room2: _, room3: _ } => {
-                @if let Some(start1) = start1 {
+        } else {
+            @match race.schedule {
+                RaceSchedule::Unscheduled => p : "Not yet scheduled";
+                RaceSchedule::Live { start, end, room: _ } => {
                     p {
-                        : "Start (team A): ";
-                        : format_datetime(start1, DateTimeFormat { long: true, running_text: false });
+                        : "Start: ";
+                        : format_datetime(start, DateTimeFormat { long: true, running_text: false });
                     }
-                } else {
-                    p : "Team A not yet started";
-                }
-                @if let Some(start2) = start2 {
-                    p {
-                        : "Start (team B): ";
-                        : format_datetime(start2, DateTimeFormat { long: true, running_text: false });
-                    }
-                } else {
-                    p : "Team B not yet started";
-                }
-                @if let Entrants::Three(_) = race.entrants {
-                    @if let Some(start3) = start3 {
+                    @if let Some(end) = end {
                         p {
-                            : "Start (team C): ";
-                            : format_datetime(start3, DateTimeFormat { long: true, running_text: false });
+                            : "End: ";
+                            : format_datetime(end, DateTimeFormat { long: true, running_text: false });
                         }
                     } else {
-                        p : "Team C not yet started";
+                        p : "Not yet ended (will be updated automatically from the racetime.gg room, if any)";
                     }
                 }
-                @if let Some(end1) = end1 {
-                    p {
-                        : "End (team A): ";
-                        : format_datetime(end1, DateTimeFormat { long: true, running_text: false });
-                    }
-                } else {
-                    p : "Team A not yet ended (will be updated automatically from the racetime.gg room, if any)";
-                }
-                @if let Some(end2) = end2 {
-                    p {
-                        : "End (team B): ";
-                        : format_datetime(end2, DateTimeFormat { long: true, running_text: false });
-                    }
-                } else {
-                    p : "Team B not yet ended (will be updated automatically from the racetime.gg room, if any)";
-                }
-                @if let Entrants::Three(_) = race.entrants {
-                    @if let Some(end3) = end3 {
+                RaceSchedule::Async { start1, start2, start3, end1, end2, end3, room1: _, room2: _, room3: _ } => {
+                    @if let Some(start1) = start1 {
                         p {
-                            : "End (team C): ";
-                            : format_datetime(end3, DateTimeFormat { long: true, running_text: false });
+                            : "Start (team A): ";
+                            : format_datetime(start1, DateTimeFormat { long: true, running_text: false });
                         }
                     } else {
-                        p : "Team C not yet ended (will be updated automatically from the racetime.gg room, if any)";
+                        p : "Team A not yet started";
+                    }
+                    @if let Some(start2) = start2 {
+                        p {
+                            : "Start (team B): ";
+                            : format_datetime(start2, DateTimeFormat { long: true, running_text: false });
+                        }
+                    } else {
+                        p : "Team B not yet started";
+                    }
+                    @if let Entrants::Three(_) = race.entrants {
+                        @if let Some(start3) = start3 {
+                            p {
+                                : "Start (team C): ";
+                                : format_datetime(start3, DateTimeFormat { long: true, running_text: false });
+                            }
+                        } else {
+                            p : "Team C not yet started";
+                        }
+                    }
+                    @if let Some(end1) = end1 {
+                        p {
+                            : "End (team A): ";
+                            : format_datetime(end1, DateTimeFormat { long: true, running_text: false });
+                        }
+                    } else {
+                        p : "Team A not yet ended (will be updated automatically from the racetime.gg room, if any)";
+                    }
+                    @if let Some(end2) = end2 {
+                        p {
+                            : "End (team B): ";
+                            : format_datetime(end2, DateTimeFormat { long: true, running_text: false });
+                        }
+                    } else {
+                        p : "Team B not yet ended (will be updated automatically from the racetime.gg room, if any)";
+                    }
+                    @if let Entrants::Three(_) = race.entrants {
+                        @if let Some(end3) = end3 {
+                            p {
+                                : "End (team C): ";
+                                : format_datetime(end3, DateTimeFormat { long: true, running_text: false });
+                            }
+                        } else {
+                            p : "Team C not yet ended (will be updated automatically from the racetime.gg room, if any)";
+                        }
                     }
                 }
             }
-        }
-        p {
-            : "The data above is currently not editable for technical reasons. Please contact ";
-            : trez;
-            : " if you've spotted an error in it.";
+            p {
+                : "The data above is currently not editable for technical reasons. Please contact ";
+                : trez;
+                : " if you've spotted an error in it.";
+            }
         }
         : form;
     };
@@ -3182,6 +3331,16 @@ pub(crate) struct EditRaceForm {
     restreamers: HashMap<Language, String>,
     #[field(default = false)]
     is_canceled: bool,
+    #[field(default = String::new())]
+    start_date: String,
+    #[field(default = String::new())]
+    async_start1_date: String,
+    #[field(default = String::new())]
+    async_start2_date: String,
+    #[field(default = String::new())]
+    async_start3_date: String,
+    #[field(default = String::new())]
+    timezone: String,
 }
 
 #[rocket::post("/event/<series>/<event>/races/<id>/edit?<redirect_to>", data = "<form>")]
@@ -3198,6 +3357,127 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
         form.context.push_error(form::Error::validation("You must be an organizer, restream coordinator, or archivist to edit this race. If you would like to be a restream coordinator for this event, please contact the organizers. If you would like to become an archivist, please contact TreZ on Discord."));
     }
     Ok(if let Some(ref value) = form.value {
+        // Check if user is an organizer for start date editing
+        let is_organizer = event.organizers(&mut transaction).await?.contains(&me);
+        
+        // Parse and validate start dates if user is an organizer
+        let mut new_start_date = None;
+        let mut new_async_start1_date = None;
+        let mut new_async_start2_date = None;
+        let mut new_async_start3_date = None;
+        
+        if is_organizer {
+            // Parse live race start date
+            if !value.start_date.is_empty() {
+                if let Ok(naive_datetime) = NaiveDateTime::parse_from_str(&value.start_date, "%Y-%m-%d %H:%M") {
+                    if value.timezone.is_empty() {
+                        new_start_date = Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_datetime, Utc));
+                    } else {
+                        match value.timezone.parse::<Tz>() {
+                            Ok(tz) => {
+                                match tz.from_local_datetime(&naive_datetime) {
+                                    LocalResult::Single(dt) => new_start_date = Some(dt.with_timezone(&Utc)),
+                                    LocalResult::None => {
+                                        form.context.push_error(form::Error::validation(format!("Invalid datetime for timezone {}: {}", value.timezone, value.start_date)).with_name("start_date"));
+                                    }
+                                    LocalResult::Ambiguous(dt1, _) => {
+                                        new_start_date = Some(dt1.with_timezone(&Utc));
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                form.context.push_error(form::Error::validation(format!("Invalid timezone: {}. Use format like America/New_York or Europe/London", value.timezone)).with_name("timezone"));
+                            }
+                        }
+                    }
+                } else {
+                    form.context.push_error(form::Error::validation("Start date must be in format YYYY-MM-DD HH:MM").with_name("start_date"));
+                }
+            }
+            
+            // Parse async race start dates
+            if !value.async_start1_date.is_empty() {
+                if let Ok(naive_datetime) = NaiveDateTime::parse_from_str(&value.async_start1_date, "%Y-%m-%d %H:%M") {
+                    if value.timezone.is_empty() {
+                        new_async_start1_date = Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_datetime, Utc));
+                    } else {
+                        match value.timezone.parse::<Tz>() {
+                            Ok(tz) => {
+                                match tz.from_local_datetime(&naive_datetime) {
+                                    LocalResult::Single(dt) => new_async_start1_date = Some(dt.with_timezone(&Utc)),
+                                    LocalResult::None => {
+                                        form.context.push_error(form::Error::validation(format!("Invalid datetime for timezone {}: {}", value.timezone, value.async_start1_date)).with_name("async_start1_date"));
+                                    }
+                                    LocalResult::Ambiguous(dt1, _) => {
+                                        new_async_start1_date = Some(dt1.with_timezone(&Utc));
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                form.context.push_error(form::Error::validation(format!("Invalid timezone: {}. Use format like America/New_York or Europe/London", value.timezone)).with_name("timezone"));
+                            }
+                        }
+                    }
+                } else {
+                    form.context.push_error(form::Error::validation("Async start 1 date must be in format YYYY-MM-DD HH:MM").with_name("async_start1_date"));
+                }
+            }
+            
+            if !value.async_start2_date.is_empty() {
+                if let Ok(naive_datetime) = NaiveDateTime::parse_from_str(&value.async_start2_date, "%Y-%m-%d %H:%M") {
+                    if value.timezone.is_empty() {
+                        new_async_start2_date = Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_datetime, Utc));
+                    } else {
+                        match value.timezone.parse::<Tz>() {
+                            Ok(tz) => {
+                                match tz.from_local_datetime(&naive_datetime) {
+                                    LocalResult::Single(dt) => new_async_start2_date = Some(dt.with_timezone(&Utc)),
+                                    LocalResult::None => {
+                                        form.context.push_error(form::Error::validation(format!("Invalid datetime for timezone {}: {}", value.timezone, value.async_start2_date)).with_name("async_start2_date"));
+                                    }
+                                    LocalResult::Ambiguous(dt1, _) => {
+                                        new_async_start2_date = Some(dt1.with_timezone(&Utc));
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                form.context.push_error(form::Error::validation(format!("Invalid timezone: {}. Use format like America/New_York or Europe/London", value.timezone)).with_name("timezone"));
+                            }
+                        }
+                    }
+                } else {
+                    form.context.push_error(form::Error::validation("Async start 2 date must be in format YYYY-MM-DD HH:MM").with_name("async_start2_date"));
+                }
+            }
+            
+            if !value.async_start3_date.is_empty() {
+                if let Ok(naive_datetime) = NaiveDateTime::parse_from_str(&value.async_start3_date, "%Y-%m-%d %H:%M") {
+                    if value.timezone.is_empty() {
+                        new_async_start3_date = Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_datetime, Utc));
+                    } else {
+                        match value.timezone.parse::<Tz>() {
+                            Ok(tz) => {
+                                match tz.from_local_datetime(&naive_datetime) {
+                                    LocalResult::Single(dt) => new_async_start3_date = Some(dt.with_timezone(&Utc)),
+                                    LocalResult::None => {
+                                        form.context.push_error(form::Error::validation(format!("Invalid datetime for timezone {}: {}", value.timezone, value.async_start3_date)).with_name("async_start3_date"));
+                                    }
+                                    LocalResult::Ambiguous(dt1, _) => {
+                                        new_async_start3_date = Some(dt1.with_timezone(&Utc));
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                form.context.push_error(form::Error::validation(format!("Invalid timezone: {}. Use format like America/New_York or Europe/London", value.timezone)).with_name("timezone"));
+                            }
+                        }
+                    }
+                } else {
+                    form.context.push_error(form::Error::validation("Async start 3 date must be in format YYYY-MM-DD HH:MM").with_name("async_start3_date"));
+                }
+            }
+        }
+        
         let mut valid_room_urls = HashMap::new();
         match race.schedule {
             RaceSchedule::Unscheduled => {
@@ -3442,13 +3722,54 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(edit_race_form(transaction, &*discord_ctx.read().await, Some(me), uri, csrf.as_ref(), event, race, redirect_to, Some(form.context)).await?)
         } else {
-            match &mut race.schedule {
-                RaceSchedule::Unscheduled => {}
-                RaceSchedule::Live { room, .. } => *room = (!value.room.is_empty()).then(|| Url::parse(&value.room).expect("validated")),
-                RaceSchedule::Async { room1, room2, room3, .. } => {
-                    *room1 = (!value.async_room1.is_empty()).then(|| Url::parse(&value.async_room1).expect("validated"));
-                    *room2 = (!value.async_room2.is_empty()).then(|| Url::parse(&value.async_room2).expect("validated"));
-                    *room3 = (!value.async_room3.is_empty()).then(|| Url::parse(&value.async_room3).expect("validated"));
+            // Update race schedule with new start dates if organizer
+            if is_organizer {
+                match &mut race.schedule {
+                    RaceSchedule::Unscheduled => {
+                        if let Some(new_start) = new_start_date {
+                            race.schedule = RaceSchedule::Live {
+                                start: new_start,
+                                end: None,
+                                room: None,
+                            };
+                            race.schedule_updated_at = Some(Utc::now());
+                        }
+                    }
+                    RaceSchedule::Live { start, end: _, room } => {
+                        if let Some(new_start) = new_start_date {
+                            *start = new_start;
+                            race.schedule_updated_at = Some(Utc::now());
+                        }
+                        *room = (!value.room.is_empty()).then(|| Url::parse(&value.room).expect("validated"));
+                    }
+                    RaceSchedule::Async { start1, start2, start3, end1: _, end2: _, end3: _, room1, room2, room3 } => {
+                        if let Some(new_start) = new_async_start1_date {
+                            *start1 = Some(new_start);
+                            race.schedule_updated_at = Some(Utc::now());
+                        }
+                        if let Some(new_start) = new_async_start2_date {
+                            *start2 = Some(new_start);
+                            race.schedule_updated_at = Some(Utc::now());
+                        }
+                        if let Some(new_start) = new_async_start3_date {
+                            *start3 = Some(new_start);
+                            race.schedule_updated_at = Some(Utc::now());
+                        }
+                        *room1 = (!value.async_room1.is_empty()).then(|| Url::parse(&value.async_room1).expect("validated"));
+                        *room2 = (!value.async_room2.is_empty()).then(|| Url::parse(&value.async_room2).expect("validated"));
+                        *room3 = (!value.async_room3.is_empty()).then(|| Url::parse(&value.async_room3).expect("validated"));
+                    }
+                }
+            } else {
+                // Non-organizers can only update room URLs
+                match &mut race.schedule {
+                    RaceSchedule::Unscheduled => {}
+                    RaceSchedule::Live { room, .. } => *room = (!value.room.is_empty()).then(|| Url::parse(&value.room).expect("validated")),
+                    RaceSchedule::Async { room1, room2, room3, .. } => {
+                        *room1 = (!value.async_room1.is_empty()).then(|| Url::parse(&value.async_room1).expect("validated"));
+                        *room2 = (!value.async_room2.is_empty()).then(|| Url::parse(&value.async_room2).expect("validated"));
+                        *room3 = (!value.async_room3.is_empty()).then(|| Url::parse(&value.async_room3).expect("validated"));
+                    }
                 }
             }
             race.last_edited_by = Some(me.id);

@@ -19,3 +19,17 @@ document.querySelectorAll('.timezone').forEach(function(timezone) {
 document.querySelectorAll('.timezone-wrapper').forEach(function(timezoneWrapper) {
     timezoneWrapper.classList.remove('timezone-wrapper');
 });
+
+// Auto-detect timezone and set it in hidden timezone fields
+document.addEventListener('DOMContentLoaded', function() {
+    const timezoneField = document.getElementById('timezone-field');
+    if (timezoneField) {
+        try {
+            const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            timezoneField.value = timezone;
+        } catch (e) {
+            console.warn('Could not detect timezone:', e);
+            timezoneField.value = 'UTC';
+        }
+    }
+});
