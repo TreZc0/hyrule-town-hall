@@ -59,6 +59,7 @@ impl AsyncRaceManager {
                                 async_part,
                                 start_time,
                                 async_channel,
+                                pool,
                             ).await?;
                         }
                     }
@@ -79,6 +80,7 @@ impl AsyncRaceManager {
         async_part: u8,
         start_time: DateTime<Utc>,
         async_channel: ChannelId,
+        db_pool: &PgPool,
     ) -> Result<(), Error> {
         let team = Self::get_team_for_async_part(race, async_part)?;
         let player = team.members(transaction).await?.into_iter().next()
@@ -127,6 +129,7 @@ impl AsyncRaceManager {
             start_time,
             &player,
             is_first_half,
+            db_pool,
         ).await?;
         
         let thread = async_channel.create_thread(discord_ctx, CreateThread::new(&thread_name)
@@ -219,6 +222,7 @@ impl AsyncRaceManager {
         _start_time: DateTime<Utc>,
         player: &User,
         _is_first_half: bool,
+        db_pool: &PgPool,
     ) -> Result<MessageBuilder, Error> {
         let mut content = MessageBuilder::default();
         
@@ -257,6 +261,37 @@ impl AsyncRaceManager {
         let display_order = Self::get_display_order(race, async_part);
         content.push(display_order.to_string());
         content.push(" of this round.");
+        
+        // Add settings information for Crosskeys2025 events
+        if let racetime_bot::Goal::Crosskeys2025 = racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event") {
+            let crosskeys_options = racetime_bot::CrosskeysRaceOptions::for_race(db_pool, race).await;
+            
+            content.push_line("");
+            content.push_line("");
+            content.push("---");
+            content.push_line("");
+            content.push(format!("**Seed Settings:** {}", crosskeys_options.as_seed_options_str()));
+            content.push_line("");
+            
+            // Create race options string without delay setting
+            let mut race_options = Vec::new();
+            let race_options_full = crosskeys_options.as_race_options_str();
+            if race_options_full.contains("ALLOWED") {
+                race_options.push("hovering and moldorm bouncing ALLOWED");
+            } else {
+                race_options.push("hovering and moldorm bouncing BANNED");
+            }
+            // Note: We exclude the delay setting as requested
+            let race_options_str = if race_options.is_empty() {
+                "standard race rules".to_string()
+            } else {
+                race_options.join(", ")
+            };
+            
+            content.push(format!("**Race Rules:** {}", race_options_str));
+            content.push_line("");
+            content.push("---");
+        }
         
         content.push_line("");
         content.push("**IMPORTANT:** To prevent seed leaks, you must signal that you are ready before the seed will be distributed.");
