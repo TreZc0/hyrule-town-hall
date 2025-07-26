@@ -2655,7 +2655,7 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
     };
 
     // There is already a seed rolled. Access that seed instead.
-    let (uuid, second_half, file_hash) = match cal_event.race.seed.files {
+    let (uuid, _second_half, file_hash) = match cal_event.race.seed.files {
         // Seed already exists, get the message appropriately.
         Some(seed::Files::AlttprDoorRando { uuid}) => (uuid, true, cal_event.race.seed.file_hash.as_ref().cloned()),
         Some(_) => unimplemented!("Haven't implemented asyncs for non-door rando yet"),
@@ -2721,11 +2721,6 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
             // Convert hash icon names to racetime emojis
             let hash_emojis = format_hash_with_game_id([hash1.clone(), hash2.clone(), hash3.clone(), hash4.clone(), hash5.clone()], &mut transaction, game_id).await?;
             content.push(format!("The hash for this seed is {}", hash_emojis));
-        }
-        if second_half {
-            content.push_line("");
-            content.push_line("");
-            content.push("This is the second half of the async. When it is done, please post the outcome in race results and on start.gg");
         }
         let msg = content.build();
         if let Some(channel) = event.discord_organizer_channel {
