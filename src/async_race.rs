@@ -723,7 +723,7 @@ impl AsyncRaceManager {
                 race_id,
                 async_part as i32,
             ).execute(&mut *transaction).await?;
-            
+
             // Send the FINISH button
             let finish_button = CreateActionRow::Buttons(vec![
                 CreateButton::new("async_finish")
