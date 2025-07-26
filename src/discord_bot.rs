@@ -2623,16 +2623,14 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
     Ok(transaction)
 }
 
-async fn format_hash_with_game_id(file_hash: [String; 5], transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<String, sqlx::Error> {
-    let mut emojis = Vec::new();
+async fn format_hash_names_for_discord(file_hash: [String; 5], transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<String, sqlx::Error> {
+    let mut names = Vec::new();
     for icon_name in file_hash {
         if let Some(hash_icon_data) = HashIconData::by_name(transaction, game_id, &icon_name).await? {
-            if let Some(emoji) = hash_icon_data.racetime_emoji.as_ref() {
-                emojis.push(emoji.clone());
-            }
+            names.push(hash_icon_data.name.clone());
         }
     }
-    Ok(emojis.join(" "))
+    Ok(names.join(" "))
 }
 
 pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, event: event::Data<'_>) -> Result<(),Error > {
@@ -2718,9 +2716,9 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
             .unwrap_or(Some(1))
             .unwrap_or(1);
             
-            // Convert hash icon names to racetime emojis
-            let hash_emojis = format_hash_with_game_id([hash1.clone(), hash2.clone(), hash3.clone(), hash4.clone(), hash5.clone()], &mut transaction, game_id).await?;
-            content.push(format!("The hash for this seed is {}", hash_emojis));
+            // Convert hash icon names to user-friendly names for Discord display
+            let hash_names = format_hash_names_for_discord([hash1.clone(), hash2.clone(), hash3.clone(), hash4.clone(), hash5.clone()], &mut transaction, game_id).await?;
+            content.push(format!("The hash for this seed is {}", hash_names));
         }
         let msg = content.build();
         if let Some(channel) = event.discord_organizer_channel {
