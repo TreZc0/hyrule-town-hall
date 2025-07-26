@@ -678,16 +678,6 @@ impl AsyncRaceManager {
         // Get the user who clicked the button
         let user = User::from_discord(&mut *transaction, user_id).await?;
         
-        // Update the async_times record with start_time
-        let now = Utc::now();
-        sqlx::query!(
-            "UPDATE async_times SET start_time = $1, recorded_at = NOW(), recorded_by = $2 WHERE race_id = $3 AND async_part = $4",
-            now,
-            user.unwrap().id as _,
-            race_id,
-            async_part as i32,
-        ).execute(&mut *transaction).await?;
-        
         // Get thread ID
         let thread_id = match async_part {
             1 => sqlx::query_scalar!("SELECT async_thread1 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
@@ -720,9 +710,19 @@ impl AsyncRaceManager {
                 }
             }
             
-            // Send GO! message
+            // Send GO! message and start the timer
             sleep(Duration::from_secs(1)).await;
             thread.say(discord_ctx, "**GO!** 🏃‍♂️").await?;
+            
+            // Start the timer AFTER the countdown completes
+            let now = Utc::now();
+            sqlx::query!(
+                "UPDATE async_times SET start_time = $1, recorded_at = NOW(), recorded_by = $2 WHERE race_id = $3 AND async_part = $4",
+                now,
+                user.unwrap().id as _,
+                race_id,
+                async_part as i32,
+            ).execute(&mut *transaction).await?;
             
             // Send the FINISH button
             let finish_button = CreateActionRow::Buttons(vec![

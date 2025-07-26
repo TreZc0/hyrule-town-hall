@@ -257,7 +257,7 @@ pub(crate) async fn manage_admins(
     pool: &State<PgPool>,
     me: Option<User>,
     uri: Origin<'_>,
-    _csrf: Option<CsrfToken>,
+    csrf: Option<CsrfToken>,
     game_name: &str,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await.map_err(Error::from)?;
@@ -285,15 +285,51 @@ pub(crate) async fn manage_admins(
             @if admins.is_empty() {
                 p : "No admins assigned to this game.";
             } else {
-                ul {
-                    @for admin in &admins {
-                        li : admin.display_name();
+                table {
+                    thead {
+                        tr {
+                            th : "Admin";
+                            th : "Actions";
+                        }
+                    }
+                    tbody {
+                        @for admin in &admins {
+                            tr {
+                                td : admin.display_name();
+                                td {
+                                    @let (errors, remove_button) = button_form(
+                                        uri!(remove_game_admin(&game_name, admin.id)),
+                                        csrf.as_ref(),
+                                        Vec::new(),
+                                        "Remove"
+                                    );
+                                    : errors;
+                                    div(class = "button-row") : remove_button;
+                                }
+                            }
+                        }
                     }
                 }
             }
             
-            h2 : "Add Admin";
-            p : "Admin management functionality will be implemented in a future update.";
+            h3 : "Add Admin";
+            @let mut errors = Vec::new();
+            : full_form(uri!(add_game_admin(&game_name)), csrf.as_ref(), html! {
+                : form_field("admin", &mut errors, html! {
+                    label(for = "admin") : "Admin:";
+                    div(class = "autocomplete-container") {
+                        input(type = "text", id = "admin", name = "admin", autocomplete = "off");
+                        div(id = "user-suggestions", class = "suggestions", style = "display: none;") {}
+                    }
+                    label(class = "help") : "(Start typing a username to search for users. The search will match display names, racetime.gg IDs, and Discord usernames.)";
+                });
+            }, errors, "Add Admin");
+            
+            script(src = static_url!("user-search.js")) {}
+            
+            p {
+                a(href = uri!(get(&game_name))) : "← Back to Game";
+            }
         }
     };
 
@@ -748,4 +784,120 @@ pub(crate) async fn reject_game_role_request(
     }
     
     Ok(Redirect::to(uri!(manage_roles(game_name))))
-} 
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct AddGameAdminForm {
+    #[field(default = String::new())]
+    csrf: String,
+    admin: String,
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct RemoveGameAdminForm {
+    #[field(default = String::new())]
+    csrf: String,
+}
+
+#[rocket::post("/games/<game_name>/admins", data = "<form>")]
+pub(crate) async fn add_game_admin(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    game_name: &str,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, AddGameAdminForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    
+    if let Some(ref value) = form.value {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        let game = Game::from_name(&mut transaction, game_name)
+            .await.map_err(Error::from)?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+        
+        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+        
+        if !is_game_admin && !is_global_admin {
+            return Err(StatusOrError::Status(Status::Forbidden));
+        }
+        
+        // Parse user ID from form
+        let admin_id = match value.admin.parse::<u64>() {
+            Ok(id) => Id::<Users>::from(id),
+            Err(_) => {
+                return Ok(Redirect::to(uri!(manage_admins(game_name))));
+            }
+        };
+        
+        // Check if user exists
+        let _user = match User::from_id(&mut *transaction, admin_id).await.map_err(Error::from)? {
+            Some(u) => u,
+            None => {
+                return Ok(Redirect::to(uri!(manage_admins(game_name))));
+            }
+        };
+        
+        // Check if already admin
+        let admins = game.admins(&mut transaction).await.map_err(Error::from)?;
+        if admins.iter().any(|u| u.id == admin_id) {
+            return Ok(Redirect::to(uri!(manage_admins(game_name))));
+        }
+        
+        // Add user as admin
+        sqlx::query!(
+            r#"INSERT INTO game_admins (game_id, admin_id) VALUES ($1, $2)"#,
+            game.id,
+            i64::from(admin_id)
+        )
+        .execute(&mut *transaction)
+        .await.map_err(Error::from)?;
+        
+        transaction.commit().await.map_err(Error::from)?;
+    }
+    
+    Ok(Redirect::to(uri!(manage_admins(game_name))))
+}
+
+#[rocket::post("/games/<game_name>/admins/<admin_id>/remove", data = "<form>")]
+pub(crate) async fn remove_game_admin(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    game_name: &str,
+    admin_id: Id<Users>,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, RemoveGameAdminForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    
+    if form.value.is_some() {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        let game = Game::from_name(&mut transaction, game_name)
+            .await.map_err(Error::from)?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+        
+        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+        
+        if !is_game_admin && !is_global_admin {
+            return Err(StatusOrError::Status(Status::Forbidden));
+        }
+        
+        // Remove user as admin
+        sqlx::query!(
+            r#"DELETE FROM game_admins WHERE game_id = $1 AND admin_id = $2"#,
+            game.id,
+            i64::from(admin_id)
+        )
+        .execute(&mut *transaction)
+        .await.map_err(Error::from)?;
+        
+        transaction.commit().await.map_err(Error::from)?;
+    }
+    
+    Ok(Redirect::to(uri!(manage_admins(game_name))))
+}

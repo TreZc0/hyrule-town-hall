@@ -670,6 +670,8 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         games::list,
         games::get,
         games::manage_admins,
+        games::add_game_admin,
+        games::remove_game_admin,
         games::manage_roles,
         games::apply_for_game_role,
         games::add_game_role_binding,
