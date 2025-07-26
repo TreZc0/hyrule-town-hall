@@ -15,15 +15,8 @@ If you're interested in contributing to the Hyrule Town Hall project, feel free 
 
 ## Code
 
-The Hyrule Town Hall codebase is currently a one-person project, but it doesn't have to remain that way! If you're interested in contributing to the codebase but don't know where to start, let me know so we can discuss how you can help.
+The Hyrule Town Hall codebase is currently a side project, but it doesn't have to remain that way! If you're interested in contributing to the codebase but don't know where to start, let me know so we can discuss how you can help.
 
-## Data archival
-
-I'm also always looking for trusted members of the OoTR community willing to help out as “archivists”, i.e. for the task of manually adding race room and restream/vod links to races for events where this isn't automated. We have an invitational Discord channel for coordinating this.
-
-## Translations
-
-Hyrule Town Hall currently has an incomplete French translation which was created for the [Tournoi Francophone Saison 3](https://midos.house/event/fr/3) by that event's organizers. Let me know if you would like to proofread or extend this translation, or start a new one for a different language. A priority of the project is attention to detail, so I would include custom code to handle grammatical variations like case and gender where necessary. For example, the English Discord message for race results uses the word “defeat” or “defeats” depending on whether the winning team's name is grammatically singular or plural.
 
 # Dev notes
 

@@ -29,6 +29,7 @@ use {
     crate::{
         auth::Discriminator,
         event::teams,
+        lang::Language,
         prelude::*,
     },
 };
@@ -392,6 +393,64 @@ struct Race(cal::Race);
     async fn restream_consent(&self) -> Option<bool> {
         self.0.teams_opt().map(|mut teams| teams.all(|team| team.restream_consent))
     }
+
+    /// All restream URLs for this race, organized by language.
+    /// Null if the race is open (not invitational) or if the event does not use Mido's House to manage entrants.
+    /// Requires permission to view restream consent and an API key with `entrants_read` scope.
+    #[graphql(guard = Scopes { entrants_read: true, ..Scopes::default() }.and(ShowRestreamConsent(&self.0)))]
+    async fn restream_urls(&self) -> Option<Vec<RestreamUrl>> {
+        self.0.teams_opt().map(|_| {
+            self.0.video_urls.iter().map(|(language, url)| RestreamUrl {
+                language: *language,
+                url: url.to_string(),
+            }).collect()
+        })
+    }
+
+    /// All restreamers for this race, organized by language.
+    /// Null if the race is open (not invitational) or if the event does not use Mido's House to manage entrants.
+    /// Requires permission to view restream consent and an API key with `entrants_read` scope.
+    #[graphql(guard = Scopes { entrants_read: true, ..Scopes::default() }.and(ShowRestreamConsent(&self.0)))]
+    async fn restreamers(&self) -> Option<Vec<Restreamer>> {
+        self.0.teams_opt().map(|_| {
+            self.0.restreamers.iter().map(|(language, restreamer)| Restreamer {
+                language: *language,
+                restreamer: restreamer.clone(),
+            }).collect()
+        })
+    }
+
+    /// All confirmed volunteers for this race.
+    /// Null if the race is open (not invitational) or if the event does not use Mido's House to manage entrants.
+    /// Requires permission to view restream consent and an API key with `entrants_read` scope.
+    #[graphql(guard = Scopes { entrants_read: true, ..Scopes::default() }.and(ShowRestreamConsent(&self.0)))]
+    async fn confirmed_volunteers(&self, ctx: &Context<'_>) -> sqlx::Result<Option<Vec<ConfirmedVolunteer>>> {
+        if self.0.teams_opt().is_none() {
+            return Ok(None);
+        }
+
+        let signups = db!(db = ctx; event::roles::Signup::for_race(&mut *db, self.0.id).await?);
+        let confirmed_signups: Vec<_> = signups.into_iter()
+            .filter(|s| matches!(s.status, event::roles::VolunteerSignupStatus::Confirmed))
+            .collect();
+
+        if confirmed_signups.is_empty() {
+            return Ok(Some(vec![]));
+        }
+
+        let mut volunteers = Vec::new();
+        for signup in confirmed_signups {
+            if let Some(user) = db!(db = ctx; user::User::from_id(&mut **db, signup.user_id).await?) {
+                volunteers.push(ConfirmedVolunteer {
+                    user: User(user),
+                    role_type_name: signup.role_type_name,
+                    notes: signup.notes,
+                });
+            }
+        }
+
+        Ok(Some(volunteers))
+    }
 }
 
 struct Team {
@@ -450,6 +509,32 @@ struct User(user::User);
     async fn discord_id(&self) -> Option<GqlId> {
         self.0.discord.as_ref().map(|discord| discord.id.into())
     }
+}
+
+#[derive(SimpleObject)]
+struct RestreamUrl {
+    /// The language for this restream URL.
+    language: crate::lang::Language,
+    /// The restream URL.
+    url: String,
+}
+
+#[derive(SimpleObject)]
+struct Restreamer {
+    /// The language for this restreamer.
+    language: crate::lang::Language,
+    /// The restreamer's racetime.gg user ID.
+    restreamer: String,
+}
+
+#[derive(SimpleObject)]
+struct ConfirmedVolunteer {
+    /// The volunteer user.
+    user: User,
+    /// The type of role the volunteer is performing (e.g., "Commentary", "Tracking", "Race Monitoring").
+    role_type_name: String,
+    /// Optional notes about the volunteer's role.
+    notes: Option<String>,
 }
 
 pub(crate) fn schema(db_pool: PgPool) -> MidosHouseSchema {
