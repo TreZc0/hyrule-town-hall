@@ -1308,6 +1308,8 @@ async fn roles_page(
 pub(crate) async fn get(
     pool: &State<PgPool>,
     me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
@@ -1316,8 +1318,7 @@ pub(crate) async fn get(
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let ctx = Context::default();
-    let uri = HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap();
-    Ok(roles_page(transaction, me, &Origin(uri.clone()), data, ctx, None).await?)
+    Ok(roles_page(transaction, me, &uri, data, ctx, csrf).await?)
 }
 
 #[derive(FromForm, CsrfForm)]
