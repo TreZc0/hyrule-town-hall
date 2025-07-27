@@ -1,8 +1,5 @@
 use crate::{
-    event::{
-        Data,
-        Tab,
-    },
+    event::{Data, Tab},
     prelude::*,
     user::DisplaySource,
     game,
