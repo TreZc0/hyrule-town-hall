@@ -18,7 +18,7 @@ pub(crate) enum SetupError {
     #[error(transparent)] ParseInt(#[from] std::num::ParseIntError),
 }
 
-async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, _uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
+async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
     let header = event.header(&mut transaction, me.as_ref(), Tab::Setup, false).await?;
     
     let content = if event.is_ended() {
@@ -206,16 +206,19 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
     } else {
         html! {
             article {
-                p : "You must be logged in to access this page.";
+                p {
+                    a(href = uri!(auth::login(Some(uri!(get(event.series, &*event.event)))))) : "Sign in or create a Hyrule Town Hall account";
+                    : " to access this page.";
+                }
             }
         }
     };
     
-    Ok(html! {
+    Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Setup — {}", event.display_name), html! {
         : header;
         : content;
         script(src = static_url!("user-search.js")) {}
-    })
+    }).await?)
 }
 
 #[rocket::get("/event/<series>/<event>/setup")]
