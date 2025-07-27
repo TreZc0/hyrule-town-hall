@@ -13,7 +13,7 @@ use {
     chrono::{DateTime, Utc},
     crate::{
         event::{Data, Tab},
-        form::{EmptyForm, button_form_ext_disabled, form_field, full_form},
+        form::{EmptyForm, button_form, button_form_ext_disabled, form_field, full_form},
         http::{PageError, StatusOrError},
         id::{RoleBindings, RoleRequests, RoleTypes, Signups, EventDiscordRoleOverrides, EventDisabledRoleBindings},
         prelude::*,
@@ -1093,7 +1093,7 @@ async fn roles_page(
                         .map(|binding| RoleType { id: binding.role_type_id, name: binding.role_type_name.clone() })
                         .collect::<Vec<_>>();
                     @if !available_role_types.is_empty() {
-                        : full_form(uri!(add_discord_override_form(data.series, &*data.event, available_role_types[0].id)), csrf.as_ref(), html! {
+                        : full_form(uri!(add_discord_override_from_form_data(data.series, &*data.event)), csrf.as_ref(), html! {
                             : form_field("role_type_id", &mut errors, html! {
                                 label(for = "role_type_id") : "Role Type:";
                                 select(name = "role_type_id", id = "role_type_id") {
@@ -3416,53 +3416,20 @@ pub(crate) async fn enable_role_binding(
     Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event)))))
 }
 
-#[rocket::get("/event/<series>/<event>/role-types/<role_type_id>/discord-override")]
-pub(crate) async fn add_discord_override_form(
-    pool: &State<PgPool>,
-    me: User,
-    series: Series,
-    event: &str,
-    role_type_id: Id<RoleTypes>,
-    csrf: Option<CsrfToken>,
-) -> Result<RawHtml<String>, StatusOrError<Error>> {
-    let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event)
-        .await?
-        .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-    if !data.organizers(&mut transaction).await?.contains(&me) {
-        return Err(StatusOrError::Status(Status::Forbidden));
-    }
-
-    // Check if this is a game role binding that can have Discord overrides
-    let game = game::Game::from_series(&mut transaction, series).await?;
-    if let Some(game) = game {
-        // Check if this role type exists in the game's role bindings
-        let game_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await?;
-        let role_type_exists = game_bindings.iter().any(|binding| binding.role_type_id == role_type_id);
-        
-        if !role_type_exists {
-            return Err(StatusOrError::Status(Status::BadRequest));
-        }
-    }
-
-    let mut errors = Vec::new();
-    Ok(html! {
-        h1 : "Add Discord Role Override";
-        p : "Set a custom Discord role for this game role binding.";
-        : full_form(uri!(add_discord_override(series, event, role_type_id)), csrf.as_ref(), html! {
-            : form_field("discord_role_id", &mut errors, html! {
-                label(for = "discord_role_id") : "Discord Role ID:";
-                input(type = "text", name = "discord_role_id", id = "discord_role_id", placeholder = "e.g. 123456789012345678", required);
-            });
-        }, errors, "Add Override");
-    })
-}
 
 #[derive(FromForm, CsrfForm)]
 pub(crate) struct AddDiscordOverrideForm {
     #[field(default = String::new())]
     csrf: String,
+    discord_role_id: String,
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct AddDiscordOverrideFromFormData {
+    #[field(default = String::new())]
+    csrf: String,
+    role_type_id: Id<RoleTypes>,
     discord_role_id: String,
 }
 
@@ -3551,6 +3518,156 @@ pub(crate) async fn add_discord_override(
 
             // Get the role type name for filtering
             let role_type = RoleType::from_id(&mut transaction, role_type_id).await?;
+            let role_type_name = if let Some(role_type) = role_type {
+                role_type.name
+            } else {
+                return Err(StatusOrError::Status(Status::NotFound));
+            };
+
+            // Retroactively assign Discord roles to existing approved volunteers
+            // Check if event uses custom bindings
+            let uses_custom_bindings = sqlx::query_scalar!(
+                r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,
+                series as _,
+                event
+            )
+            .fetch_optional(&mut *transaction)
+            .await?
+            .unwrap_or(Some(true)).unwrap_or(true);
+
+            // Get all approved role requests for this role type (both event-specific and game-wide)
+            let approved_requests = if uses_custom_bindings {
+                // For event-specific bindings, get approved requests for this event
+                RoleRequest::approved_for_event(&mut transaction, series, event).await?
+                    .into_iter()
+                    .filter(|req| req.role_type_name == role_type_name)
+                    .collect::<Vec<_>>()
+            } else {
+                // For game bindings, get all approved requests for the game
+                let game = game::Game::from_series(&mut transaction, series).await?;
+                if let Some(game) = game {
+                    RoleRequest::for_game(&mut transaction, game.id).await?
+                        .into_iter()
+                        .filter(|req| req.status == RoleRequestStatus::Approved && req.role_type_name == role_type_name)
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                }
+            };
+
+            // Assign Discord roles to all approved volunteers
+            for request in approved_requests {
+                let user = User::from_id(&mut *transaction, request.user_id).await?;
+                if let Some(user) = user {
+                    if let Some(discord_user) = user.discord {
+                        // Get the Discord context and guild
+                        let discord_ctx = discord_ctx.read().await;
+                        if let Some(discord_guild) = data.discord_guild {
+                            if let Ok(member) = discord_guild.member(&*discord_ctx, discord_user.id).await {
+                                if let Err(e) = member.add_role(&*discord_ctx, RoleId::new(discord_role_id.try_into().unwrap())).await {
+                                    eprintln!("Failed to retroactively assign Discord role {} to user {}: {}", discord_role_id, discord_user.id, e);
+                                } else {
+                                    eprintln!("Successfully retroactively assigned Discord role {} to user {} for role request {}", 
+                                             discord_role_id, discord_user.id, request.id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+        }
+    } else {
+        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+    })
+}
+
+#[rocket::post("/event/<series>/<event>/discord-override", data = "<form>")]
+pub(crate) async fn add_discord_override_from_form_data(
+    pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
+    me: User,
+    series: Series,
+    event: &str,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, AddDiscordOverrideFromFormData>>,
+) -> Result<RedirectOrContent, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    Ok(if let Some(ref value) = form.value {
+        if !data.organizers(&mut transaction).await?.contains(&me) {
+            form.context.push_error(form::Error::validation(
+                "You must be an organizer to manage roles for this event.",
+            ));
+        }
+
+        // Check if this is a game role binding that can have Discord overrides
+        let game = game::Game::from_series(&mut transaction, series).await?;
+        if let Some(game) = game {
+            // Check if this role type exists in the game's role bindings
+            let game_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await?;
+            let role_type_exists = game_bindings.iter().any(|binding| binding.role_type_id == value.role_type_id);
+            
+            if !role_type_exists {
+                form.context.push_error(form::Error::validation(
+                    "This role type does not exist in the game's role bindings.",
+                ));
+            }
+        }
+
+        // Check if an override already exists for this role type
+        if EventDiscordRoleOverride::exists_for_role_type(&mut transaction, series, event, value.role_type_id).await? {
+            form.context.push_error(form::Error::validation(
+                "A Discord role override already exists for this role type.",
+            ));
+        }
+
+        if form.context.errors().next().is_some() {
+            RedirectOrContent::Content(
+                roles_page(
+                    transaction,
+                    Some(me),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                    data,
+                    form.context,
+                    csrf,
+                )
+                .await?,
+            )
+        } else {
+            // Parse the Discord role ID
+            let discord_role_id = match value.discord_role_id.parse::<i64>() {
+                Ok(id) => id,
+                Err(_) => {
+                    form.context.push_error(form::Error::validation(
+                        "Discord role ID must be a valid number.",
+                    ));
+                    return Ok(RedirectOrContent::Content(
+                        roles_page(
+                            transaction,
+                            Some(me),
+                            &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                            data,
+                            form.context,
+                            csrf,
+                        )
+                        .await?,
+                    ));
+                }
+            };
+
+            // Add the override
+            EventDiscordRoleOverride::create(&mut transaction, series, event, value.role_type_id, discord_role_id).await?;
+
+            // Get the role type name for filtering
+            let role_type = RoleType::from_id(&mut transaction, value.role_type_id).await?;
             let role_type_name = if let Some(role_type) = role_type {
                 role_type.name
             } else {
