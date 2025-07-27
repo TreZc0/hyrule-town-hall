@@ -928,6 +928,7 @@ async fn roles_page(
                                 th : "Role Type";
                                 th : "Min Count";
                                 th : "Max Count";
+                                th : "Auto-approve";
                                 th : "Discord Role";
                                 th : "Actions";
                             }
@@ -938,6 +939,13 @@ async fn roles_page(
                                     td : binding.role_type_name;
                                     td : binding.min_count;
                                     td : binding.max_count;
+                                    td {
+                                        @if binding.auto_approve {
+                                            span(style = "color: green;") : "✓ Yes";
+                                        } else {
+                                            span(style = "color: red;") : "✗ No";
+                                        }
+                                    }
                                     td {
                                         @if let Some(discord_role_id) = binding.discord_role_id {
                                             : format!("{}", discord_role_id);
@@ -994,14 +1002,25 @@ async fn roles_page(
                                                 }
                                             }
                                         } else {
-                                            @let (errors, delete_button) = button_form(
-                                                uri!(delete_role_binding(data.series, &*data.event, binding.id)),
-                                                csrf.as_ref(),
-                                                Vec::new(),
-                                                "Delete"
-                                            );
-                                            : errors;
-                                            : delete_button;
+                                            div(style = "display: flex; justify-content: center; gap: 8px; flex-wrap: wrap;") {
+                                                @let (errors, edit_button) = button_form(
+                                                    uri!(edit_role_binding(data.series, &*data.event, binding.id)),
+                                                    csrf.as_ref(),
+                                                    Vec::new(),
+                                                    "Edit"
+                                                );
+                                                : errors;
+                                                : edit_button;
+                                                
+                                                @let (errors, delete_button) = button_form(
+                                                    uri!(delete_role_binding(data.series, &*data.event, binding.id)),
+                                                    csrf.as_ref(),
+                                                    Vec::new(),
+                                                    "Delete"
+                                                );
+                                                : errors;
+                                                : delete_button;
+                                            }
                                         }
                                     }
                                 }
@@ -1292,6 +1311,17 @@ pub(crate) struct AddRoleBindingForm {
     auto_approve: bool,
 }
 
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct EditRoleBindingForm {
+    #[field(default = String::new())]
+    csrf: String,
+    min_count: i32,
+    max_count: i32,
+    #[field(default = String::new())]
+    discord_role_id: String,
+    auto_approve: bool,
+}
+
 #[rocket::post("/event/<series>/<event>/roles/add-binding", data = "<form>")]
 pub(crate) async fn add_role_binding(
     pool: &State<PgPool>,
@@ -1461,6 +1491,158 @@ pub(crate) async fn delete_role_binding(
             .await?,
         )
     })
+}
+
+#[rocket::get("/event/<series>/<event>/roles/edit-binding/<binding>")]
+pub(crate) async fn edit_role_binding_page(
+    pool: &State<PgPool>,
+    me: User,
+    series: Series,
+    event: &str,
+    binding: Id<RoleBindings>,
+    csrf: Option<CsrfToken>,
+) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    if !data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+
+    // Get the role binding
+    let role_binding = sqlx::query_as!(
+        RoleBinding,
+        r#"
+            SELECT
+                rb.id AS "id: Id<RoleBindings>",
+                rb.series AS "series: Series",
+                rb.event,
+                rb.game_id,
+                rb.role_type_id AS "role_type_id: Id<RoleTypes>",
+                rb.min_count,
+                rb.max_count,
+                rt.name AS "role_type_name",
+                rb.discord_role_id,
+                rb.auto_approve
+            FROM role_bindings rb
+            JOIN role_types rt ON rb.role_type_id = rt.id
+            WHERE rb.id = $1 AND rb.series = $2 AND rb.event = $3
+        "#,
+        binding as _,
+        series as _,
+        event
+    )
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    // Check if this is a game binding (which can't be edited on event page)
+    if role_binding.game_id.is_some() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+
+    let ctx = Context::default();
+    let uri = HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap();
+    
+    let mut errors = ctx.errors().collect_vec();
+    let content = html! {
+        h2 : "Edit Role Binding";
+        p : format!("Editing role binding for: {}", role_binding.role_type_name);
+        
+        : full_form(uri!(edit_role_binding(data.series, &*data.event, role_binding.id)), csrf.as_ref(), html! {
+            : form_field("min_count", &mut errors, html! {
+                label(for = "min_count") : "Minimum Count:";
+                input(type = "number", name = "min_count", id = "min_count", value = role_binding.min_count.to_string(), min = "1");
+            });
+            : form_field("max_count", &mut errors, html! {
+                label(for = "max_count") : "Maximum Count:";
+                input(type = "number", name = "max_count", id = "max_count", value = role_binding.max_count.to_string(), min = "1");
+            });
+            : form_field("discord_role_id", &mut errors, html! {
+                label(for = "discord_role_id") : "Discord Role ID (optional):";
+                input(type = "text", name = "discord_role_id", id = "discord_role_id", 
+                      value = role_binding.discord_role_id.map(|id| id.to_string()).unwrap_or_default(),
+                      placeholder = "e.g. 123456789012345678");
+            });
+            : form_field("auto_approve", &mut errors, html! {
+                label(for = "auto_approve") : "Auto-approve requests:";
+                input(type = "checkbox", name = "auto_approve", id = "auto_approve", 
+                      checked = role_binding.auto_approve.then(|| ""));
+                span(class = "help-text") : "When enabled, role requests for this binding will be automatically approved without manual review.";
+            });
+        }, errors, "Update Role Binding");
+        
+        p {
+            a(href = uri!(get(data.series, &*data.event))) : "← Back to Role Management";
+        }
+    };
+    
+    Ok(page(
+        transaction,
+        &Some(me),
+        &Origin(uri.clone()),
+        PageStyle::default(),
+        &format!("Edit Role Binding — {}", data.display_name),
+        content,
+    ).await?)
+}
+
+#[rocket::post("/event/<series>/<event>/roles/edit-binding/<binding>", data = "<form>")]
+pub(crate) async fn edit_role_binding(
+    pool: &State<PgPool>,
+    me: User,
+    series: Series,
+    event: &str,
+    binding: Id<RoleBindings>,
+    _csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, EditRoleBindingForm>>,
+) -> Result<RedirectOrContent, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    if !data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+
+    let value = form.value.as_ref().ok_or(StatusOrError::Status(Status::BadRequest))?;
+
+    // Validate form data
+    if value.min_count < 1 {
+        return Err(StatusOrError::Status(Status::BadRequest));
+    }
+    if value.max_count < value.min_count {
+        return Err(StatusOrError::Status(Status::BadRequest));
+    }
+
+    // Parse Discord role ID
+    let discord_role_id = if value.discord_role_id.trim().is_empty() {
+        None
+    } else {
+        Some(value.discord_role_id.parse::<i64>().map_err(|_| StatusOrError::Status(Status::BadRequest))?)
+    };
+
+    // Update the role binding
+    sqlx::query!(
+        r#"UPDATE role_bindings 
+           SET min_count = $1, max_count = $2, discord_role_id = $3, auto_approve = $4
+           WHERE id = $5 AND series = $6 AND event = $7"#,
+        value.min_count,
+        value.max_count,
+        discord_role_id,
+        value.auto_approve,
+        binding as _,
+        series as _,
+        event
+    )
+    .execute(&mut *transaction)
+    .await?;
+
+    transaction.commit().await?;
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event)))))
 }
 
 #[rocket::post("/event/<series>/<event>/roles/<request>/approve", data = "<form>")]

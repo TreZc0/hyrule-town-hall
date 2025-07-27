@@ -630,6 +630,8 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::configure::search_users,
         event::roles::get,
         event::roles::add_role_binding,
+        event::roles::edit_role_binding_page,
+        event::roles::edit_role_binding,
         event::roles::delete_role_binding,
         event::roles::approve_role_request,
         event::roles::reject_role_request,
