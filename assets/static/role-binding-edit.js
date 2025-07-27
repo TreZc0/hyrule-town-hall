@@ -17,8 +17,8 @@ function startEdit(bindingId) {
     // Replace edit button with save/cancel buttons
     const actionsDiv = row.querySelector('.actions');
     actionsDiv.innerHTML = `
-        <button class="button save-btn" onclick="saveEdit(${bindingId})">Save</button>
-        <button class="button cancel-btn" onclick="cancelEdit(${bindingId})">Cancel</button>
+        <button class="button edit-btn save-btn" onclick="saveEdit(${bindingId})">Save</button>
+        <button class="button edit-btn cancel-btn" onclick="cancelEdit(${bindingId})">Cancel</button>
     `;
 }
 

@@ -255,6 +255,18 @@ input[type="text"] {
   border-end-end-radius: 8px;
 }
 
+/* Inline edit button styles */
+.save-btn {
+  border-start-start-radius: 8px;
+  border-end-start-radius: 8px;
+  padding: 0.5rem 1rem;
+}
+.cancel-btn {
+  border-start-end-radius: 8px;
+  border-end-end-radius: 8px;
+  padding: 0.5rem 1rem;
+}
+
 table {
   width: 95%;
   margin: 8px 0;
