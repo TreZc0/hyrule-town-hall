@@ -1261,6 +1261,7 @@ async fn roles_page(
             }
         }
     };
+
     Ok(page(
         transaction,
         &me,
@@ -1270,6 +1271,7 @@ async fn roles_page(
         html! {
             : header;
             : content;
+            link(rel = "stylesheet", href = static_url!("roles-page.css"));
             script(src = static_url!("role-binding-edit.js")) {}
         },
     )

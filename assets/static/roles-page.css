@@ -1,0 +1,21 @@
+.actions .save-btn, .actions .cancel-btn, .actions .edit-btn {
+  height: 51px;
+  padding: 0 1rem;
+  border-radius: 0;
+  border-start-start-radius: 0 !important;
+  border-end-start-radius: 0 !important;
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.actions form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

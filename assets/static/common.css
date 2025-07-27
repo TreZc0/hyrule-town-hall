@@ -268,29 +268,7 @@ input[type="text"] {
   color: var(--accent);
 }
 
-.save-btn, .cancel-btn, .edit-btn {
-  height: 51px;
-  padding: 0 1rem;
-  border-radius: 0;
-  border-start-start-radius: 0 !important;
-  border-end-start-radius: 0 !important;
-  border-start-end-radius: 0;
-  border-end-end-radius: 0;
-}
 
-/* Ensure actions div aligns buttons properly */
-.actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* Only apply flex styling to forms within actions div */
-.actions form {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
 
 /* Keep the connected button styling for button groups */
 .button-row .button:nth-child(1) {
