@@ -19,6 +19,7 @@ use {
 
 pub(crate) mod configure;
 pub(crate) mod enter;
+pub(crate) mod setup;
 pub(crate) mod teams;
 pub(crate) mod roles;
 
@@ -719,6 +720,11 @@ impl<'a> Data<'a> {
                         } else {
                             a(class = "button", href = uri!(roles::get(self.series, &*self.event))) : "Roles";
                         }
+                        @if let Tab::Setup = tab {
+                            a(class = "button selected", href? = is_subpage.then(|| uri!(setup::get(self.series, &*self.event)))) : "Setup";
+                        } else {
+                            a(class = "button", href = uri!(setup::get(self.series, &*self.event))) : "Setup";
+                        }
                     }
                 }
             }
@@ -747,6 +753,7 @@ pub(crate) enum Tab {
     Configure,
     Roles,
     SwissStandings,
+    Setup,
 }
 
 #[derive(Debug, thiserror::Error)]

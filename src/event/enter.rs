@@ -949,7 +949,7 @@ impl Requirement {
             Self::External { .. } => form_ctx.push_error(form::Error::validation("Please complete event entry via the external method.")),
             _ => if !self.is_checked(transaction, http_client, discord_ctx, me, data).await?.unwrap_or(false) {
                 form_ctx.push_error(form::Error::validation(match self {
-                    Self::RaceTime => Cow::Borrowed("A racetime.gg account is required to enter this event. Go to your Hyrule Town Hall profile and select “Connect a racetime.gg account”."), //TODO direct link?
+                    Self::RaceTime => Cow::Borrowed("A racetime.gg account is required to enter this event. Go to your Hyrule Town Hall profile and select 'Connect a racetime.gg account'."), //TODO direct link?
                     Self::RaceTimeInvite { error_text, .. } => if me.racetime.is_some() {
                         if let Some(error_text) = error_text {
                             Cow::Owned(error_text.clone())
@@ -957,10 +957,10 @@ impl Requirement {
                             Cow::Borrowed("This is an invitational event and it looks like you're not invited.")
                         }
                     } else {
-                        Cow::Borrowed("This event uses an invite list of racetime.gg users. Go to your Hyrule Town Hall profile and select “Connect a racetime.gg account” to check whether you're invited.") //TODO direct link?
+                        Cow::Borrowed("This event uses an invite list of racetime.gg users. Go to your Hyrule Town Hall profile and select 'Connect a racetime.gg account' to check whether you're invited.") //TODO direct link?
                     },
-                    Self::Twitch => Cow::Borrowed("A Twitch account is required to enter this event. Go to the “Twitch & connections” section of your racetime.gg settings to connect one."), //TODO direct link?
-                    Self::Discord => Cow::Borrowed("A Discord account is required to enter this event. Go to your Hyrule Town Hall profile and select “Connect a Discord account”."), //TODO direct link?
+                    Self::Twitch => Cow::Borrowed("A Twitch account is required to enter this event. Go to the 'Twitch & connections' section of your racetime.gg settings to connect one."), //TODO direct link?
+                    Self::Discord => Cow::Borrowed("A Discord account is required to enter this event. Go to your Hyrule Town Hall profile and select 'Connect a Discord account'."), //TODO direct link?
                     Self::DiscordGuild { .. } => Cow::Borrowed("You must join the event's Discord server to enter."), //TODO invite link?
                     Self::Challonge => Cow::Borrowed("A Challonge account is required to enter this event."), //TODO link to /login/challonge
                     Self::QualifierPlacement { .. } => Cow::Borrowed("You have not secured a qualifying placement."), //TODO different message if the player has overqualified or overqualifying due to opt-outs is still possible
@@ -1518,7 +1518,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                             form.context.push_error(form::Error::validation("A team with this name is already signed up for this race.").with_name("team_name"));
                         }
                         if my_role == pic::Role::Sheikah && me.racetime.is_none() {
-                            form.context.push_error(form::Error::validation("A racetime.gg account is required to enter as runner. Go to your profile and select “Connect a racetime.gg account”.").with_name("my_role")); //TODO direct link?
+                            form.context.push_error(form::Error::validation("A racetime.gg account is required to enter as runner. Go to your profile and select 'Connect a racetime.gg account'.").with_name("my_role")); //TODO direct link?
                         }
                         if teammate == me.id {
                             form.context.push_error(form::Error::validation("You cannot be your own teammate.").with_name("teammate"));
@@ -1607,7 +1607,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                             None
                         }
                         None => {
-                            form.context.push_error(form::Error::validation("A racetime.gg account is required to enter this event. Go to your profile and select “Connect a racetime.gg account”.")); //TODO direct link?
+                            form.context.push_error(form::Error::validation("A racetime.gg account is required to enter this event. Go to your profile and select 'Connect a racetime.gg account'.")); //TODO direct link?
                             None
                         }
                     }

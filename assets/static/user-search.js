@@ -1,6 +1,6 @@
 document.addEventListener('DOMContentLoaded', function() {
-    const input = document.getElementById('restreamer') || document.getElementById('admin');
-    const suggestions = document.getElementById('user-suggestions');
+    const input = document.getElementById('restreamer') || document.getElementById('admin') || document.getElementById('organizer');
+    const suggestions = document.getElementById('user-suggestions') || document.getElementById('organizer-suggestions');
     let currentFocus = -1;
     
     input.addEventListener('input', function() {
@@ -10,7 +10,8 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         
-        fetch('/api/users/search?query=' + encodeURIComponent(query))
+        const endpoint = input.id === 'organizer' ? '/event/setup/search-users' : '/api/users/search';
+        fetch(endpoint + '?query=' + encodeURIComponent(query))
             .then(response => response.json())
             .then(data => {
                 suggestions.innerHTML = '';
