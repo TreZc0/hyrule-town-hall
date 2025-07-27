@@ -167,7 +167,8 @@ a.nav,
 input[type="text"],
 input[type="number"],
 select,
-textarea {
+textarea,
+.button {
   background-color: var(--bg-surface);
   border: 1px solid var(--border);
   padding: 8px;
@@ -250,32 +251,6 @@ input[type="text"] {
 .button-row .popover-wrapper:nth-last-child(1) > button,
 .button-row form input[type="submit"]:nth-last-child(1),
 .button:nth-last-child(1) {
-  border-start-end-radius: 8px;
-  border-end-end-radius: 8px;
-}
-
-/* Make buttons look like the submit input styling */
-.button {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.5rem 1rem;
-  border-radius: 0.375rem;
-  text-decoration: none;
-  cursor: pointer;
-  transition: background-color 0.2s, color 0.2s, transform 0.1s;
-  background-color: var(--bg-surface);
-  border: 1px solid var(--border);
-  color: var(--accent);
-}
-
-
-
-/* Keep the connected button styling for button groups */
-.button-row .button:nth-child(1) {
-  border-start-start-radius: 8px;
-  border-end-start-radius: 8px;
-}
-.button-row .button:nth-last-child(1) {
   border-start-end-radius: 8px;
   border-end-end-radius: 8px;
 }

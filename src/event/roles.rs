@@ -1225,7 +1225,7 @@ async fn roles_page(
                                                             p(class = "game-binding-info") : "Globally managed role assignment - no editing here";
                                                         } else {
                                                                                                         @let (errors, revoke_button) = button_form(
-                                                    uri!(revoke_role_request(data.series, &*data.event)),
+                                                    uri!(revoke_role_request(data.series, &*data.event, request.id)),
                                                     csrf.as_ref(),
                                                     Vec::new(),
                                                     "Revoke"
@@ -2934,12 +2934,7 @@ pub(crate) struct WithdrawRoleRequestForm {
     request_id: Id<RoleRequests>,
 }
 
-#[derive(FromForm, CsrfForm)]
-pub(crate) struct RevokeRoleRequestForm {
-    #[field(default = String::new())]
-    csrf: String,
-    request_id: Id<RoleRequests>,
-}
+
 
 #[rocket::post("/event/<series>/<event>/withdraw-role-request", data = "<form>")]
 pub(crate) async fn withdraw_role_request(
@@ -3008,14 +3003,15 @@ pub(crate) async fn withdraw_role_request(
     })
 }
 
-#[rocket::post("/event/<series>/<event>/revoke-role-request", data = "<form>")]
+#[rocket::post("/event/<series>/<event>/revoke-role-request/<request>", data = "<form>")]
 pub(crate) async fn revoke_role_request(
     pool: &State<PgPool>,
     me: User,
     series: Series,
     event: &str,
+    request: Id<RoleRequests>,
     csrf: Option<CsrfToken>,
-    form: Form<Contextual<'_, RevokeRoleRequestForm>>,
+    form: Form<Contextual<'_, EmptyForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event)
@@ -3024,62 +3020,43 @@ pub(crate) async fn revoke_role_request(
     let mut form = form.into_inner();
     form.verify(&csrf);
 
-    Ok(if let Some(ref value) = form.value {
-        if data.is_ended() {
-            form.context.push_error(form::Error::validation(
-                "This event has ended and can no longer be managed",
-            ));
-        }
+    if data.is_ended() {
+        form.context.push_error(form::Error::validation(
+            "This event has ended and can no longer be managed",
+        ));
+    }
 
-        if !data.organizers(&mut transaction).await?.contains(&me) {
-            form.context.push_error(form::Error::validation(
-                "You must be an organizer to revoke role requests",
-            ));
-        }
+    if !data.organizers(&mut transaction).await?.contains(&me) {
+        form.context.push_error(form::Error::validation(
+            "You must be an organizer to revoke role requests",
+        ));
+    }
 
-        // Verify the role request exists
-        let request = RoleRequest::from_id(&mut transaction, value.request_id).await?
-            .ok_or(StatusOrError::Status(Status::NotFound))?;
+    // Verify the role request exists
+    let role_request = RoleRequest::from_id(&mut transaction, request).await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-        if request.series != Some(series) || request.event != Some(event.to_string()) {
-            form.context.push_error(form::Error::validation(
-                "Invalid role request for this event",
-            ));
-        }
+    if role_request.series != Some(series) || role_request.event != Some(event.to_string()) {
+        form.context.push_error(form::Error::validation(
+            "Invalid role request for this event",
+        ));
+    }
 
-        // Prevent revoking game role bindings
-        if request.series.is_none() && request.event.is_none() {
-            form.context.push_error(form::Error::validation(
-                "Cannot revoke globally managed role assignments",
-            ));
-        }
+    // Prevent revoking game role bindings
+    if role_request.series.is_none() && role_request.event.is_none() {
+        form.context.push_error(form::Error::validation(
+            "Cannot revoke globally managed role assignments",
+        ));
+    }
 
-        // Only allow revoking approved role requests
-        if !matches!(request.status, RoleRequestStatus::Approved) {
-            form.context.push_error(form::Error::validation(
-                "You can only revoke approved role requests",
-            ));
-        }
+    // Only allow revoking approved role requests
+    if !matches!(role_request.status, RoleRequestStatus::Approved) {
+        form.context.push_error(form::Error::validation(
+            "You can only revoke approved role requests",
+        ));
+    }
 
-        if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(
-                roles_page(
-                    transaction,
-                    Some(me),
-                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
-                    data,
-                    form.context,
-                    csrf,
-                )
-                .await?,
-            )
-        } else {
-            // Update the role request status back to Pending
-            RoleRequest::update_status(&mut transaction, value.request_id, RoleRequestStatus::Pending).await?;
-            transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
-        }
-    } else {
+    Ok(if form.context.errors().next().is_some() {
         RedirectOrContent::Content(
             roles_page(
                 transaction,
@@ -3091,6 +3068,11 @@ pub(crate) async fn revoke_role_request(
             )
             .await?,
         )
+    } else {
+        // Update the role request status back to Pending
+        RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Pending).await?;
+        transaction.commit().await?;
+        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
     })
 }
 
