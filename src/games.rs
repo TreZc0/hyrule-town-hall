@@ -201,26 +201,36 @@ pub(crate) async fn get(
                                     }
                                 }
                             }
-                            @if let Some(ref notes) = request.notes {
-                                p(class = "request-notes") {
-                                    : "Your notes: ";
-                                    : notes;
+                            @if request.status == RoleRequestStatus::Pending || request.status == RoleRequestStatus::Rejected {
+                                @if let Some(ref notes) = request.notes {
+                                    @if !notes.is_empty() {
+                                        p(class = "request-notes") {
+                                            : "Your application note: ";
+                                            : notes;
+                                        }
+                                    }
                                 }
                             }
+                            @let mut errors = Vec::new();
+                            : full_form(uri!(forfeit_game_role(&game.name)), csrf.as_ref(), html! {
+                                input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                            }, errors, "Forfeit Role");
                         } else {
                             @if let Some(ref me) = me {
                                 @let mut errors = Vec::new();
                                 @let button_text = if binding.auto_approve {
-                                    format!("Volunteer for {}", binding.role_type_name)
+                                    format!("Volunteer for {} role", binding.role_type_name)
                                 } else {
-                                    format!("Apply for {}", binding.role_type_name)
+                                    format!("Apply for {} role", binding.role_type_name)
                                 };
                                 : full_form(uri!(apply_for_game_role(&game.name)), csrf.as_ref(), html! {
                                     input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                    : form_field("notes", &mut errors, html! {
-                                        label(for = "notes") : "Notes:";
-                                        input(type = "text", name = "notes", id = "notes", maxlength = "60", size = "30", placeholder = "Optional notes for organizers");
-                                    });
+                                    @if !binding.auto_approve {
+                                        : form_field("notes", &mut errors, html! {
+                                            label(for = "notes") : "Notes:";
+                                            input(type = "text", name = "notes", id = "notes", maxlength = "60", size = "30", placeholder = "Optional notes for organizers");
+                                        });
+                                    }
                                 }, errors, &button_text);
                             } else {
                                 p {
@@ -577,6 +587,13 @@ pub(crate) struct ApplyForGameRoleForm {
     notes: String,
 }
 
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct ForfeitGameRoleForm {
+    #[field(default = String::new())]
+    csrf: String,
+    role_binding_id: Id<RoleBindings>,
+}
+
 #[rocket::post("/games/<game_name>/apply", data = "<form>")]
 pub(crate) async fn apply_for_game_role(
     pool: &State<PgPool>,
@@ -612,6 +629,61 @@ pub(crate) async fn apply_for_game_role(
         ).await.map_err(Error::from)?;
         
         transaction.commit().await.map_err(Error::from)?;
+    }
+    
+    Ok(Redirect::to(uri!(get(game_name))))
+}
+
+#[rocket::post("/games/<game_name>/forfeit", data = "<form>")]
+pub(crate) async fn forfeit_game_role(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    game_name: &str,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, ForfeitGameRoleForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    
+    if let Some(ref value) = form.value {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        
+        // Find the role request for this user and role binding
+        let role_request = sqlx::query_as!(
+            RoleRequest,
+            r#"
+                SELECT 
+                    rr.id AS "id: Id<RoleRequests>",
+                    rr.role_binding_id AS "role_binding_id: Id<RoleBindings>",
+                    rr.user_id AS "user_id: Id<Users>",
+                    rr.status AS "status: RoleRequestStatus",
+                    rr.notes,
+                    rr.created_at,
+                    rr.updated_at,
+                    rb.series AS "series: Series",
+                    rb.event,
+                    rb.min_count,
+                    rb.max_count,
+                    rt.name AS "role_type_name"
+                FROM role_requests rr
+                JOIN role_bindings rb ON rr.role_binding_id = rb.id
+                JOIN role_types rt ON rb.role_type_id = rt.id
+                WHERE rr.role_binding_id = $1 AND rr.user_id = $2 AND rr.status IN ('pending', 'approved')
+                ORDER BY rr.created_at DESC
+                LIMIT 1
+            "#,
+            i64::from(value.role_binding_id) as i32,
+            i64::from(me.id) as i32
+        )
+        .fetch_optional(&mut *transaction)
+        .await.map_err(Error::from)?;
+
+        if let Some(request) = role_request {
+            // Update the status to aborted
+            RoleRequest::update_status(&mut transaction, request.id, RoleRequestStatus::Aborted).await.map_err(Error::from)?;
+            transaction.commit().await.map_err(Error::from)?;
+        }
     }
     
     Ok(Redirect::to(uri!(get(game_name))))

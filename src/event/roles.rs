@@ -1715,6 +1715,13 @@ pub(crate) struct ApplyForRoleForm {
     notes: String,
 }
 
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct ForfeitRoleForm {
+    #[field(default = String::new())]
+    csrf: String,
+    role_binding_id: Id<RoleBindings>,
+}
+
 #[rocket::post("/event/<series>/<event>/volunteer-roles/apply", data = "<form>")]
 pub(crate) async fn apply_for_role(
     pool: &State<PgPool>,
@@ -1832,6 +1839,89 @@ pub(crate) async fn apply_for_role(
 
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(volunteer_page_get(series, event))))
+        }
+    } else {
+        RedirectOrContent::Content(
+            volunteer_page(
+                transaction,
+                Some(me),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                data,
+                form.context,
+                csrf,
+            )
+            .await?,
+        )
+    })
+}
+
+#[rocket::post("/event/<series>/<event>/volunteer-roles/forfeit", data = "<form>")]
+pub(crate) async fn forfeit_role(
+    pool: &State<PgPool>,
+    me: User,
+    series: Series,
+    event: &str,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, ForfeitRoleForm>>,
+) -> Result<RedirectOrContent, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    Ok(if let Some(ref value) = form.value {
+        // Find the role request for this user and role binding
+        let role_request = sqlx::query_as!(
+            RoleRequest,
+            r#"
+                SELECT 
+                    rr.id AS "id: Id<RoleRequests>",
+                    rr.role_binding_id AS "role_binding_id: Id<RoleBindings>",
+                    rr.user_id AS "user_id: Id<Users>",
+                    rr.status AS "status: RoleRequestStatus",
+                    rr.notes,
+                    rr.created_at,
+                    rr.updated_at,
+                    rb.series AS "series: Series",
+                    rb.event,
+                    rb.min_count,
+                    rb.max_count,
+                    rt.name AS "role_type_name"
+                FROM role_requests rr
+                JOIN role_bindings rb ON rr.role_binding_id = rb.id
+                JOIN role_types rt ON rb.role_type_id = rt.id
+                WHERE rr.role_binding_id = $1 AND rr.user_id = $2 AND rr.status IN ('pending', 'approved')
+                ORDER BY rr.created_at DESC
+                LIMIT 1
+            "#,
+            i64::from(value.role_binding_id) as i32,
+            i64::from(me.id) as i32
+        )
+        .fetch_optional(&mut *transaction)
+        .await?;
+
+        if let Some(request) = role_request {
+            // Update the status to aborted
+            RoleRequest::update_status(&mut transaction, request.id, RoleRequestStatus::Aborted).await?;
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(volunteer_page_get(series, event))))
+        } else {
+            form.context.push_error(form::Error::validation(
+                "No active role request found to forfeit",
+            ));
+            RedirectOrContent::Content(
+                volunteer_page(
+                    transaction,
+                    Some(me),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                    data,
+                    form.context,
+                    csrf,
+                )
+                .await?,
+            )
         }
     } else {
         RedirectOrContent::Content(
@@ -2012,25 +2102,35 @@ async fn volunteer_page(
                                         }
                                     }
                                 }
-                                @if let Some(ref notes) = request.notes {
-                                    p(class = "request-notes") {
-                                        : "Your notes: ";
-                                        : notes;
+                                @if request.status == RoleRequestStatus::Pending || request.status == RoleRequestStatus::Rejected {
+                                    @if let Some(ref notes) = request.notes {
+                                        @if !notes.is_empty() {
+                                            p(class = "request-notes") {
+                                                : "Your application note: ";
+                                                : notes;
+                                            }
+                                        }
                                     }
                                 }
+                                @let mut errors = Vec::new();
+                                : full_form(uri!(forfeit_role(data.series, &*data.event)), csrf.as_ref(), html! {
+                                    input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                }, errors, "Forfeit Role");
                             } else {
                                 @let mut errors = Vec::new();
                                 @let button_text = if binding.auto_approve {
-                                    format!("Grab {}", binding.role_type_name)
+                                    format!("Volunteer for {} role", binding.role_type_name)
                                 } else {
-                                    format!("Apply for {}", binding.role_type_name)
+                                    format!("Apply for {} role", binding.role_type_name)
                                 };
                                 : full_form(uri!(apply_for_role(data.series, &*data.event)), csrf.as_ref(), html! {
                                     input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                    : form_field("notes", &mut errors, html! {
-                                        label(for = "notes") : "Notes (optional):";
-                                        textarea(name = "notes", id = "notes", rows = "3") : "";
-                                    });
+                                    @if !binding.auto_approve {
+                                        : form_field("notes", &mut errors, html! {
+                                            label(for = "notes") : "Notes (optional):";
+                                            textarea(name = "notes", id = "notes", rows = "3") : "";
+                                        });
+                                    }
                                 }, errors, button_text.as_str());
                             }
                         }
