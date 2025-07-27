@@ -95,6 +95,14 @@ impl Table for EventDiscordRoleOverrides {
     }
 }
 
+pub(crate) enum EventDisabledRoleBindings {}
+
+impl Table for EventDisabledRoleBindings {
+    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
+        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM event_disabled_role_bindings WHERE id = $1) AS "exists!""#, id as i32)
+    }
+}
+
 #[derive(Derivative, Deserialize, Serialize)]
 #[cfg_attr(unix, derive(Protocol), async_proto(where(T: Sync)))]
 #[derivative(Debug(bound = ""), Clone(bound = ""), Copy(bound = ""), PartialEq(bound = ""), Eq(bound = ""), Hash(bound = ""), PartialOrd(bound = ""), Ord(bound = ""))]

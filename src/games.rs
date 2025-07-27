@@ -504,30 +504,46 @@ pub(crate) async fn manage_roles(
             @if approved_requests.is_empty() {
                 p : "No approved role requests.";
             } else {
-                table {
-                    thead {
-                        tr {
-                            th : "User";
-                            th : "Role Type";
-                            th : "Notes";
-                            th : "Approved";
-                        }
+                @let grouped = {
+                    let mut map = std::collections::BTreeMap::new();
+                    for request in &approved_requests {
+                        map.entry(&request.role_type_name).or_insert_with(Vec::new).push(request);
                     }
-                    tbody {
-                        @for request in approved_requests {
-                            @if let Some(user) = User::from_id(&mut *transaction, request.user_id).await.map_err(Error::from)? {
+                    map
+                };
+                @for (role_type_name, requests) in grouped.iter() {
+                    details {
+                        summary {
+                            : format!("{} ({})", role_type_name, requests.len());
+                        }
+                        table {
+                            thead {
                                 tr {
-                                    td : user.display_name();
-                                td : request.role_type_name;
-                                td {
-                                    @if let Some(ref notes) = request.notes {
-                                        : notes;
-                                    } else {
-                                        : "None";
+                                    th : "User";
+                                    th : "Notes";
+                                    th : "Approved";
+                                }
+                            }
+                            tbody {
+                                @for request in requests.iter().sorted_by_key(|r| r.updated_at) {
+                                    tr {
+                                        td {
+                                            @if let Some(user) = User::from_id(&mut *transaction, request.user_id).await.map_err(Error::from)? {
+                                                : user.display_name();
+                                            } else {
+                                                : "Unknown User";
+                                            }
+                                        }
+                                        td {
+                                            @if let Some(ref notes) = request.notes {
+                                                : notes;
+                                            } else {
+                                                : "None";
+                                            }
+                                        }
+                                        td : format_datetime(request.updated_at, DateTimeFormat { long: false, running_text: false });
                                     }
                                 }
-                                td : format_datetime(request.updated_at, DateTimeFormat { long: false, running_text: false });
-                            }
                             }
                         }
                     }

@@ -645,6 +645,8 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::roles::add_discord_override_form,
         event::roles::add_discord_override,
         event::roles::delete_discord_override,
+        event::roles::disable_role_binding,
+        event::roles::enable_role_binding,
         favicon::favicon_ico,
         favicon::favicon_png,
         legal::legal_disclaimer,
