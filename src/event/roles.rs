@@ -1493,7 +1493,7 @@ pub(crate) async fn delete_role_binding(
     })
 }
 
-#[rocket::get("/event/<series>/<event>/roles/edit-binding/<binding>")]
+#[rocket::get("/event/<series>/<event>/roles/binding/<binding>/edit")]
 pub(crate) async fn edit_role_binding_page(
     pool: &State<PgPool>,
     me: User,
@@ -1589,7 +1589,7 @@ pub(crate) async fn edit_role_binding_page(
     ).await?)
 }
 
-#[rocket::post("/event/<series>/<event>/roles/edit-binding/<binding>", data = "<form>")]
+#[rocket::post("/event/<series>/<event>/roles/binding/<binding>/edit", data = "<form>")]
 pub(crate) async fn edit_role_binding(
     pool: &State<PgPool>,
     me: User,
