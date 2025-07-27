@@ -255,16 +255,31 @@ input[type="text"] {
   border-end-end-radius: 8px;
 }
 
-/* Inline edit button styles */
-.save-btn {
+/* Make all buttons look like the styled delete button */
+.button {
+  border-radius: 0.375rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border);
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s, transform 0.1s;
+}
+
+.button:hover {
+  background-color: var(--hover-bg);
+  color: var(--hover-text);
+  transform: translateY(-1px);
+}
+
+/* Keep the connected button styling for button groups */
+.button-row .button:nth-child(1) {
   border-start-start-radius: 8px;
   border-end-start-radius: 8px;
-  padding: 0.5rem 1rem;
 }
-.cancel-btn {
+.button-row .button:nth-last-child(1) {
   border-start-end-radius: 8px;
   border-end-end-radius: 8px;
-  padding: 0.5rem 1rem;
 }
 
 table {
