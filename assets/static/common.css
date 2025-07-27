@@ -272,6 +272,15 @@ input[type="text"] {
   height: 51px;
   padding: 0 1rem;
   border-radius: 0;
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+/* Ensure actions div aligns buttons properly */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 form {
