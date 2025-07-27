@@ -268,6 +268,18 @@ input[type="text"] {
   color: var(--accent);
 }
 
+.save-btn, .cancel-btn, .edit-btn {
+  height: 51px;
+  padding: 0 1rem;
+  border-radius: 0;
+}
+
+form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* Keep the connected button styling for button groups */
 .button-row .button:nth-child(1) {
   border-start-start-radius: 8px;
