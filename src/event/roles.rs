@@ -895,12 +895,7 @@ async fn roles_page(
                 None
             };
 
-            // Get event overrides if using game bindings
-            let event_overrides = if !uses_custom_bindings {
-                EventDiscordRoleOverride::for_event(&mut transaction, data.series, &data.event).await?
-            } else {
-                Vec::new()
-            };
+
 
             let effective_role_bindings = EffectiveRoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
 
@@ -955,7 +950,7 @@ async fn roles_page(
                                             : "None";
                                         }
                                     }
-                                    td {
+                                    td(style = "text-align: center;") {
                                         @if binding.is_game_binding {
                                             p(class = "game-binding-info") {
                                                 : "This role is managed by the game's role binding system";
@@ -965,35 +960,37 @@ async fn roles_page(
                                             }
                                             @if !uses_custom_bindings {
                                                 @let is_disabled = EventDisabledRoleBinding::exists_for_role_type(&mut transaction, data.series, &data.event, binding.role_type_id).await?;
-                                                @if is_disabled {
-                                                    @let (errors, enable_button) = button_form(
-                                                        uri!(enable_role_binding(data.series, &*data.event, binding.role_type_id)),
-                                                        csrf.as_ref(),
-                                                        Vec::new(),
-                                                        "Enable"
-                                                    );
-                                                    : errors;
-                                                    div(class = "button-row") : enable_button;
-                                                } else {
-                                                    @let (errors, disable_button) = button_form(
-                                                        uri!(disable_role_binding(data.series, &*data.event, binding.role_type_id)),
-                                                        csrf.as_ref(),
-                                                        Vec::new(),
-                                                        "Disable"
-                                                    );
-                                                    : errors;
-                                                    div(class = "button-row") : disable_button;
-                                                }
-                                                
-                                                @if binding.has_event_override {
-                                                    @let (errors, remove_override_button) = button_form(
-                                                        uri!(delete_discord_override(data.series, &*data.event, binding.role_type_id)),
-                                                        csrf.as_ref(),
-                                                        Vec::new(),
-                                                        "Remove Discord Override"
-                                                    );
-                                                    : errors;
-                                                    div(class = "button-row") : remove_override_button;
+                                                div(style = "display: flex; justify-content: center; gap: 8px; flex-wrap: wrap;") {
+                                                    @if is_disabled {
+                                                        @let (errors, enable_button) = button_form(
+                                                            uri!(enable_role_binding(data.series, &*data.event, binding.role_type_id)),
+                                                            csrf.as_ref(),
+                                                            Vec::new(),
+                                                            "Enable"
+                                                        );
+                                                        : errors;
+                                                        : enable_button;
+                                                    } else {
+                                                        @let (errors, disable_button) = button_form(
+                                                            uri!(disable_role_binding(data.series, &*data.event, binding.role_type_id)),
+                                                            csrf.as_ref(),
+                                                            Vec::new(),
+                                                            "Disable"
+                                                        );
+                                                        : errors;
+                                                        : disable_button;
+                                                    }
+                                                    
+                                                    @if binding.has_event_override {
+                                                        @let (errors, remove_override_button) = button_form(
+                                                            uri!(delete_discord_override(data.series, &*data.event, binding.role_type_id)),
+                                                            csrf.as_ref(),
+                                                            Vec::new(),
+                                                            "Remove Discord Override"
+                                                        );
+                                                        : errors;
+                                                        : remove_override_button;
+                                                    }
                                                 }
                                             }
                                         } else {
@@ -1004,7 +1001,7 @@ async fn roles_page(
                                                 "Delete"
                                             );
                                             : errors;
-                                            div(class = "button-row") : delete_button;
+                                            : delete_button;
                                         }
                                     }
                                 }
@@ -1048,44 +1045,6 @@ async fn roles_page(
                     h3 : "Discord Role Overrides";
                     p : "You can override Discord role IDs for specific role types while using the game's role binding structure.";
                     
-                    @if event_overrides.is_empty() {
-                        p : "No Discord role overrides configured.";
-                    } else {
-                        table {
-                            thead {
-                                tr {
-                                    th : "Role Type";
-                                    th : "Discord Role ID";
-                                    th : "Actions";
-                                }
-                            }
-                            tbody {
-                                @for override_item in &event_overrides {
-                                    tr {
-                                        td {
-                                            @if let Some(role_type) = all_role_types.iter().find(|rt| rt.id == override_item.role_type_id) {
-                                                : role_type.name;
-                                            } else {
-                                                : "Unknown";
-                                            }
-                                        }
-                                        td : override_item.discord_role_id;
-                                        td {
-                                            @let (errors, button) = button_form(
-                                                uri!(delete_discord_override(data.series, &*data.event, override_item.role_type_id)),
-                                                csrf.as_ref(),
-                                                Vec::new(),
-                                                "Remove"
-                                            );
-                                            : errors;
-                                            div(class = "button-row") : button;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
                     h4 : "Add Discord Role Override";
                     @let mut errors = ctx.errors().collect_vec();
                     @let available_role_types = effective_role_bindings.iter()
@@ -1111,12 +1070,12 @@ async fn roles_page(
                         p : "No game role bindings available for Discord role override.";
                     }
 
-                    h3 : "Disabled Role Bindings";
+                    h3 : "Disabled Volunteer Roles";
                     @let disabled_bindings = EventDisabledRoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
                     @if disabled_bindings.is_empty() {
-                        p : "No role bindings are currently disabled for this event.";
+                        p : "No game volunteer roles are currently disabled for this event.";
                     } else {
-                        p : "The following game role bindings are disabled for this event:";
+                        p : "The following game volunteer roles are disabled for this event:";
                         table {
                             thead {
                                 tr {
@@ -1940,9 +1899,9 @@ async fn volunteer_page(
                             }
                             @if binding.is_game_binding {
                                 p(class = "game-binding-info") {
-                                    : "This role is managed by the game's role binding system";
+                                    : "Managed globally by the game";
                                     @if binding.has_event_override {
-                                        : " with event-specific Discord role override";
+                                        : " with an event-specific Discord role override";
                                     }
                                 }
                             }
