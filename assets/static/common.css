@@ -272,8 +272,8 @@ input[type="text"] {
   height: 51px;
   padding: 0 1rem;
   border-radius: 0;
-  border-start-start-radius: 0;
-  border-end-start-radius: 0;
+  border-start-start-radius: 0 !important;
+  border-end-start-radius: 0 !important;
   border-start-end-radius: 0;
   border-end-end-radius: 0;
 }
@@ -285,7 +285,8 @@ input[type="text"] {
   gap: 8px;
 }
 
-form {
+/* Only apply flex styling to forms within actions div */
+.actions form {
   display: flex;
   align-items: center;
   gap: 8px;
