@@ -1270,7 +1270,7 @@ async fn roles_page(
         html! {
             : header;
             : content;
-            script(src = "/static/js/role-binding-edit.js") {}
+            script(src = static_url!("role-binding-edit.js")) {}
         },
     )
     .await?)
