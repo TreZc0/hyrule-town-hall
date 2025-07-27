@@ -39,70 +39,70 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                         
                         : form_field("display_name", &mut errors, html! {
                             label(for = "display_name") : "Display Name";
-                            input(type = "text", id = "display_name", name = "display_name", value = ctx.field_value("display_name").unwrap_or(&event.display_name));
+                            input(type = "text", id = "display_name", name = "display_name", value = ctx.field_value("display_name").unwrap_or(&event.display_name), style = "width: 100%; max-width: 600px;");
                         });
                         
                         : form_field("start", &mut errors, html! {
                             label(for = "start") : "Start Time";
                             input(type = "datetime-local", id = "start", name = "start", value = ctx.field_value("start").unwrap_or(
                                 &event.start(&mut transaction).await?.map(|dt| dt.format("%Y-%m-%dT%H:%M").to_string()).unwrap_or_default()
-                            ));
+                            ), style = "width: 100%; max-width: 600px;");
                         });
                         
                         : form_field("end", &mut errors, html! {
                             label(for = "end") : "End Time";
                             input(type = "datetime-local", id = "end", name = "end", value = ctx.field_value("end").unwrap_or(
                                 &event.end.map(|dt| dt.format("%Y-%m-%dT%H:%M").to_string()).unwrap_or_default()
-                            ));
+                            ), style = "width: 100%; max-width: 600px;");
                         });
                         
                         : form_field("url", &mut errors, html! {
                             label(for = "url") : "Event URL (start.gg/Challonge)";
                             input(type = "url", id = "url", name = "url", value = ctx.field_value("url").unwrap_or(
                                 &event.url.as_ref().map(|u| u.to_string()).unwrap_or_default()
-                            ));
+                            ), style = "width: 100%; max-width: 600px;");
                         });
                         
                         : form_field("video_url", &mut errors, html! {
                             label(for = "video_url") : "Video URL";
                             input(type = "url", id = "video_url", name = "video_url", value = ctx.field_value("video_url").unwrap_or(
                                 &event.video_url.as_ref().map(|u| u.to_string()).unwrap_or_default()
-                            ));
+                            ), style = "width: 100%; max-width: 600px;");
                         });
                         
                         : form_field("discord_invite_url", &mut errors, html! {
                             label(for = "discord_invite_url") : "Discord Invite URL";
                             input(type = "url", id = "discord_invite_url", name = "discord_invite_url", value = ctx.field_value("discord_invite_url").unwrap_or(
                                 &event.discord_invite_url.as_ref().map(|u| u.to_string()).unwrap_or_default()
-                            ));
+                            ), style = "width: 100%; max-width: 600px;");
                         });
                         
                         : form_field("discord_guild", &mut errors, html! {
                             label(for = "discord_guild") : "Discord Guild ID";
                             input(type = "text", id = "discord_guild", name = "discord_guild", value = ctx.field_value("discord_guild").unwrap_or(
                                 &event.discord_guild.map(|g| g.get().to_string()).unwrap_or_default()
-                            ));
+                            ), style = "width: 100%; max-width: 600px;");
                         });
                         
                         : form_field("discord_race_room_channel", &mut errors, html! {
                             label(for = "discord_race_room_channel") : "Discord Race Room Channel ID";
                             input(type = "text", id = "discord_race_room_channel", name = "discord_race_room_channel", value = ctx.field_value("discord_race_room_channel").unwrap_or(
                                 &event.discord_race_room_channel.map(|c| c.get().to_string()).unwrap_or_default()
-                            ));
+                            ), style = "width: 100%; max-width: 600px;");
                         });
                         
                         : form_field("discord_race_results_channel", &mut errors, html! {
                             label(for = "discord_race_results_channel") : "Discord Race Results Channel ID";
                             input(type = "text", id = "discord_race_results_channel", name = "discord_race_results_channel", value = ctx.field_value("discord_race_results_channel").unwrap_or(
                                 &event.discord_race_results_channel.map(|c| c.get().to_string()).unwrap_or_default()
-                            ));
+                            ), style = "width: 100%; max-width: 600px;");
                         });
                         
                         : form_field("discord_volunteer_info_channel", &mut errors, html! {
                             label(for = "discord_volunteer_info_channel") : "Discord Volunteer Info Channel ID";
                             input(type = "text", id = "discord_volunteer_info_channel", name = "discord_volunteer_info_channel", value = ctx.field_value("discord_volunteer_info_channel").unwrap_or(
                                 &event.discord_volunteer_info_channel.map(|c| c.get().to_string()).unwrap_or_default()
-                            ));
+                            ), style = "width: 100%; max-width: 600px;");
                         });
                         
                         : form_field("listed", &mut errors, html! {
@@ -117,63 +117,82 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                         });
                     }, errors.clone(), "Save Basic Info");
                     
-                    h3 : "Organizer Management";
-                    
-                    : full_form(uri!(add_organizer(event.series, &*event.event)), csrf, html! {
-                        : form_field("organizer", &mut errors, html! {
-                            label(for = "organizer") : "Add Organizer";
-                            input(type = "text", id = "organizer", name = "organizer", autocomplete = "off");
-                            div(id = "organizer-suggestions", class = "suggestions");
-                        });
-                    }, errors.clone(), "Add Organizer");
-                    
                     h3 : "Enter Flow Configuration";
                     
                     : full_form(uri!(update_enter_flow(event.series, &*event.event)), csrf, html! {
                         : form_field("enter_flow_json", &mut errors, html! {
                             label(for = "enter_flow_json") : "Enter Flow JSON";
-                            textarea(id = "enter_flow_json", name = "enter_flow_json", rows = "10", style = "font-family: monospace;") {
-                                : ctx.field_value("enter_flow_json").unwrap_or(
+                            textarea(id = "enter_flow_json", name = "enter_flow_json", rows = "10", style = "font-family: monospace; width: 100%; max-width: 800px;") {
+                                : ctx.field_value("enter_flow_json").unwrap_or_else(|| {
                                     match &event.enter_flow {
-                                        Some(_val) => "{}", // Placeholder since Flow doesn't implement Serialize
+                                        Some(_flow) => "{}", // Placeholder since we can't easily serialize the complex Flow
                                         None => "",
                                     }
-                                );
+                                });
                             }
                             p(class = "help") : "Configure the signup requirements as JSON. Leave empty for no requirements.";
                             
                             details {
                                 summary : "Example enter_flow configurations";
-                                div(style = "margin-top: 10px; padding: 10px; background: #f5f5f5; border-radius: 4px;") {
-                                    h4 : "Basic Discord Account Requirement:";
-                                    pre(style = "font-size: 12px;") {
+                                div(style = "margin-top: 10px; padding: 15px; background: #f8f9fa; border-radius: 6px; border: 1px solid #e9ecef;") {
+                                    h4(style = "margin-top: 0; color: #495057;") : "Basic Discord Account Requirement:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #ffffff; padding: 12px; border-radius: 4px; border: 1px solid #dee2e6; overflow-x: auto;") {
                                         : r#"{
   "requirements": [
     {
-      "type": "discord_account"
+      "type": "discord"
     }
   ]
 }"#;
                                     }
                                     
-                                    h4 : "Multiple Requirements:";
-                                    pre(style = "font-size: 12px;") {
+                                    h4(style = "margin-top: 20px; color: #495057;") : "Multiple Requirements with Deadline:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #ffffff; padding: 12px; border-radius: 4px; border: 1px solid #dee2e6; overflow-x: auto;") {
                                         : r#"{
   "requirements": [
     {
-      "type": "discord_account"
+      "type": "discord"
     },
     {
-      "type": "racetime_account"
+      "type": "raceTime"
+    },
+    {
+      "type": "startGG"
     }
   ],
   "closes": "2024-01-15T23:59:59Z"
+}"#;
+                                    }
+                                    
+                                    h4(style = "margin-top: 20px; color: #495057;") : "Custom Text Field Requirement:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #ffffff; padding: 12px; border-radius: 4px; border: 1px solid #dee2e6; overflow-x: auto;") {
+                                        : r#"{
+  "requirements": [
+    {
+      "type": "textField",
+      "label": "What's your favorite Zelda game?",
+      "long": false,
+      "regex": ".*",
+      "regexErrorMessages": [],
+      "fallbackErrorMessage": "Please provide an answer"
+    }
+  ]
 }"#;
                                     }
                                 }
                             }
                         });
                     }, errors.clone(), "Save Enter Flow");
+                    
+                    h3 : "Organizer Management";
+                    
+                    : full_form(uri!(add_organizer(event.series, &*event.event)), csrf, html! {
+                        : form_field("organizer", &mut errors, html! {
+                            label(for = "organizer") : "Add Organizer";
+                            input(type = "text", id = "organizer", name = "organizer", autocomplete = "off", style = "width: 100%; max-width: 600px;");
+                            div(id = "organizer-suggestions", class = "suggestions");
+                        });
+                    }, errors.clone(), "Add Organizer");
                     
                     h3 : "Current Organizers";
                     @if let Ok(organizers) = event.organizers(&mut transaction).await {
