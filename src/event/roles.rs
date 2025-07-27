@@ -22,9 +22,11 @@ use {
         series::Series,
         game,
         cal::{Race, RaceSchedule, Entrants, Entrant},
+        prelude::DiscordCtx,
     },
     rocket_util::Origin,
     std::collections::{HashMap, HashSet},
+    serenity::model::id::RoleId,
 };
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
@@ -87,7 +89,7 @@ impl From<game::GameError> for StatusOrError<Error> {
     }
 }
 
-#[derive(Debug, Clone, Copy, sqlx::Type)]
+#[derive(Debug, Clone, Copy, sqlx::Type, PartialEq)]
 #[sqlx(type_name = "role_request_status", rename_all = "lowercase")]
 pub(crate) enum RoleRequestStatus {
     Pending,
@@ -910,7 +912,7 @@ async fn roles_page(
                     div(class = "info-box") {
                         h3 : "Using Game Volunteer roles";
                         p {
-                            : "This event is using global volunteer rolesfrom ";
+                            : "This event is using global volunteer roles from ";
                             @if let Some(ref game) = game_info {
                                 strong : &game.display_name;
                             } else {
@@ -3421,6 +3423,7 @@ pub(crate) async fn add_discord_override_form(
     series: Series,
     event: &str,
     role_type_id: Id<RoleTypes>,
+    csrf: Option<CsrfToken>,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event)
@@ -3443,16 +3446,16 @@ pub(crate) async fn add_discord_override_form(
         }
     }
 
+    let mut errors = Vec::new();
     Ok(html! {
         h1 : "Add Discord Role Override";
         p : "Set a custom Discord role for this game role binding.";
-        form(method = "post", action = uri!(add_discord_override(series, event, role_type_id))) {
-            label {
-                : "Discord Role ID: ";
-                input(type = "text", name = "discord_role_id", required);
-            }
-            button(type = "submit") : "Add Override";
-        }
+        : full_form(uri!(add_discord_override(series, event, role_type_id)), csrf.as_ref(), html! {
+            : form_field("discord_role_id", &mut errors, html! {
+                label(for = "discord_role_id") : "Discord Role ID:";
+                input(type = "text", name = "discord_role_id", id = "discord_role_id", placeholder = "e.g. 123456789012345678", required);
+            });
+        }, errors, "Add Override");
     })
 }
 
@@ -3466,6 +3469,7 @@ pub(crate) struct AddDiscordOverrideForm {
 #[rocket::post("/event/<series>/<event>/role-types/<role_type_id>/discord-override", data = "<form>")]
 pub(crate) async fn add_discord_override(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     series: Series,
     event: &str,
@@ -3544,6 +3548,66 @@ pub(crate) async fn add_discord_override(
 
             // Add the override
             EventDiscordRoleOverride::create(&mut transaction, series, event, role_type_id, discord_role_id).await?;
+
+            // Get the role type name for filtering
+            let role_type = RoleType::from_id(&mut transaction, role_type_id).await?;
+            let role_type_name = if let Some(role_type) = role_type {
+                role_type.name
+            } else {
+                return Err(StatusOrError::Status(Status::NotFound));
+            };
+
+            // Retroactively assign Discord roles to existing approved volunteers
+            // Check if event uses custom bindings
+            let uses_custom_bindings = sqlx::query_scalar!(
+                r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,
+                series as _,
+                event
+            )
+            .fetch_optional(&mut *transaction)
+            .await?
+            .unwrap_or(Some(true)).unwrap_or(true);
+
+            // Get all approved role requests for this role type (both event-specific and game-wide)
+            let approved_requests = if uses_custom_bindings {
+                // For event-specific bindings, get approved requests for this event
+                RoleRequest::approved_for_event(&mut transaction, series, event).await?
+                    .into_iter()
+                    .filter(|req| req.role_type_name == role_type_name)
+                    .collect::<Vec<_>>()
+            } else {
+                // For game bindings, get all approved requests for the game
+                let game = game::Game::from_series(&mut transaction, series).await?;
+                if let Some(game) = game {
+                    RoleRequest::for_game(&mut transaction, game.id).await?
+                        .into_iter()
+                        .filter(|req| req.status == RoleRequestStatus::Approved && req.role_type_name == role_type_name)
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                }
+            };
+
+            // Assign Discord roles to all approved volunteers
+            for request in approved_requests {
+                let user = User::from_id(&mut *transaction, request.user_id).await?;
+                if let Some(user) = user {
+                    if let Some(discord_user) = user.discord {
+                        // Get the Discord context and guild
+                        let discord_ctx = discord_ctx.read().await;
+                        if let Some(discord_guild) = data.discord_guild {
+                            if let Ok(member) = discord_guild.member(&*discord_ctx, discord_user.id).await {
+                                if let Err(e) = member.add_role(&*discord_ctx, RoleId::new(discord_role_id.try_into().unwrap())).await {
+                                    eprintln!("Failed to retroactively assign Discord role {} to user {}: {}", discord_role_id, discord_user.id, e);
+                                } else {
+                                    eprintln!("Successfully retroactively assigned Discord role {} to user {} for role request {}", 
+                                             discord_role_id, discord_user.id, request.id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
