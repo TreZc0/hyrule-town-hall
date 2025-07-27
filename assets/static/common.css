@@ -167,8 +167,7 @@ a.nav,
 input[type="text"],
 input[type="number"],
 select,
-textarea,
-.button {
+textarea {
   background-color: var(--bg-surface);
   border: 1px solid var(--border);
   padding: 8px;
