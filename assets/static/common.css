@@ -255,20 +255,19 @@ input[type="text"] {
   border-end-end-radius: 8px;
 }
 
-/* Make all buttons look like the styled delete button */
+/* Make buttons look like the styled delete button */
 .button {
   border-radius: 0.375rem;
   padding: 0.5rem 1rem;
-  border: 1px solid var(--border);
-  background-color: var(--bg-surface);
-  color: var(--text-primary);
+  border: 1px solid #4a90e2; /* Light blue border like the delete button */
+  background-color: transparent; /* Transparent background to show border */
+  color: white;
   cursor: pointer;
   transition: background-color 0.2s, color 0.2s, transform 0.1s;
 }
 
 .button:hover {
-  background-color: var(--hover-bg);
-  color: var(--hover-text);
+  background-color: rgba(74, 144, 226, 0.1); /* Light blue background on hover */
   transform: translateY(-1px);
 }
 
