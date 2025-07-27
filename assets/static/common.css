@@ -272,8 +272,8 @@ input[type="text"] {
   height: 51px;
   padding: 0 1rem;
   border-radius: 0;
-  border-start-end-radius: 0;
-  border-end-end-radius: 0;
+  border-start-end-radius: 0 !important;
+  border-end-end-radius: 0 !important;
 }
 
 /* Ensure actions div aligns buttons properly */

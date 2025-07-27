@@ -12,7 +12,7 @@ function startEdit(bindingId) {
     row.querySelector('.min-count').innerHTML = `<input type="number" name="min_count" value="${minCount}" min="1" style="width: 60px;">`;
     row.querySelector('.max-count').innerHTML = `<input type="number" name="max_count" value="${maxCount}" min="1" style="width: 60px;">`;
     row.querySelector('.auto-approve').innerHTML = `<input type="checkbox" name="auto_approve" ${autoApprove === 'true' ? 'checked' : ''}>`;
-    row.querySelector('.discord-role').innerHTML = `<input type="text" name="discord_role_id" value="${discordRole}" placeholder="e.g. 123456789012345678" style="width: 150px;">`;
+    row.querySelector('.discord-role').innerHTML = `<input type="text" name="discord_role_id" value="${discordRole}" placeholder="e.g. 123456789012345678" style="width: 220px;">`;
     
     // Replace edit button with save/cancel buttons
     const actionsDiv = row.querySelector('.actions');
