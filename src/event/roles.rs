@@ -1758,6 +1758,21 @@ pub(crate) async fn apply_for_role(
                 Some(value.notes.clone())
             };
 
+            // Get the role binding details to check auto-approve status
+            let role_binding = sqlx::query_as!(
+                RoleBinding,
+                r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event as "event!", rb.game_id,
+                          rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count as "min_count!", 
+                          rb.max_count as "max_count!", rt.name as "role_type_name!", rb.discord_role_id, rb.auto_approve
+                       FROM role_bindings rb
+                       JOIN role_types rt ON rb.role_type_id = rt.id
+                       WHERE rb.id = $1"#,
+                i64::from(value.role_binding_id) as i32
+            )
+            .fetch_one(&mut *transaction)
+            .await?;
+
+            // Check if user already has an active request for this role binding
             if RoleRequest::active_for_user(&mut transaction, value.role_binding_id, me.id).await? {
                 form.context.push_error(form::Error::validation(
                     "You have already applied for this role",
@@ -1775,20 +1790,6 @@ pub(crate) async fn apply_for_role(
                 ));
             }
 
-            // Get the role binding details for the notification
-            let role_binding = sqlx::query_as!(
-                RoleBinding,
-                r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event as "event!", rb.game_id,
-                          rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count as "min_count!", 
-                          rb.max_count as "max_count!", rt.name as "role_type_name!", rb.discord_role_id, rb.auto_approve
-                       FROM role_bindings rb
-                       JOIN role_types rt ON rb.role_type_id = rt.id
-                       WHERE rb.id = $1"#,
-                i64::from(value.role_binding_id) as i32
-            )
-            .fetch_one(&mut *transaction)
-            .await?;
-
             // Create the role request
             RoleRequest::create(
                 &mut transaction,
@@ -1798,32 +1799,34 @@ pub(crate) async fn apply_for_role(
             )
             .await?;
 
-            // Send Discord notification to organizer channel
-            if let Some(organizer_channel) = data.discord_organizer_channel {
-                let discord_ctx = discord_ctx.read().await;
-                let mut msg = MessageBuilder::default();
-                msg.push("New volunteer application: ");
-                msg.mention_user(&me);
-                msg.push(" has applied for the **");
-                msg.push_safe(&role_binding.role_type_name);
-                msg.push("** role in **");
-                msg.push_safe(&data.display_name);
-                msg.push("**.");
-                
-                if let Some(notes) = notes {
-                    msg.push("\nNotes: ");
-                    msg.push_safe(&notes);
-                }
-                
-                msg.push("\n\nClick here to review and manage role requests for the event: ");
-                msg.push_named_link_no_preview("Manage Roles", format!("{}/event/{}/{}/roles", 
-                    base_uri(),
-                    series.slug(),
-                    event
-                ));
+            // Only send Discord notification for non-auto-approve roles
+            if !role_binding.auto_approve {
+                if let Some(organizer_channel) = data.discord_organizer_channel {
+                    let discord_ctx = discord_ctx.read().await;
+                    let mut msg = MessageBuilder::default();
+                    msg.push("New volunteer application: ");
+                    msg.mention_user(&me);
+                    msg.push(" has applied for the **");
+                    msg.push_safe(&role_binding.role_type_name);
+                    msg.push("** role in **");
+                    msg.push_safe(&data.display_name);
+                    msg.push("**.");
+                    
+                    if let Some(notes) = notes {
+                        msg.push("\nNotes: ");
+                        msg.push_safe(&notes);
+                    }
+                    
+                    msg.push("\n\nClick here to review and manage role requests for the event: ");
+                    msg.push_named_link_no_preview("Manage Roles", format!("{}/event/{}/{}/roles", 
+                        base_uri(),
+                        series.slug(),
+                        event
+                    ));
 
-                if let Err(e) = organizer_channel.say(&*discord_ctx, msg.build()).await {
-                    eprintln!("Failed to send Discord notification for role request: {}", e);
+                    if let Err(e) = organizer_channel.say(&*discord_ctx, msg.build()).await {
+                        eprintln!("Failed to send Discord notification for role request: {}", e);
+                    }
                 }
             }
 
@@ -2017,13 +2020,18 @@ async fn volunteer_page(
                                 }
                             } else {
                                 @let mut errors = Vec::new();
+                                @let button_text = if binding.auto_approve {
+                                    format!("Grab {}", binding.role_type_name)
+                                } else {
+                                    format!("Apply for {}", binding.role_type_name)
+                                };
                                 : full_form(uri!(apply_for_role(data.series, &*data.event)), csrf.as_ref(), html! {
                                     input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
                                     : form_field("notes", &mut errors, html! {
                                         label(for = "notes") : "Notes (optional):";
                                         textarea(name = "notes", id = "notes", rows = "3") : "";
                                     });
-                                }, errors, format!("Apply for {}", binding.role_type_name).as_str());
+                                }, errors, button_text.as_str());
                             }
                         }
                     }

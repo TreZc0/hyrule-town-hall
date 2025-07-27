@@ -210,13 +210,18 @@ pub(crate) async fn get(
                         } else {
                             @if let Some(ref me) = me {
                                 @let mut errors = Vec::new();
-                                                                    : full_form(uri!(apply_for_game_role(&game.name)), csrf.as_ref(), html! {
+                                @let button_text = if binding.auto_approve {
+                                    format!("Volunteer for {}", binding.role_type_name)
+                                } else {
+                                    format!("Apply for {}", binding.role_type_name)
+                                };
+                                : full_form(uri!(apply_for_game_role(&game.name)), csrf.as_ref(), html! {
                                     input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
                                     : form_field("notes", &mut errors, html! {
                                         label(for = "notes") : "Notes:";
                                         input(type = "text", name = "notes", id = "notes", maxlength = "60", size = "30", placeholder = "Optional notes for organizers");
                                     });
-                                }, errors, &format!("Apply for {}", binding.role_type_name));
+                                }, errors, &button_text);
                             } else {
                                 p {
                                     a(href = "/login") : "Sign in";
