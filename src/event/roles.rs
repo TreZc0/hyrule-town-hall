@@ -119,6 +119,7 @@ pub(crate) struct RoleBinding {
     pub(crate) max_count: i32,
     pub(crate) role_type_name: String,
     pub(crate) discord_role_id: Option<i64>,
+    pub(crate) auto_approve: bool,
 }
 
 #[allow(unused)]
@@ -129,9 +130,11 @@ pub(crate) struct GameRoleBinding {
     pub(crate) max_count: i32,
     pub(crate) role_type_name: String,
     pub(crate) discord_role_id: Option<i64>,
+    pub(crate) auto_approve: bool,
 }
 
 #[allow(unused)]
+#[derive(Clone)]
 pub(crate) struct RoleRequest {
     pub(crate) id: Id<RoleRequests>,
     pub(crate) role_binding_id: Id<RoleBindings>,
@@ -140,8 +143,8 @@ pub(crate) struct RoleRequest {
     pub(crate) notes: Option<String>,
     pub(crate) created_at: DateTime<Utc>,
     pub(crate) updated_at: DateTime<Utc>,
-    pub(crate) series: Series,
-    pub(crate) event: String,
+    pub(crate) series: Option<Series>,
+    pub(crate) event: Option<String>,
     pub(crate) min_count: i32,
     pub(crate) max_count: i32,
     pub(crate) role_type_name: String,
@@ -157,8 +160,8 @@ pub(crate) struct Signup {
     pub(crate) notes: Option<String>,
     pub(crate) created_at: DateTime<Utc>,
     pub(crate) updated_at: DateTime<Utc>,
-    pub(crate) series: Series,
-    pub(crate) event: String,
+    pub(crate) series: Option<Series>,
+    pub(crate) event: Option<String>,
     pub(crate) min_count: i32,
     pub(crate) max_count: i32,
     pub(crate) role_type_name: String,
@@ -172,6 +175,7 @@ pub(crate) struct EffectiveRoleBinding {
     pub(crate) max_count: i32,
     pub(crate) role_type_name: String,
     pub(crate) discord_role_id: Option<i64>,
+    pub(crate) auto_approve: bool,
     pub(crate) is_game_binding: bool,
     pub(crate) has_event_override: bool,
 }
@@ -233,7 +237,8 @@ impl RoleBinding {
                     rb.min_count,
                     rb.max_count,
                     rt.name AS "role_type_name",
-                    rb.discord_role_id
+                    rb.discord_role_id,
+                    rb.auto_approve
                 FROM role_bindings rb
                 JOIN role_types rt ON rb.role_type_id = rt.id
                 WHERE rb.series = $1 AND rb.event = $2
@@ -254,16 +259,18 @@ impl RoleBinding {
         min_count: i32,
         max_count: i32,
         discord_role_id: Option<i64>,
+        auto_approve: bool,
     ) -> sqlx::Result<Id<RoleBindings>> {
         let id = sqlx::query_scalar!(
-            r#"INSERT INTO role_bindings (series, event, role_type_id, min_count, max_count, discord_role_id, game_id) 
-               VALUES ($1, $2, $3, $4, $5, $6, NULL) RETURNING id"#,
+            r#"INSERT INTO role_bindings (series, event, role_type_id, min_count, max_count, discord_role_id, game_id, auto_approve) 
+               VALUES ($1, $2, $3, $4, $5, $6, NULL, $7) RETURNING id"#,
             series as _,
             event,
             role_type_id as _,
             min_count,
             max_count,
-            discord_role_id
+            discord_role_id,
+            auto_approve
         )
         .fetch_one(&mut **pool)
         .await?;
@@ -313,7 +320,8 @@ impl GameRoleBinding {
                     rb.min_count,
                     rb.max_count,
                     rt.name AS "role_type_name",
-                    rb.discord_role_id
+                    rb.discord_role_id,
+                    rb.auto_approve
                 FROM role_bindings rb
                 JOIN role_types rt ON rb.role_type_id = rt.id
                 WHERE rb.game_id = $1 AND rb.series IS NULL AND rb.event IS NULL
@@ -332,15 +340,17 @@ impl GameRoleBinding {
         min_count: i32,
         max_count: i32,
         discord_role_id: Option<i64>,
+        auto_approve: bool,
     ) -> sqlx::Result<Id<RoleBindings>> {
         let id = sqlx::query_scalar!(
-            r#"INSERT INTO role_bindings (game_id, role_type_id, min_count, max_count, discord_role_id, series, event) 
-               VALUES ($1, $2, $3, $4, $5, NULL, NULL) RETURNING id"#,
+            r#"INSERT INTO role_bindings (game_id, role_type_id, min_count, max_count, discord_role_id, series, event, auto_approve) 
+               VALUES ($1, $2, $3, $4, $5, NULL, NULL, $6) RETURNING id"#,
             game_id,
             role_type_id as _,
             min_count,
             max_count,
-            discord_role_id
+            discord_role_id,
+            auto_approve
         )
         .fetch_one(&mut **pool)
         .await?;
@@ -479,12 +489,27 @@ impl RoleRequest {
         user_id: Id<Users>,
         notes: String,
     ) -> sqlx::Result<Id<RoleRequests>> {
+        // Check if the role binding has auto-approve enabled
+        let auto_approve = sqlx::query_scalar!(
+            r#"SELECT auto_approve FROM role_bindings WHERE id = $1"#,
+            role_binding_id as _
+        )
+        .fetch_one(&mut **pool)
+        .await?;
+
+        let status = if auto_approve {
+            RoleRequestStatus::Approved
+        } else {
+            RoleRequestStatus::Pending
+        };
+
         let id = sqlx::query_scalar!(
-            r#"INSERT INTO role_requests (role_binding_id, user_id, notes)
-               VALUES ($1, $2, $3) RETURNING id"#,
+            r#"INSERT INTO role_requests (role_binding_id, user_id, notes, status)
+               VALUES ($1, $2, $3, $4) RETURNING id"#,
             role_binding_id as _,
             user_id as _,
-            notes
+            notes,
+            status as _
         )
         .fetch_one(&mut **pool)
         .await?;
@@ -807,11 +832,6 @@ async fn roles_page(
 
     let content = if let Some(ref me) = me {
         if data.organizers(&mut transaction).await?.contains(me) {
-            let all_role_requests = RoleRequest::for_event(&mut transaction, data.series, &data.event).await?;
-            let pending_requests = all_role_requests.iter().filter(|req| matches!(req.status, RoleRequestStatus::Pending)).collect::<Vec<_>>();
-            let approved_requests = all_role_requests.iter().filter(|req| matches!(req.status, RoleRequestStatus::Approved)).collect::<Vec<_>>();
-            let all_role_types = RoleType::all(&mut transaction).await?;
-            
             // Check if event uses custom role bindings
             let uses_custom_bindings = sqlx::query_scalar!(
                 r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,
@@ -821,6 +841,26 @@ async fn roles_page(
             .fetch_optional(&mut *transaction)
             .await?
             .unwrap_or(Some(true)).unwrap_or(true);
+
+            let (pending_requests, approved_requests) = if uses_custom_bindings {
+                // Use event-specific role requests
+                let all_role_requests = RoleRequest::for_event(&mut transaction, data.series, &data.event).await?;
+                let pending = all_role_requests.iter().filter(|req| matches!(req.status, RoleRequestStatus::Pending)).cloned().collect::<Vec<_>>();
+                let approved = all_role_requests.iter().filter(|req| matches!(req.status, RoleRequestStatus::Approved)).cloned().collect::<Vec<_>>();
+                (pending, approved)
+            } else {
+                // Use game role bindings - get all approved volunteers for the game
+                let game = game::Game::from_series(&mut transaction, data.series).await.map_err(Error::from)?;
+                if let Some(game) = game {
+                    let all_game_role_requests = RoleRequest::for_game(&mut transaction, game.id).await?;
+                    let pending = all_game_role_requests.iter().filter(|req| matches!(req.status, RoleRequestStatus::Pending)).cloned().collect::<Vec<_>>();
+                    let approved = all_game_role_requests.iter().filter(|req| matches!(req.status, RoleRequestStatus::Approved)).cloned().collect::<Vec<_>>();
+                    (pending, approved)
+                } else {
+                    (Vec::new(), Vec::new())
+                }
+            };
+            let all_role_types = RoleType::all(&mut transaction).await?;
 
             // Get game info if using game bindings
             let game_info = if !uses_custom_bindings {
@@ -846,13 +886,13 @@ async fn roles_page(
                     div(class = "info-box") {
                         h3 : "Using Game Role Bindings";
                         p {
-                            : "This event is using role bindings from the ";
+                            : "This event is using global role bindings from ";
                             @if let Some(ref game) = game_info {
                                 strong : &game.display_name;
                             } else {
-                                strong : "game";
+                                strong : "the game";
                             }
-                            : " with event-specific Discord role overrides.";
+                            : " and only allows event-specific Discord roles to be defined.";
                         }
                     }
                 }
@@ -936,6 +976,11 @@ async fn roles_page(
                             label(for = "discord_role_id") : "Discord Role ID (optional):";
                             input(type = "text", name = "discord_role_id", id = "discord_role_id", placeholder = "e.g. 123456789012345678");
                         });
+                        : form_field("auto_approve", &mut errors, html! {
+                            label(for = "auto_approve") : "Auto-approve requests:";
+                            input(type = "checkbox", name = "auto_approve", id = "auto_approve");
+                            span(class = "help-text") : "When enabled, role requests for this binding will be automatically approved without manual review.";
+                        });
                     }, errors, "Add Role Binding");
                 } else {
                     h3 : "Discord Role Overrides";
@@ -981,20 +1026,28 @@ async fn roles_page(
 
                     h4 : "Add Discord Role Override";
                     @let mut errors = ctx.errors().collect_vec();
-                    : full_form(uri!(add_discord_override_form(data.series, &*data.event, all_role_types[0].id)), csrf.as_ref(), html! {
-                        : form_field("role_type_id", &mut errors, html! {
-                            label(for = "role_type_id") : "Role Type:";
-                            select(name = "role_type_id", id = "role_type_id") {
-                                @for role_type in all_role_types {
-                                    option(value = role_type.id.to_string()) : role_type.name;
+                    @let available_role_types = effective_role_bindings.iter()
+                        .filter(|binding| binding.is_game_binding && !binding.has_event_override)
+                        .map(|binding| RoleType { id: binding.role_type_id, name: binding.role_type_name.clone() })
+                        .collect::<Vec<_>>();
+                    @if !available_role_types.is_empty() {
+                        : full_form(uri!(add_discord_override_form(data.series, &*data.event, available_role_types[0].id)), csrf.as_ref(), html! {
+                            : form_field("role_type_id", &mut errors, html! {
+                                label(for = "role_type_id") : "Role Type:";
+                                select(name = "role_type_id", id = "role_type_id") {
+                                    @for role_type in available_role_types {
+                                        option(value = role_type.id.to_string()) : role_type.name;
+                                    }
                                 }
-                            }
-                        });
-                        : form_field("discord_role_id", &mut errors, html! {
-                            label(for = "discord_role_id") : "Discord Role ID:";
-                            input(type = "text", name = "discord_role_id", id = "discord_role_id", placeholder = "e.g. 123456789012345678", required);
-                        });
-                    }, errors, "Add Override");
+                            });
+                            : form_field("discord_role_id", &mut errors, html! {
+                                label(for = "discord_role_id") : "Discord Role ID:";
+                                input(type = "text", name = "discord_role_id", id = "discord_role_id", placeholder = "e.g. 123456789012345678", required);
+                            });
+                        }, errors, "Add Override");
+                    } else {
+                        p : "No game role bindings available for Discord role override.";
+                    }
                 }
 
                 h3 : "Pending Role Requests";
@@ -1056,9 +1109,9 @@ async fn roles_page(
                     }
                 }
 
-                h3 : "Approved Role Requests";
+                h3 : "Volunteer Pool";
                 @if approved_requests.is_empty() {
-                    p : "No approved role requests.";
+                    p : "No volunteers have received any roles yet.";
                 } else {
                     @let grouped = {
                         let mut map = std::collections::BTreeMap::new();
@@ -1176,6 +1229,7 @@ pub(crate) struct AddRoleBindingForm {
     max_count: i32,
     #[field(default = String::new())]
     discord_role_id: String,
+    auto_approve: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/roles/add-binding", data = "<form>")]
@@ -1267,6 +1321,7 @@ pub(crate) async fn add_role_binding(
                 value.min_count,
                 value.max_count,
                 discord_role_id,
+                value.auto_approve,
             )
             .await?;
             transaction.commit().await?;
@@ -1398,7 +1453,7 @@ pub(crate) async fn approve_role_request(
             // Get the role binding to check for Discord role ID
             let role_binding = sqlx::query_as!(
                 RoleBinding,
-                r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event, rb.game_id, rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count, rb.max_count, rt.name as role_type_name, rb.discord_role_id FROM role_bindings rb JOIN role_types rt ON rb.role_type_id = rt.id WHERE rb.id = $1"#,
+                r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event, rb.game_id, rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count, rb.max_count, rt.name as role_type_name, rb.discord_role_id, rb.auto_approve FROM role_bindings rb JOIN role_types rt ON rb.role_type_id = rt.id WHERE rb.id = $1"#,
                 i64::from(role_request.role_binding_id) as i32
             )
             .fetch_optional(&mut *transaction)
@@ -1581,7 +1636,7 @@ pub(crate) async fn apply_for_role(
                 RoleBinding,
                 r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event as "event!", rb.game_id,
                           rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count as "min_count!", 
-                          rb.max_count as "max_count!", rt.name as "role_type_name!", rb.discord_role_id
+                          rb.max_count as "max_count!", rt.name as "role_type_name!", rb.discord_role_id, rb.auto_approve
                        FROM role_bindings rb
                        JOIN role_types rt ON rb.role_type_id = rt.id
                        WHERE rb.id = $1"#,
@@ -1662,13 +1717,36 @@ async fn volunteer_page(
         // Check if user has access to view volunteer signups
         let is_organizer = data.organizers(&mut transaction).await?.contains(me);
         let is_restreamer = data.restreamers(&mut transaction).await?.contains(me);
-        let has_confirmed_roles = {
+        // Check if event uses custom role bindings
+        let uses_custom_bindings = sqlx::query_scalar!(
+            r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,
+            data.series as _,
+            &data.event
+        )
+        .fetch_optional(&mut *transaction)
+        .await?
+        .unwrap_or(Some(true)).unwrap_or(true);
+
+        let has_confirmed_roles = if uses_custom_bindings {
+            // Check for event-specific role requests
             let my_requests = RoleRequest::for_user(&mut transaction, me.id).await?;
             my_requests.iter().any(|req| {
                 matches!(req.status, RoleRequestStatus::Approved)
-                    && req.series == data.series
-                    && req.event == data.event
+                    && req.series == Some(data.series)
+                    && req.event == Some(data.event.to_string())
             })
+        } else {
+            // Check for game role requests
+            let game = game::Game::from_series(&mut transaction, data.series).await.map_err(Error::from)?;
+            if let Some(_game) = game {
+                let my_requests = RoleRequest::for_user(&mut transaction, me.id).await?;
+                my_requests.iter().any(|req| {
+                    matches!(req.status, RoleRequestStatus::Approved)
+                        && u64::from(req.role_binding_id) > 0 // Valid role binding ID
+                })
+            } else {
+                false
+            }
         };
 
         if !is_organizer && !is_restreamer && !has_confirmed_roles {
@@ -1686,20 +1764,44 @@ async fn volunteer_page(
             // User has access - show the full volunteer interface
             let effective_role_bindings = EffectiveRoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
             let my_requests = RoleRequest::for_user(&mut transaction, me.id).await?;
-            let my_approved_roles = my_requests
-                .iter()
-                .filter(|req| {
-                    matches!(req.status, RoleRequestStatus::Approved)
-                        && req.series == data.series
-                        && req.event == data.event
-                })
-                .collect::<Vec<_>>();
+            let my_approved_roles = if uses_custom_bindings {
+                // For custom bindings, show event-specific approved roles
+                my_requests
+                    .iter()
+                    .filter(|req| {
+                        matches!(req.status, RoleRequestStatus::Approved)
+                            && req.series == Some(data.series)
+                                                         && req.event == Some(data.event.to_string())
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                // For game bindings, show all approved roles for the game
+                my_requests
+                    .iter()
+                    .filter(|req| {
+                        matches!(req.status, RoleRequestStatus::Approved)
+                    })
+                    .collect::<Vec<_>>()
+            };
 
             let upcoming_races = Race::for_event(&mut transaction, &reqwest::Client::new(), &data).await?;
 
             html! {
                 h2 : "Volunteer for Roles";
-                p : "Apply to volunteer for roles in this event.";
+                
+                @if !uses_custom_bindings {
+                    div(class = "game-binding-notice") {
+                        h3 : "Game Role Bindings";
+                        p : "This event uses game-level role bindings. To volunteer for roles, you need to apply for game roles instead of event-specific roles.";
+                        p {
+                            : "Please visit the ";
+                            a(href = uri!(crate::games::manage_roles(data.series.slug()))) : "game role management page";
+                            : " to apply for roles that will be available across all events for this game.";
+                        }
+                    }
+                } else {
+                    p : "Apply to volunteer for roles in this event.";
+                }
 
                 @if effective_role_bindings.is_empty() {
                     p : "No volunteer roles are currently available for this event.";
@@ -1726,6 +1828,11 @@ async fn volunteer_page(
                                     @if binding.has_event_override {
                                         span(class = "override-indicator") : " (event override)";
                                     }
+                                }
+                            }
+                            @if binding.auto_approve {
+                                p(class = "auto-approve-indicator") {
+                                    : "Auto-approve enabled";
                                 }
                             }
                             @if binding.is_game_binding {
@@ -2786,7 +2893,7 @@ pub(crate) async fn revoke_role_request(
         let request = RoleRequest::from_id(&mut transaction, value.request_id).await?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-        if request.series != series || request.event != event {
+        if request.series != Some(series) || request.event != Some(event.to_string()) {
             form.context.push_error(form::Error::validation(
                 "Invalid role request for this event",
             ));
@@ -2939,6 +3046,7 @@ impl EffectiveRoleBinding {
                     max_count: binding.max_count,
                     role_type_name: binding.role_type_name,
                     discord_role_id: binding.discord_role_id,
+                    auto_approve: binding.auto_approve,
                     is_game_binding: false,
                     has_event_override: false,
                 });
@@ -2978,6 +3086,7 @@ impl EffectiveRoleBinding {
                     max_count: binding.max_count,
                     role_type_name: binding.role_type_name,
                     discord_role_id,
+                    auto_approve: binding.auto_approve,
                     is_game_binding: true,
                     has_event_override: has_override,
                 });

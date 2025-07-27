@@ -123,6 +123,10 @@ input[type="submit"]:hover,
   transform: translateY(-1px);
 }
 
+a.nav {
+  padding-right: 10px;
+}
+
 a.nav,
 .favicon {
   color: inherit;

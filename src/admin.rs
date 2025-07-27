@@ -959,6 +959,7 @@ pub(crate) async fn add_game_role_binding(
             value.min_count,
             value.max_count,
             discord_role_id,
+            false, // auto_approve - default to false for game role bindings
         ).await.map_err(Error::from)?;
         
         transaction.commit().await.map_err(Error::from)?;

@@ -910,9 +910,29 @@ pub(crate) async fn races(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
         @if any_races_ongoing_or_upcoming {
             //TODO split into ongoing and upcoming, show headers for both
             @if let Some(ref me) = me {
-               @let my_approved_roles = roles::RoleRequest::for_event(&mut transaction, data.series, &data.event).await
-                    .map(|reqs| reqs.into_iter().filter(|req| req.user_id == me.id && matches!(req.status, roles::RoleRequestStatus::Approved)).map(|req| req.role_binding_id).collect::<Vec<_>>())
-                    .unwrap_or_default();
+               @let my_approved_roles = {
+                   // Check if event uses custom role bindings
+                   let uses_custom_bindings = sqlx::query_scalar!(
+                       r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,
+                       data.series as _,
+                       &data.event
+                   )
+                   .fetch_optional(&mut *transaction)
+                   .await?
+                   .unwrap_or(Some(true)).unwrap_or(true);
+
+                   if uses_custom_bindings {
+                       // For custom bindings, show event-specific approved roles
+                       roles::RoleRequest::for_event(&mut transaction, data.series, &data.event).await
+                           .map(|reqs| reqs.into_iter().filter(|req| req.user_id == me.id && matches!(req.status, roles::RoleRequestStatus::Approved)).map(|req| req.role_binding_id).collect::<Vec<_>>())
+                           .unwrap_or_default()
+                   } else {
+                       // For game bindings, show all approved roles for the user
+                       roles::RoleRequest::for_user(&mut transaction, me.id).await
+                           .map(|reqs| reqs.into_iter().filter(|req| matches!(req.status, roles::RoleRequestStatus::Approved)).map(|req| req.role_binding_id).collect::<Vec<_>>())
+                           .unwrap_or_default()
+                   }
+               };
                 : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: true, can_create, can_edit, show_restream_consent, challonge_import_ctx: None }, &ongoing_and_upcoming_races, Some(me), Some(&my_approved_roles)).await?;
             } else {
                 : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: true, can_create, can_edit, show_restream_consent, challonge_import_ctx: None }, &ongoing_and_upcoming_races, None, None).await?;
