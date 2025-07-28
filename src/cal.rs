@@ -2632,6 +2632,7 @@ async fn import_race<'a>(mut transaction: Transaction<'a, Postgres>, discord_ctx
         let mut race = Race {
             id: Id::<Races>::new(&mut transaction).await?,
             game: (game_count > 1).then_some(game),
+            draft: race.draft.as_ref().filter(|_| game == 1).cloned(),
             scheduling_thread,
             ..race.clone()
         };
