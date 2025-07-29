@@ -731,20 +731,20 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
             }
             QualifierKind::Score(score_kind) => {
                 let (num1, score1) = match *qualification1 {
-                    Qualification::Multiple { num_entered, num_finished, score } => match score_kind {
-                        QualifierScoreKind::Standard => (num_finished, score),
+                    Qualification::Multiple { num_entered, num_finished, score } => match score_kind { //TODO determine based on enter flow
+                        QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online => (num_finished, score),
                         QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => (num_entered, score),
                     },
                     _ => unreachable!("QualifierKind::Multiple must use Qualification::Multiple"),
                 };
                 let (num2, score2) = match *qualification2 {
-                    Qualification::Multiple { num_entered, num_finished, score } => match score_kind {
-                        QualifierScoreKind::Standard => (num_finished, score),
+                    Qualification::Multiple { num_entered, num_finished, score } => match score_kind { //TODO determine based on enter flow
+                        QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online => (num_finished, score),
                         QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => (num_entered, score),
                     },
                     _ => unreachable!("QualifierKind::Multiple must use Qualification::Multiple"),
                 };
-                let required_qualifiers = match score_kind {
+                let required_qualifiers = match score_kind { //TODO determine based on enter flow
                     QualifierScoreKind::Standard => 5,
                     QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => 3,
                 };
@@ -856,7 +856,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                 th : "Pieces Found";
             });
         }
-        QualifierKind::Score(QualifierScoreKind::Standard) => {
+        QualifierKind::Score(QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online) => { //TODO determine based on enter flow
             column_headers.push(html! {
                 th : "Qualifiers Entered";
             });
@@ -1061,7 +1061,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                     }
                                 }
                                 (QualifierKind::Single { show_times: true }, Qualification::TriforceBlitz { pieces, .. }) => td : pieces;
-                                (QualifierKind::Score(QualifierScoreKind::Standard), Qualification::Multiple { num_entered, num_finished, score }) => {
+                                (QualifierKind::Score(QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online), Qualification::Multiple { num_entered, num_finished, score }) => { //TODO determine based on enter flow
                                     td(style = "text-align: right;") : num_entered;
                                     td(style = "text-align: right;") : num_finished;
                                     td(style = "text-align: right;") : format!("{score:.2}");
@@ -1107,7 +1107,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                         enter::Requirement::RestreamConsent { .. } => {}
                                                         enter::Requirement::Qualifier { .. } => {} //TODO
                                                         enter::Requirement::TripleQualifier { .. } => {} //TODO
-                                                        enter::Requirement::QualifierPlacement { num_players, min_races, event, exclude_players } => : if_chain! {
+                                                        enter::Requirement::QualifierPlacement { num_players, min_races, need_finish, event, exclude_players } => : if_chain! {
                                                             let data = if let Some(event) = event {
                                                                 &Data::new(&mut transaction, data.series, event).await?.ok_or(Error::NoSuchEvent)?
                                                             } else {
@@ -1122,27 +1122,21 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                             let teams = signups_sorted(&mut transaction, &mut cache, None, data, is_organizer, QualifierKind::Score(qualifier_kind), Some(&entrant.user)).await?;
                                                             if let Some((placement, team)) = teams.iter().enumerate().find(|(_, team)| team.members.iter().any(|member| member.user == entrant.user));
                                                             if let Qualification::Multiple { num_entered, num_finished, .. } = team.qualification;
-                                                            let num_qualifiers = match qualifier_kind {
-                                                                QualifierScoreKind::Standard => num_finished,
-                                                                QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => num_entered,
-                                                            };
+                                                            let num_qualifiers = if *need_finish { num_finished } else { num_entered };
                                                             then {
                                                                 if num_qualifiers < *min_races {
                                                                     html! {
                                                                         : "Not eligible (needs ";
                                                                         : min_races - num_qualifiers;
-                                                                        @match qualifier_kind {
-                                                                            QualifierScoreKind::Standard => {
-                                                                                : " more finish";
-                                                                                @if min_races - num_qualifiers != 1 {
-                                                                                    : "es";
-                                                                                }
+                                                                        @if *need_finish {
+                                                                            : " more finish";
+                                                                            @if min_races - num_qualifiers != 1 {
+                                                                                : "es";
                                                                             }
-                                                                            QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => {
-                                                                                : " more race";
-                                                                                @if min_races - num_qualifiers != 1 {
-                                                                                    : "s";
-                                                                                }
+                                                                        } else {
+                                                                            : " more race";
+                                                                            @if min_races - num_qualifiers != 1 {
+                                                                                : "s";
                                                                             }
                                                                         }
                                                                         : ")";

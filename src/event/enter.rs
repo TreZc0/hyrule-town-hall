@@ -166,6 +166,9 @@ pub(crate) enum Requirement {
         num_players: usize,
         #[serde(default)]
         min_races: usize,
+        /// If this is set, a DNF does not count towards the minimum required races.
+        #[serde(default)]
+        need_finish: bool,
         /// Check qualifiers for a different event in this series
         event: Option<String>,
         /// Must not place within this range, e.g. for Challenge Cup
@@ -227,7 +230,7 @@ impl Requirement {
             Self::RestreamConsent { .. } => Some(false),
             Self::Qualifier { .. } => Some(false),
             Self::TripleQualifier { .. } => Some(false),
-            Self::QualifierPlacement { num_players, min_races, event, exclude_players } => Some(if_chain! {
+            Self::QualifierPlacement { num_players, min_races, need_finish, event, exclude_players } => Some(if_chain! {
                 let data = if let Some(event) = event {
                     &Data::new(&mut *transaction, data.series, event).await?.ok_or(Error::NoSuchEvent)?
                 } else {
@@ -252,10 +255,7 @@ impl Requirement {
                         .find(|(_, team)| team.members.iter().any(|member| member.user == teams::MemberUser::Newcomer))
                         .is_none_or(|(newcomer_placement, _)| placement < newcomer_placement) // Newcomer can represent any number of teams
                     && placement < *num_players
-                    && match qualifier_kind {
-                        teams::QualifierScoreKind::Standard => num_finished >= *min_races,
-                        teams::QualifierScoreKind::Sgl2023Online | teams::QualifierScoreKind::Sgl2024Online => num_entered >= *min_races,
-                    }
+                    && if *need_finish { num_finished } else { num_entered } >= *min_races
                 } else {
                     false
                 }
@@ -851,14 +851,18 @@ impl Requirement {
                     }),
                 }
             }
-            &Self::QualifierPlacement { num_players, min_races, exclude_players, event: _ } => {
+            &Self::QualifierPlacement { num_players, min_races, need_finish, exclude_players, event: _ } => {
                 RequirementStatus {
                     blocks_submit: !is_checked.unwrap(),
                     html_content: Box::new(move |_| html! {
                         @if min_races == 0 {
                             : "Place";
                         } else {
-                            : "Enter at least ";
+                            @if need_finish {
+                                : "Finish at least ";
+                            } else {
+                                : "Enter at least ";
+                            }
                             : min_races;
                             : " qualifier races and place";
                         }
