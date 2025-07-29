@@ -858,6 +858,13 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         .max_int_value(3)
                         .required(false)
                     )
+                    .add_option(CreateCommandOption::new(
+                        CommandOptionType::String,
+                        "link",
+                        "Link to the recording/VoD for this async part (optional)",
+                    )
+                        .required(false)
+                    )
                 );
                 idx
             };
@@ -2854,6 +2861,12 @@ pub(crate) async fn result_async_command(
     let total_seconds = hours * 3600 + minutes * 60 + seconds;
     let duration = Duration::from_secs(total_seconds as u64);
 
+    // Get the optional link parameter
+    let link: Option<String> = interaction.data.options.iter()
+        .find(|opt| opt.name == "link")
+        .and_then(|opt| opt.value.as_str())
+        .map(|s| s.to_string());
+
     // Get the user who ran the command
     let user = User::from_discord(&mut *transaction, user_id).await?;
 
@@ -2868,17 +2881,19 @@ pub(crate) async fn result_async_command(
     };
     sqlx::query!(
         r#"
-        INSERT INTO async_times (race_id, async_part, finish_time, recorded_by)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO async_times (race_id, async_part, finish_time, recorded_by, link)
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (race_id, async_part) DO UPDATE SET
             finish_time = EXCLUDED.finish_time,
             recorded_at = NOW(),
-            recorded_by = EXCLUDED.recorded_by
+            recorded_by = EXCLUDED.recorded_by,
+            link = EXCLUDED.link
         "#,
         race_id,
         async_part as i32,
         pg_interval,
         user.unwrap().id as _,
+        link,
     ).execute(&mut *transaction).await?;
 
     // Send immediate response for the time recording
@@ -2896,7 +2911,7 @@ pub(crate) async fn result_async_command(
     // Check if both async parts are complete
     let async_times = sqlx::query!(
         r#"
-        SELECT async_part, finish_time FROM async_times
+        SELECT async_part, finish_time, link FROM async_times
         WHERE race_id = $1
         ORDER BY async_part
         "#,
@@ -3030,6 +3045,37 @@ pub(crate) async fn result_async_command(
             loser_time.as_secs() % 60
         ));
         content.push(")");
+        
+        // Add links if available
+        let mut links_content = MessageBuilder::default();
+        let mut has_links = false;
+        
+        for async_time in &async_times {
+            if let Some(link) = &async_time.link {
+                if !has_links {
+                    links_content.push_line("");
+                    links_content.push("**Recordings:**");
+                    has_links = true;
+                }
+                links_content.push_line("");
+                let player = match async_time.async_part {
+                    1 => race.teams().next(),
+                    2 => race.teams().nth(1),
+                    3 => race.teams().nth(2),
+                    _ => None,
+                };
+                if let Some(player) = player {
+                    let player_name = player.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Player".to_string().into());
+                    links_content.push_safe(player_name);
+                    links_content.push(": ");
+                    links_content.push(link);
+                }
+            }
+        }
+        
+        if has_links {
+            content.push(links_content.build());
+        }
         
         // Send to race results channel
         if let Some(results_channel) = event.discord_race_results_channel {
