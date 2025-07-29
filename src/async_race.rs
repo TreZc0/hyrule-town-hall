@@ -4,7 +4,7 @@ use {
         ChannelId, CreateThread, MessageBuilder, CreateMessage,
         ChannelType, AutoArchiveDuration, CreateActionRow, CreateButton, ButtonStyle,
     },
-    sqlx::{PgPool, Transaction, Postgres, postgres::types::PgInterval},
+    sqlx::{PgPool, Transaction, Postgres},
     tokio::time::{sleep, Duration},
 
     crate::{
@@ -801,29 +801,8 @@ impl AsyncRaceManager {
         let hours = total_seconds / 3600;
         let minutes = (total_seconds % 3600) / 60;
         let seconds = total_seconds % 60;
+        //merely used for display purposes, not stored in the database.
         let formatted_time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
-        
-        // Get the user who clicked the button
-        let user = User::from_discord(&mut *transaction, user_id).await?;
-        
-        // Update the async_times record with finish_time
-        let pg_interval = PgInterval {
-            months: 0,
-            days: 0,
-            microseconds: duration.num_seconds() * 1_000_000,
-        };
-        
-        sqlx::query!(
-            r#"
-            UPDATE async_times 
-            SET finish_time = $1, recorded_at = NOW(), recorded_by = $2
-            WHERE race_id = $3 AND async_part = $4
-            "#,
-            pg_interval,
-            user.unwrap().id as _,
-            race_id,
-            async_part as i32,
-        ).execute(&mut *transaction).await?;
         
         // Load event data for organizer notification
         let _event = EventData::new(&mut transaction, race.series, &race.event)
