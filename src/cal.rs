@@ -617,9 +617,6 @@ impl Race {
             races.push(Self::from_id(&mut *transaction, http_client, id).await?);
         }
         match event.series {
-            // All old series are now scheduled via Mido's House
-            _ => {}
-        }
             Series::Standard => match &*event.event {
                 "w" => for kind in all::<s::WeeklyKind>() {
                     let schedule = RaceSchedule::Live { start: kind.next_weekly_after(now).to_utc(), end: None, room: None };

@@ -47,34 +47,6 @@ impl Score for Option<Duration> {
     }
 }
 
-// Removed tfb module reference
-    type SortKey = (Reverse<u8>, Duration);
-
-    fn is_dnf(&self) -> bool {
-        self.pieces == 0
-    }
-
-    fn sort_key(&self) -> Self::SortKey {
-        (
-            Reverse(self.pieces),
-            self.last_collection_time,
-        )
-    }
-
-    fn time_window(&self, other: &Self) -> Option<Duration> {
-        (self.pieces == other.pieces).then(|| self.last_collection_time - other.last_collection_time)
-    }
-
-    fn format(&self, _: Language) -> Cow<'_, str> {
-        Cow::Owned(self.to_string())
-    }
-
-    fn as_duration(&self) -> Option<Option<Duration>> {
-        None
-    }
-}
-
-// Removed tfb module reference
 
 async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ctx: &RaceContext<GlobalState>, cal_event: &cal::Event, event: &event::Data<'_>, mut entrants: [(Entrant, S, Url); 2]) -> Result<Transaction<'a, Postgres>, Error> {
     entrants.sort_unstable_by_key(|(_, time, _)| time.sort_key());

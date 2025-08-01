@@ -256,7 +256,7 @@ impl Requirement {
         })
     }
 
-    async fn check_get(&self, http_client: &reqwest::Client, data: &Data<'_>, is_checked: Option<bool>, redirect_uri: rocket::http::uri::Origin<'_>, defaults: &()) -> Result<RequirementStatus, Error> {
+    async fn check_get(&self, http_client: &reqwest::Client, data: &Data<'_>, is_checked: Option<bool>, redirect_uri: rocket::http::uri::Origin<'_>, defaults: &Option<&EnterForm>) -> Result<RequirementStatus, Error> {
         Ok(match self {
             Self::RaceTime => {
                 let mut html_content = html! {
@@ -369,7 +369,7 @@ impl Requirement {
                     @if is_checked.unwrap() {
                         : "Enter with your connected start.gg account"; //TODO show name and link to profile
                     } else {
-                        a(href = uri!(crate::auth::startgg_login(Some(redirect_uri)))) : "Connect a start.gg account to your Hyrule Town Hall account";
+                                                    a(href = uri!(crate::auth::startgg_login(Some(redirect_uri)))) : "Connect a start.gg account to your Hyrule Town Hall account";
                     }
                 };
                 let no_checked = false; // Removed pic module reference
@@ -465,8 +465,8 @@ impl Requirement {
                 }
             }
             Self::AllDungeonsOk => {
-                let yes_checked = defaults.field_value("all_dungeons_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("all_dungeons_ok").is_some_and(|value| value == "no");
+                    let yes_checked = defaults.and_then(|d| d.all_dungeons_ok.as_ref()).map(|r| matches!(r, BoolRadio::Yes)).unwrap_or(false);
+    let no_checked = defaults.and_then(|d| d.all_dungeons_ok.as_ref()).map(|r| matches!(r, BoolRadio::No)).unwrap_or(false);
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
@@ -482,8 +482,8 @@ impl Requirement {
                 }
             }
             Self::FluteOk => {
-                let yes_checked = defaults.field_value("flute_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("flute_ok").is_some_and(|value| value == "no");
+                let yes_checked = defaults.and_then(|d| d.flute_ok.as_ref()).map(|r| matches!(r, BoolRadio::Yes)).unwrap_or(false);
+                let no_checked = defaults.and_then(|d| d.flute_ok.as_ref()).map(|r| matches!(r, BoolRadio::No)).unwrap_or(false);
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
@@ -499,8 +499,8 @@ impl Requirement {
                 }
             }
             Self::HardSettingsOk => {
-                let yes_checked = defaults.field_value("hard_settings_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("hard_settings_ok").is_some_and(|value| value == "no");
+                let yes_checked = defaults.and_then(|d| d.hard_settings_ok.as_ref()).map(|r| matches!(r, BoolRadio::Yes)).unwrap_or(false);
+                let no_checked = defaults.and_then(|d| d.hard_settings_ok.as_ref()).map(|r| matches!(r, BoolRadio::No)).unwrap_or(false);
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
@@ -516,8 +516,8 @@ impl Requirement {
                 }
             }
             Self::HoveringOk => {
-                let yes_checked = defaults.field_value("hover_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("hover_ok").is_some_and(|value| value == "no");
+                let yes_checked = defaults.and_then(|d| d.hover_ok.as_ref()).map(|r| matches!(r, BoolRadio::Yes)).unwrap_or(false);
+                let no_checked = defaults.and_then(|d| d.hover_ok.as_ref()).map(|r| matches!(r, BoolRadio::No)).unwrap_or(false);
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
@@ -533,8 +533,8 @@ impl Requirement {
                 }
             }
             Self::InvertedOk => {
-                let yes_checked = defaults.field_value("inverted_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("inverted_ok").is_some_and(|value| value == "no");
+                let yes_checked = defaults.and_then(|d| d.inverted_ok.as_ref()).map(|r| matches!(r, BoolRadio::Yes)).unwrap_or(false);
+                let no_checked = defaults.and_then(|d| d.inverted_ok.as_ref()).map(|r| matches!(r, BoolRadio::No)).unwrap_or(false);
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
@@ -550,8 +550,8 @@ impl Requirement {
                 }
             }
             Self::KeydropOk => {
-                let yes_checked = defaults.field_value("keydrop_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("keydrop_ok").is_some_and(|value| value == "no");
+                let yes_checked = defaults.and_then(|d| d.keydrop_ok.as_ref()).map(|r| matches!(r, BoolRadio::Yes)).unwrap_or(false);
+                let no_checked = defaults.and_then(|d| d.keydrop_ok.as_ref()).map(|r| matches!(r, BoolRadio::No)).unwrap_or(false);
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
@@ -567,8 +567,8 @@ impl Requirement {
                 }
             }
             Self::LiteOk => {
-                let yes_checked = defaults.field_value("lite_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("lite_ok").is_some_and(|value| value == "no");
+                let yes_checked = defaults.and_then(|d| d.lite_ok.as_ref()).map(|r| matches!(r, BoolRadio::Yes)).unwrap_or(false);
+                let no_checked = defaults.and_then(|d| d.lite_ok.as_ref()).map(|r| matches!(r, BoolRadio::No)).unwrap_or(false);
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
@@ -584,8 +584,8 @@ impl Requirement {
                 }
             }
             Self::MirrorScrollOk => {
-                let yes_checked = defaults.field_value("mirror_scroll_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("mirror_scroll_ok").is_some_and(|value| value == "no");
+                let yes_checked = defaults.and_then(|d| d.mirror_scroll_ok.as_ref()).map(|r| matches!(r, BoolRadio::Yes)).unwrap_or(false);
+                let no_checked = defaults.and_then(|d| d.mirror_scroll_ok.as_ref()).map(|r| matches!(r, BoolRadio::No)).unwrap_or(false);
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
@@ -601,8 +601,8 @@ impl Requirement {
                 }
             }
             Self::MqOk => {
-                let yes_checked = defaults.field_value("mq_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("mq_ok").is_some_and(|value| value == "no");
+                let yes_checked = defaults.and_then(|d| d.mq_ok.as_ref()).map(|r| matches!(r, BoolRadio::Yes)).unwrap_or(false);
+                let no_checked = defaults.and_then(|d| d.mq_ok.as_ref()).map(|r| matches!(r, BoolRadio::No)).unwrap_or(false);
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
@@ -618,8 +618,8 @@ impl Requirement {
                 }
             }
             Self::NoDelayOk => {
-                let yes_checked = defaults.field_value("no_delay_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("no_delay_ok").is_some_and(|value| value == "no");
+                let yes_checked = defaults.and_then(|d| d.no_delay_ok.as_ref()).map(|r| matches!(r, BoolRadio::Yes)).unwrap_or(false);
+                let no_checked = defaults.and_then(|d| d.no_delay_ok.as_ref()).map(|r| matches!(r, BoolRadio::No)).unwrap_or(false);
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
@@ -635,8 +635,8 @@ impl Requirement {
                 }
             }
             Self::PbOk => {
-                let yes_checked = defaults.field_value("pb_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("pb_ok").is_some_and(|value| value == "no");
+                let yes_checked = defaults.and_then(|d| d.pb_ok.as_ref()).map(|r| matches!(r, BoolRadio::Yes)).unwrap_or(false);
+                let no_checked = defaults.and_then(|d| d.pb_ok.as_ref()).map(|r| matches!(r, BoolRadio::No)).unwrap_or(false);
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
@@ -652,8 +652,8 @@ impl Requirement {
                 }
             }
             Self::ZwOk => {
-                let yes_checked = defaults.field_value("zw_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("zw_ok").is_some_and(|value| value == "no");
+                let yes_checked = defaults.and_then(|d| d.zw_ok.as_ref()).map(|r| matches!(r, BoolRadio::Yes)).unwrap_or(false);
+                let no_checked = defaults.and_then(|d| d.zw_ok.as_ref()).map(|r| matches!(r, BoolRadio::No)).unwrap_or(false);
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
@@ -670,7 +670,7 @@ impl Requirement {
                 }
             }
             Self::RestreamConsent { optional: false, note } => {
-                let checked = defaults.field_value("restream_consent").is_some_and(|value| value == "on");
+                let checked = defaults.map(|d| d.restream_consent).unwrap_or(false);
                 let team_config = data.team_config;
                 let note = note.clone();
                 RequirementStatus {
@@ -694,8 +694,8 @@ impl Requirement {
                 }
             }
             Self::RestreamConsent { optional: true, note } => {
-                let yes_checked = defaults.field_value("restream_consent_radio").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("restream_consent_radio").is_some_and(|value| value == "no");
+                let yes_checked = defaults.and_then(|d| d.restream_consent_radio.as_ref()).map(|r| matches!(r, BoolRadio::Yes)).unwrap_or(false);
+                let no_checked = defaults.and_then(|d| d.restream_consent_radio.as_ref()).map(|r| matches!(r, BoolRadio::No)).unwrap_or(false);
                 let note = note.clone();
                 RequirementStatus {
                     blocks_submit: false,
@@ -721,7 +721,7 @@ impl Requirement {
                 let now = Utc::now();
                 let async_available = now >= async_start && now < async_end;
                 let series = data.series;
-                let checked = defaults.field_value("confirm").is_some_and(|value| value == "on");
+                let checked = defaults.map(|d| d.confirm).unwrap_or(false);
                 RequirementStatus {
                     blocks_submit: !async_available,
                     html_content: Box::new(move |errors| html! {
@@ -754,7 +754,7 @@ impl Requirement {
                 let now = Utc::now();
                 let async_available = async_starts.into_iter().zip_eq(async_ends).any(|(async_start, async_end)| now >= async_start && now < async_end);
                 let series = data.series;
-                let checked = defaults.field_value("confirm").is_some_and(|value| value == "on");
+                let checked = defaults.map(|d| d.confirm).unwrap_or(false);
                 RequirementStatus {
                     blocks_submit: !async_available,
                     html_content: Box::new(move |errors| html! {
@@ -826,7 +826,7 @@ impl Requirement {
                         : "Have ";
                         : required_races;
                         : " finishes on ";
-                        a(href = "https://rsl.one/") : "the RSL leaderboard";
+                                                    a(href = "https://rsl.one/") : "the RSL leaderboard";
                     }),
                 }
             }
@@ -1054,7 +1054,7 @@ pub(crate) struct EnterForm {
     text_field2: String,
 }
 
-pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, data: Data<'_>, defaults: ()) -> Result<RawHtml<String>, Error> {
+pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, data: Data<'_>, defaults: Option<&EnterForm>) -> Result<RawHtml<String>, Error> {
     //TODO if already entered, redirect to status page
     let my_invites = if let Some(ref me) = me {
         sqlx::query_scalar!(r#"SELECT team AS "team: Id<Teams>" FROM teams, team_members WHERE series = $1 AND event = $2 AND member = $3 AND status = 'unconfirmed'"#, data.series as _, &*data.event, me.id as _).fetch_all(&mut *transaction).await?
@@ -1113,14 +1113,14 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                                     }
                                 }
                             } else {
-                                full_form(uri!(post(data.series, &*data.event)), csrf, html! {}, defaults.errors(), "Enter")
+                                full_form(uri!(post(data.series, &*data.event)), csrf, html! {}, Vec::new(), "Enter")
                             }
                         } else if let Some(ref me) = me {
                             let mut can_submit = true;
                             let mut requirements_display = Vec::with_capacity(requirements.len());
                             for requirement in requirements {
                                 let is_checked = requirement.is_checked(&mut transaction, http_client, discord_ctx, me, &data).await?;
-                                let status = requirement.check_get(http_client, &data, is_checked, uri!(get(data.series, &*data.event, defaults.my_role(), defaults.teammate())), &defaults).await?;
+                                let status = requirement.check_get(http_client, &data, is_checked, uri!(get(data.series, &*data.event, defaults.and_then(|d| d.my_role.as_ref()).cloned(), defaults.and_then(|d| d.teammate))), &defaults).await?;
                                 if status.blocks_submit { can_submit = false }
                                 requirements_display.push((is_checked, status.html_content));
                             }
@@ -1136,7 +1136,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                                 }
                             };
                             if can_submit {
-                                let mut errors = defaults.errors();
+                                let mut errors = Vec::new();
                                 full_form(uri!(post(data.series, &*data.event)), csrf, html! {
                                     : preface;
                                     @for (is_checked, html_content) in requirements_display {
@@ -1175,7 +1175,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                             html! {
                                 article {
                                     p {
-                                        a(href = uri!(auth::login(Some(uri!(get(data.series, &*data.event, defaults.my_role(), defaults.teammate())))))) : "Sign in or create a Hyrule Town Hall account";
+                                        a(href = uri!(auth::login(Some(uri!(get(data.series, &*data.event, defaults.and_then(|d| d.my_role.as_ref()).cloned(), defaults.and_then(|d| d.teammate)))))) : "Sign in or create a Hyrule Town Hall account";
                                         : " to enter";
                                         @if data.show_opt_out {
                                             : " or opt out of";
@@ -1191,7 +1191,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                                 article {
                                     p {
                                         : "This is an invitational event. ";
-                                        a(href = uri!(auth::login(Some(uri!(get(data.series, &*data.event, defaults.my_role(), defaults.teammate())))))) : "Sign in or create a Hyrule Town Hall account";
+                                        a(href = uri!(auth::login(Some(uri!(get(data.series, &*data.event, defaults.and_then(|d| d.my_role.as_ref()).cloned(), defaults.and_then(|d| d.teammate)))))) : "Sign in or create a Hyrule Town Hall account";
                                         : " to see if you're invited.";
                                     }
                                 }
@@ -1221,7 +1221,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
     let header = data.header(&mut transaction, me.as_ref(), Tab::Enter, false).await?;
     let invites = html! {
         @for team_id in my_invites {
-            : crate::notification::team_invite(&mut transaction, me.as_ref().expect("got a team invite while not logged in"), csrf, defaults.errors(), crate::notification::TeamInviteSource::Enter, team_id).await?;
+                                : crate::notification::team_invite(&mut transaction, me.as_ref().expect("got a team invite while not logged in"), csrf, Vec::new(), crate::notification::TeamInviteSource::Enter, team_id).await?;
         }
     };
     Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Enter — {}", data.display_name), html! {
@@ -1231,7 +1231,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
     }).await?)
 }
 
-fn enter_form_step2<'a, 'b: 'a, 'c: 'a, 'd: 'a>(mut transaction: Transaction<'a, Postgres>, me: Option<User>, uri: Origin<'b>, http_client: &reqwest::Client, csrf: Option<&'a CsrfToken>, data: Data<'c>, defaults: ()) -> Pin<Box<dyn Future<Output = Result<RawHtml<String>, Error>> + Send + 'a>> {
+fn enter_form_step2<'a, 'b: 'a, 'c: 'a, 'd: 'a>(mut transaction: Transaction<'a, Postgres>, me: Option<User>, uri: Origin<'b>, http_client: &reqwest::Client, csrf: Option<&'a CsrfToken>, data: Data<'c>, defaults: Option<&EnterForm>) -> Pin<Box<dyn Future<Output = Result<RawHtml<String>, Error>> + Send + 'a>> {
     // Removed mw module reference
     Box::pin(async move {
         let header = data.header(&mut transaction, me.as_ref(), Tab::Enter, true).await?;
@@ -1246,7 +1246,7 @@ fn enter_form_step2<'a, 'b: 'a, 'c: 'a, 'd: 'a>(mut transaction: Transaction<'a,
                     : form_field("racetime_team", &mut errors, html! {
                         label(for = "racetime_team") {
                             : "racetime.gg Team: ";
-                            a(href = format!("https://{}/team/{}", racetime_host(), defaults.racetime_team_slug().expect("missing racetime team slug"))) : defaults.racetime_team_name().expect("missing racetime team name");
+                            a(href = format!("https://{}/team/{}", racetime_host(), defaults.and_then(|d| d.racetime_team.as_ref()).expect("missing racetime team slug"))) : defaults.and_then(|d| d.racetime_team.as_ref()).expect("missing racetime team name");
                             : " • ";
                             a(href = uri!(get(data.series, &*data.event, _, _))) : "Change";
                         }
@@ -1269,7 +1269,7 @@ fn enter_form_step2<'a, 'b: 'a, 'c: 'a, 'd: 'a>(mut transaction: Transaction<'a,
                                 : &team_member.name; //TODO Mido's House display name, falling back to racetime display name if no Mido's House account
                                 : "):";
                             }
-                            input(type = "text", name = &format!("startgg_id[{}]", team_member.id), value? = ""); // Removed mw module reference
+                            input(type = "text", name = &format!("startgg_id[{}]", team_member.id), value = ""); // Removed mw module reference
                             label(class = "help") {
                                 : "(Optional. Can be copied by going to your ";
                                 a(href = "https://start.gg/") : "start.gg";
@@ -1288,7 +1288,7 @@ fn enter_form_step2<'a, 'b: 'a, 'c: 'a, 'd: 'a>(mut transaction: Transaction<'a,
                                     : &team_member.name; //TODO Mido's House display name, falling back to racetime display name if no Mido's House account
                                     : "):";
                                 }
-                                input(type = "text", name = field_name, value? = ""); // Removed mw module reference
+                                input(type = "text", name = field_name, value = ""); // Removed mw module reference
                             });
                         }
                     }
@@ -1331,7 +1331,7 @@ fn enter_form_step2<'a, 'b: 'a, 'c: 'a, 'd: 'a>(mut transaction: Transaction<'a,
 pub(crate) async fn get(pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, my_role: Option<String>, teammate: Option<Id<Users>>) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    Ok(enter_form(transaction, http_client, discord_ctx, me, uri, csrf.as_ref(), data, ()).await?)
+    Ok(enter_form(transaction, http_client, discord_ctx, me, uri, csrf.as_ref(), data, None).await?)
 }
 
 #[rocket::post("/event/<series>/<event>/enter", data = "<form>")]

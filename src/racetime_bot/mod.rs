@@ -384,7 +384,6 @@ impl Goal {
                     }),
                 },
             },
-        }
             (_, "first") => DraftCommandParseResult::Action(draft::Action::GoFirst(true)),
             (_, "no") => DraftCommandParseResult::Action(draft::Action::BooleanChoice(false)),
             (_, "second") => DraftCommandParseResult::Action(draft::Action::GoFirst(false)),
@@ -664,7 +663,9 @@ impl GlobalState {
                         },
                         // The type of seed being rolled is extremely likely to require a very long time and/or a large number of attempts to generate.
                         // Start rolling the seed immediately upon the room being opened.
-                        PrerollMode::Long => {}
+                        PrerollMode::Long => {
+                            // No delay needed - start immediately
+                        }
                     }
                     match self.ootr_api_client.roll_seed_with_retry(update_tx.clone(), delay_until, web_version, false, unlock_spoiler_log, settings).await {
                         Ok(ootr_web::SeedInfo { id, gen_time, file_hash, file_stem, password }) => update_tx.send(SeedRollUpdate::Done {
@@ -868,168 +869,6 @@ impl GlobalState {
         };
         Command::new("mv").arg(spoiler_path).arg(destination_path).check("Moving spoiler file").await?;
         Ok(hash)
-    }
-
-    // Removed rsl module reference
-        let (update_tx, update_rx) = mpsc::channel(128);
-        let update_tx2 = update_tx.clone();
-        tokio::spawn(async move {
-            let rsl_script_path = preset.script_path().await?;
-            // check RSL script version
-            let rsl_version = Command::new(PYTHON)
-                .arg("-c")
-                .arg("import rslversion; print(rslversion.__version__)")
-                .current_dir(&rsl_script_path)
-                .check(PYTHON).await?
-                .stdout;
-            let rsl_version = String::from_utf8(rsl_version)?;
-            let supports_plando_filename_base = if let Some((_, major, minor, patch, devmvp)) = regex_captures!(r"^([0-9]+)\.([0-9]+)\.([0-9]+) devmvp-([0-9]+)$", &rsl_version.trim()) {
-                (Version::new(major.parse()?, minor.parse()?, patch.parse()?), devmvp.parse()?) >= (Version::new(2, 6, 3), 4)
-            } else {
-                rsl_version.parse::<Version>().is_ok_and(|rsl_version| rsl_version >= Version::new(2, 8, 2))
-            };
-            // check required randomizer version
-            let randomizer_version = Command::new(PYTHON)
-                .arg("-c")
-                .arg("import rslversion; print(rslversion.randomizer_version)")
-                .current_dir(&rsl_script_path)
-                .check(PYTHON).await?
-                .stdout;
-            let randomizer_version = String::from_utf8(randomizer_version)?.trim().parse::<rando::Version>()?;
-            let web_version = self.ootr_api_client.can_roll_on_web(Some(&preset), &VersionedBranch::Pinned { version: randomizer_version.clone() }, world_count, unlock_spoiler_log).await;
-            // run the RSL script
-            update_tx.send(SeedRollUpdate::Started).await.allow_unreceived();
-            let outer_tries = if web_version.is_some() { 5 } else { 1 }; // when generating locally, retries are already handled by the RSL script
-            let mut last_error = None;
-            for attempt in 0.. {
-                if attempt >= outer_tries && delay_until.is_none_or(|delay_until| Utc::now() >= delay_until) {
-                    return Err(RollError::Retries {
-                        num_retries: 3 * attempt,
-                        last_error,
-                    })
-                }
-                let mut rsl_cmd = Command::new(PYTHON);
-                rsl_cmd.arg("RandomSettingsGenerator.py");
-                rsl_cmd.arg("--no_log_errors");
-                if supports_plando_filename_base {
-                    // add a sequence ID to the names of temporary plando files to prevent name collisions
-                    rsl_cmd.arg(format!("--plando_filename_base=mh_{}", RSL_SEQUENCE_ID.fetch_add(1, atomic::Ordering::Relaxed)));
-                }
-                let mut input = None;
-                if false { // Removed rsl module reference
-                    match preset.name_or_weights() {
-                        Either::Left(name) => {
-                            rsl_cmd.arg(format!(
-                                "--override={}{name}_override.json",
-                                if preset.base_version().is_none_or(|version| *version >= Version::new(2, 3, 9)) { "weights/" } else { "" },
-                            ));
-                        }
-                        Either::Right(weights) => {
-                            rsl_cmd.arg("--override=-");
-                            rsl_cmd.stdin(Stdio::piped());
-                            input = Some(serde_json::to_vec(&weights)?);
-                        }
-                    }
-                }
-                if world_count > 1 {
-                    rsl_cmd.arg(format!("--worldcount={world_count}"));
-                }
-                if web_version.is_some() {
-                    rsl_cmd.arg("--no_seed");
-                }
-                let mut rsl_process = rsl_cmd
-                    .current_dir(&rsl_script_path)
-                    .stdout(Stdio::piped())
-                    .spawn().at_command("RandomSettingsGenerator.py")?;
-                if let Some(input) = input {
-                    rsl_process.stdin.as_mut().expect("piped stdin missing").write_all(&input).await.at_command("RandomSettingsGenerator.py")?;
-                }
-                let output = rsl_process.wait_with_output().await.at_command("RandomSettingsGenerator.py")?;
-                match output.status.code() {
-                    Some(0) => {}
-                    Some(2) => {
-                        last_error = Some(String::from_utf8_lossy(&output.stderr).into_owned());
-                        continue
-                    }
-                    _ => return Err(RollError::Wheel(wheel::Error::CommandExit { name: Cow::Borrowed("RandomSettingsGenerator.py"), output })),
-                }
-                if let Some(web_version) = web_version.clone() {
-                    #[derive(Deserialize)]
-                    struct Plando {
-                        settings: seed::Settings,
-                    }
-
-                    let plando_filename = BufRead::lines(&*output.stdout)
-                        .filter_map_ok(|line| Some(regex_captures!("^Plando File: (.+)$", &line)?.1.to_owned()))
-                        .next().ok_or(RollError::PatchPath)?.at_command("RandomSettingsGenerator.py")?;
-                    let plando_path = rsl_script_path.join("data").join(plando_filename);
-                    let _plando_file = fs::read_to_string(&plando_path).await?;
-                    let settings = serde_json::from_str::<Plando>(&plando_file)?.settings;
-                    fs::remove_file(plando_path).await?;
-                    if let Some(max_sleep_duration) = delay_until.and_then(|delay_until| (delay_until - TimeDelta::minutes(15) - Utc::now()).to_std().ok()) {
-                        // ootrandomizer.com seed IDs are sequential, making it easy to find a seed if you know when it was rolled.
-                        // This is especially true for open races, whose rooms are opened an entire hour before start.
-                        // To make this a bit more difficult, we start rolling the seed at a random point between the room being opened and 30 minutes before start.
-                        let sleep_duration = rng().random_range(Duration::default()..max_sleep_duration);
-                        sleep(sleep_duration).await;
-                    }
-                    let ootr_web::SeedInfo { id, gen_time, file_hash, file_stem, password } = match self.ootr_api_client.roll_seed_with_retry(update_tx.clone(), None /* always limit to 3 tries per settings */, web_version, true, unlock_spoiler_log, settings).await {
-                        Ok(data) => data,
-                        Err(ootr_web::Error::Retries { .. }) => continue,
-                        Err(e) => return Err(e.into()), //TODO fall back to rolling locally for network errors
-                    };
-                    update_tx.send(SeedRollUpdate::Done {
-                        seed: seed::Data {
-                            file_hash: Some(file_hash),
-                            files: Some(seed::Files::OotrWeb {
-                                file_stem: Cow::Owned(file_stem),
-                                id, gen_time,
-                            }),
-                            progression_spoiler: unlock_spoiler_log == UnlockSpoilerLog::Progression,
-                            password,
-                        },
-                        unlock_spoiler_log,
-                    }).await.allow_unreceived();
-                    return Ok(())
-                } else {
-                    let patch_filename = BufRead::lines(&*output.stdout)
-                        .filter_map_ok(|line| Some(regex_captures!("^Creating Patch File: (.+)$", &line)?.1.to_owned()))
-                        .next().ok_or(RollError::PatchPath)?.at_command("RandomSettingsGenerator.py")?;
-                    let patch_path = rsl_script_path.join("patches").join(&patch_filename);
-                    let spoiler_log_filename = BufRead::lines(&*output.stdout)
-                        .filter_map_ok(|line| Some(regex_captures!("^Created spoiler log at: (.+)$", &line)?.1.to_owned()))
-                        .next().ok_or(RollError::SpoilerLogPath { stdout: String::new(), stderr: String::new() })?.at_command("RandomSettingsGenerator.py")?;
-                    let spoiler_log_path = rsl_script_path.join("patches").join(spoiler_log_filename);
-                    let (_, file_stem) = regex_captures!(r"^(.+)\.zpfz?$", &patch_filename).ok_or(RollError::PatchPath)?;
-                    for extra_output_filename in [format!("{file_stem}_Cosmetics.json"), format!("{file_stem}_Distribution.json")] {
-                        fs::remove_file(rsl_script_path.join("patches").join(extra_output_filename)).await.missing_ok()?;
-                    }
-                    fs::rename(patch_path, Path::new(seed::DIR).join(&patch_filename)).await?;
-                    update_tx.send(match regex_captures!(r"^(.+)\.zpfz?$", &patch_filename) {
-                        Some((_, file_stem)) => SeedRollUpdate::Done {
-                            seed: seed::Data {
-                                file_hash: None, password: None, // will be read from spoiler log
-                                files: Some(seed::Files::MidosHouse {
-                                    file_stem: Cow::Owned(file_stem.to_owned()),
-                                    locked_spoiler_log_path: Some(spoiler_log_path.into_os_string().into_string()?),
-                                }),
-                                progression_spoiler: unlock_spoiler_log == UnlockSpoilerLog::Progression,
-                            },
-                            unlock_spoiler_log,
-                        },
-                        None => SeedRollUpdate::Error(RollError::PatchPath),
-                    }).await.allow_unreceived();
-                    return Ok(())
-                }
-            }
-            Ok(())
-        }.then(|res| async move {
-            match res {
-                Ok(()) => {}
-                Err(e) => update_tx2.send(SeedRollUpdate::Error(e)).await.allow_unreceived(),
-            }
-        }));
-        update_rx
     }
 
     pub(crate) fn roll_tfb_seed(self: Arc<Self>, delay_until: Option<DateTime<Utc>>, version: &'static str, room: Option<String>, unlock_spoiler_log: UnlockSpoilerLog) -> mpsc::Receiver<SeedRollUpdate> {
@@ -2225,11 +2064,6 @@ impl Handler {
                                 ), true, Vec::default()).await.expect("failed to send race options");
     }
 
-    // Removed rsl module reference
-        let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
-        let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
-        self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_rsl_seed(delay_until, preset, world_count, unlock_spoiler_log), language, article, description).await;
-    }
 
     async fn roll_tfb_seed(&self, ctx: &RaceContext<GlobalState>, version: &'static str, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
         let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
