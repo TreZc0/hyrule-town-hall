@@ -525,3 +525,14 @@ p.error {
   display: inline-block;
   margin-top: 0.5rem;
 }
+
+.settings-link {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  font-size: 0.875rem;
+}
+
+.settings-link:hover {
+  color: var(--hover-text);
+}

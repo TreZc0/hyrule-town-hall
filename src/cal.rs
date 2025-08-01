@@ -31,6 +31,7 @@ use {
         hash_icon::SpoilerLog,
         hash_icon_db::HashIconData,
         prelude::*,
+        racetime_bot,
         sheets,
     },
     crate::id::RoleBindings,
@@ -2243,6 +2244,18 @@ pub(crate) async fn race_table(
                                         }
                                     }
                                 }
+                                
+                                // Add Settings link for past/ongoing races with custom options
+                                @if race.show_seed() || race.is_ended() {
+                                    @if let Some(racetime_bot::Goal::Crosskeys2025) = racetime_bot::Goal::for_event(race.series, &race.event) {
+                                        @if let Ok(crosskeys_options) = racetime_bot::CrosskeysRaceOptions::for_race_with_transaction(&mut *transaction, race).await {
+                                            br;
+                                            span(class = "settings-link", title = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str())) {
+                                                : "Settings";
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         @if options.show_restream_consent {
@@ -2268,9 +2281,15 @@ pub(crate) async fn race_table(
                                                 @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
                                                 @if all_teams_consented {
                                                     a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
+                                                } else {
+                                                    // Show edit button for organizers even without consent
+                                                    a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
                                                 }
                                             }
-                                            RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {}
+                                            RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {
+                                                // Show edit button for organizers on async and unscheduled races
+                                                a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
+                                            }
                                         }
                                     }
                                 }
@@ -4007,7 +4026,7 @@ pub(crate) async fn add_file_hash_post(pool: &State<PgPool>, http_client: &State
         form.context.push_error(form::Error::validation("This race is not part of this event."));
     }
     if !me.is_archivist && !event.organizers(&mut transaction).await?.contains(&me) {
-        form.context.push_error(form::Error::validation("You must be an archivist to edit this race. If you would like to become an archivist, please contact TreZ on Discord."));
+        form.context.push_error(form::Error::validation("You must be an organizer or archivist to edit this race. If you would like to become an archivist, please contact TreZ on Discord."));
     }
     Ok(if let Some(ref value) = form.value {
         let hash1 = if !value.hash1.is_empty() {
