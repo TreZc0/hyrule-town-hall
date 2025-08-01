@@ -2281,9 +2281,15 @@ pub(crate) async fn race_table(
                                                 @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
                                                 @if all_teams_consented {
                                                     a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
+                                                } else {
+                                                    // Show edit button for organizers even without consent
+                                                    a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
                                                 }
                                             }
-                                            RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {}
+                                            RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {
+                                                // Show edit button for organizers on async and unscheduled races
+                                                a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
+                                            }
                                         }
                                     }
                                 }
@@ -3698,7 +3704,7 @@ pub(crate) async fn add_file_hash_post(pool: &State<PgPool>, http_client: &State
         form.context.push_error(form::Error::validation("This race is not part of this event."));
     }
     if !me.is_archivist && !event.organizers(&mut transaction).await?.contains(&me) {
-        form.context.push_error(form::Error::validation("You must be an archivist to edit this race. If you would like to become an archivist, please contact TreZ on Discord."));
+        form.context.push_error(form::Error::validation("You must be an organizer or archivist to edit this race. If you would like to become an archivist, please contact TreZ on Discord."));
     }
     Ok(if let Some(ref value) = form.value {
         let hash1 = if let Ok(hash1) = value.hash1.parse::<HashIcon>() {
