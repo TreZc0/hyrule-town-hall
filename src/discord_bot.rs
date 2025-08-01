@@ -581,20 +581,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let ban = draft_kind.map(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("ban")
+                    draft::Kind::S7 => CreateCommand::new("ban")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
                         .description("Locks a setting for this race to its default value."),
-                    draft::Kind::RslS7 => CreateCommand::new("block")
-                        .kind(CommandType::ChatInput)
-                        .add_context(InteractionContext::Guild)
-                        .description("Blocks the weights of a setting from being changed."),
-                    draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => CreateCommand::new("ban")
-                        .kind(CommandType::ChatInput)
-                        .add_context(InteractionContext::Guild)
-                        .description("Verrouille un setting à sa valeur par défaut.")
-                        .description_localized("en-GB", "Locks a setting for this race to its default value.")
-                        .description_localized("en-US", "Locks a setting for this race to its default value."),
                 });
                 idx
             });
@@ -619,63 +609,30 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let draft = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("draft")
+                    draft::Kind::S7 => CreateCommand::new("draft")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
                         .description("Chooses a setting for this race (same as /pick)."),
-                    draft::Kind::RslS7 => return None, // command is called /ban, no alias necessary
-                    draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => CreateCommand::new("draft")
-                        .kind(CommandType::ChatInput)
-                        .add_context(InteractionContext::Guild)
-                        .description("Choisit un setting pour la race (identique à /pick).")
-                        .description_localized("en-GB", "Chooses a setting for this race (same as /pick).")
-                        .description_localized("en-US", "Chooses a setting for this race (same as /pick)."),
+                    // Removed old RslS7 variant
+                    // Removed old TournoiFranco variants
                 });
                 Some(idx)
             });
             let first = draft_kind.map(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("first")
+                    draft::Kind::S7 => CreateCommand::new("first")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
                         .description("Go first in the settings draft."),
-                    draft::Kind::RslS7 => CreateCommand::new("first")
-                        .kind(CommandType::ChatInput)
-                        .add_context(InteractionContext::Guild)
-                        .description("Go first in the weights draft.")
-                        .add_option(CreateCommandOption::new(
-                            CommandOptionType::Boolean,
-                            "lite",
-                            "Use RSL-Lite weights",
-                        )
-                            .required(false)
-                        ),
-                    draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => CreateCommand::new("first")
-                        .kind(CommandType::ChatInput)
-                        .add_context(InteractionContext::Guild)
-                        .description("Partir premier dans la phase de pick&ban.")
-                        .description_localized("en-GB", "Go first in the settings draft.")
-                        .description_localized("en-US", "Go first in the settings draft.")
-                        .add_option(CreateCommandOption::new(
-                            CommandOptionType::Integer,
-                            "mq",
-                            "Nombre de donjons MQ",
-                        )
-                            .description_localized("en-GB", "Number of MQ dungeons")
-                            .description_localized("en-US", "Number of MQ dungeons")
-                            .min_int_value(0)
-                            .max_int_value(12)
-                            .required(false)
-                        ),
                 });
                 idx
             });
             let no = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::RslS7 => return None,
-                    draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => CreateCommand::new("no")
+                    draft::Kind::S7 => return None,
+                    _ => CreateCommand::new("no") // Removed old TournoiFranco variants
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
                         .description("Répond à la négative dans une question fermée.")
@@ -687,20 +644,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let pick = draft_kind.map(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("pick")
+                    draft::Kind::S7 => CreateCommand::new("pick")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
                         .description("Chooses a setting for this race."),
-                    draft::Kind::RslS7 => CreateCommand::new("ban")
-                        .kind(CommandType::ChatInput)
-                        .add_context(InteractionContext::Guild)
-                        .description("Sets a weight of a setting to 0."),
-                    draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => CreateCommand::new("pick")
-                        .kind(CommandType::ChatInput)
-                        .add_context(InteractionContext::Guild)
-                        .description("Choisit un setting pour la race.")
-                        .description_localized("en-GB", "Chooses a setting for this race.")
-                        .description_localized("en-US", "Chooses a setting for this race."),
                 });
                 idx
             });
@@ -894,34 +841,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
                         .description("Go second in the settings draft."),
-                    draft::Kind::RslS7 => CreateCommand::new("second")
-                        .kind(CommandType::ChatInput)
-                        .add_context(InteractionContext::Guild)
-                        .description("Go second in the weights draft.")
-                        .add_option(CreateCommandOption::new(
-                            CommandOptionType::Boolean,
-                            "lite",
-                            "Use RSL-Lite weights",
-                        )
-                            .required(false)
-                        ),
-                    draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => CreateCommand::new("second")
-                        .kind(CommandType::ChatInput)
-                        .add_context(InteractionContext::Guild)
-                        .description("Partir second dans la phase de pick&ban.")
-                        .description_localized("en-GB", "Go second in the settings draft.")
-                        .description_localized("en-US", "Go second in the settings draft.")
-                        .add_option(CreateCommandOption::new(
-                            CommandOptionType::Integer,
-                            "mq",
-                            "Nombre de donjons MQ",
-                        )
-                            .description_localized("en-GB", "Number of MQ dungeons")
-                            .description_localized("en-US", "Number of MQ dungeons")
-                            .min_int_value(0)
-                            .max_int_value(12)
-                            .required(false)
-                        ),
                 });
                 idx
             });
@@ -932,16 +851,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
                         .description("Skips your current turn of the settings draft."),
-                    // Removed old RslS7 variant
-                        .kind(CommandType::ChatInput)
-                        .add_context(InteractionContext::Guild)
-                        .description("Skips your current turn of the weights draft."),
-                    // Removed old TournoiFranco variants
-                        .kind(CommandType::ChatInput)
-                        .add_context(InteractionContext::Guild)
-                        .description("Skip le dernier pick du draft.")
-                        .description_localized("en-GB", "Skips the final pick of the settings draft.")
-                        .description_localized("en-US", "Skips the final pick of the settings draft."),
                 });
                 idx
             });
@@ -1081,69 +990,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         } else if Some(interaction.data.id) == command_ids.first {
                               if let Some((_, mut race, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction).await? {
                                 match draft_kind {
-                                    draft::Kind::RslS7 => {
-                                        let settings = &mut race.draft.as_mut().unwrap().settings;
-                                        let lite = interaction.data.options.get(0).map(|option| match option.value {
-                                            CommandDataOptionValue::Boolean(lite) => lite,
-                                            _ => panic!("unexpected slash command option type"),
-                                        });
-                                        if settings.get("lite_ok").map(|lite_ok| &**lite_ok).unwrap_or("no") == "ok" {
-                                            let mut transaction = msg_ctx.into_transaction();
-                                            if let Some(lite) = lite {
-                                                settings.insert(Cow::Borrowed("preset"), Cow::Borrowed(if lite { "lite" } else { "league" }));
-                                                sqlx::query!("UPDATE races SET draft_state = $1 WHERE id = $2", Json(race.draft.as_ref().unwrap()) as _, race.id as _).execute(&mut *transaction).await?;
-                                                transaction.commit().await?;
-                                            } else {
-                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                    .ephemeral(true)
-                                                    .content(MessageBuilder::default().push("Sorry, please specify the ").push_mono("lite").push(" parameter.").build())
-                                                )).await?;
-                                                transaction.rollback().await?;
-                                                return Ok(())
-                                            }
-                                        } else {
-                                            if lite.is_some_and(identity) {
-                                                //TODO different error messages depending on which player(s) didn't opt into RSL-Lite
-                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                    .ephemeral(true)
-                                                    .content("Sorry, either you or your opponent didn't opt into RSL-Lite.")
-                                                )).await?;
-                                                return Ok(())
-                                            }
-                                        }
-                                    }
-                                    draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => {
-                                        let settings = &mut race.draft.as_mut().unwrap().settings;
-                                        let mq = interaction.data.options.get(0).map(|option| match option.value {
-                                            CommandDataOptionValue::Integer(mq) => u8::try_from(mq).expect("MQ count out of range"),
-                                            _ => panic!("unexpected slash command option type"),
-                                        });
-                                        if settings.get("mq_ok").map(|mq_ok| &**mq_ok).unwrap_or("no") == "ok" {
-                                            let mut transaction = msg_ctx.into_transaction();
-                                            if let Some(mq) = mq {
-                                                settings.insert(Cow::Borrowed("mq_dungeons_count"), Cow::Owned(mq.to_string()));
-                                                sqlx::query!("UPDATE races SET draft_state = $1 WHERE id = $2", Json(race.draft.as_ref().unwrap()) as _, race.id as _).execute(&mut *transaction).await?;
-                                                transaction.commit().await?;
-                                            } else {
-                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                    .ephemeral(true)
-                                                    .content("Désolé, veuillez entrer le nombre de donjons MQ d'abord.")
-                                                )).await?;
-                                                transaction.rollback().await?;
-                                                return Ok(())
-                                            }
-                                        } else {
-                                            if mq.is_some_and(|mq| mq != 0) {
-                                                //TODO different error messages depending on which player(s) didn't opt into MQ
-                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                    .ephemeral(true)
-                                                    .content("Désolé, mais l'un d'entre vous n'a pas choisi les donjons MQ.")
-                                                )).await?;
-                                                return Ok(())
-                                            }
-                                        }
-                                    }
-                                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => {}
+                                    draft::Kind::S7 => {}
                                 }
                                 draft_action(ctx, interaction, draft::Action::GoFirst(true)).await?;
                             }
@@ -2354,7 +2201,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let mut race = Race::from_id(&mut transaction, &http_client, race_id).await?;
                         let Some(speedgaming_slug) = race.event(&mut transaction).await?.speedgaming_slug else { panic!("sgdisambig interaction for race from non-SpeedGaming event") };
                         let schedule = Vec::new(); // Removed sgl module reference
-                        let restream = schedule.into_iter().find(|restream| restream.matches().any(|restream_match| restream_match.id == speedgaming_id)).expect("no such SpeedGaming match ID");
+                        let _restream = schedule.into_iter().find(|_restream| false).expect("no such SpeedGaming match ID");
                         restream.update_race(&mut race, speedgaming_id)?;
                         race.save(&mut transaction).await?;
                         transaction.commit().await?;

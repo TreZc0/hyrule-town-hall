@@ -1019,17 +1019,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User
                                         : full_form(uri!(event::submit_async(data.series, &*data.event)), csrf, html! {
                                             @match data.team_config {
                                                 TeamConfig::Solo => {
-                                                    @if let Series::TriforceBlitz = data.series {
-                                                        : form_field("pieces", &mut errors, html! {
-                                                            label(for = "pieces") : "Number of Triforce Pieces found:";
-                                                            input(type = "number", min = "0", max = tfb::piece_count(data.team_config), name = "pieces", value? = ctx.field_value("pieces"));
-                                                        });
-                                                        : form_field("time1", &mut errors, html! {
-                                                            label(for = "time1") : "Time at which you found the most recent piece:";
-                                                            input(type = "text", name = "time1", value? = ctx.field_value("time1")); //TODO h:m:s fields?
-                                                            label(class = "help") : "(If you did not find any, leave this field blank.)";
-                                                        });
-                                                    } else {
+                                                    {
                                                         : form_field("time1", &mut errors, html! {
                                                             label(for = "time1") : "Finishing Time:";
                                                             input(type = "text", name = "time1", value? = ctx.field_value("time1")); //TODO h:m:s fields?
@@ -1121,9 +1111,9 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User
                                         AsyncKind::Tiebreaker1 | AsyncKind::Tiebreaker2 => p : "Play the tiebreaker async to qualify for the bracket stage of the tournament.";
                                     }
                                     @match data.series {
-                                        Series::CoOp => : coop::async_rules(async_kind);
+                                        // Removed old CoOp variant
                                         Series::MixedPools => : mp::async_rules(&data);
-                                        Series::Multiworld => : mw::async_rules(&data, async_kind);
+                                        // Removed old Multiworld variant
                                         _ => {}
                                     }
                                     : full_form(uri!(event::request_async(data.series, &*data.event)), csrf, html! {
@@ -1147,12 +1137,10 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User
                     @if let Some(async_info) = async_info {
                         : async_info;
                     } else {
-                                                @match data.series {
-                            Series::Crosskeys | Series::Standard => @if let French = data.language {
-                                p : "Planifiez vos matches dans les fils du canal dédié.";
-                            } else {
-                                p : "Please schedule your matches using the Discord match threads.";
-                            }
+                                                @if let French = data.language {
+                            p : "Planifiez vos matches dans les fils du canal dédié.";
+                        } else {
+                            p : "Please schedule your matches using the Discord match threads.";
                         }
                     }
                     @if !data.is_ended() {
@@ -1277,7 +1265,7 @@ async fn find_team_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                 : "This is a solo event.";
             }).await?
         }
-        TeamConfig::Pictionary => pic::find_team_form(transaction, me, uri, csrf, data, ctx).await?,
+        // Removed old Pictionary variant
         TeamConfig::CoOp | TeamConfig::TfbCoOp | TeamConfig::Multiworld => mw::find_team_form(transaction, me, uri, csrf, data, ctx).await?,
     })
 }
@@ -1297,7 +1285,7 @@ pub(crate) struct FindTeamForm {
     availability: String,
     #[field(default = String::new())]
     notes: String,
-    role: Option<pic::RolePreference>,
+    role: Option<String>, // Removed pic module reference
 }
 
 #[rocket::post("/event/<series>/<event>/find-team", data = "<form>")]
@@ -1403,7 +1391,7 @@ pub(crate) async fn confirm_signup(pool: &State<PgPool>, http_client: &State<req
         }
         Ok(if form.context.errors().next().is_some() {
             RedirectOrContent::Content(match value.source {
-                AcceptFormSource::Enter => enter::enter_form(transaction, http_client, discord_ctx, Some(me), uri, csrf.as_ref(), data, pic::EnterFormDefaults::Context(form.context)).await?,
+                AcceptFormSource::Enter => enter::enter_form(transaction, http_client, discord_ctx, Some(me), uri, csrf.as_ref(), data, enter::EnterFormDefaults::Context(form.context)).await?,
                 AcceptFormSource::Notifications => {
                     transaction.rollback().await?;
                     crate::notification::list(pool, Some(me), uri, csrf.as_ref(), form.context).await?
@@ -1594,7 +1582,7 @@ pub(crate) async fn resign_post(pool: &State<PgPool>, http_client: &State<reqwes
         }
         Ok(if form.context.errors().next().is_some() {
             RedirectOrContent::Content(match value.source {
-                ResignFormSource::Enter => enter::enter_form(transaction, http_client, discord_ctx, Some(me), uri, csrf.as_ref(), data, pic::EnterFormDefaults::Context(form.context)).await?,
+                ResignFormSource::Enter => enter::enter_form(transaction, http_client, discord_ctx, Some(me), uri, csrf.as_ref(), data, enter::EnterFormDefaults::Context(form.context)).await?,
                 ResignFormSource::Notifications => {
                     transaction.rollback().await?;
                     crate::notification::list(pool, Some(me), uri, csrf.as_ref(), form.context).await?
@@ -1889,7 +1877,7 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, discord_ctx: &State<RwFut
             form.context.push_error(form::Error::validation("You are not signed up for this event."));
             None
         };
-        if let Series::TriforceBlitz = series {
+        if false {
             if let Some(pieces) = value.pieces {
                 if pieces < 0 || pieces > i16::from(tfb::piece_count(data.team_config)) {
                     form.context.push_error(form::Error::validation(format!("Must be a number from 0 to {}.", tfb::piece_count(data.team_config))).with_name("pieces"));

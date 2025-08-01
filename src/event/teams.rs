@@ -596,7 +596,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                             challonge_id: row.challonge_id,
                             plural_name: row.plural_name,
                             restream_consent: row.restream_consent,
-                            mw_impl: row.mw_impl,
+                            // Removed mw_impl field
                             qualifier_rank: row.qualifier_rank,
                         },
                         hard_settings_ok: row.hard_settings_ok,
@@ -616,7 +616,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     })
                     .try_collect::<Vec<_>>().await?
             } else {
-                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, submitted IS NOT NULL AS "qualified!", pieces, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams LEFT OUTER JOIN async_teams ON (id = team) WHERE
+                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, submitted IS NOT NULL AS "qualified!", pieces, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, qualifier_rank FROM teams LEFT OUTER JOIN async_teams ON (id = team) WHERE
                     series = $1
                     AND event = $2
                     AND NOT resigned
@@ -638,7 +638,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                             challonge_id: row.challonge_id,
                             plural_name: row.plural_name,
                             restream_consent: row.restream_consent,
-                            mw_impl: row.mw_impl,
+                            // Removed mw_impl field
                             qualifier_rank: row.qualifier_rank,
                         },
                         hard_settings_ok: row.hard_settings_ok,
@@ -819,16 +819,15 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
         false
     };
     let qualifier_kind = match (data.series, &*data.event) {
-        (Series::SongsOfHope, "1") => QualifierKind::SongsOfHope,
-        (Series::SpeedGaming, "2023onl" | "2024onl") | (Series::Standard, "8") => {
+        // Removed old SongsOfHope variant
+        (Series::Standard, "8") => {
             if is_organizer {
                 show_status = ShowStatus::Detailed;
             } else if !data.is_started(&mut transaction).await? && Race::for_event(&mut transaction, http_client, &data).await?.into_iter().all(|race| race.phase.as_ref().is_none_or(|phase| phase != "Qualifier") || race.is_ended()) {
                 show_status = ShowStatus::Confirmed;
             }
             QualifierKind::Score(match (data.series, &*data.event) {
-                (Series::SpeedGaming, "2023onl") => QualifierScoreKind::Sgl2023Online,
-                (Series::SpeedGaming, "2024onl") => QualifierScoreKind::Sgl2024Online,
+                // Removed old SpeedGaming variants
                 (Series::Standard, "8") => QualifierScoreKind::Standard,
                 _ => unreachable!("checked by outer match"),
             })
@@ -876,10 +875,8 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
         QualifierKind::Single { show_times: false } | QualifierKind::SongsOfHope => column_headers.push(html! {
             th : "Qualified";
         }),
-        QualifierKind::Single { show_times: true } => if series == Series::TriforceBlitz {
-            column_headers.push(html! {
-                th : "Pieces Found";
-            });
+        QualifierKind::Single { show_times: true } => {
+            // No additional headers for single qualifiers with times
         }
         QualifierKind::Score(QualifierScoreKind::Standard) => {
             column_headers.push(html! {
@@ -911,18 +908,9 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
         ShowStatus::None => {}
     }
     match data.draft_kind() {
-        None | Some(draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5) => {}
-        Some(draft::Kind::RslS7) => column_headers.push(html! {
-            th : "RSL-Lite OK";
-        }),
-        Some(draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5) => {
-            column_headers.push(html! {
-                th : "Advanced Settings OK";
-            });
-            column_headers.push(html! {
-                th : "MQ OK";
-            });
-        }
+        None | Some(draft::Kind::S7) => {}
+        // Removed old RslS7 variant
+        // Removed old TournoiFranco variants
     }
     if data.series == Series::Crosskeys {
         column_headers.push(html! {
@@ -990,11 +978,8 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                 let Qualification::Multiple { num_finished, .. } = qualification else { unreachable!("qualification kind mismatch") };
                                 num_finished < 5
                             }
-                            QualifierKind::Score(QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online) => {
-                                let Qualification::Multiple { num_entered, .. } = qualification else { unreachable!("qualification kind mismatch") };
-                                num_entered < 3
-                            }
-                            QualifierKind::SongsOfHope => false, //TODO
+                            // Removed old SpeedGaming variants
+                            // Removed old SongsOfHope variant
                         };
                         tr(class? = is_dimmed.then_some("dimmed")) {
                             @match qualifier_kind {
@@ -1007,7 +992,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                     @if let Some(ref team) = team {
                                         : team.to_html(&mut transaction, false).await?;
                                     }
-                                    @if let (QualifierKind::Single { show_times: true }, Qualification::Single { qualified: true } | Qualification::TriforceBlitz { qualified: true, .. }) = (qualifier_kind, qualification) {
+                                    @if let (QualifierKind::Single { show_times: true }, Qualification::Single { qualified: true }) = (qualifier_kind, qualification) {
                                         br;
                                         small {
                                             @if let Some(time) = members.iter().try_fold(Duration::default(), |acc, member| Some(acc + member.qualifier_time?)) {
@@ -1137,8 +1122,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                                 &data
                                                             };
                                                             let qualifier_kind = match (data.series, &*data.event) {
-                                                                (Series::SpeedGaming, "2023onl") => QualifierScoreKind::Sgl2023Online,
-                                                                (Series::SpeedGaming, "2024onl") => QualifierScoreKind::Sgl2024Online,
+                                                                                    // Removed old SpeedGaming variants
                                                                 (Series::Standard, "8") => QualifierScoreKind::Standard,
                                                                 (_, _) => unimplemented!("enter::Requirement::QualifierPlacement for event {}/{}", data.series.slug(), data.event),
                                                             };
@@ -1233,13 +1217,9 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                 ShowStatus::None => {}
                             }
                             @match data.draft_kind() {
-                                None | Some(draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5) => {}
-                                Some(draft::Kind::RslS7) => td {
-                                    @if lite_ok {
-                                        : "✓";
-                                    }
-                                }
-                                Some(draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5) => {
+                                None | Some(draft::Kind::S7) => {}
+                                // Removed old RslS7 variant
+                                Some(_) => { // Removed old TournoiFranco variants
                                     td {
                                         @if hard_settings_ok {
                                             : "✓";
@@ -1309,7 +1289,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                 @if let TeamConfig::Multiworld = data.team_config {
                                     td {
                                         @if let Some(team) = team {
-                                            @match team.mw_impl {
+                                            @match None::<()> { // Removed mw_impl field
                                                 None => : "?";
                                                 Some(mw::Impl::BizHawkCoOp) => : "bizhawk-co-op";
                                                 Some(mw::Impl::MidosHouse) => : "MH MW";

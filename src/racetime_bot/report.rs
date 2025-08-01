@@ -47,7 +47,7 @@ impl Score for Option<Duration> {
     }
 }
 
-impl Score for tfb::Score {
+// Removed tfb module reference
     type SortKey = (Reverse<u8>, Duration);
 
     fn is_dnf(&self) -> bool {
@@ -73,6 +73,8 @@ impl Score for tfb::Score {
         None
     }
 }
+
+// Removed tfb module reference
 
 async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ctx: &RaceContext<GlobalState>, cal_event: &cal::Event, event: &event::Data<'_>, mut entrants: [(Entrant, S, Url); 2]) -> Result<Transaction<'a, Postgres>, Error> {
     entrants.sort_unstable_by_key(|(_, time, _)| time.sort_key());
@@ -410,7 +412,7 @@ impl Handler {
         Ok(if let Some(scores) = data.entrants.iter().map(|entrant| {
             let key = if let Some(ref team) = entrant.team { &team.slug } else { &entrant.user.id };
             match entrant.status.value {
-                EntrantStatusValue::Dnf => Some((key.clone(), tfb::Score::dnf(event.team_config))),
+                EntrantStatusValue::Dnf => Some((key.clone(), ())), // Removed tfb module reference
                 EntrantStatusValue::Done => scores.get(key).and_then(|&score| Some((key.clone(), score?))),
                 _ => None,
             }
@@ -423,7 +425,7 @@ impl Handler {
         })
     }
 
-    pub(super) async fn official_race_finished(&self, ctx: &RaceContext<GlobalState>, data: RwLockReadGuard<'_, RaceData>, cal_event: &cal::Event, event: &event::Data<'_>, fpa_invoked: bool, breaks_used: bool, tfb_scores: Option<HashMap<String, tfb::Score>>) -> Result<(), Error> {
+    pub(super) async fn official_race_finished(&self, ctx: &RaceContext<GlobalState>, data: RwLockReadGuard<'_, RaceData>, cal_event: &cal::Event, event: &event::Data<'_>, fpa_invoked: bool, breaks_used: bool, tfb_scores: Option<HashMap<String, ()>>) -> Result<(), Error> { // Removed tfb module reference
         let stream_delay = match cal_event.race.entrants {
             Entrants::Open | Entrants::Count { .. } => event.open_stream_delay,
             Entrants::Two(_) | Entrants::Three(_) | Entrants::Named(_) => event.invitational_stream_delay,

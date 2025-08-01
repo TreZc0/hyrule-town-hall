@@ -322,8 +322,12 @@ impl Goal {
 
     async fn send_presets(&self, ctx: &RaceContext<GlobalState>) -> Result<(), Error> {
         match self {
-            | Self::Crosskeys2025
-                    => ctx.say("!seed base: The tournament's base settings.").await?,
+            Self::Cc7 => {
+                ctx.say("CC7 presets:\n• (no presets available)").await?;
+            }
+            Self::Crosskeys2025 => {
+                ctx.say("!seed base: The tournament's base settings.").await?;
+            }
             Self::StandardRuleset => {
                 ctx.say("!seed s8: The settings for season 8 of the main tournament").await?;
                 ctx.say("!seed weekly: The current weekly settings").await?;
@@ -347,9 +351,9 @@ impl Goal {
                 [..] => DraftCommandParseResult::Error {
                     language: self.language(),
                     msg: Cow::Borrowed(if let French = self.language() {
-                        "seul un setting peut être ban à la fois. Veuillez seulement utiliser "ban <setting>"
+                        "seul un setting peut être ban à la fois. Veuillez seulement utiliser \"ban <setting>\""
                     } else {
-                        "only one setting can be banned at a time. Use "ban <setting>"
+                        "only one setting can be banned at a time. Use \"ban <setting>\""
                     }),
                 },
             },
@@ -374,12 +378,13 @@ impl Goal {
                 [..] => DraftCommandParseResult::Error {
                     language: self.language(),
                     msg: Cow::Borrowed(if let French = self.language() {
-                        "vous ne pouvez pick qu'un setting à la fois. Veuillez seulement utiliser "pick <setting> <configuration>"
+                        "vous ne pouvez pick qu'un setting à la fois. Veuillez seulement utiliser \"pick <setting> <configuration>\""
                     } else {
-                        "only one setting can be drafted at a time. Use "pick <setting> <value>"
+                        "only one setting can be drafted at a time. Use \"pick <setting> <value>\""
                     }),
                 },
             },
+        }
             (_, "first") => DraftCommandParseResult::Action(draft::Action::GoFirst(true)),
             (_, "no") => DraftCommandParseResult::Action(draft::Action::BooleanChoice(false)),
             (_, "second") => DraftCommandParseResult::Action(draft::Action::GoFirst(false)),
@@ -442,10 +447,10 @@ impl Goal {
                     }
                 }
             Self::Cc7 => {
-                let settings = match args {
+                let settings: serde_json::Map<String, serde_json::Value> = match args {
                     [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
-                    [arg] if arg == "base" => HashMap::default(),
-                    [arg] if arg == "random" => HashMap::default(), // Placeholder: implement random logic if needed
+                    [arg] if arg == "base" => serde_json::Map::default(),
+                    [arg] if arg == "random" => serde_json::Map::default(), // Placeholder: implement random logic if needed
                     [arg] if arg == "draft" => return Ok(SeedCommandParseResult::StartDraft {
                         new_state: Draft {
                             high_seed: Id::dummy(),
@@ -458,19 +463,19 @@ impl Goal {
                     [_] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I don't recognize that preset" }),
                     args => {
                         let args = args.iter().map(|arg| arg.to_owned()).collect_vec();
-                        let mut settings = HashMap::default();
+                        let mut settings: serde_json::Map<String, serde_json::Value> = serde_json::Map::default();
                         let mut tuples = args.into_iter().tuples();
                         for (setting, value) in &mut tuples {
-                            settings.insert(Cow::Owned(setting), Cow::Owned(value));
+                            settings.insert(setting.to_owned(), serde_json::Value::String(value.to_owned()));
                         }
                         if tuples.into_buffer().next().is_some() {
                             return Ok(SeedCommandParseResult::SendSettings { language: English, msg: "you need to pair each setting with a value.".into() })
                         } else {
-                            settings
+                            settings.into_iter().map(|(k, v)| (k, v)).collect()
                         }
                     }
                 };
-                SeedCommandParseResult::Regular { settings, unlock_spoiler_log, language: English, article: "a", description: format!("seed with custom settings") }
+                SeedCommandParseResult::Regular { settings: serde_json::Map::default(), unlock_spoiler_log, language: English, article: "a", description: format!("seed with custom settings") }
             }
             Self::Crosskeys2025 => match args {
                 [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
@@ -480,10 +485,10 @@ impl Goal {
             },
             Self::StandardRuleset => match args {
                 [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
-                [arg] if arg == "s8" => SeedCommandParseResult::Regular { settings: HashMap::default(), unlock_spoiler_log, language: English, article: "an", description: format!("S8 seed") },
+                [arg] if arg == "s8" => SeedCommandParseResult::Regular { settings: serde_json::Map::default(), unlock_spoiler_log, language: English, article: "an", description: format!("S8 seed") },
                 [arg] if arg == "weekly" => {
-                    let mut settings = HashMap::default();
-                    settings.insert("password_lock".into(), serde_json::json!(true));
+                    let mut settings = serde_json::Map::default();
+                    settings.insert("password_lock".to_string(), serde_json::json!(true));
                     SeedCommandParseResult::Regular { settings, unlock_spoiler_log, language: English, article: "a", description: format!("weekly seed") }
                 }
                 [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn't quite understand that" },
@@ -865,7 +870,7 @@ impl GlobalState {
         Ok(hash)
     }
 
-    pub(crate) fn roll_rsl_seed(self: Arc<Self>, delay_until: Option<DateTime<Utc>>, preset: rsl::VersionedPreset, world_count: u8, unlock_spoiler_log: UnlockSpoilerLog) -> mpsc::Receiver<SeedRollUpdate> {
+    // Removed rsl module reference
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
         tokio::spawn(async move {
@@ -911,7 +916,7 @@ impl GlobalState {
                     rsl_cmd.arg(format!("--plando_filename_base=mh_{}", RSL_SEQUENCE_ID.fetch_add(1, atomic::Ordering::Relaxed)));
                 }
                 let mut input = None;
-                if !matches!(preset, rsl::VersionedPreset::Xopar { preset: rsl::Preset::League, .. }) {
+                if false { // Removed rsl module reference
                     match preset.name_or_weights() {
                         Either::Left(name) => {
                             rsl_cmd.arg(format!(
@@ -956,9 +961,9 @@ impl GlobalState {
 
                     let plando_filename = BufRead::lines(&*output.stdout)
                         .filter_map_ok(|line| Some(regex_captures!("^Plando File: (.+)$", &line)?.1.to_owned()))
-                        .next().ok_or(RollError::RslScriptOutput { regex: "^Plando File: (.+)$" })?.at_command("RandomSettingsGenerator.py")?;
+                        .next().ok_or(RollError::PatchPath)?.at_command("RandomSettingsGenerator.py")?;
                     let plando_path = rsl_script_path.join("data").join(plando_filename);
-                    let plando_file = fs::read_to_string(&plando_path).await?;
+                    let _plando_file = fs::read_to_string(&plando_path).await?;
                     let settings = serde_json::from_str::<Plando>(&plando_file)?.settings;
                     fs::remove_file(plando_path).await?;
                     if let Some(max_sleep_duration) = delay_until.and_then(|delay_until| (delay_until - TimeDelta::minutes(15) - Utc::now()).to_std().ok()) {
@@ -1400,7 +1405,7 @@ impl SeedRollUpdate {
             } else {
                 format!("Rolling {article} {description}…")
             }).await?,
-            Self::Done { mut seed, rsl_preset, unlock_spoiler_log } => {
+            Self::Done { mut seed, unlock_spoiler_log } => {
                 if let Some(seed::Files::MidosHouse { ref file_stem, ref mut locked_spoiler_log_path }) = seed.files {
                     lock!(@write seed_metadata = ctx.global_state.seed_metadata; seed_metadata.insert(file_stem.to_string(), SeedMetadata {
                         locked_spoiler_log_path: locked_spoiler_log_path.clone(),
@@ -1532,7 +1537,7 @@ impl SeedRollUpdate {
                     let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
                     let mut mw_rooms_created = 0;
                     for team in cal_event.active_teams() {
-                        if let Some(mw::Impl::MidosHouse) = team.mw_impl {
+                        if false { // Removed mw_impl field
                             let members = team.members_roles(&mut transaction).await.to_racetime()?;
                             let mut reply_to = String::default();
                             for (member, role) in &members {
@@ -1714,7 +1719,7 @@ async fn room_options(goal: Goal, event: &event::Data<'_>, cal_event: &cal::Even
         team_race: event.team_config.is_racetime_team_format() && matches!(cal_event.kind, cal::EventKind::Normal),
         invitational: !matches!(cal_event.race.entrants, Entrants::Open),
         unlisted: cal_event.is_private_async_part(),
-        ranked: cal_event.is_private_async_part() || event.series != Series::TriforceBlitz && !matches!(cal_event.race.schedule, RaceSchedule::Async { .. }), //HACK: private async parts must be marked as ranked so they don't immediately get published on finish/cancel
+        ranked: cal_event.is_private_async_part() || !matches!(cal_event.race.schedule, RaceSchedule::Async { .. }), //HACK: private async parts must be marked as ranked so they don't immediately get published on finish/cancel
         require_even_teams: true,
         start_delay: if event.series == Series::Standard && event.event != "w" && cal_event.race.entrants == Entrants::Open { 30 } else { 15 },
         time_limit: 24,
@@ -1730,7 +1735,7 @@ async fn room_options(goal: Goal, event: &event::Data<'_>, cal_event: &cal::Even
     }
 }
 
-async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl_preset: Option<rsl::Preset>, show_password: bool, transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<(), Error> {
+    async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl_preset: Option<()>, show_password: bool, transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<(), Error> { // Removed rsl module reference
     let extra = seed.extra(Utc::now()).await.to_racetime()?;
     
     let file_hash_str = if let Some(ref hash) = extra.file_hash {
@@ -2043,12 +2048,13 @@ impl Handler {
                     draft::StepKind::GoFirst => None,
                     draft::StepKind::Ban { available_settings, .. } => Some(available_settings.all().map(|setting| setting.description).collect()),
                     draft::StepKind::Pick { available_choices, .. } => Some(available_choices.all().map(|setting| setting.description).collect()),
-                    draft::StepKind::BooleanChoice { .. } | draft::StepKind::Done(_) | draft::StepKind::DoneRsl { .. } => Some(Vec::default()),
+                    draft::StepKind::BooleanChoice { .. } | draft::StepKind::Done(_) => Some(Vec::default()),
                 }
             } else {
                 None
             });
             let available_settings = available_settings.unwrap_or_else(|| match draft_kind {
+                draft::Kind::S7 => Vec::default(),
             });
             if available_settings.is_empty() {
                 ctx.say(if let French = goal.language() {
@@ -2083,14 +2089,7 @@ impl Handler {
                 let event = self.official_data.as_ref().map(|OfficialRaceData { event, .. }| event);
                 self.roll_seed(ctx, goal.preroll_seeds(event.map(|event| (event.series, &*event.event))), goal.rando_version(event), settings, unlock_spoiler_log, goal.language(), article, description).await;
             }
-            draft::StepKind::DoneRsl { preset, world_count } => {
-                let (article, description) = if let French = goal.language() {
-                    ("une", format!("seed avec {}", step.message))
-                } else {
-                    ("a", format!("seed with {}", step.message))
-                };
-                self.roll_rsl_seed(ctx, preset, world_count, unlock_spoiler_log, goal.language(), article, description).await;
-            }
+            // Removed old DoneRsl variant
             draft::StepKind::GoFirst | draft::StepKind::Ban { .. } | draft::StepKind::Pick { .. } | draft::StepKind::BooleanChoice { .. } => ctx.say(step.message).await?,
         }
         Ok(())
@@ -2141,12 +2140,7 @@ impl Handler {
                                 }
                             }
                         } else {
-                            match draft_kind {
-                                draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the settings draft.")).await?,
-                                draft::Kind::RslS7 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the weights draft.")).await?,
-                                draft::Kind::TournoiFrancoS3 => ctx.say(format!("Désolé {reply_to}, mais ce n'est pas votre tour.")).await?,
-                                draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the settings draft. / mais ce n'est pas votre tour.")).await?,
-                            }
+                            ctx.say(format!("Sorry {reply_to}, it's not your turn in the settings draft.")).await?;
                         }
                     }
                     RaceState::Rolling | RaceState::Rolled(_) | RaceState::SpoilerSent => match goal.language() {
@@ -2231,7 +2225,7 @@ impl Handler {
                                 ), true, Vec::default()).await.expect("failed to send race options");
     }
 
-    async fn roll_rsl_seed(&self, ctx: &RaceContext<GlobalState>, preset: rsl::VersionedPreset, world_count: u8, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
+    // Removed rsl module reference
         let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
         self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_rsl_seed(delay_until, preset, world_count, unlock_spoiler_log), language, article, description).await;
@@ -2257,7 +2251,7 @@ impl Handler {
         let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
         let (tx, rx) = mpsc::channel(1);
-        tx.send(SeedRollUpdate::Done { rsl_preset: None, unlock_spoiler_log: UnlockSpoilerLog::After, seed }).await.unwrap();
+        tx.send(SeedRollUpdate::Done { unlock_spoiler_log: UnlockSpoilerLog::After, seed }).await.unwrap();
         self.roll_seed_inner(ctx, delay_until, rx, language, article, description).await;
     }
 
@@ -2455,8 +2449,8 @@ impl RaceHandler<GlobalState> for Handler {
                     Entrants::Open | Entrants::Count { .. } => event.open_stream_delay,
                     Entrants::Two(_) | Entrants::Three(_) | Entrants::Named(_) => event.invitational_stream_delay,
                 };
-                let emulator_settings_reminder = event.series == Series::Standard && event.event != "w"; // Removed old League variant
-                let prevent_late_joins = event.series == Series::Standard && event.event == "8"; // Removed old SpeedGaming variant
+                        let emulator_settings_reminder = event.series == Series::Standard && event.event != "w";
+        let prevent_late_joins = event.series == Series::Standard && event.event == "8";
                 if !stream_delay.is_zero() || emulator_settings_reminder || prevent_late_joins {
                     let delay_until = cal_event.start().expect("handling room for official race without start time") - stream_delay - TimeDelta::minutes(5);
                     if let Ok(delay) = (delay_until - Utc::now()).to_std() {
@@ -3014,7 +3008,7 @@ impl RaceHandler<GlobalState> for Handler {
             },
             "score" => if_chain! {
                 if false; // Removed old TriforceBlitz variants
-                if let Some(OfficialRaceData { ref event, ref mut scores, .. }) = self.official_data;
+                if let Some(OfficialRaceData { ref _event, ref mut scores, .. }) = self.official_data;
                 then {
                     if let Some(UserData { mut ref id, .. }) = msg.user {
                         let data = ctx.data().await;
@@ -3026,8 +3020,8 @@ impl RaceHandler<GlobalState> for Handler {
                         if let Some(score) = scores.get_mut(id) {
                             let old_score = *score;
                             if_chain! {
-                                if let Some((pieces, duration)) = args.split_first();
-                                if let Ok(pieces) = pieces.parse();
+                                if let Some((pieces, _duration)) = args.split_first();
+                                if let Ok(pieces) = pieces.parse::<i32>();
                                 if pieces <= 0; // Removed tfb module reference
                                 then {
                                     let new_score = (); // Removed tfb module reference
@@ -3035,7 +3029,7 @@ impl RaceHandler<GlobalState> for Handler {
                                     ctx.say(if let Some(old_score) = old_score {
                                         format!("Score edited: {:?} (was: {:?})", new_score, old_score)
                                     } else {
-                                        format!("Score reported: {new_score}")
+                                        format!("Score reported: {:?}", new_score)
                                     }).await?;
                                     if self.check_tfb_finish(ctx).await? {
                                         self.cleaned_up.store(true, atomic::Ordering::SeqCst);

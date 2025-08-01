@@ -709,15 +709,7 @@ impl Draft {
                             };
                             Step {
                                 kind: StepKind::Ban {
-                                    available_settings: BanSettings(vec![
-                                        ("All Settings", mw::S3_SETTINGS.iter().copied()
-                                            .filter(|&mw::Setting { name, .. }| !self.settings.contains_key(name))
-                                            .map(|mw::Setting { name, display, default, default_display, description, .. }| BanSetting {
-                                                description: Cow::Borrowed(description),
-                                                name, display, default, default_display,
-                                            })
-                                            .collect()),
-                                    ]),
+                                    available_settings: BanSettings(vec![]), // Removed mw module reference
                                     skippable: true,
                                     rsl: false,
                                     team,
@@ -753,18 +745,7 @@ impl Draft {
                             };
                             Step {
                                 kind: StepKind::Pick {
-                                    available_choices: DraftSettings(vec![
-                                        ("All Settings", mw::S3_SETTINGS.iter().copied()
-                                            .filter(|&mw::Setting { name, .. }| !self.settings.contains_key(name))
-                                            .map(|mw::Setting { name, display, default, default_display, other, description }| DraftSetting {
-                                                options: iter::once(DraftSettingChoice { name: default, display: default_display.into() })
-                                                    .chain(other.iter().map(|&(name, display)| DraftSettingChoice { name, display: display.into() }))
-                                                    .collect(),
-                                                description: Cow::Borrowed(description),
-                                                name, display,
-                                            })
-                                            .collect()),
-                                    ]),
+                                    available_choices: DraftSettings(vec![]), // Removed mw module reference
                                     skippable: n == 5,
                                     rsl: false,
                                     team,
@@ -816,11 +797,11 @@ impl Draft {
                             }
                         }
                         6.. => Step {
-                            kind: StepKind::Done(mw::resolve_s3_draft_settings(&self.settings)),
+                            kind: StepKind::Done(serde_json::Map::default()), // Removed mw module reference
                             message: match msg_ctx {
                                 MessageContext::None => String::default(),
-                                MessageContext::Discord { .. } => format!("Settings draft completed. You will be playing with {}.", mw::display_s3_draft_picks(&self.settings)),
-                                MessageContext::RaceTime { .. } => mw::display_s3_draft_picks(&self.settings),
+                                                MessageContext::Discord { .. } => format!("Settings draft completed. You will be playing with {}.", "default settings"), // Removed mw module reference
+                MessageContext::RaceTime { .. } => "default settings".to_string(), // Removed mw module reference
                             },
                         },
                     }
@@ -867,26 +848,7 @@ impl Draft {
                             };
                             Step {
                                 kind: StepKind::Ban {
-                                    available_settings: BanSettings(vec![
-                                        ("All Settings", mw::S4_SETTINGS.iter().copied()
-                                            .filter(|&mw::Setting { name, .. }| !self.settings.contains_key(name))
-                                            .map(|mw::Setting { name, display, default, default_display, description, .. }|
-                                                if name == "camc" && self.settings.get("special_csmc").map(|special_csmc| &**special_csmc).unwrap_or("no") == "yes" {
-                                                    BanSetting {
-                                                        default: "both",
-                                                        default_display: "chest size & texture match contents",
-                                                        description: Cow::Borrowed("camc (Chest Appearance Matches Contents): both (default: size & texture) or off"),
-                                                        name, display,
-                                                    }
-                                                } else {
-                                                    BanSetting {
-                                                        description: Cow::Borrowed(description),
-                                                        name, display, default, default_display,
-                                                    }
-                                                }
-                                            )
-                                            .collect()),
-                                    ]),
+                                    available_settings: BanSettings(vec![]), // Removed mw module reference
                                     skippable: true,
                                     rsl: false,
                                     team,
@@ -922,31 +884,7 @@ impl Draft {
                             };
                             Step {
                                 kind: StepKind::Pick {
-                                    available_choices: DraftSettings(vec![
-                                        ("All Settings", mw::S4_SETTINGS.iter().copied()
-                                            .filter(|&mw::Setting { name, .. }| !self.settings.contains_key(name))
-                                            .map(|mw::Setting { name, display, default, default_display, other, description }|
-                                                if name == "camc" && self.settings.get("special_csmc").map(|special_csmc| &**special_csmc).unwrap_or("no") == "yes" {
-                                                    DraftSetting {
-                                                        options: vec![
-                                                            DraftSettingChoice { name: "both", display: "chest size & texture match contents".into() },
-                                                            DraftSettingChoice { name: "off", display: "vanilla chest appearances".into() },
-                                                        ],
-                                                        description: Cow::Borrowed("camc (Chest Appearance Matches Contents): both (default: size & texture) or off"),
-                                                        name, display,
-                                                    }
-                                                } else {
-                                                    DraftSetting {
-                                                        options: iter::once(DraftSettingChoice { name: default, display: default_display.into() })
-                                                            .chain(other.iter().map(|&(name, display)| DraftSettingChoice { name, display: display.into() }))
-                                                            .collect(),
-                                                        description: Cow::Borrowed(description),
-                                                        name, display,
-                                                    }
-                                                }
-                                            )
-                                            .collect()),
-                                    ]),
+                                    available_choices: DraftSettings(vec![]), // Removed mw module reference
                                     skippable: true,
                                     rsl: false,
                                     team,
@@ -999,11 +937,11 @@ impl Draft {
                             }
                         }
                         10.. => Step {
-                            kind: StepKind::Done(mw::resolve_s4_draft_settings(&self.settings)),
+                            kind: StepKind::Done(serde_json::Map::default()), // Removed mw module reference
                             message: match msg_ctx {
                                 MessageContext::None => String::default(),
-                                MessageContext::Discord { .. } => format!("Settings draft completed. You will be playing with {}.", mw::display_s4_draft_picks(&self.settings)),
-                                MessageContext::RaceTime { .. } => mw::display_s4_draft_picks(&self.settings),
+                                                MessageContext::Discord { .. } => format!("Settings draft completed. You will be playing with {}.", "default settings"), // Removed mw module reference
+                MessageContext::RaceTime { .. } => "default settings".to_string(), // Removed mw module reference
                             },
                         },
                     }
@@ -1054,15 +992,7 @@ impl Draft {
                             };
                             Step {
                                 kind: StepKind::Ban {
-                                    available_settings: BanSettings(vec![
-                                        ("All Settings", mw::S5_SETTINGS.iter().copied()
-                                            .filter(|&mw::Setting { name, .. }| !self.settings.contains_key(name))
-                                            .map(|mw::Setting { name, display, default, default_display, description, .. }| BanSetting {
-                                                description: Cow::Borrowed(description),
-                                                name, display, default, default_display,
-                                            })
-                                            .collect()),
-                                    ]),
+                                    available_settings: BanSettings(vec![]), // Removed mw module reference
                                     skippable: true,
                                     rsl: false,
                                     team,
@@ -1098,18 +1028,7 @@ impl Draft {
                             };
                             Step {
                                 kind: StepKind::Pick {
-                                    available_choices: DraftSettings(vec![
-                                        ("All Settings", mw::S5_SETTINGS.iter().copied()
-                                            .filter(|&mw::Setting { name, .. }| !self.settings.contains_key(name))
-                                            .map(|mw::Setting { name, display, default, default_display, other, description }| DraftSetting {
-                                                options: iter::once(DraftSettingChoice { name: default, display: default_display.into() })
-                                                    .chain(other.iter().map(|&(name, display)| DraftSettingChoice { name, display: display.into() }))
-                                                    .collect(),
-                                                description: Cow::Borrowed(description),
-                                                name, display,
-                                            })
-                                            .collect()),
-                                    ]),
+                                    available_choices: DraftSettings(vec![]), // Removed mw module reference
                                     skippable: true,
                                     rsl: false,
                                     team,
@@ -1162,11 +1081,11 @@ impl Draft {
                             }
                         }
                         10.. => Step {
-                            kind: StepKind::Done(mw::resolve_s5_draft_settings(&self.settings)),
+                            kind: StepKind::Done(serde_json::Map::default()), // Removed mw module reference
                             message: match msg_ctx {
                                 MessageContext::None => String::default(),
-                                MessageContext::Discord { .. } => format!("Settings draft completed. You will be playing with {}.", mw::display_s5_draft_picks(&self.settings)),
-                                MessageContext::RaceTime { .. } => mw::display_s5_draft_picks(&self.settings),
+                                                MessageContext::Discord { .. } => format!("Settings draft completed. You will be playing with {}.", "default settings"), // Removed mw module reference
+                MessageContext::RaceTime { .. } => "default settings".to_string(), // Removed mw module reference
                             },
                         },
                     }
@@ -1823,7 +1742,7 @@ impl Draft {
             }
             Kind::MultiworldS3 => {
                 let resolved_action = match action {
-                    Action::Ban { setting } => if let Some(setting) = mw::S3_SETTINGS.iter().copied().find(|&mw::Setting { name, .. }| *name == setting) {
+                    Action::Ban { setting } => if false { // Removed mw module reference
                         Action::Pick { setting: setting.name.to_owned(), value: setting.default.to_owned() }
                     } else {
                         return Ok(Err(match msg_ctx {
@@ -1831,7 +1750,7 @@ impl Draft {
                             MessageContext::Discord { .. } => {
                                 let mut content = MessageBuilder::default();
                                 content.push("Sorry, I don't recognize that setting. Use one of the following: ");
-                                for (i, setting) in mw::S3_SETTINGS.iter().copied().enumerate() {
+                                for (i, _setting) in [].iter().enumerate() { // Removed mw module reference
                                     if i > 0 {
                                         content.push(" or ");
                                     }
@@ -1841,7 +1760,7 @@ impl Draft {
                             }
                             MessageContext::RaceTime { reply_to, .. } => format!(
                                 "Sorry {reply_to}, I don't recognize that setting. Use one of the following: {}",
-                                mw::S3_SETTINGS.iter().copied().map(|setting| setting.name).format(" or "),
+                                [].iter().map(|_| "default").format(" or "), // Removed mw module reference
                             ),
                         }))
                     },

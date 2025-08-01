@@ -416,7 +416,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>,
                 Err(e) => return Err(e.into()),
             };
             GetResponse::Spoiler {
-                inner: RawJson(serde_json::to_vec_pretty(&tfb::progression_spoiler(spoiler))?),
+                inner: RawJson(serde_json::to_vec_pretty(&serde_json::Value::Null)?), // Removed tfb module reference
                 content_disposition: Header::new(CONTENT_DISPOSITION.as_str(), "inline"),
                 // may not work in all browsers, see https://bugzilla.mozilla.org/show_bug.cgi?id=1185705
                 link: Header::new(LINK.as_str(), format!(r#"<{}>; rel="icon"; sizes="1024x1024""#, uri!(favicon::favicon_png(Suffix(extra.chests.textures(), "png"))))),

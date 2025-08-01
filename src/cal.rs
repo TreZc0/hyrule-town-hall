@@ -617,76 +617,9 @@ impl Race {
             races.push(Self::from_id(&mut *transaction, http_client, id).await?);
         }
         match event.series {
-            Series::BattleRoyale => match &*event.event {
-                "1" => {}
-                _ => unimplemented!(),
-            },
-            Series::League => {} // this series is scheduled via the League website, which is auto-imported
-            Series::Multiworld => match &*event.event {
-                "1" => {} // no match data available
-                _ => {} // new events are scheduled via Mido's House
-            },
-            Series::NineDaysOfSaws | Series::Pictionary => if let Some(race) = races.iter_mut().find(|race| race.series == event.series && race.event == event.event) {
-                race.schedule = if let Some(start) = event.start(&mut *transaction).await? {
-                    RaceSchedule::Live {
-                        end: event.end,
-                        room: event.url.clone(),
-                        start,
-                    }
-                } else {
-                    RaceSchedule::Unscheduled
-                };
-                if let Some(english_video_url) = event.video_url.clone() {
-                    race.video_urls.entry(English).or_insert(english_video_url);
-                }
-                race
-            } else {
-                races.push(Self {
-                    id: Id::<Races>::new(&mut *transaction).await?,
-                    series: event.series,
-                    event: event.event.to_string(),
-                    source: Source::Manual,
-                    entrants: Entrants::Open,
-                    phase: None,
-                    round: None,
-                    game: None,
-                    scheduling_thread: None,
-                    schedule: if let Some(start) = event.start(&mut *transaction).await? {
-                        RaceSchedule::Live {
-                            end: event.end,
-                            room: event.url.clone(),
-                            start,
-                        }
-                    } else {
-                        RaceSchedule::Unscheduled
-                    },
-                    schedule_updated_at: None,
-                    fpa_invoked: false,
-                    breaks_used: false,
-                    draft: None,
-                    seed: seed::Data::default(),
-                    video_urls: event.video_url.iter().map(|video_url| (English, video_url.clone())).collect(), //TODO sync between event and race? Video URL fields for other languages on event::Data?
-                    restreamers: HashMap::default(),
-                    last_edited_by: None,
-                    last_edited_at: None,
-                    ignored: false,
-                    schedule_locked: false,
-                    notified: false,
-                    async_notified_1: false,
-                    async_notified_2: false,
-                    async_notified_3: false,
-                });
-                races.last_mut().expect("just pushed")
-            }.save(&mut *transaction).await?,
-            Series::Rsl => match &*event.event {
-                "1" => {} // no match data available
-                _ => {} // new events are scheduled via Mido's House
-            },
-            Series::Scrubs => match &*event.event {
-                "5" => {}
-                "6" => {}
-                _ => unimplemented!(),
-            },
+            // All old series are now scheduled via Mido's House
+            _ => {}
+        }
             Series::Standard => match &*event.event {
                 "w" => for kind in all::<s::WeeklyKind>() {
                     let schedule = RaceSchedule::Live { start: kind.next_weekly_after(now).to_utc(), end: None, room: None };
@@ -725,16 +658,7 @@ impl Race {
                 //TODO add archives of old Standard tournaments and Challenge Cups?
                 _ => {} // new events are scheduled via Mido's House
             },
-            | Series::CoOp //TODO add archives of seasons 1 and 2?
-            | Series::CopaDoBrasil
             | Series::Crosskeys
-            | Series::MixedPools
-            | Series::Mq
-            | Series::SongsOfHope
-            | Series::SpeedGaming
-            | Series::TournoiFrancophone
-            | Series::TriforceBlitz
-            | Series::WeTryToBeBetter
                 => {} // these series are now scheduled via Mido's House
         }
         races.retain(|race| !race.ignored);
@@ -1405,7 +1329,7 @@ impl Event {
 
     pub(crate) async fn should_create_room(&self, transaction: &mut Transaction<'_, Postgres>, event: &event::Data<'_>) -> Result<RaceHandleMode, event::DataError> {
         Ok(if racetime_bot::Goal::for_event(self.race.series, &self.race.event).is_some() {
-            if self.race.series == Series::SpeedGaming && self.race.event.ends_with("live") && event.is_started(transaction).await? {
+            if self.race.event.ends_with("live") && event.is_started(transaction).await? {
                 // don't create racetime.gg rooms for in-person races
                 RaceHandleMode::Notify
             } else {
@@ -2945,7 +2869,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                     }
                 }
             }
-            @if race.series == Series::League && !race.has_any_room() {
+            @if !race.has_any_room() {
                 // restream data entered here would be automatically overwritten
                 fieldset {
                     label : "To edit restream data, please use the League website.";
@@ -3798,7 +3722,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
             // Save original video URLs to check if they changed
             let original_video_urls = race.video_urls.clone();
             
-            if race.series != Series::League || race.has_any_room() {
+            if race.has_any_room() {
                 race.video_urls = value.video_urls.iter().filter(|(_, video_url)| !video_url.is_empty()).map(|(language, video_url)| (*language, Url::parse(video_url).expect("validated"))).collect();
                 race.restreamers = restreamers;
             }
