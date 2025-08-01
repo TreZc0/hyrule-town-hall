@@ -2249,9 +2249,8 @@ pub(crate) async fn race_table(
                                 @if race.show_seed() || race.is_ended() {
                                     @if let Some(racetime_bot::Goal::Crosskeys2025) = racetime_bot::Goal::for_event(race.series, &race.event) {
                                         @if let Ok(crosskeys_options) = racetime_bot::CrosskeysRaceOptions::for_race_with_transaction(&mut *transaction, race).await {
-                                            br;
-                                            span(class = "settings-link", title = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str())) {
-                                                : "Settings";
+                                            span(class = "settings-link", data-tooltip = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str())) {
+                                                : "Hover for Settings";
                                             }
                                         }
                                     }
@@ -2273,7 +2272,8 @@ pub(crate) async fn race_table(
                             td {
                                 @if options.can_edit {
                                     @let is_admin = user.map_or(false, |u| u.id == Id::from(16287394041462225947_u64));
-                                    @if is_admin {
+                                    @let is_organizer = user.map_or(false, |u| event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(u)));
+                                    @if is_admin || is_organizer {
                                         a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
                                     } else {
                                         @match race.schedule {
