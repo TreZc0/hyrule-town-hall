@@ -32,6 +32,7 @@ use {
             SpoilerLog
         },
         prelude::*,
+        racetime_bot,
         sheets,
     },
     crate::id::RoleBindings,
@@ -2240,6 +2241,18 @@ pub(crate) async fn race_table(
                                         a(class = "clean_button", href = uri!(practice_seed(event.series, &*event.event, race.id))) {
                                             : favicon(&Url::parse("https://ootrandomizer.com/").unwrap()); //TODO adjust based on seed host
                                             : "Practice";
+                                        }
+                                    }
+                                }
+                                
+                                // Add Settings link for past/ongoing races with custom options
+                                @if race.show_seed() || race.is_ended() {
+                                    @if let Some(racetime_bot::Goal::Crosskeys2025) = racetime_bot::Goal::for_event(race.series, &race.event) {
+                                        @if let Ok(crosskeys_options) = racetime_bot::CrosskeysRaceOptions::for_race_with_transaction(&mut *transaction, race).await {
+                                            br;
+                                            span(class = "settings-link", title = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str())) {
+                                                : "Settings";
+                                            }
                                         }
                                     }
                                 }

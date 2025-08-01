@@ -2553,6 +2553,22 @@ impl CrosskeysRaceOptions {
             zw_ok: team_rows.iter().all(|row| row.zw_ok),
         }
     }
+
+    pub(crate) async fn for_race_with_transaction(transaction: &mut Transaction<'_, Postgres>, race: &Race) -> sqlx::Result<Self> {
+        let teams = race.teams();
+        let team_rows = sqlx::query!("SELECT all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _).fetch_all(&mut **transaction).await?;
+        Ok(CrosskeysRaceOptions {
+            all_dungeons_ok: team_rows.iter().all(|row| row.all_dungeons_ok),
+            flute_ok: team_rows.iter().all(|row| row.flute_ok),
+            hovering_ok: team_rows.iter().all(|row| row.hover_ok),
+            inverted_ok: team_rows.iter().all(|row| row.inverted_ok),
+            keydrop_ok: team_rows.iter().all(|row| row.keydrop_ok),
+            mirror_scroll_ok: team_rows.iter().all(|row| row.mirror_scroll_ok),
+            no_delay_ok: team_rows.iter().all(|row| row.no_delay_ok),
+            pb_ok: team_rows.iter().all(|row| row.pb_ok),
+            zw_ok: team_rows.iter().all(|row| row.zw_ok),
+        })
+    }
     
 }
 

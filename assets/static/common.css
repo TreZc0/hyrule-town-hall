@@ -405,3 +405,14 @@ p.error {
   color: var(--text-muted);
   margin-top: 0.25rem;
 }
+
+.settings-link {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  font-size: 0.875rem;
+}
+
+.settings-link:hover {
+  color: var(--hover-text);
+}
