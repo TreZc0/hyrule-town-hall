@@ -529,10 +529,29 @@ p.error {
 .settings-link {
   color: var(--accent);
   cursor: pointer;
-  text-decoration: underline;
-  font-size: 0.875rem;
+  font-size: 0.75rem;
+  position: relative;
 }
 
 .settings-link:hover {
   color: var(--hover-text);
+}
+
+.settings-link:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: var(--bg-surface);
+  color: var(--text);
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  white-space: pre-line;
+  z-index: 1000;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  max-width: 350px;
+  text-align: center;
 }
