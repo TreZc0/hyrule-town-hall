@@ -122,10 +122,11 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                     : full_form(uri!(update_enter_flow(event.series, &*event.event)), csrf, html! {
                         : form_field("enter_flow_json", &mut errors, html! {
                             label(for = "enter_flow_json") : "Enter Flow JSON";
+                            br;
                             textarea(id = "enter_flow_json", name = "enter_flow_json", rows = "10", style = "font-family: monospace; width: 100%; max-width: 800px;") {
                                 : ctx.field_value("enter_flow_json").unwrap_or_else(|| {
                                     match &event.enter_flow {
-                                        Some(_flow) => "{}", // Placeholder since we can't easily serialize the complex Flow
+                                        Some(_flow) => "{}", // Flow structure is complex, showing placeholder
                                         None => "",
                                     }
                                 });
@@ -134,9 +135,9 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             
                             details {
                                 summary : "Example enter_flow configurations";
-                                div(style = "margin-top: 10px; padding: 15px; background: #f8f9fa; border-radius: 6px; border: 1px solid #e9ecef;") {
-                                    h4(style = "margin-top: 0; color: #495057;") : "Basic Discord Account Requirement:";
-                                    pre(style = "font-size: 14px; line-height: 1.4; background: #ffffff; padding: 12px; border-radius: 4px; border: 1px solid #dee2e6; overflow-x: auto;") {
+                                div(style = "margin-top: 10px; padding: 15px; background: var(--bg-surface); border-radius: 6px; border: 1px solid var(--border);") {
+                                    h4(style = "margin-top: 0; color: var(--text-primary);") : "Basic Discord Account Requirement:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: var(--bg-secondary); padding: 12px; border-radius: 4px; border: 1px solid var(--border); overflow-x: auto; color: var(--text-primary);") {
                                         : r#"{
   "requirements": [
     {
@@ -146,8 +147,8 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
 }"#;
                                     }
                                     
-                                    h4(style = "margin-top: 20px; color: #495057;") : "Multiple Requirements with Deadline:";
-                                    pre(style = "font-size: 14px; line-height: 1.4; background: #ffffff; padding: 12px; border-radius: 4px; border: 1px solid #dee2e6; overflow-x: auto;") {
+                                    h4(style = "margin-top: 20px; color: var(--text-primary);") : "Multiple Requirements with Deadline:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: var(--bg-secondary); padding: 12px; border-radius: 4px; border: 1px solid var(--border); overflow-x: auto; color: var(--text-primary);") {
                                         : r#"{
   "requirements": [
     {
@@ -164,8 +165,8 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
 }"#;
                                     }
                                     
-                                    h4(style = "margin-top: 20px; color: #495057;") : "Custom Text Field Requirement:";
-                                    pre(style = "font-size: 14px; line-height: 1.4; background: #ffffff; padding: 12px; border-radius: 4px; border: 1px solid #dee2e6; overflow-x: auto;") {
+                                    h4(style = "margin-top: 20px; color: var(--text-primary);") : "Custom Text Field Requirement:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: var(--bg-secondary); padding: 12px; border-radius: 4px; border: 1px solid var(--border); overflow-x: auto; color: var(--text-primary);") {
                                         : r#"{
   "requirements": [
     {
@@ -213,6 +214,13 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             }
                         }
                     }
+                    
+                    h3 : "Event Info Content";
+                    p : "Use the WYSIWYG editor below to create and edit the event information page. This content will be displayed on the event info page and will override any hardcoded content.";
+                    
+                    div(id = "event-info-editor", data_series = event.series.to_string(), data_event = event.event.to_string()) {
+                        p : "Loading editor...";
+                    }
                 }
             }
         } else {
@@ -237,6 +245,8 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
         : header;
         : content;
         script(src = static_url!("user-search.js")) {}
+        link(rel = "stylesheet", href = static_url!("event-info-editor.css"));
+        script(src = static_url!("event-info-editor.js")) {}
     }).await?)
 }
 

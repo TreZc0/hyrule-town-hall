@@ -14,23 +14,15 @@ use {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[error(transparent)] RslScriptPath(#[from] rsl::ScriptPathError),
     #[error(transparent)] Sql(#[from] sqlx::Error),
     #[error(transparent)] Wheel(#[from] wheel::Error),
-    #[error("unexpected type of `extra_` option in RSL override")]
-    RslExtraType,
-    #[error("unexpected type of `remove_` option in RSL override")]
-    RslRemoveType,
 }
 
 impl IsNetworkError for Error {
     fn is_network_error(&self) -> bool {
         match self {
-            Self::RslScriptPath(_) => false,
             Self::Sql(_) => false,
             Self::Wheel(e) => e.is_network_error(),
-            Self::RslExtraType => false,
-            Self::RslRemoveType => false,
         }
     }
 }
@@ -65,28 +57,12 @@ impl fmt::Display for Team {
 pub(crate) enum Kind {
     // when defining a new variant, make sure to add it to event::Data::draft_kind and racetime_bot::Goal::draft_kind
     S7,
-    MultiworldS3,
-    MultiworldS4,
-    MultiworldS5,
-    RslS7,
-    TournoiFrancoS3,
-    TournoiFrancoS4,
-    TournoiFrancoS5,
 }
 
 impl Kind {
     fn language(&self) -> Language {
         match self {
-            | Self::S7
-            | Self::MultiworldS3
-            | Self::MultiworldS4
-            | Self::MultiworldS5
-            | Self::RslS7
-            | Self::TournoiFrancoS4
-            | Self::TournoiFrancoS5
-                => English,
-            | Self::TournoiFrancoS3
-                => French,
+            Self::S7 => English,
         }
     }
 }
@@ -178,10 +154,7 @@ pub(crate) enum StepKind {
         team: Team,
     },
     Done(seed::Settings), //TODO use ootr_utils::Settings instead?
-    DoneRsl {
-        preset: rsl::VersionedPreset,
-        world_count: u8,
-    },
+
 }
 
 pub(crate) struct Step {
@@ -346,15 +319,9 @@ impl Draft {
     fn pick_count(&self, kind: Kind) -> u8 {
         match kind {
             Kind::S7 => self.skipped_bans + u8::try_from(self.settings.len()).unwrap(),
-            Kind::RslS7 => self.skipped_bans
-                + u8::try_from(rsl::FORCE_OFF_SETTINGS.into_iter().filter(|&rsl::ForceOffSetting { name, .. }| self.settings.contains_key(name)).count()).unwrap()
-                + u8::try_from(rsl::FIFTY_FIFTY_SETTINGS.into_iter().chain(rsl::MULTI_OPTION_SETTINGS).filter(|&rsl::MultiOptionSetting { name, .. }| self.settings.contains_key(name)).count()).unwrap(),
-            Kind::MultiworldS3 => self.skipped_bans + u8::try_from(mw::S3_SETTINGS.iter().copied().filter(|&mw::Setting { name, .. }| self.settings.contains_key(name)).count()).unwrap(),
-            Kind::MultiworldS4 => self.skipped_bans + u8::try_from(mw::S4_SETTINGS.iter().copied().filter(|&mw::Setting { name, .. }| self.settings.contains_key(name)).count()).unwrap(),
-            Kind::MultiworldS5 => self.skipped_bans + u8::try_from(mw::S5_SETTINGS.iter().copied().filter(|&mw::Setting { name, .. }| self.settings.contains_key(name)).count()).unwrap(),
-            Kind::TournoiFrancoS3 => self.skipped_bans + u8::try_from(fr::S3_SETTINGS.into_iter().filter(|&fr::Setting { name, .. }| self.settings.contains_key(name)).count()).unwrap(),
-            Kind::TournoiFrancoS4 => self.skipped_bans + u8::try_from(fr::S4_SETTINGS.into_iter().filter(|&fr::Setting { name, .. }| self.settings.contains_key(name)).count()).unwrap(),
-            Kind::TournoiFrancoS5 => self.skipped_bans + u8::try_from(fr::S5_SETTINGS.into_iter().filter(|&fr::Setting { name, .. }| self.settings.contains_key(name)).count()).unwrap(),
+            // Removed old RslS7 variant
+            // Removed old Multiworld variants
+            // Removed old TournoiFranco variants
         }
     }
 

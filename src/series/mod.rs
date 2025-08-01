@@ -23,102 +23,34 @@ use {
     chrono::TimeDelta,
 };
 
-pub(crate) mod br;
-pub(crate) mod coop;
-pub(crate) mod fr;
-pub(crate) mod league;
-pub(crate) mod mp;
-pub(crate) mod mq;
-pub(crate) mod mw;
-pub(crate) mod ndos;
-pub(crate) mod ohko;
-pub(crate) mod pic;
-pub(crate) mod rsl;
 pub(crate) mod s;
-pub(crate) mod scrubs;
-pub(crate) mod sgl;
-pub(crate) mod soh;
-pub(crate) mod tfb;
-pub(crate) mod wttbb;
 pub(crate) mod xkeys;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence)]
 pub(crate) enum Series {
-    BattleRoyale,
-    CoOp,
-    CopaDoBrasil,
     Crosskeys,
-    League,
-    MixedPools,
-    Mq,
-    Multiworld,
-    NineDaysOfSaws,
-    Pictionary,
-    Rsl,
-    Scrubs,
-    SongsOfHope,
-    SpeedGaming,
     Standard,
-    TournoiFrancophone,
-    TriforceBlitz,
-    WeTryToBeBetter,
 }
 
 impl Series {
     pub(crate) fn slug(&self) -> &'static str {
         match self {
-            Self::BattleRoyale => "ohko",
-            Self::CoOp => "coop",
-            Self::CopaDoBrasil => "br",
             Self::Crosskeys => "xkeys",
-            Self::League => "league",
-            Self::MixedPools => "mp",
-            Self::Mq => "mq",
-            Self::Multiworld => "mw",
-            Self::NineDaysOfSaws => "9dos",
-            Self::Pictionary => "pic",
-            Self::Rsl => "rsl",
-            Self::Scrubs => "scrubs",
-            Self::SongsOfHope => "soh",
-            Self::SpeedGaming => "sgl",
             Self::Standard => "s",
-            Self::TournoiFrancophone => "fr",
-            Self::TriforceBlitz => "tfb",
-            Self::WeTryToBeBetter => "wttbb",
         }
     }
 
     pub(crate) fn display_name(&self) -> &'static str {
         match self {
-            Self::BattleRoyale => "Battle Royale",
-            Self::CoOp => "Co-op Tournaments",
-            Self::CopaDoBrasil => "Copa do Brasil",
             Self::Crosskeys => "Crosskeys Tournaments",
-            Self::League => "League",
-            Self::MixedPools => "Mixed Pools Tournaments",
-            Self::Mq => "12 MQ Tournaments",
-            Self::Multiworld => "Multiworld Tournaments",
-            Self::NineDaysOfSaws => "9 Days of SAWS",
-            Self::Pictionary => "Pictionary Spoiler Log Races",
-            Self::Rsl => "Random Settings League",
-            Self::Scrubs => "Scrubs Tournaments",
-            Self::SongsOfHope => "Songs of Hope",
-            Self::SpeedGaming => "SpeedGaming Live",
             Self::Standard => "Standard Tournaments",
-            Self::TournoiFrancophone => "Tournois Francophones",
-            Self::TriforceBlitz => "Triforce Blitz",
-            Self::WeTryToBeBetter => "WeTryToBeBetter",
         }
     }
 
     pub(crate) fn default_race_duration(&self) -> TimeDelta {
         match self {
-            Self::TriforceBlitz => TimeDelta::hours(2),
-            Self::BattleRoyale | Self::Crosskeys => TimeDelta::hours(2) + TimeDelta::minutes(30),
-            Self::CoOp | Self::MixedPools | Self::Scrubs | Self::SpeedGaming | Self::WeTryToBeBetter => TimeDelta::hours(3),
-            Self::CopaDoBrasil | Self::League | Self::NineDaysOfSaws | Self::SongsOfHope | Self::Standard | Self::TournoiFrancophone => TimeDelta::hours(3) + TimeDelta::minutes(30),
-            Self::Mq | Self::Multiworld | Self::Pictionary => TimeDelta::hours(4),
-            Self::Rsl => TimeDelta::hours(4) + TimeDelta::minutes(30),
+            Self::Crosskeys => TimeDelta::hours(2) + TimeDelta::minutes(30),
+            Self::Standard => TimeDelta::hours(3) + TimeDelta::minutes(30),
         }
     }
 }

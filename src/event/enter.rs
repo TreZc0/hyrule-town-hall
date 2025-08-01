@@ -221,8 +221,6 @@ impl Requirement {
                     data
                 };
                 let qualifier_kind = match (data.series, &*data.event) {
-                    (Series::SpeedGaming, "2023onl") => teams::QualifierScoreKind::Sgl2023Online,
-                    (Series::SpeedGaming, "2024onl") => teams::QualifierScoreKind::Sgl2024Online,
                     (Series::Standard, "8") => teams::QualifierScoreKind::Standard,
                     (_, _) => unimplemented!("enter::Requirement::QualifierPlacement for event {}/{}", data.series.slug(), data.event),
                 };
@@ -733,10 +731,7 @@ impl Requirement {
                             : " or request it as an async using this form by ";
                             : format_datetime(async_end, DateTimeFormat { long: true, running_text: true });
                             : ".";
-                            @match series {
-                                Series::TriforceBlitz => : tfb::qualifier_async_rules();
-                                _ => @unimplemented
-                            }
+                            @unimplemented!("qualifier async rules for series {}", series.slug());
                             : form_field("confirm", errors, html! {
                                 input(type = "checkbox", id = "confirm", name = "confirm", checked? = checked);
                                 label(for = "confirm") : "I have read the above and am ready to play the seed";
@@ -781,10 +776,7 @@ impl Requirement {
                             }
                         }
                         @if async_available {
-                            @match series {
-                                Series::TriforceBlitz => : tfb::qualifier_async_rules();
-                                _ => @unimplemented
-                            }
+                            @unimplemented!("qualifier async rules for series {}", series.slug());
                             : form_field("confirm", errors, html! {
                                 input(type = "checkbox", id = "confirm", name = "confirm", checked? = checked);
                                 label(for = "confirm") : "I have read the above and am ready to play the seed";
@@ -1077,7 +1069,6 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
         }
     } else {
         match (data.series, &*data.event) {
-            (Series::BattleRoyale, "1") => ohko::enter_form(),
             (Series::Standard, "w") => s::weeklies_enter_form(me.as_ref()),
             _ => match data.team_config {
                 TeamConfig::Solo => {
@@ -1286,7 +1277,7 @@ fn enter_form_step2<'a, 'b: 'a, 'c: 'a, 'd: 'a>(mut transaction: Transaction<'a,
                                 : " profile and clicking your name.)";
                             }
                         });
-                        @if let Series::CoOp = data.series {
+                        @if false { // Removed old CoOp variant
                             @let field_name = match member_idx {
                                 0 => "text_field",
                                 1 => "text_field2",
@@ -1314,12 +1305,12 @@ fn enter_form_step2<'a, 'b: 'a, 'c: 'a, 'd: 'a>(mut transaction: Transaction<'a,
                     : form_field("restream_consent_radio", &mut errors, html! {
                         label(for = "restream_consent_radio") {
                             @match data.series {
-                                Series::CoOp => {
+                                _ => { // Removed old CoOp variant
                                     : "Do you consent to your matches being restreamed by our restream partners (see ";
                                     a(href = "https://zsr.link/coops3rules") : "rules document";
                                     : ")? If you change your mind later, please let organizers know.";
                                 }
-                                Series::Multiworld => {
+                                _ => { // Removed old Multiworld variant
                                     //TODO allow changing on Status page during Swiss, except revoking while a restream is planned
                                     //TODO change text depending on tournament structure
                                     : "We are okay with being restreamed. (Optional for Swiss, required for top 8. Can be changed later.)";

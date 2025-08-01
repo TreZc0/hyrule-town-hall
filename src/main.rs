@@ -54,7 +54,7 @@ mod id;
 mod lang;
 mod legal;
 #[macro_use] mod macros;
-mod mw;
+
 mod notification;
 mod ootr_web;
 mod prelude;

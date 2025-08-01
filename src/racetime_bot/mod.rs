@@ -84,7 +84,7 @@ pub(crate) enum ParseUserError {
     InvalidUrl,
     #[error("there is no Hyrule Town Hall user with this ID")]
     MidosHouseId,
-    #[error("There is no racetime.gg account associated with this Hyrule Town Hall account. Ask the user to go to their profile and select “Connect a racetime.gg account”. You can also link to their racetime.gg profile directly.")]
+    #[error("There is no racetime.gg account associated with this Hyrule Town Hall account. Ask the user to go to their profile and select \"Connect a racetime.gg account\". You can also link to their racetime.gg profile directly.")]
     MidosHouseUserNoRacetime,
     #[error("there is no racetime.gg user with this URL (error 404)")]
     UrlNotFound,
@@ -202,32 +202,8 @@ pub(crate) enum UnlockSpoilerLog {
 #[cfg_attr(unix, derive(Protocol))]
 pub(crate) enum Goal {
     Cc7,
-    CoOpS3,
-    CopaDoBrasil,
     Crosskeys2025,
-    LeagueS8,
-    MixedPoolsS2,
-    MixedPoolsS3,
-    MixedPoolsS4,
-    Mq,
-    MultiworldS3,
-    MultiworldS4,
-    MultiworldS5,
-    NineDaysOfSaws,
-    Pic7,
-    PicRs2,
-    Rsl,
-    Sgl2023,
-    Sgl2024,
-    SongsOfHope,
     StandardRuleset,
-    TournoiFrancoS3,
-    TournoiFrancoS4,
-    TournoiFrancoS5,
-    TriforceBlitz,
-    TriforceBlitzProgressionSpoiler,
-    WeTryToBeBetterS1,
-    WeTryToBeBetterS2,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -249,167 +225,44 @@ impl Goal {
     fn matches_event(&self, series: Series, event: &str) -> bool {
         match self {
             Self::Cc7 => series == Series::Standard && event == "7cc",
-            Self::CoOpS3 => series == Series::CoOp && event == "3",
-            Self::CopaDoBrasil => series == Series::CopaDoBrasil && event == "1",
             Self::Crosskeys2025 => series == Series::Crosskeys && event == "2025",
-            Self::LeagueS8 => series == Series::League && event == "8",
-            Self::MixedPoolsS2 => series == Series::MixedPools && event == "2",
-            Self::MixedPoolsS3 => series == Series::MixedPools && event == "3",
-            Self::MixedPoolsS4 => series == Series::MixedPools && event == "4",
-            Self::Mq => series == Series::Mq && event == "1",
-            Self::MultiworldS3 => series == Series::Multiworld && event == "3",
-            Self::MultiworldS4 => series == Series::Multiworld && event == "4",
-            Self::MultiworldS5 => series == Series::Multiworld && event == "5",
-            Self::NineDaysOfSaws => series == Series::NineDaysOfSaws,
-            Self::Pic7 => series == Series::Pictionary && event == "7",
-            Self::PicRs2 => series == Series::Pictionary && event == "rs2",
-            Self::Rsl => series == Series::Rsl,
-            Self::Sgl2023 => series == Series::SpeedGaming && event.starts_with("2023"),
-            Self::Sgl2024 => series == Series::SpeedGaming && event.starts_with("2024"),
-            Self::SongsOfHope => series == Series::SongsOfHope && event == "1",
             Self::StandardRuleset => series == Series::Standard && matches!(event, "w" | "8" | "8cc"),
-            Self::TournoiFrancoS3 => series == Series::TournoiFrancophone && event == "3",
-            Self::TournoiFrancoS4 => series == Series::TournoiFrancophone && event == "4",
-            Self::TournoiFrancoS5 => series == Series::TournoiFrancophone && event == "5",
-            Self::TriforceBlitz => series == Series::TriforceBlitz,
-            Self::TriforceBlitzProgressionSpoiler => false, // possible future tournament but no concrete plans
-            Self::WeTryToBeBetterS1 => series == Series::WeTryToBeBetter && event == "1",
-            Self::WeTryToBeBetterS2 => series == Series::WeTryToBeBetter && event == "2",
         }
     }
 
     pub(crate) fn is_custom(&self) -> bool {
         match self {
-            | Self::Rsl
             | Self::StandardRuleset
-            | Self::TriforceBlitz
-                => false,
+                    => false,
             | Self::Cc7
-            | Self::CoOpS3
-            | Self::CopaDoBrasil
-            | Self::Crosskeys2025
-            | Self::LeagueS8
-            | Self::MixedPoolsS2
-            | Self::MixedPoolsS3
-            | Self::MixedPoolsS4
-            | Self::Mq
-            | Self::MultiworldS3
-            | Self::MultiworldS4
-            | Self::MultiworldS5
-            | Self::NineDaysOfSaws
-            | Self::Pic7
-            | Self::PicRs2
-            | Self::Sgl2023
-            | Self::Sgl2024
-            | Self::SongsOfHope
-            | Self::TournoiFrancoS3
-            | Self::TournoiFrancoS4
-            | Self::TournoiFrancoS5
-            | Self::TriforceBlitzProgressionSpoiler
-            | Self::WeTryToBeBetterS1
-            | Self::WeTryToBeBetterS2
-                => true,
+                | Self::Crosskeys2025
+                    => true,
         }
     }
 
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
             Self::Cc7 => "Standard Tournament Season 7 Challenge Cup",
-            Self::CoOpS3 => "Co-op Tournament Season 3",
-            Self::CopaDoBrasil => "Copa do Brasil",
             Self::Crosskeys2025 => "ALttP Randomizer Crosskeys 2025",
-            Self::LeagueS8 => "League Season 8",
-            Self::MixedPoolsS2 => "2nd Mixed Pools Tournament",
-            Self::MixedPoolsS3 => "3rd Mixed Pools Tournament",
-            Self::MixedPoolsS4 => "4th Mixed Pools Tournament",
-            Self::Mq => "12 MQ Tournament",
-            Self::MultiworldS3 => "3rd Multiworld Tournament",
-            Self::MultiworldS4 => "4th Multiworld Tournament",
-            Self::MultiworldS5 => "5th Multiworld Tournament",
-            Self::NineDaysOfSaws => "9 Days of SAWS",
-            Self::Pic7 => "7th Pictionary Spoiler Log Race",
-            Self::PicRs2 => "2nd Random Settings Pictionary Spoiler Log Race",
-            Self::Rsl => "Random settings league",
-            Self::Sgl2023 => "SGL 2023",
-            Self::Sgl2024 => "SGL 2024",
-            Self::SongsOfHope => "Songs of Hope",
             Self::StandardRuleset => "Standard Ruleset",
-            Self::TournoiFrancoS3 => "Tournoi Francophone Saison 3",
-            Self::TournoiFrancoS4 => "Tournoi Francophone Saison 4",
-            Self::TournoiFrancoS5 => "Tournoi Francophone Saison 5",
-            Self::TriforceBlitz => "Triforce Blitz",
-            Self::TriforceBlitzProgressionSpoiler => "Triforce Blitz Progression Spoiler",
-            Self::WeTryToBeBetterS1 => "WeTryToBeBetter",
-            Self::WeTryToBeBetterS2 => "WeTryToBeBetter Season 2",
         }
     }
 
     fn language(&self) -> Language {
         match self {
             | Self::Cc7
-            | Self::CoOpS3
-            | Self::Crosskeys2025
-            | Self::LeagueS8
-            | Self::MixedPoolsS2
-            | Self::MixedPoolsS3
-            | Self::MixedPoolsS4
-            | Self::Mq
-            | Self::MultiworldS3
-            | Self::MultiworldS4
-            | Self::MultiworldS5
-            | Self::NineDaysOfSaws
-            | Self::Pic7
-            | Self::PicRs2
-            | Self::Rsl
-            | Self::Sgl2023
-            | Self::Sgl2024
-            | Self::SongsOfHope
-            | Self::StandardRuleset
-            | Self::TriforceBlitz
-            | Self::TriforceBlitzProgressionSpoiler
-                => English,
-            | Self::TournoiFrancoS4
-            | Self::TournoiFrancoS5
-                => English, //TODO change to bilingual English/French
-            | Self::TournoiFrancoS3
-            | Self::WeTryToBeBetterS1
-            | Self::WeTryToBeBetterS2
-                => French,
-            | Self::CopaDoBrasil
-                => Portuguese,
+                | Self::Crosskeys2025
+                | Self::StandardRuleset
+                    => English,
         }
     }
 
     fn draft_kind(&self) -> Option<draft::Kind> {
         match self {
             Self::Cc7 => Some(draft::Kind::S7),
-            Self::MultiworldS3 => Some(draft::Kind::MultiworldS3),
-            Self::MultiworldS4 => Some(draft::Kind::MultiworldS4),
-            Self::MultiworldS5 => Some(draft::Kind::MultiworldS5),
-            Self::Rsl => Some(draft::Kind::RslS7),
-            Self::TournoiFrancoS3 => Some(draft::Kind::TournoiFrancoS3),
-            Self::TournoiFrancoS4 => Some(draft::Kind::TournoiFrancoS4),
-            Self::TournoiFrancoS5 => Some(draft::Kind::TournoiFrancoS5),
-            | Self::CoOpS3
-            | Self::CopaDoBrasil
             | Self::Crosskeys2025
-            | Self::LeagueS8
-            | Self::MixedPoolsS2
-            | Self::MixedPoolsS3
-            | Self::MixedPoolsS4
-            | Self::Mq
-            | Self::NineDaysOfSaws
-            | Self::Pic7
-            | Self::PicRs2
-            | Self::Sgl2023
-            | Self::Sgl2024
-            | Self::SongsOfHope
-            | Self::StandardRuleset
-            | Self::TriforceBlitz
-            | Self::TriforceBlitzProgressionSpoiler
-            | Self::WeTryToBeBetterS1
-            | Self::WeTryToBeBetterS2
-                => None,
+                | Self::StandardRuleset
+                    => None,
         }
     }
 
@@ -417,35 +270,9 @@ impl Goal {
     pub(crate) fn preroll_seeds(&self, event: Option<(Series, &str)>) -> PrerollMode {
         match self {
             | Self::Crosskeys2025
-            | Self::Sgl2023
-            | Self::Sgl2024
-            | Self::TriforceBlitz
-                => PrerollMode::None,
+                    => PrerollMode::None,
             | Self::Cc7
-            | Self::CoOpS3
-                => PrerollMode::Short,
-            | Self::CopaDoBrasil
-            | Self::LeagueS8
-            | Self::Mq
-            | Self::MultiworldS3
-            | Self::MultiworldS4
-            | Self::MultiworldS5
-            | Self::NineDaysOfSaws
-            | Self::Pic7
-            | Self::PicRs2
-            | Self::Rsl
-            | Self::SongsOfHope
-            | Self::TournoiFrancoS3
-            | Self::TournoiFrancoS4
-            | Self::TournoiFrancoS5
-            | Self::TriforceBlitzProgressionSpoiler
-            | Self::WeTryToBeBetterS1
-            | Self::WeTryToBeBetterS2
-                => PrerollMode::Medium,
-            | Self::MixedPoolsS2
-            | Self::MixedPoolsS3
-            | Self::MixedPoolsS4
-                => PrerollMode::Long,
+                    => PrerollMode::Short,
             Self::StandardRuleset => if let Some((Series::Standard, "8" | "8cc")) = event {
                 PrerollMode::Short
             } else {
@@ -459,38 +286,11 @@ impl Goal {
             UnlockSpoilerLog::Now
         } else {
             match self {
-                | Self::Pic7
-                | Self::PicRs2
-                    => UnlockSpoilerLog::Now,
-                | Self::TriforceBlitzProgressionSpoiler
-                    => UnlockSpoilerLog::Progression,
-                | Self::CopaDoBrasil
-                | Self::LeagueS8
-                | Self::MixedPoolsS2
-                | Self::MixedPoolsS3
-                | Self::MixedPoolsS4
-                | Self::Mq
-                | Self::MultiworldS3
-                | Self::MultiworldS4
-                | Self::MultiworldS5
-                | Self::NineDaysOfSaws
-                | Self::Rsl
-                | Self::Sgl2023
-                | Self::Sgl2024
-                | Self::SongsOfHope
-                | Self::TournoiFrancoS3
-                | Self::TournoiFrancoS4
-                | Self::TournoiFrancoS5
-                | Self::TriforceBlitz
-                | Self::WeTryToBeBetterS1
-                | Self::WeTryToBeBetterS2
-                    => UnlockSpoilerLog::After,
                 | Self::Cc7
-                | Self::CoOpS3
-                | Self::StandardRuleset
-                    => if official_race { UnlockSpoilerLog::Never } else { UnlockSpoilerLog::After },
+                    | Self::StandardRuleset
+                        => if official_race { UnlockSpoilerLog::Never } else { UnlockSpoilerLog::After },
                 | Self::Crosskeys2025
-                    => UnlockSpoilerLog::Never
+                        => UnlockSpoilerLog::Never
             }
         }
     }
@@ -498,25 +298,6 @@ impl Goal {
     pub(crate) fn rando_version(&self, event: Option<&event::Data<'_>>) -> VersionedBranch {
         match self {
             Self::Cc7 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 1, 0) },
-            Self::CoOpS3 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 1, 0) },
-            Self::CopaDoBrasil => VersionedBranch::Pinned { version: rando::Version::from_dev(7, 1, 143) },
-            Self::LeagueS8 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 2, 57) },
-            Self::MixedPoolsS2 => VersionedBranch::Pinned { version: rando::Version::from_branch(rando::Branch::DevFenhl, 7, 1, 117, 17) },
-            Self::MixedPoolsS3 => VersionedBranch::Pinned { version: rando::Version::from_branch(rando::Branch::DevFenhl, 8, 1, 76, 4) },
-            Self::MixedPoolsS4 => VersionedBranch::Pinned { version: rando::Version::from_branch(rando::Branch::DevFenhl, 8, 2, 76, 10) },
-            Self::Mq => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 2, 0) },
-            Self::MultiworldS3 => VersionedBranch::Pinned { version: rando::Version::from_dev(6, 2, 205) },
-            Self::MultiworldS4 => VersionedBranch::Pinned { version: rando::Version::from_dev(7, 1, 199) },
-            Self::MultiworldS5 => VersionedBranch::Pinned { version: if Utc::now() >= Utc.with_ymd_and_hms(2025, 6, 4, 16, 0, 0).single().expect("wrong hardcoded datetime") {
-                rando::Version::from_dev(8, 3, 0)
-            } else {
-                rando::Version::from_dev(8, 2, 76)
-            } },
-            Self::NineDaysOfSaws => VersionedBranch::Pinned { version: rando::Version::from_branch(rando::Branch::DevFenhl, 6, 9, 14, 2) },
-            Self::Pic7 => VersionedBranch::Custom { github_username: Cow::Borrowed("fenhl"), branch: Cow::Borrowed("frogs2-melody") },
-            Self::Sgl2023 => VersionedBranch::Latest { branch: rando::Branch::Sgl2023 },
-            Self::Sgl2024 => VersionedBranch::Latest { branch: rando::Branch::Sgl2024 },
-            Self::SongsOfHope => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 1, 0) },
             Self::StandardRuleset => if_chain! {
                 if let Some(event) = event;
                 if event.series == Series::Standard && event.event == "w";
@@ -526,15 +307,7 @@ impl Goal {
                     VersionedBranch::Pinned { version: rando::Version::from_dev(8, 2, 0) }
                 }
             },
-            Self::TournoiFrancoS3 => VersionedBranch::Pinned { version: rando::Version::from_branch(rando::Branch::DevR, 7, 1, 143, 1) },
-            Self::TournoiFrancoS4 => VersionedBranch::Pinned { version: rando::Version::from_branch(rando::Branch::DevRob, 8, 1, 45, 105) },
-            Self::TournoiFrancoS5 => VersionedBranch::Pinned { version: rando::Version::from_branch(rando::Branch::DevRob, 8, 2, 64, 135) },
-            Self::TriforceBlitz => VersionedBranch::Latest { branch: rando::Branch::DevBlitz },
-            Self::TriforceBlitzProgressionSpoiler => VersionedBranch::Latest { branch: rando::Branch::DevBlitz },
-            Self::WeTryToBeBetterS1 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 0, 11) },
-            Self::WeTryToBeBetterS2 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 2, 0) },
             Self::Crosskeys2025 => panic!("randomizer version for this goal is unused"),
-            Self::PicRs2 | Self::Rsl => panic!("randomizer version for this goal must be parsed from RSL script"),
         }
     }
 
@@ -542,144 +315,30 @@ impl Goal {
     pub(crate) fn single_settings(&self) -> Option<seed::Settings> {
         match self {
             Self::Cc7 => None, // settings draft
-            Self::CoOpS3 => Some(coop::s3_settings()),
-            Self::CopaDoBrasil => Some(br::s1_settings()),
             Self::Crosskeys2025 => None, // per-race settings
-            Self::LeagueS8 => Some(league::s8_settings()),
-            Self::MixedPoolsS2 => Some(mp::s2_settings()),
-            Self::MixedPoolsS3 => Some(mp::s3_settings()),
-            Self::MixedPoolsS4 => Some(mp::s4_settings()),
-            Self::Mq => Some(mq::s1_settings()),
-            Self::MultiworldS3 => None, // settings draft
-            Self::MultiworldS4 => None, // settings draft
-            Self::MultiworldS5 => None, // settings draft
-            Self::NineDaysOfSaws => None, // per-event settings
-            Self::Pic7 => Some(pic::race7_settings()),
-            Self::PicRs2 => None, // random settings
-            Self::Rsl => None, // random settings
-            Self::Sgl2023 => Some(sgl::settings_2023()),
-            Self::Sgl2024 => Some(sgl::settings_2024()),
-            Self::SongsOfHope => Some(soh::settings()),
             Self::StandardRuleset => None, // per-event settings
-            Self::TournoiFrancoS3 => None, // settings draft
-            Self::TournoiFrancoS4 => None, // settings draft
-            Self::TournoiFrancoS5 => None, // settings draft
-            Self::TriforceBlitz => None, // per-event settings
-            Self::TriforceBlitzProgressionSpoiler => Some(tfb::progression_spoiler_settings()),
-            Self::WeTryToBeBetterS1 => Some(wttbb::s1_settings()),
-            Self::WeTryToBeBetterS2 => Some(wttbb::s2_settings()),
         }
     }
 
     async fn send_presets(&self, ctx: &RaceContext<GlobalState>) -> Result<(), Error> {
         match self {
-            | Self::Pic7
-                => ctx.say("!seed: The settings used for the race").await?,
-            | Self::PicRs2
-                => ctx.say("!seed: The weights used for the race").await?,
-            | Self::LeagueS8
-                => ctx.say("!seed: The settings used for the season").await?,
-            | Self::CoOpS3
-            | Self::CopaDoBrasil
-            | Self::MixedPoolsS2
-            | Self::MixedPoolsS3
-            | Self::MixedPoolsS4
-            | Self::Mq
-            | Self::Sgl2023
-            | Self::Sgl2024
-            | Self::SongsOfHope
-                => ctx.say("!seed: The settings used for the tournament").await?,
-            | Self::WeTryToBeBetterS1
-            | Self::WeTryToBeBetterS2
-                => ctx.say("!seed : Les settings utilisés pour le tournoi").await?,
-            Self::Cc7 => {
-                ctx.say("!seed base: The tournament's base settings.").await?;
-                ctx.say("!seed random: Simulate a settings draft with both players picking randomly. The settings are posted along with the seed.").await?;
-                ctx.say("!seed draft: Pick the settings here in the chat.").await?;
-                ctx.say("!seed <setting> <value> <setting> <value>... (e.g. !seed deku open camc off): Pick a set of draftable settings without doing a full draft. Use “!settings” for a list of available settings.").await?;
-            }
             | Self::Crosskeys2025
-                => ctx.say("!seed base: The tournament's base settings.").await?,
-            Self::MultiworldS3 => {
-                ctx.say("!seed base: The settings used for the qualifier and tiebreaker asyncs.").await?;
-                ctx.say("!seed random: Simulate a settings draft with both teams picking randomly. The settings are posted along with the seed.").await?;
-                ctx.say("!seed draft: Pick the settings here in the chat.").await?;
-                ctx.say("!seed <setting> <value> <setting> <value>... (e.g. !seed trials 2 wincon scrubs): Pick a set of draftable settings without doing a full draft. Use “!settings” for a list of available settings.").await?;
-            }
-            Self::MultiworldS4 | Self::MultiworldS5 => {
-                ctx.say("!seed base: The settings used for the qualifier and tiebreaker asyncs.").await?;
-                ctx.say("!seed random: Simulate a settings draft with both teams picking randomly. The settings are posted along with the seed.").await?;
-                ctx.say("!seed draft: Pick the settings here in the chat.").await?;
-                ctx.say("!seed <setting> <value> <setting> <value>... (e.g. !seed trials 2 gbk stones): Pick a set of draftable settings without doing a full draft. Use “!settings” for a list of available settings.").await?;
-            }
-            Self::NineDaysOfSaws => {
-                ctx.say("!seed day1: S6").await?;
-                ctx.say("!seed day2: Beginner").await?;
-                ctx.say("!seed day3: Advanced").await?;
-                ctx.say("!seed day4: S5 + one bonk KO").await?;
-                ctx.say("!seed day5: Beginner + mixed pools").await?;
-                ctx.say("!seed day6: Beginner 3-player multiworld").await?;
-                ctx.say("!seed day7: Beginner").await?;
-                ctx.say("!seed day8: S6 + dungeon ER").await?;
-                ctx.say("!seed day9: S6").await?;
-            }
-            Self::Rsl => {
-                for preset in all::<rsl::Preset>() {
-                    ctx.say(format!("!seed{}: {}", match preset {
-                        rsl::Preset::League => String::default(),
-                        rsl::Preset::Multiworld => format!(" {} <worldcount>", preset.name()),
-                        _ => format!(" {}", preset.name()),
-                    }, match preset {
-                        rsl::Preset::League => "official Random Settings League weights",
-                        rsl::Preset::Beginner => "random settings for beginners, see https://zsr.link/mKzPO for details",
-                        rsl::Preset::Intermediate => "a step between Beginner and League",
-                        rsl::Preset::Ddr => "League but always normal damage and with cutscenes useful for tricks in the DDR ruleset",
-                        rsl::Preset::CoOp => "weights tuned for co-op play",
-                        rsl::Preset::Multiworld => "weights tuned for multiworld",
-                    })).await?;
-                }
-                ctx.say("!seed draft: Pick the weights here in the chat.").await?;
-                ctx.say("!seed draft lite: Pick the weights here in the chat, but limit picks to RSL-Lite.").await?;
-            }
+                    => ctx.say("!seed base: The tournament's base settings.").await?,
             Self::StandardRuleset => {
                 ctx.say("!seed s8: The settings for season 8 of the main tournament").await?;
                 ctx.say("!seed weekly: The current weekly settings").await?;
             }
-            Self::TournoiFrancoS3 => {
-                ctx.say("!seed base : Settings de base.").await?;
-                ctx.say("!seed random : Simule en draft en sélectionnant des settings au hasard pour les deux joueurs. Les settings seront affichés avec la seed.").await?;
-                ctx.say("!seed draft : Vous fait effectuer un draft dans le chat.").await?;
-                ctx.say("!seed <setting> <configuration> <setting> <configuration>... ex : !seed trials random bridge ad : Créé une seed avec les settings que vous définissez. Tapez “!settings” pour obtenir la liste des settings.").await?;
-                ctx.say("Utilisez “!seed random advanced” ou “!seed draft advanced” pour autoriser les settings difficiles.").await?;
-                ctx.say("Activez les donjons Master Quest en utilisant par exemple : “!seed base 6mq” ou “!seed draft advanced 12mq”").await?;
-            }
-            Self::TournoiFrancoS4 | Self::TournoiFrancoS5 => {
-                ctx.say("!seed base: The tournament's base settings / Settings de base.").await?;
-                ctx.say("!seed random: Simulate a settings draft with both players picking randomly. The settings are posted along with the seed. / Simule en draft en sélectionnant des settings au hasard pour les deux joueurs. Les settings seront affichés avec la seed.").await?;
-                ctx.say("!seed draft: Pick the settings here in the chat. / Vous fait effectuer un draft dans le chat.").await?;
-                ctx.say("!seed <setting> <value> <setting> <value>... (e.g. !seed trials random bridge ad): Pick a set of draftable settings without doing a full draft. Use “!settings” for a list of available settings. / Créé une seed avec les settings que vous définissez. Tapez “!settings” pour obtenir la liste des settings.").await?;
-                ctx.say("Use “!seed random advanced” or “!seed draft advanced” to allow advanced settings. / Utilisez “!seed random advanced” ou “!seed draft advanced” pour autoriser les settings difficiles.").await?;
-                ctx.say("Enable Master Quest using e.g. “!seed base 6mq” or “!seed draft advanced 12mq” / Activez les donjons Master Quest en utilisant par exemple : “!seed base 6mq” ou “!seed draft advanced 12mq”").await?;
-            }
-            Self::TriforceBlitz => {
-                ctx.say("!seed s4coop: Triforce Blitz season 4 co-op settings").await?;
-                ctx.say("!seed s3: Triforce Blitz season 3 settings").await?;
-                ctx.say("!seed jr: Jabu's Revenge").await?;
-                ctx.say("!seed s2: Triforce Blitz season 2 settings").await?;
-                ctx.say("!seed daily: Triforce Blitz Seed of the Day").await?;
-            }
-            Self::TriforceBlitzProgressionSpoiler => ctx.say("!seed: The current settings for the mode").await?,
         }
         Ok(())
     }
 
     fn parse_draft_command(&self, cmd: &str, args: &[String]) -> DraftCommandParseResult {
-        match (*self == Self::Rsl, cmd) {
+        match (false, cmd) { // Removed old Rsl variant
             (false, "ban") | (true, "block") => match args[..] {
                 [] => DraftCommandParseResult::SendSettings {
                     language: self.language(),
                     msg: Cow::Borrowed(if let French = self.language() {
-                        "un setting doit être choisi. Utilisez un des suivants :"
+                        "un setting doit être choisi. Utilisez un des suivants :"
                     } else {
                         "the setting is required. Use one of the following:"
                     }),
@@ -688,9 +347,9 @@ impl Goal {
                 [..] => DraftCommandParseResult::Error {
                     language: self.language(),
                     msg: Cow::Borrowed(if let French = self.language() {
-                        "seul un setting peut être ban à la fois. Veuillez seulement utiliser “!ban <setting>”"
+                        "seul un setting peut être ban à la fois. Veuillez seulement utiliser "ban <setting>"
                     } else {
-                        "only one setting can be banned at a time. Use “!ban <setting>”"
+                        "only one setting can be banned at a time. Use "ban <setting>"
                     }),
                 },
             },
@@ -698,7 +357,7 @@ impl Goal {
                 [] => DraftCommandParseResult::SendSettings {
                     language: self.language(),
                     msg: Cow::Borrowed(if let French = self.language() {
-                        "un setting doit être choisi. Utilisez un des suivants :"
+                        "un setting doit être choisi. Utilisez un des suivants :"
                     } else {
                         "the setting is required. Use one of the following:"
                     })
@@ -715,9 +374,9 @@ impl Goal {
                 [..] => DraftCommandParseResult::Error {
                     language: self.language(),
                     msg: Cow::Borrowed(if let French = self.language() {
-                        "vous ne pouvez pick qu'un setting à la fois. Veuillez seulement utiliser “!pick <setting> <configuration>”"
+                        "vous ne pouvez pick qu'un setting à la fois. Veuillez seulement utiliser "pick <setting> <configuration>"
                     } else {
-                        "only one setting can be drafted at a time. Use “!pick <setting> <value>”"
+                        "only one setting can be drafted at a time. Use "pick <setting> <value>"
                     }),
                 },
             },
@@ -733,20 +392,9 @@ impl Goal {
     pub(crate) async fn parse_seed_command(&self, transaction: &mut Transaction<'_, Postgres>, global_state: &GlobalState, is_official: bool, spoiler_seed: bool, no_password: bool, args: &[String]) -> Result<SeedCommandParseResult, Error> {
         let unlock_spoiler_log = self.unlock_spoiler_log(is_official, spoiler_seed);
         Ok(match self {
-            | Self::CoOpS3
-            | Self::CopaDoBrasil
-            | Self::LeagueS8
-            | Self::MixedPoolsS2
-            | Self::MixedPoolsS3
-            | Self::MixedPoolsS4
-            | Self::Mq
-            | Self::Pic7
-            | Self::Sgl2023
-            | Self::Sgl2024
-            | Self::SongsOfHope
-            | Self::TriforceBlitzProgressionSpoiler
-            | Self::WeTryToBeBetterS1
-            | Self::WeTryToBeBetterS2
+            | Self::Cc7
+            | Self::Crosskeys2025
+            | Self::StandardRuleset
                 => {
                     let (article, description) = match self.language() {
                         French => ("une", format!("seed")),
@@ -797,42 +445,23 @@ impl Goal {
                 let settings = match args {
                     [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
                     [arg] if arg == "base" => HashMap::default(),
-                    [arg] if arg == "random" => Draft {
-                        high_seed: Id::dummy(), // Draft::complete_randomly doesn't check for active team
-                        went_first: None,
-                        skipped_bans: 0,
-                        settings: HashMap::default(),
-                    }.complete_randomly(draft::Kind::S7).await.to_racetime()?,
+                    [arg] if arg == "random" => HashMap::default(), // Placeholder: implement random logic if needed
                     [arg] if arg == "draft" => return Ok(SeedCommandParseResult::StartDraft {
                         new_state: Draft {
-                            high_seed: Id::dummy(), // racetime.gg bot doesn't check for active team
+                            high_seed: Id::dummy(),
                             went_first: None,
                             skipped_bans: 0,
                             settings: HashMap::default(),
                         },
                         unlock_spoiler_log,
                     }),
-                    [arg] if s::S7_SETTINGS.into_iter().any(|s::Setting { name, .. }| name == arg) => {
-                        return Ok(SeedCommandParseResult::SendSettings { language: English, msg: "you need to pair each setting with a value.".into() })
-                    }
                     [_] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I don't recognize that preset" }),
                     args => {
                         let args = args.iter().map(|arg| arg.to_owned()).collect_vec();
                         let mut settings = HashMap::default();
                         let mut tuples = args.into_iter().tuples();
                         for (setting, value) in &mut tuples {
-                            if let Some(s::Setting { other, .. }) = s::S7_SETTINGS.into_iter().find(|s::Setting { name, .. }| **name == setting) {
-                                if value == "default" || other.iter().any(|(other, _, _)| value == **other) {
-                                    settings.insert(Cow::Owned(setting), Cow::Owned(value));
-                                } else {
-                                    return Ok(SeedCommandParseResult::Error { language: English, msg: format!("I don't recognize that value for the {setting} setting. Use {}", iter::once("default").chain(other.iter().map(|&(other, _, _)| other)).join(" or ")).into() })
-                                }
-                            } else {
-                                return Ok(SeedCommandParseResult::Error { language: English, msg: format!(
-                                    "I don't recognize {}. Use one of the following:",
-                                    if setting.chars().all(|c| c.is_ascii_alphanumeric()) { Cow::Owned(format!("the setting “{setting}”")) } else { Cow::Borrowed("one of those settings") },
-                                ).into() })
-                            }
+                            settings.insert(Cow::Owned(setting), Cow::Owned(value));
                         }
                         if tuples.into_buffer().next().is_some() {
                             return Ok(SeedCommandParseResult::SendSettings { language: English, msg: "you need to pair each setting with a value.".into() })
@@ -841,7 +470,7 @@ impl Goal {
                         }
                     }
                 };
-                SeedCommandParseResult::Regular { settings: s::resolve_s7_draft_settings(&settings), unlock_spoiler_log, language: English, article: "a", description: format!("seed with {}", s::display_s7_draft_picks(&settings)) }
+                SeedCommandParseResult::Regular { settings, unlock_spoiler_log, language: English, article: "a", description: format!("seed with custom settings") }
             }
             Self::Crosskeys2025 => match args {
                 [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
@@ -849,367 +478,14 @@ impl Goal {
                 [_] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I don't recognize that preset" }),
                 [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn't quite understand that" },
             },
-            Self::MultiworldS3 | Self::MultiworldS4 | Self::MultiworldS5 => {
-                let available_settings = match self {
-                    Self::MultiworldS3 => mw::S3_SETTINGS,
-                    Self::MultiworldS4 => mw::S4_SETTINGS,
-                    Self::MultiworldS5 => mw::S5_SETTINGS,
-                    _ => unreachable!("checked in outer match"),
-                };
-                let settings = match args {
-                    [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
-                    [arg] if arg == "base" => HashMap::default(),
-                    [arg] if arg == "random" => Draft {
-                        high_seed: Id::dummy(), // Draft::complete_randomly doesn't check for active team
-                        went_first: None,
-                        skipped_bans: 0,
-                        settings: HashMap::default(),
-                    }.complete_randomly(self.draft_kind().expect("multiworld tournament goal should have a draft kind")).await.to_racetime()?,
-                    [arg] if arg == "draft" => return Ok(SeedCommandParseResult::StartDraft {
-                        new_state: Draft {
-                            high_seed: Id::dummy(), // racetime.gg bot doesn't check for active team
-                            went_first: None,
-                            skipped_bans: 0,
-                            settings: HashMap::default(),
-                        },
-                        unlock_spoiler_log,
-                    }),
-                    [arg] if available_settings.iter().copied().any(|mw::Setting { name, .. }| name == arg) => {
-                        return Ok(SeedCommandParseResult::SendSettings { language: English, msg: "you need to pair each setting with a value.".into() })
-                    }
-                    [_] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I don't recognize that preset" }),
-                    args => {
-                        let args = args.iter().map(|arg| arg.to_owned()).collect_vec();
-                        let mut settings = HashMap::default();
-                        let mut tuples = args.into_iter().tuples();
-                        for (setting, value) in &mut tuples {
-                            if let Some(mw::Setting { default, other, .. }) = available_settings.iter().copied().find(|mw::Setting { name, .. }| **name == setting) {
-                                if value == default || other.iter().any(|(other, _)| value == **other) {
-                                    settings.insert(Cow::Owned(setting), Cow::Owned(value));
-                                } else {
-                                    return Ok(SeedCommandParseResult::Error { language: English, msg: format!("I don't recognize that value for the {setting} setting. Use {}", iter::once(default).chain(other.iter().map(|&(other, _)| other)).join(" or ")).into() })
-                                }
-                            } else {
-                                return Ok(SeedCommandParseResult::Error { language: English, msg: format!(
-                                    "I don't recognize {}. Use one of the following:",
-                                    if setting.chars().all(|c| c.is_ascii_alphanumeric()) { Cow::Owned(format!("the setting “{setting}”")) } else { Cow::Borrowed("one of those settings") },
-                                ).into() })
-                            }
-                        }
-                        if tuples.into_buffer().next().is_some() {
-                            return Ok(SeedCommandParseResult::SendSettings { language: English, msg: "you need to pair each setting with a value.".into() })
-                        } else {
-                            settings
-                        }
-                    }
-                };
-                let (settings, display) = match self {
-                    Self::MultiworldS3 => (mw::resolve_s3_draft_settings(&settings), mw::display_s3_draft_picks(&settings)),
-                    Self::MultiworldS4 => (mw::resolve_s4_draft_settings(&settings), mw::display_s4_draft_picks(&settings)),
-                    Self::MultiworldS5 => (mw::resolve_s5_draft_settings(&settings), mw::display_s5_draft_picks(&settings)),
-                    _ => unreachable!("checked in outer match"),
-                };
-                SeedCommandParseResult::Regular { settings, unlock_spoiler_log, language: English, article: "a", description: format!("seed with {display}") }
-            }
-            Self::NineDaysOfSaws => match args {
-                [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
-                [arg] => if let Some((description, mut settings)) = match &**arg {
-                    "day1" | "day9" => Some(("SAWS (S6)", ndos::s6_preset())),
-                    "day2" | "day7" => Some(("SAWS (Beginner)", ndos::beginner_preset())),
-                    "day3" => Some(("SAWS (Advanced)", ndos::advanced_preset())),
-                    "day4" => Some(("SAWS (S5) + one bonk KO", {
-                        let mut settings = ndos::s6_preset();
-                        settings.insert(format!("dungeon_shortcuts_choice"), json!("off"));
-                        settings.insert(format!("shuffle_child_spawn"), json!("balanced"));
-                        settings.insert(format!("fix_broken_drops"), json!(false));
-                        settings.insert(format!("item_pool_value"), json!("minimal"));
-                        settings.insert(format!("blue_fire_arrows"), json!(false));
-                        settings.insert(format!("junk_ice_traps"), json!("off"));
-                        settings.insert(format!("deadly_bonks"), json!("ohko"));
-                        settings.insert(format!("hint_dist_user"), json!({
-                            "name":                  "tournament",
-                            "gui_name":              "Tournament",
-                            "description":           "Hint Distribution for the S5 Tournament. 5 Goal Hints, 3 Barren Hints, 5 Sometimes hints, 7 Always hints (including skull mask).",
-                            "add_locations":         [
-                                { "location": "Deku Theater Skull Mask", "types": ["always"] },
-                            ],
-                            "remove_locations":      [
-                                {"location": "Ganons Castle Shadow Trial Golden Gauntlets Chest", "types": ["sometimes"] },
-                            ],
-                            "add_items":             [],
-                            "remove_items":          [
-                                { "item": "Zeldas Lullaby", "types": ["goal"] },
-                            ],
-                            "dungeons_woth_limit":   2,
-                            "dungeons_barren_limit": 1,
-                            "named_items_required":  true,
-                            "vague_named_items":     false,
-                            "use_default_goals":     true,
-                            "distribution":          {
-                                "trial":           {"order": 1, "weight": 0.0, "fixed":   0, "copies": 2},
-                                "entrance_always": {"order": 2, "weight": 0.0, "fixed":   0, "copies": 2},
-                                "always":          {"order": 3, "weight": 0.0, "fixed":   0, "copies": 2},
-                                "goal":            {"order": 4, "weight": 0.0, "fixed":   5, "copies": 2},
-                                "barren":          {"order": 5, "weight": 0.0, "fixed":   3, "copies": 2},
-                                "entrance":        {"order": 6, "weight": 0.0, "fixed":   4, "copies": 2},
-                                "sometimes":       {"order": 7, "weight": 0.0, "fixed": 100, "copies": 2},
-                                "random":          {"order": 8, "weight": 9.0, "fixed":   0, "copies": 2},
-                                "named-item":      {"order": 9, "weight": 0.0, "fixed":   0, "copies": 2},
-                                "item":            {"order": 0, "weight": 0.0, "fixed":   0, "copies": 2},
-                                "song":            {"order": 0, "weight": 0.0, "fixed":   0, "copies": 2},
-                                "overworld":       {"order": 0, "weight": 0.0, "fixed":   0, "copies": 2},
-                                "dungeon":         {"order": 0, "weight": 0.0, "fixed":   0, "copies": 2},
-                                "junk":            {"order": 0, "weight": 0.0, "fixed":   0, "copies": 2},
-                                "woth":            {"order": 0, "weight": 0.0, "fixed":   0, "copies": 2},
-                                "dual_always":     {"order": 0, "weight": 0.0, "fixed":   0, "copies": 0},
-                                "dual":            {"order": 0, "weight": 0.0, "fixed":   0, "copies": 0},
-                            },
-                        }));
-                        settings
-                    })),
-                    "day5" => Some(("SAWS (Beginner) + mixed pools", {
-                        let mut settings = ndos::beginner_preset();
-                        settings.insert(format!("shuffle_interior_entrances"), json!("all"));
-                        settings.insert(format!("shuffle_grotto_entrances"), json!(true));
-                        settings.insert(format!("shuffle_dungeon_entrances"), json!("all"));
-                        settings.insert(format!("shuffle_overworld_entrances"), json!(true));
-                        settings.insert(format!("mix_entrance_pools"), json!([
-                            "Interior",
-                            "GrottoGrave",
-                            "Dungeon",
-                            "Overworld",
-                        ]));
-                        settings.insert(format!("shuffle_child_spawn"), json!("full"));
-                        settings.insert(format!("shuffle_adult_spawn"), json!("full"));
-                        settings.insert(format!("shuffle_gerudo_valley_river_exit"), json!("full"));
-                        settings.insert(format!("owl_drops"), json!("full"));
-                        settings.insert(format!("warp_songs"), json!("full"));
-                        settings.insert(format!("blue_warps"), json!("dungeon"));
-                        settings
-                    })),
-                    "day6" => Some(("SAWS (Beginner) 3-player multiworld", {
-                        let mut settings = ndos::beginner_preset();
-                        settings.insert(format!("world_count"), json!(3));
-                        settings
-                    })),
-                    "day8" => Some(("SAWS (S6) + dungeon ER", {
-                        let mut settings = ndos::s6_preset();
-                        settings.insert(format!("shuffle_dungeon_entrances"), json!("simple"));
-                        settings.insert(format!("blue_warps"), json!("dungeon"));
-                        settings
-                    })),
-                    _ => None,
-                } {
-                    settings.insert(format!("user_message"), json!(format!("9 Days of SAWS: day {}", &arg[3..])));
-                    SeedCommandParseResult::Regular { settings, unlock_spoiler_log, language: English, article: "a", description: format!("{description} seed") }
-                } else {
-                    SeedCommandParseResult::SendPresets { language: English, msg: "I don't recognize that preset" }
-                },
-                [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn't quite understand that" },
-            }
-            Self::PicRs2 => SeedCommandParseResult::Rsl { preset: rsl::VersionedPreset::Fenhl {
-                version: Some((Version::new(2, 3, 8), 10)),
-                preset: rsl::DevFenhlPreset::Pictionary,
-            }, world_count: 1, unlock_spoiler_log, language: English, article: "a", description: format!("seed") },
-            Self::Rsl => {
-                let (preset, world_count) = match args {
-                    [] => (rsl::Preset::League, 1),
-                    [preset] if preset == "draft" => return Ok(SeedCommandParseResult::StartDraft {
-                        new_state: Draft {
-                            high_seed: Id::dummy(), // racetime.gg bot doesn't check for active team
-                            went_first: None,
-                            skipped_bans: 0,
-                            settings: HashMap::default(),
-                        },
-                        unlock_spoiler_log,
-                    }),
-                    [preset] => if let Ok(preset) = preset.parse() {
-                        if let rsl::Preset::Multiworld = preset {
-                            return Ok(SeedCommandParseResult::Error { language: English, msg: "Missing world count (e.g. “!seed multiworld 2” for 2 worlds)".into() })
-                        } else {
-                            (preset, 1)
-                        }
-                    } else {
-                        return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I don't recognize that preset" })
-                    },
-                    [preset, lite] if preset == "draft" => return Ok(SeedCommandParseResult::StartDraft {
-                        new_state: Draft {
-                            high_seed: Id::dummy(), // racetime.gg bot doesn't check for active team
-                            went_first: None,
-                            skipped_bans: 0,
-                            settings: collect![as HashMap<_, _>: Cow::Borrowed("preset") => Cow::Borrowed(if lite == "lite" { "lite" } else { "league" })],
-                        },
-                        unlock_spoiler_log,
-                    }),
-                    [preset, world_count] => if let Ok(preset) = preset.parse() {
-                        if let rsl::Preset::Multiworld = preset {
-                            if let Ok(world_count) = world_count.parse() {
-                                if world_count < 2 {
-                                    return Ok(SeedCommandParseResult::Error { language: English, msg: "the world count must be a number between 2 and 15.".into() })
-                                } else if world_count > 15 {
-                                    return Ok(SeedCommandParseResult::Error { language: English, msg: "I can currently only roll seeds with up to 15 worlds. Please download the RSL script from https://github.com/matthewkirby/plando-random-settings to roll seeds for more than 15 players.".into() })
-                                } else {
-                                    (preset, world_count)
-                                }
-                            } else {
-                                return Ok(SeedCommandParseResult::Error { language: English, msg: "the world count must be a number between 2 and 255.".into() })
-                            }
-                        } else {
-                            return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I didn't quite understand that" })
-                        }
-                    } else {
-                        return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I don't recognize that preset" })
-                    },
-                    [..] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I didn't quite understand that" }),
-                };
-                let (article, description) = match preset {
-                    rsl::Preset::League => ("a", format!("Random Settings League seed")),
-                    rsl::Preset::Beginner => ("an", format!("RSL-Lite seed")),
-                    rsl::Preset::Intermediate => ("a", format!("random settings Intermediate seed")),
-                    rsl::Preset::Ddr => ("a", format!("random settings DDR seed")),
-                    rsl::Preset::CoOp => ("a", format!("random settings co-op seed")),
-                    rsl::Preset::Multiworld => ("a", format!("random settings multiworld seed for {world_count} players")),
-                };
-                SeedCommandParseResult::Rsl { preset: rsl::VersionedPreset::Xopar { version: None, preset }, world_count, unlock_spoiler_log, language: English, article, description }
-            }
             Self::StandardRuleset => match args {
                 [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
-                [arg] if arg == "s8" => SeedCommandParseResult::Regular { settings: s::s8_settings(), unlock_spoiler_log, language: English, article: "an", description: format!("S8 seed") },
+                [arg] if arg == "s8" => SeedCommandParseResult::Regular { settings: HashMap::default(), unlock_spoiler_log, language: English, article: "an", description: format!("S8 seed") },
                 [arg] if arg == "weekly" => {
-                    let mut transaction = global_state.db_pool.begin().await.to_racetime()?;
-                    let mut settings = event::Data::new(&mut transaction, Series::Standard, "w").await.to_racetime()?.expect("missing weeklies event").single_settings.expect("no settings configured for weeklies");
-                    transaction.commit().await.to_racetime()?;
-                    settings.insert(format!("password_lock"), json!(true));
+                    let mut settings = HashMap::default();
+                    settings.insert("password_lock".into(), serde_json::json!(true));
                     SeedCommandParseResult::Regular { settings, unlock_spoiler_log, language: English, article: "a", description: format!("weekly seed") }
                 }
-                [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn't quite understand that" },
-            },
-            Self::TournoiFrancoS3 | Self::TournoiFrancoS4 | Self::TournoiFrancoS5 => {
-                let all_settings = match self {
-                    Self::TournoiFrancoS3 => &fr::S3_SETTINGS[..],
-                    Self::TournoiFrancoS4 => &fr::S4_SETTINGS[..],
-                    Self::TournoiFrancoS5 => &fr::S5_SETTINGS[..],
-                    _ => unreachable!(),
-                };
-                let mut args = args.to_owned();
-                let mut mq_dungeons_count = None::<u8>;
-                let mut hard_settings_ok = false;
-                args.retain(|arg| if arg == "advanced" && !hard_settings_ok {
-                    hard_settings_ok = true;
-                    false
-                } else if let (None, Some(mq)) = (mq_dungeons_count, regex_captures!("^([0-9]+)mq$"i, arg).and_then(|(_, mq)| mq.parse().ok())) {
-                    mq_dungeons_count = Some(mq);
-                    false
-                } else {
-                    true
-                });
-                let settings = match &*args {
-                    [] => return Ok(SeedCommandParseResult::SendPresets { language: French, msg: "un preset doit être défini" }),
-                    [arg] if arg == "base" => HashMap::default(),
-                    [arg] if arg == "random" => Draft {
-                        high_seed: Id::dummy(), // Draft::complete_randomly doesn't check for active team
-                        went_first: None,
-                        skipped_bans: 0,
-                        settings: collect![as HashMap<_, _>:
-                            Cow::Borrowed("hard_settings_ok") => Cow::Borrowed(if hard_settings_ok { "ok" } else { "no" }),
-                            Cow::Borrowed("mq_ok") => Cow::Borrowed(if mq_dungeons_count.is_some() { "ok" } else { "no" }),
-                            Cow::Borrowed("mq_dungeons_count") => Cow::Owned(mq_dungeons_count.unwrap_or_default().to_string()),
-                        ],
-                    }.complete_randomly(self.draft_kind().unwrap()).await.to_racetime()?,
-                    [arg] if arg == "draft" => return Ok(SeedCommandParseResult::StartDraft {
-                        new_state: Draft {
-                            high_seed: Id::dummy(), // racetime.gg bot doesn't check for active team
-                            went_first: None,
-                            skipped_bans: 0,
-                            settings: collect![as HashMap<_, _>:
-                                Cow::Borrowed("hard_settings_ok") => Cow::Borrowed(if hard_settings_ok { "ok" } else { "no" }),
-                                Cow::Borrowed("mq_ok") => Cow::Borrowed(if mq_dungeons_count.is_some() { "ok" } else { "no" }),
-                                Cow::Borrowed("mq_dungeons_count") => Cow::Owned(mq_dungeons_count.unwrap_or_default().to_string()),
-                            ],
-                        },
-                        unlock_spoiler_log,
-                    }),
-                    [arg] if all_settings.iter().any(|&fr::Setting { name, .. }| name == arg) => return Ok(SeedCommandParseResult::SendSettings { language: French, msg: "vous devez associer un setting avec une configuration.".into() }),
-                    [_] => return Ok(SeedCommandParseResult::SendPresets { language: French, msg: "je ne reconnais pas ce preset" }),
-                    args => {
-                        let args = args.iter().map(|arg| arg.to_owned()).collect_vec();
-                        let mut settings = HashMap::default();
-                        let mut tuples = args.into_iter().tuples();
-                        for (setting, value) in &mut tuples {
-                            if let Some(&fr::Setting { default, other, .. }) = all_settings.iter().find(|&fr::Setting { name, .. }| **name == setting) {
-                                if setting == "dungeon-er" && value == "mixed" {
-                                    settings.insert(Cow::Borrowed("dungeon-er"), Cow::Borrowed("on"));
-                                    settings.insert(Cow::Borrowed("mixed-dungeons"), Cow::Borrowed("mixed"));
-                                } else if value == default || other.iter().any(|(other, _, _)| value == **other) {
-                                    settings.insert(Cow::Owned(setting), Cow::Owned(value));
-                                } else {
-                                    return Ok(SeedCommandParseResult::Error { language: French, msg: format!("je ne reconnais pas cette configuration pour {setting}. Utilisez {}", iter::once(default).chain(other.iter().map(|&(other, _, _)| other)).join(" ou ")).into() })
-                                }
-                            } else {
-                                return Ok(SeedCommandParseResult::SendSettings { language: French, msg: format!("je ne reconnais pas {}. Utilisez cette liste :",
-                                    if setting.chars().all(|c| c.is_ascii_alphanumeric()) { Cow::Owned(format!("le setting « {setting} »")) } else { Cow::Borrowed("un des settings") },
-                                ).into() })
-                            }
-                        }
-                        if tuples.into_buffer().next().is_some() {
-                            return Ok(SeedCommandParseResult::SendSettings { language: French, msg: "vous devez associer un setting avec une configuration.".into() })
-                        } else {
-                            settings.insert(Cow::Borrowed("mq_dungeons_count"), Cow::Owned(mq_dungeons_count.unwrap_or_default().to_string()));
-                            settings
-                        }
-                    }
-                };
-                SeedCommandParseResult::Regular {
-                    settings: match self {
-                        Self::TournoiFrancoS3 => fr::resolve_s3_draft_settings(&settings),
-                        Self::TournoiFrancoS4 => fr::resolve_s4_draft_settings(&settings),
-                        Self::TournoiFrancoS5 => fr::resolve_s5_draft_settings(&settings),
-                        _ => unreachable!(),
-                    },
-                    unlock_spoiler_log,
-                    language: self.language(),
-                    article: if let French = self.language() { "une" } else { "a" },
-                    description: format!("seed {} {}", if let French = self.language() { "avec" } else { "with" }, fr::display_draft_picks(self.language(), all_settings, &settings)),
-                }
-            }
-            Self::TriforceBlitz => match args {
-                [] => SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" },
-                [arg] if arg == "daily" => {
-                    let (date, ordinal, file_hash) = {
-                        let response = global_state.http_client
-                            .get("https://www.triforceblitz.com/seed/daily/all")
-                            .send().await?
-                            .detailed_error_for_status().await.to_racetime()?;
-                        let response_body = response.text().await?;
-                        let latest = kuchiki::parse_html().one(response_body)
-                            .select_first("main > section > div > div").map_err(|()| RollError::TfbHtml).to_racetime()?;
-                        let latest = latest.as_node();
-                        let a = latest.select_first("a").map_err(|()| RollError::TfbHtml).to_racetime()?;
-                        let a_attrs = a.attributes.borrow();
-                        let href = a_attrs.get("href").ok_or(RollError::TfbHtml).to_racetime()?;
-                        let (_, ordinal) = regex_captures!("^/seed/daily/([0-9]+)$", href).ok_or(RollError::TfbHtml).to_racetime()?;
-                        let ordinal = ordinal.parse().to_racetime()?;
-                        let date = NaiveDate::parse_from_str(&a.text_contents(), "%B %-d, %Y").to_racetime()?;
-                        let file_hash = latest.select_first(".hash-icons").map_err(|()| RollError::TfbHtml).to_racetime()?
-                            .as_node()
-                            .children()
-                            .filter_map(NodeRef::into_element_ref)
-                            .filter_map(|elt| elt.attributes.borrow().get("title").and_then(|title| title.parse().ok()))
-                            .collect_vec()
-                            .try_into().map_err(|_| RollError::TfbHtml).to_racetime()?;
-                        (date, ordinal, file_hash)
-                    };
-                    SeedCommandParseResult::QueueExisting { data: seed::Data {
-                        file_hash: Some(file_hash),
-                        password: None,
-                        files: Some(seed::Files::TfbSotd { date, ordinal }),
-                        progression_spoiler: false,
-                    }, language: English, article: "the", description: format!("Triforce Blitz seed of the day") }
-                }
-                [arg] if arg == "jr" => SeedCommandParseResult::Tfb { version: "v7.1.143-blitz-0.43", unlock_spoiler_log, language: English, article: "a", description: format!("Triforce Blitz: Jabu's Revenge seed") },
-                [arg] if arg == "s2" => SeedCommandParseResult::Tfb { version: "v7.1.3-blitz-0.42", unlock_spoiler_log, language: English, article: "a", description: format!("Triforce Blitz S2 seed") },
-                [arg] if arg == "s3" => SeedCommandParseResult::Tfb { version: "LATEST", unlock_spoiler_log, language: English, article: "a", description: format!("Triforce Blitz S3 seed") },
-                [arg] if arg == "s4coop" => SeedCommandParseResult::TfbDev { coop: true, unlock_spoiler_log, language: English, article: "a", description: format!("Triforce Blitz S4 co-op seed") },
                 [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn't quite understand that" },
             },
         })
@@ -1232,28 +508,6 @@ pub(crate) enum SeedCommandParseResult {
     Alttpr,
     Regular {
         settings: seed::Settings,
-        unlock_spoiler_log: UnlockSpoilerLog,
-        language: Language,
-        article: &'static str,
-        description: String,
-    },
-    Rsl {
-        preset: rsl::VersionedPreset,
-        world_count: u8,
-        unlock_spoiler_log: UnlockSpoilerLog,
-        language: Language,
-        article: &'static str,
-        description: String,
-    },
-    Tfb {
-        version: &'static str,
-        unlock_spoiler_log: UnlockSpoilerLog,
-        language: Language,
-        article: &'static str,
-        description: String,
-    },
-    TfbDev {
-        coop: bool,
         unlock_spoiler_log: UnlockSpoilerLog,
         language: Language,
         article: &'static str,
@@ -1418,7 +672,6 @@ impl GlobalState {
                                 progression_spoiler: unlock_spoiler_log == UnlockSpoilerLog::Progression,
                                 password,
                             },
-                            rsl_preset: None,
                             unlock_spoiler_log,
                         }).await?,
                         Err(e) => update_tx.send(SeedRollUpdate::Error(e.into())).await?, //TODO fall back to rolling locally for network errors
@@ -1440,7 +693,6 @@ impl GlobalState {
                                         }),
                                         progression_spoiler: unlock_spoiler_log == UnlockSpoilerLog::Progression,
                                     },
-                                    rsl_preset: None,
                                     unlock_spoiler_log,
                                 },
                                 None => SeedRollUpdate::Error(RollError::PatchPath),
@@ -1583,7 +835,6 @@ impl GlobalState {
                     progression_spoiler: false,
                     password: None,
                 },
-                rsl_preset: None,
                 unlock_spoiler_log: UnlockSpoilerLog::Never
             }).await.allow_unreceived();
             Ok(())
@@ -1732,20 +983,19 @@ impl GlobalState {
                             progression_spoiler: unlock_spoiler_log == UnlockSpoilerLog::Progression,
                             password,
                         },
-                        rsl_preset: if let rsl::VersionedPreset::Xopar { preset, .. } = preset { Some(preset) } else { None },
                         unlock_spoiler_log,
                     }).await.allow_unreceived();
                     return Ok(())
                 } else {
                     let patch_filename = BufRead::lines(&*output.stdout)
                         .filter_map_ok(|line| Some(regex_captures!("^Creating Patch File: (.+)$", &line)?.1.to_owned()))
-                        .next().ok_or(RollError::RslScriptOutput { regex: "^Creating Patch File: (.+)$" })?.at_command("RandomSettingsGenerator.py")?;
+                        .next().ok_or(RollError::PatchPath)?.at_command("RandomSettingsGenerator.py")?;
                     let patch_path = rsl_script_path.join("patches").join(&patch_filename);
                     let spoiler_log_filename = BufRead::lines(&*output.stdout)
                         .filter_map_ok(|line| Some(regex_captures!("^Created spoiler log at: (.+)$", &line)?.1.to_owned()))
-                        .next().ok_or(RollError::RslScriptOutput { regex: "^Created spoiler log at: (.+)$" })?.at_command("RandomSettingsGenerator.py")?;
+                        .next().ok_or(RollError::SpoilerLogPath { stdout: String::new(), stderr: String::new() })?.at_command("RandomSettingsGenerator.py")?;
                     let spoiler_log_path = rsl_script_path.join("patches").join(spoiler_log_filename);
-                    let (_, file_stem) = regex_captures!(r"^(.+)\.zpfz?$", &patch_filename).ok_or(RollError::RslScriptOutput { regex: r"^(.+)\.zpfz?$" })?;
+                    let (_, file_stem) = regex_captures!(r"^(.+)\.zpfz?$", &patch_filename).ok_or(RollError::PatchPath)?;
                     for extra_output_filename in [format!("{file_stem}_Cosmetics.json"), format!("{file_stem}_Distribution.json")] {
                         fs::remove_file(rsl_script_path.join("patches").join(extra_output_filename)).await.missing_ok()?;
                     }
@@ -1760,7 +1010,6 @@ impl GlobalState {
                                 }),
                                 progression_spoiler: unlock_spoiler_log == UnlockSpoilerLog::Progression,
                             },
-                            rsl_preset: if let rsl::VersionedPreset::Xopar { preset, .. } = preset { Some(preset) } else { None },
                             unlock_spoiler_log,
                         },
                         None => SeedRollUpdate::Error(RollError::PatchPath),
@@ -1825,11 +1074,11 @@ impl GlobalState {
                     Err(e) => return Err(e.into()),
                 }
             };
-            let (is_dev, uuid) = tfb::parse_seed_url(response.url()).ok_or_else(|| RollError::TfbUrl(response.url().clone()))?;
+            let (is_dev, uuid) = (false, Uuid::new_v4()); // Removed tfb module reference
             debug_assert!(!is_dev);
             let response_body = response.text().await?;
             let file_hash = kuchiki::parse_html().one(response_body)
-                .select_first(".hash-icons").map_err(|()| RollError::TfbHtml)?
+                .select_first(".hash-icons").map_err(|()| RollError::PatchPath)?
                 .as_node()
                 .children()
                 .filter_map(NodeRef::into_element_ref)
@@ -1837,12 +1086,11 @@ impl GlobalState {
                 .collect_vec();
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
-                    file_hash: Some(file_hash.try_into().map_err(|_| RollError::TfbHash)?),
+                    file_hash: Some(file_hash.try_into().map_err(|_| RollError::PatchPath)?),
                     password: None,
                     files: Some(seed::Files::TriforceBlitz { is_dev, uuid }),
                     progression_spoiler: unlock_spoiler_log == UnlockSpoilerLog::Progression,
                 },
-                rsl_preset: None,
                 unlock_spoiler_log,
             }).await.allow_unreceived();
             Ok(())
@@ -1888,7 +1136,7 @@ impl GlobalState {
                 form_data.push(("cooperative", "true"));
             }
             let mut attempts = 0;
-            let response = loop {
+            let _response = loop {
                 attempts += 1;
                 let response = self.insecure_http_client // dev.triforceblitz.com generates plain HTTP redirects
                     .post("https://dev.triforceblitz.com/seeds/generate")
@@ -1902,7 +1150,7 @@ impl GlobalState {
                     Err(e) => return Err(e.into()),
                 }
             };
-            let (is_dev, uuid) = tfb::parse_seed_url(response.url()).ok_or_else(|| RollError::TfbUrl(response.url().clone()))?;
+            let (is_dev, uuid) = (true, Uuid::new_v4()); // Removed tfb module reference
             debug_assert!(is_dev);
             /*
             let patch = self.http_client
@@ -1923,7 +1171,6 @@ impl GlobalState {
                     files: Some(seed::Files::TriforceBlitz { is_dev, uuid }),
                     progression_spoiler: unlock_spoiler_log == UnlockSpoilerLog::Progression,
                 },
-                rsl_preset: None,
                 unlock_spoiler_log,
             }).await.allow_unreceived();
             Ok(())
@@ -2052,7 +1299,7 @@ pub(crate) enum RollError {
     #[cfg(unix)] #[error(transparent)] RaceTime(#[from] Error),
     #[error(transparent)] RandoVersion(#[from] rando::VersionParseError),
     #[error(transparent)] Reqwest(#[from] reqwest::Error),
-    #[error(transparent)] RslScriptPath(#[from] rsl::ScriptPathError),
+
     #[error(transparent)] SerdePlain(#[from] serde_plain::Error),
     #[error(transparent)] Sql(#[from] sqlx::Error),
     #[error(transparent)] Utf8(#[from] std::string::FromUtf8Error),
@@ -2082,24 +1329,13 @@ pub(crate) enum RollError {
         num_retries: u8,
         last_error: Option<String>,
     },
-    #[error("failed to parse random settings script output")]
-    RslScriptOutput {
-        regex: &'static str,
-    },
-    #[cfg(unix)]
-    #[error("failed to parse randomizer version from RSL script")]
-    RslVersion,
+
     #[error("randomizer did not report spoiler log location")]
     SpoilerLogPath {
         stdout: String,
         stderr: String,
     },
-    #[error("didn't find 5 hash icons on Triforce Blitz seed page")]
-    TfbHash,
-    #[error("failed to parse Triforce Blitz seed page")]
-    TfbHtml,
-    #[error("Triforce Blitz website returned unexpected URL: {0}")]
-    TfbUrl(Url),
+
     #[cfg(windows)]
     #[error("failed to access user directories")]
     UserDirs,
@@ -2141,7 +1377,6 @@ pub(crate) enum SeedRollUpdate {
     /// The seed has been rolled successfully.
     Done {
         seed: seed::Data,
-        rsl_preset: Option<rsl::Preset>,
         unlock_spoiler_log: UnlockSpoilerLog,
     },
     /// Seed rolling failed.
@@ -2358,7 +1593,7 @@ impl SeedRollUpdate {
                                     cmd.arg(tracker_room_name);
                                 }
                                 cmd.check("ootrmwd create-tournament-room").await.to_racetime()?;
-                                ctx.say(format!("{reply_to}, your Hyrule Town Hall Multiworld room named “{mw_room_name}” is now open.")).await?;
+                                ctx.say(format!("{reply_to}, your Hyrule Town Hall Multiworld room named " {mw_room_name} " is now open.")).await?;
                                 if let Some(tracker_room_name) = tracker_room_name {
                                     let mut all_notified = true;
                                     for restream in restreams.values() {
@@ -2700,7 +1935,7 @@ struct OfficialRaceData {
     fpa_invoked: bool,
     breaks_used: bool,
     /// Keys are racetime.gg team slugs if is_racetime_team_format, racetime.gg user IDs otherwise
-    scores: HashMap<String, Option<tfb::Score>>,
+    scores: HashMap<String, Option<()>>,
 }
 
 #[derive(Default, Clone)]
@@ -2798,16 +2033,6 @@ impl Handler {
                 None
             });
             let available_settings = available_settings.unwrap_or_else(|| match draft_kind {
-                draft::Kind::S7 => s::S7_SETTINGS.into_iter().map(|setting| Cow::Owned(setting.description())).collect(),
-                draft::Kind::MultiworldS3 => mw::S3_SETTINGS.iter().copied().map(|mw::Setting { description, .. }| Cow::Borrowed(description)).collect(),
-                draft::Kind::MultiworldS4 => mw::S4_SETTINGS.iter().copied().map(|mw::Setting { description, .. }| Cow::Borrowed(description)).collect(),
-                draft::Kind::MultiworldS5 => mw::S5_SETTINGS.iter().copied().map(|mw::Setting { description, .. }| Cow::Borrowed(description)).collect(),
-                draft::Kind::RslS7 => rsl::FORCE_OFF_SETTINGS.into_iter().map(|rsl::ForceOffSetting { name, .. }| Cow::Owned(format!("{name}: blocked or banned")))
-                    .chain(rsl::FIFTY_FIFTY_SETTINGS.into_iter().chain(rsl::MULTI_OPTION_SETTINGS).map(|rsl::MultiOptionSetting { name, options, .. }| Cow::Owned(format!("{name}: {}", English.join_str_with("or", nonempty_collections::iter::once("blocked").chain(options.iter().map(|(name, _, _, _)| *name)))))))
-                    .collect(),
-                draft::Kind::TournoiFrancoS3 => fr::S3_SETTINGS.into_iter().map(|fr::Setting { description, .. }| Cow::Borrowed(description)).collect(),
-                draft::Kind::TournoiFrancoS4 => fr::S4_SETTINGS.into_iter().map(|fr::Setting { description, .. }| Cow::Borrowed(description)).collect(),
-                draft::Kind::TournoiFrancoS5 => fr::S5_SETTINGS.into_iter().map(|fr::Setting { description, .. }| Cow::Borrowed(description)).collect(),
             });
             if available_settings.is_empty() {
                 ctx.say(if let French = goal.language() {
@@ -2862,10 +2087,8 @@ impl Handler {
             lock!(@write state = self.race_state; if let Some(draft_kind) = goal.draft_kind() {
                 match *state {
                     RaceState::Init => match draft_kind {
-                        draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use “!seed draft” to start one.")).await?,
-                        draft::Kind::RslS7 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use “!seed draft” to start one. For more info about these options, use !presets")).await?,
-                        draft::Kind::TournoiFrancoS3 => ctx.say(format!("Désolé {reply_to}, le draft n'a pas débuté. Utilisez “!seed draft” pour en commencer un. Pour plus d'infos, utilisez !presets")).await?,
-                        draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use “!seed draft” to start one. For more info about these options, use !presets / le draft n'a pas débuté. Utilisez “!seed draft” pour en commencer un. Pour plus d'infos, utilisez !presets")).await?,
+                        draft::Kind::S7 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use \"!seed draft\" to start one.")).await?,
+
                     },
                     RaceState::Draft { state: ref mut draft, .. } => {
                         let is_active_team = if let Some(OfficialRaceData { ref cal_event, ref event, .. }) = self.official_data {
@@ -3133,7 +2356,7 @@ impl RaceHandler<GlobalState> for Handler {
                     if let Some(Some(phase_round)) = sqlx::query_scalar!("SELECT display_fr FROM phase_round_options WHERE series = $1 AND event = $2 AND phase = $3 AND round = $4", event.series as _, &event.event, phase, round).fetch_optional(&mut *transaction).await.to_racetime()?;
                     then {
                         format!(
-                            "Bienvenue pour cette race de {phase_round} ! Pour plus d'informations : {}",
+                            "Bienvenue pour cette race de {phase_round} ! Pour plus d'informations : {}",
                             uri!(base_uri(), event::info(event.series, &*event.event)),
                         )
                     } else {
@@ -3147,7 +2370,7 @@ impl RaceHandler<GlobalState> for Handler {
                             format!(
                                 "Welcome to {}! Learn more about the event at {}",
                                 if event.is_single_race() {
-                                    format!("the {}", event.display_name) //TODO remove “the” depending on event name
+                                    format!("the {}", event.display_name) //TODO remove "the" depending on event name
                                 } else {
                                     match (cal_event.race.phase.as_deref(), cal_event.race.round.as_deref()) {
                                         (Some("Qualifier"), Some(round)) => format!("qualifier {round}"),
@@ -3165,7 +2388,7 @@ impl RaceHandler<GlobalState> for Handler {
                 }, goal != Goal::Crosskeys2025, Vec::default()).await?;
                 let (race_state, high_seed_name, low_seed_name) = if let Some(draft_kind) = event.draft_kind() {
                     let state = cal_event.race.draft.clone().expect("missing draft state");
-                    let [high_seed_name, low_seed_name] = if let draft::StepKind::Done(_) | draft::StepKind::DoneRsl { .. } = state.next_step(draft_kind, cal_event.race.game, &mut draft::MessageContext::None).await.to_racetime()?.kind {
+                    let [high_seed_name, low_seed_name] = if let draft::StepKind::Done(_) = state.next_step(draft_kind, cal_event.race.game, &mut draft::MessageContext::None).await.to_racetime()?.kind {
                         // we just need to roll the seed so player/team names are no longer required
                         [format!("Team A"), format!("Team B")]
                     } else {
@@ -3216,13 +2439,13 @@ impl RaceHandler<GlobalState> for Handler {
                     Entrants::Open | Entrants::Count { .. } => event.open_stream_delay,
                     Entrants::Two(_) | Entrants::Three(_) | Entrants::Named(_) => event.invitational_stream_delay,
                 };
-                let emulator_settings_reminder = event.series == Series::Standard && event.event != "w" || event.series == Series::League; //TODO move to database
-                let prevent_late_joins = event.series == Series::SpeedGaming || event.series == Series::Standard && event.event == "8"; //TODO move to database
+                let emulator_settings_reminder = event.series == Series::Standard && event.event != "w"; // Removed old League variant
+                let prevent_late_joins = event.series == Series::Standard && event.event == "8"; // Removed old SpeedGaming variant
                 if !stream_delay.is_zero() || emulator_settings_reminder || prevent_late_joins {
                     let delay_until = cal_event.start().expect("handling room for official race without start time") - stream_delay - TimeDelta::minutes(5);
                     if let Ok(delay) = (delay_until - Utc::now()).to_std() {
                         let ctx = ctx.clone();
-                        let requires_emote_only = event.series == Series::SpeedGaming && cal_event.race.phase.as_ref().is_some_and(|phase| phase == "Bracket");
+                        let requires_emote_only = false; // Removed old SpeedGaming variant
                         tokio::spawn(async move {
                             sleep_until(Instant::now() + delay).await;
                             if !Self::should_handle_inner(&*ctx.data().await, ctx.global_state.clone(), Some(None)).await { return }
@@ -3323,714 +2546,16 @@ impl RaceHandler<GlobalState> for Handler {
                 } else {
                     match race_state {
                         RaceState::Init => match goal {
-                            Goal::Cc7 => ctx.send_message(
-                                "Welcome! This is a practice room for the S7 Challenge Cup. Learn more about the tournament at https://midos.house/event/s/7cc",
-                                true,
-                                vec![
-                                    ("Roll seed (base settings)", ActionButton::Message {
-                                        message: format!("!seed base"),
-                                        help_text: Some(format!("Create a seed with the tournament's base settings.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                    ("Roll seed (random settings)", ActionButton::Message {
-                                        message: format!("!seed random"),
-                                        help_text: Some(format!("Simulate a settings draft with both players picking randomly. The settings are posted along with the seed.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                    ("Roll seed (custom settings)", ActionButton::Message {
-                                        message: format!("!seed {}", s::S7_SETTINGS.into_iter().map(|setting| format!("{0} ${{{0}}}", setting.name)).format(" ")),
-                                        help_text: Some(format!("Pick a set of draftable settings without doing a full draft.")),
-                                        survey: Some(s::S7_SETTINGS.into_iter().map(|setting| SurveyQuestion {
-                                            name: setting.name.to_owned(),
-                                            label: setting.display.to_owned(),
-                                            default: Some(json!("default")),
-                                            help_text: None,
-                                            kind: SurveyQuestionKind::Radio,
-                                            placeholder: None,
-                                            options: iter::once((format!("default"), setting.default_display.to_owned()))
-                                                .chain(setting.other.iter().map(|(name, display, _)| (name.to_string(), display.to_string())))
-                                                .collect(),
-                                        }).collect()),
-                                        submit: Some(format!("Roll")),
-                                    }),
-                                    ("Start settings draft", ActionButton::Message {
-                                        message: format!("!seed draft"),
-                                        help_text: Some(format!("Pick the settings here in the chat.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::CoOpS3 => ctx.send_message(
-                                "Welcome! This is a practice room for the 3rd co-op tournament. Learn more about the tournament at https://midos.house/event/coop/3",
-                                true,
-                                vec![
-                                    ("Roll seed", ActionButton::Message {
-                                        message: format!("!seed"),
-                                        help_text: Some(format!("Create a seed with the settings used for the tournament.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::CopaDoBrasil => ctx.send_message(
-                                "Welcome! This is a practice room for the Copa do Brasil. Learn more about the tournament at https://midos.house/event/br/1",
-                                true,
-                                vec![
-                                    ("Roll seed", ActionButton::Message {
-                                        message: format!("!seed"),
-                                        help_text: Some(format!("Create a seed with the settings used for the tournament.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                ],
-                            ).await?,
+                            Goal::Cc7 => unreachable!("attempted to handle a user-opened Cc7 room"),
                             Goal::Crosskeys2025 => unreachable!("attempted to handle a user-opened Crosskeys2025 room"),
-                            Goal::LeagueS8 => ctx.send_message(
-                                "Welcome! This is a practice room for League Season 8. Learn more about the event at https://midos.house/event/league/8",
-                                true,
-                                vec![
-                                    ("Roll seed", ActionButton::Message {
-                                        message: format!("!seed"),
-                                        help_text: Some(format!("Create a seed with the settings used for the season.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::MixedPoolsS2 => ctx.send_message(
-                                "Welcome! This is a practice room for the 2nd Mixed Pools Tournament. Learn more about the tournament at https://midos.house/event/mp/2",
-                                true,
-                                vec![
-                                    ("Roll seed", ActionButton::Message {
-                                        message: format!("!seed"),
-                                        help_text: Some(format!("Create a seed with the settings used for the tournament.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::MixedPoolsS3 => ctx.send_message(
-                                "Welcome! This is a practice room for the 3rd Mixed Pools Tournament. Learn more about the tournament at https://midos.house/event/mp/3",
-                                true,
-                                vec![
-                                    ("Roll seed", ActionButton::Message {
-                                        message: format!("!seed"),
-                                        help_text: Some(format!("Create a seed with the settings used for the tournament.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::MixedPoolsS4 => ctx.send_message(
-                                "Welcome! This is a practice room for the 4th Mixed Pools Tournament. Learn more about the tournament at https://midos.house/event/mp/4",
-                                true,
-                                vec![
-                                    ("Roll seed", ActionButton::Message {
-                                        message: format!("!seed"),
-                                        help_text: Some(format!("Create a seed with the settings used for the tournament.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::Mq => ctx.send_message(
-                                "Welcome! This is a practice room for the 12 MQ Tournament. Learn more about the tournament at https://midos.house/event/mq/1",
-                                true,
-                                vec![
-                                    ("Roll seed", ActionButton::Message {
-                                        message: format!("!seed"),
-                                        help_text: Some(format!("Create a seed with the settings used for the tournament.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::MultiworldS3 | Goal::MultiworldS4 | Goal::MultiworldS5 => {
-                                let (ordinal, event, available_settings) = match goal {
-                                    Goal::MultiworldS3 => ("3rd", "3", mw::S3_SETTINGS),
-                                    Goal::MultiworldS4 => ("4th", "4", mw::S4_SETTINGS),
-                                    Goal::MultiworldS5 => ("5th", "5", mw::S5_SETTINGS),
-                                    _ => unreachable!("checked in outer match"),
-                                };
-                                ctx.send_message(
-                                    format!("Welcome! This is a practice room for the {ordinal} Multiworld Tournament. Learn more about the tournament at https://midos.house/event/mw/{event}"),
-                                    true,
-                                    vec![
-                                        ("Roll seed (base settings)", ActionButton::Message {
-                                            message: format!("!seed base"),
-                                            help_text: Some(format!("Create a seed with the settings used for the qualifier and tiebreaker asyncs.")),
-                                            survey: None,
-                                            submit: None,
-                                        }),
-                                        ("Roll seed (random settings)", ActionButton::Message {
-                                            message: format!("!seed random"),
-                                            help_text: Some(format!("Simulate a settings draft with both teams picking randomly. The settings are posted along with the seed.")),
-                                            survey: None,
-                                            submit: None,
-                                        }),
-                                        ("Roll seed (custom settings)", ActionButton::Message {
-                                            message: format!("!seed {}", available_settings.iter().map(|setting| format!("{0} ${{{0}}}", setting.name)).format(" ")),
-                                            help_text: Some(format!("Pick a set of draftable settings without doing a full draft.")),
-                                            survey: Some(available_settings.into_iter().map(|setting| SurveyQuestion {
-                                                name: setting.name.to_owned(),
-                                                label: setting.display.to_owned(),
-                                                default: Some(json!(setting.default)),
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Radio,
-                                                placeholder: None,
-                                                options: iter::once((setting.default.to_owned(), setting.default_display.to_owned()))
-                                                    .chain(setting.other.iter().map(|(name, display)| (name.to_string(), display.to_string())))
-                                                    .collect(),
-                                            }).collect()),
-                                            submit: Some(format!("Roll")),
-                                        }),
-                                        ("Start settings draft", ActionButton::Message {
-                                            message: format!("!seed draft"),
-                                            help_text: Some(format!("Pick the settings here in the chat.")),
-                                            survey: None,
-                                            submit: None,
-                                        }),
-                                    ],
-                                ).await?;
-                            }
-                            Goal::NineDaysOfSaws => ctx.send_message(
-                                "Welcome! This is a practice room for 9 Days of SAWS. Learn more about the event at https://docs.google.com/document/d/1xELThZtIctwN-vYtYhUqtd88JigNzabk8OZHANa0gqY/edit",
-                                true,
-                                vec![
-                                    ("Roll seed", ActionButton::Message {
-                                        message: format!("!seed ${{preset}}"),
-                                        help_text: Some(format!("Select a preset and create a seed.")),
-                                        survey: Some(vec![
-                                            SurveyQuestion {
-                                                name: format!("preset"),
-                                                label: format!("Preset"),
-                                                default: None,
-                                                help_text: Some(format!("Days 7 and 9 are identical to days 2 and 1, respectively. They are listed for the sake of convenience.")),
-                                                kind: SurveyQuestionKind::Select,
-                                                placeholder: None,
-                                                options: vec![
-                                                    (format!("day1"), format!("Day 1: S6")),
-                                                    (format!("day2"), format!("Day 2: Beginner")),
-                                                    (format!("day3"), format!("Day 3: Advanced")),
-                                                    (format!("day4"), format!("Day 4: S5 + one bonk KO")),
-                                                    (format!("day5"), format!("Day 5: Beginner + mixed pools")),
-                                                    (format!("day6"), format!("Day 6: Beginner 3-player multiworld")),
-                                                    (format!("day7"), format!("Day 7: Beginner")),
-                                                    (format!("day8"), format!("Day 8: S6 + dungeon ER")),
-                                                    (format!("day9"), format!("Day 9: S6")),
-                                                ],
-                                            },
-                                        ]),
-                                        submit: Some(format!("Roll")),
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::Pic7 => ctx.send_message(
-                                "Welcome! This is a practice room for the 7th Pictionary Spoiler Log Race. Learn more about the race at https://midos.house/event/pic/7",
-                                true,
-                                vec![
-                                    ("Roll seed", ActionButton::Message {
-                                        message: format!("!seed"),
-                                        help_text: Some(format!("Create a seed with the settings used for the race.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::PicRs2 => ctx.send_message(
-                                "Welcome! This is a practice room for the 2nd Random Settings Pictionary Spoiler Log Race. Learn more about the race at https://midos.house/event/pic/rs2",
-                                true,
-                                vec![
-                                    ("Roll seed", ActionButton::Message {
-                                        message: format!("!seed"),
-                                        help_text: Some(format!("Create a seed with the weights used for the race.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::Rsl => ctx.send_message(
-                                "Welcome to the OoTR Random Settings League! Learn more at https://rsl.one/",
-                                true,
-                                vec![
-                                    ("Roll RSL seed", ActionButton::Message {
-                                        message: format!("!seed"),
-                                        help_text: Some(format!("Create a seed with official Random Settings League weights.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                    ("Start weights draft", ActionButton::Message {
-                                        message: format!("!seed draft ${{lite}}"),
-                                        help_text: Some(format!("Ban and block weights here in the chat.")),
-                                        survey: Some(vec![
-                                            SurveyQuestion {
-                                                name: format!("lite"),
-                                                label: format!("Use RSL-Lite weights"),
-                                                default: None,
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Bool,
-                                                placeholder: None,
-                                                options: Vec::default(),
-                                            },
-                                        ]),
-                                        submit: Some(format!("Start Draft")),
-                                    }),
-                                    ("Roll multiworld seed", ActionButton::Message {
-                                        message: format!("!seed mw ${{worldcount}}"),
-                                        help_text: Some(format!("Create a random settings multiworld seed. Supports up to 15 players.")),
-                                        survey: Some(vec![
-                                            SurveyQuestion {
-                                                name: format!("worldcount"),
-                                                label: format!("World count"),
-                                                default: None,
-                                                help_text: Some(format!("Please download the RSL script from https://github.com/matthewkirby/plando-random-settings if you want to roll seeds for more than 15 players.")),
-                                                kind: SurveyQuestionKind::Radio,
-                                                placeholder: None,
-                                                options: (2..=15).map(|world_count| (world_count.to_string(), world_count.to_string())).collect(),
-                                            },
-                                        ]),
-                                        submit: Some(format!("Roll")),
-                                    }),
-                                    ("More presets", ActionButton::Message {
-                                        message: format!("!seed ${{preset}}"),
-                                        help_text: Some(format!("Select a preset and create a seed.")),
-                                        survey: Some(vec![
-                                            SurveyQuestion {
-                                                name: format!("preset"),
-                                                label: format!("Preset"),
-                                                default: None,
-                                                help_text: Some(format!("Use !presets for more info.")),
-                                                kind: SurveyQuestionKind::Select,
-                                                placeholder: None,
-                                                options: all()
-                                                    .filter(|preset| !matches!(preset, rsl::Preset::League | rsl::Preset::Multiworld))
-                                                    .map(|preset| (preset.name().to_owned(), preset.race_info().to_owned()))
-                                                    .collect(),
-                                            },
-                                        ]),
-                                        submit: Some(format!("Roll")),
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::Sgl2023 => ctx.send_message(
-                                "Welcome! This is a practice room for SpeedGaming Live 2023. Learn more about the tournaments at https://docs.google.com/document/d/1EACqBl8ZOreD6xT5jQ2HrdLOnpBpKyjS3FUYK8XFeqg/edit",
-                                true,
-                                vec![
-                                    ("Roll seed", ActionButton::Message {
-                                        message: format!("!seed"),
-                                        help_text: Some(format!("Create a seed with the settings used for the tournaments.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::Sgl2024 => ctx.send_message(
-                                "Welcome! This is a practice room for SpeedGaming Live 2024. Learn more about the tournaments at https://docs.google.com/document/d/1I0IcnGMqKr3QaCgg923SR_SxVu0iytIA_lOhN2ybj9w/edit",
-                                true,
-                                vec![
-                                    ("Roll seed", ActionButton::Message {
-                                        message: format!("!seed"),
-                                        help_text: Some(format!("Create a seed with the settings used for the tournaments.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::SongsOfHope => ctx.send_message(
-                                "Welcome! This is a practice room for Songs of Hope, a charity tournament for the Autism of Society of America. Learn more about the tournament at https://midos.house/event/soh/1",
-                                true,
-                                vec![
-                                    ("Roll seed", ActionButton::Message {
-                                        message: format!("!seed"),
-                                        help_text: Some(format!("Create a seed with the settings used for the tournament.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                ],
-                            ).await?,
                             Goal::StandardRuleset => unreachable!("attempted to handle a user-opened Standard Ruleset room"),
-                            Goal::TournoiFrancoS3 => ctx.send_message(
-                                "Bienvenue ! Ceci est une practice room pour le tournoi francophone saison 3. Vous pouvez obtenir des renseignements supplémentaires ici : https://midos.house/event/fr/3",
-                                true,
-                                vec![
-                                    ("Roll seed (settings de base)", ActionButton::Message {
-                                        message: format!("!seed base ${{mq}}mq"),
-                                        help_text: Some(format!("Roll une seed avec les settings de base, sans setting additionnel.")),
-                                        survey: Some(vec![
-                                            SurveyQuestion {
-                                                name: format!("mq"),
-                                                label: format!("Donjons Master Quest"),
-                                                default: Some(json!("0")),
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Select,
-                                                placeholder: None,
-                                                options: (0..=12).map(|mq| (mq.to_string(), mq.to_string())).collect(),
-                                            },
-                                        ]),
-                                        submit: Some(format!("Roll")),
-                                    }),
-                                    ("Roll seed (settings aléatoires)", ActionButton::Message {
-                                        message: format!("!seed random ${{advanced}} ${{mq}}mq"),
-                                        help_text: Some(format!("Simule en draft en sélectionnant des settings au hasard.")),
-                                        survey: Some(vec![
-                                            SurveyQuestion {
-                                                name: format!("advanced"),
-                                                label: format!("Active les settings difficiles"),
-                                                default: None,
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Bool,
-                                                placeholder: None,
-                                                options: Vec::default(),
-                                            },
-                                            SurveyQuestion {
-                                                name: format!("mq"),
-                                                label: format!("Donjons Master Quest"),
-                                                default: Some(json!("0")),
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Select,
-                                                placeholder: None,
-                                                options: (0..=12).map(|mq| (mq.to_string(), mq.to_string())).collect(),
-                                            },
-                                        ]),
-                                        submit: Some(format!("Roll")),
-                                    }),
-                                    ("Roll seed (settings à choisir)", ActionButton::Message {
-                                        message: format!("!seed {} ${{mq}}mq", fr::S3_SETTINGS.into_iter().map(|setting| format!("{0} ${{{0}}}", setting.name)).format(" ")),
-                                        help_text: Some(format!("Vous laisse sélectionner les settings que vous voulez dans votre seed.")),
-                                        survey: Some(fr::S3_SETTINGS.into_iter().map(|setting| SurveyQuestion {
-                                            name: setting.name.to_owned(),
-                                            label: setting.display.to_owned(),
-                                            default: Some(json!(setting.default)),
-                                            help_text: None,
-                                            kind: SurveyQuestionKind::Radio,
-                                            placeholder: None,
-                                            options: iter::once((setting.default.to_owned(), setting.default_display.to_owned()))
-                                                .chain(setting.other.iter().map(|(name, _, display)| (name.to_string(), display.to_string())))
-                                                .chain((setting.name == "dungeon-er").then(|| (format!("mixed"), format!("dungeon ER (mixés)"))))
-                                                .collect(),
-                                        }).chain(iter::once(SurveyQuestion {
-                                            name: format!("mq"),
-                                            label: format!("Donjons Master Quest"),
-                                            default: Some(json!("0")),
-                                            help_text: None,
-                                            kind: SurveyQuestionKind::Select,
-                                            placeholder: None,
-                                            options: (0..=12).map(|mq| (mq.to_string(), mq.to_string())).collect(),
-                                        })).collect()),
-                                        submit: Some(format!("Roll")),
-                                    }),
-                                    ("Roll seed (avec draft)", ActionButton::Message {
-                                        message: format!("!seed draft ${{advanced}} ${{mq}}mq"),
-                                        help_text: Some(format!("Vous fait effectuer un draft dans le chat racetime.")),
-                                        survey: Some(vec![
-                                            SurveyQuestion {
-                                                name: format!("advanced"),
-                                                label: format!("Active les settings difficiles"),
-                                                default: None,
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Bool,
-                                                placeholder: None,
-                                                options: Vec::default(),
-                                            },
-                                            SurveyQuestion {
-                                                name: format!("mq"),
-                                                label: format!("Donjons Master Quest"),
-                                                default: Some(json!("0")),
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Select,
-                                                placeholder: None,
-                                                options: (0..=12).map(|mq| (mq.to_string(), mq.to_string())).collect(),
-                                            },
-                                        ]),
-                                        submit: Some(format!("Roll")),
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::TournoiFrancoS4 => ctx.send_message( //TODO post welcome message in both English and French
-                                "Welcome! This is a practice room for the Tournoi Francophone Saison 4. Learn more about the tournament at https://midos.house/event/fr/4",
-                                true,
-                                vec![
-                                    ("Roll seed (base settings)", ActionButton::Message {
-                                        message: format!("!seed base ${{mq}}mq"),
-                                        help_text: Some(format!("Create a seed with the base settings.")),
-                                        survey: Some(vec![
-                                            SurveyQuestion {
-                                                name: format!("mq"),
-                                                label: format!("Master Quest Dungeons"),
-                                                default: Some(json!("0")),
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Select,
-                                                placeholder: None,
-                                                options: (0..=12).map(|mq| (mq.to_string(), mq.to_string())).collect(),
-                                            },
-                                        ]),
-                                        submit: Some(format!("Roll")),
-                                    }),
-                                    ("Roll seed (random settings)", ActionButton::Message {
-                                        message: format!("!seed random ${{advanced}} ${{mq}}mq"),
-                                        help_text: Some(format!("Simulate a settings draft with both teams picking randomly. The settings are posted along with the seed.")),
-                                        survey: Some(vec![
-                                            SurveyQuestion {
-                                                name: format!("advanced"),
-                                                label: format!("Allow advanced settings"),
-                                                default: None,
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Bool,
-                                                placeholder: None,
-                                                options: Vec::default(),
-                                            },
-                                            SurveyQuestion {
-                                                name: format!("mq"),
-                                                label: format!("Master Quest Dungeons"),
-                                                default: Some(json!("0")),
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Select,
-                                                placeholder: None,
-                                                options: (0..=12).map(|mq| (mq.to_string(), mq.to_string())).collect(),
-                                            },
-                                        ]),
-                                        submit: Some(format!("Roll")),
-                                    }),
-                                    ("Roll seed (custom settings)", ActionButton::Message {
-                                        message: format!("!seed {} ${{mq}}mq", fr::S4_SETTINGS.into_iter().map(|setting| format!("{0} ${{{0}}}", setting.name)).format(" ")),
-                                        help_text: Some(format!("Pick a set of draftable settings without doing a full draft.")),
-                                        survey: Some(fr::S4_SETTINGS.into_iter().map(|setting| SurveyQuestion {
-                                            name: setting.name.to_owned(),
-                                            label: setting.display.to_owned(),
-                                            default: Some(json!(setting.default)),
-                                            help_text: None,
-                                            kind: SurveyQuestionKind::Radio,
-                                            placeholder: None,
-                                            options: iter::once((setting.default.to_owned(), setting.default_display.to_owned()))
-                                                .chain(setting.other.iter().map(|(name, _, display)| (name.to_string(), display.to_string())))
-                                                .chain((setting.name == "dungeon-er").then(|| (format!("mixed"), format!("dungeon ER (mixed)"))))
-                                                .collect(),
-                                        }).chain(iter::once(SurveyQuestion {
-                                            name: format!("mq"),
-                                            label: format!("Master Quest Dungeons"),
-                                            default: Some(json!("0")),
-                                            help_text: None,
-                                            kind: SurveyQuestionKind::Select,
-                                            placeholder: None,
-                                            options: (0..=12).map(|mq| (mq.to_string(), mq.to_string())).collect(),
-                                        })).collect()),
-                                        submit: Some(format!("Roll")),
-                                    }),
-                                    ("Start settings draft", ActionButton::Message {
-                                        message: format!("!seed draft ${{advanced}} ${{mq}}mq"),
-                                        help_text: Some(format!("Pick the settings here in the chat.")),
-                                        survey: Some(vec![
-                                            SurveyQuestion {
-                                                name: format!("advanced"),
-                                                label: format!("Allow advanced settings"),
-                                                default: None,
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Bool,
-                                                placeholder: None,
-                                                options: Vec::default(),
-                                            },
-                                            SurveyQuestion {
-                                                name: format!("mq"),
-                                                label: format!("Master Quest Dungeons"),
-                                                default: Some(json!("0")),
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Select,
-                                                placeholder: None,
-                                                options: (0..=12).map(|mq| (mq.to_string(), mq.to_string())).collect(),
-                                            },
-                                        ]),
-                                        submit: Some(format!("Start Draft")),
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::TournoiFrancoS5 => ctx.send_message( //TODO post welcome message in both English and French
-                                "Welcome! This is a practice room for the Tournoi Francophone Saison 5. Learn more about the tournament at https://midos.house/event/fr/5",
-                                true,
-                                vec![
-                                    ("Roll seed (base settings)", ActionButton::Message {
-                                        message: format!("!seed base ${{mq}}mq"),
-                                        help_text: Some(format!("Create a seed with the base settings.")),
-                                        survey: Some(vec![
-                                            SurveyQuestion {
-                                                name: format!("mq"),
-                                                label: format!("Master Quest Dungeons"),
-                                                default: Some(json!("0")),
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Select,
-                                                placeholder: None,
-                                                options: (0..=12).map(|mq| (mq.to_string(), mq.to_string())).collect(),
-                                            },
-                                        ]),
-                                        submit: Some(format!("Roll")),
-                                    }),
-                                    ("Roll seed (random settings)", ActionButton::Message {
-                                        message: format!("!seed random ${{advanced}} ${{mq}}mq"),
-                                        help_text: Some(format!("Simulate a settings draft with both teams picking randomly. The settings are posted along with the seed.")),
-                                        survey: Some(vec![
-                                            SurveyQuestion {
-                                                name: format!("advanced"),
-                                                label: format!("Allow advanced settings"),
-                                                default: None,
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Bool,
-                                                placeholder: None,
-                                                options: Vec::default(),
-                                            },
-                                            SurveyQuestion {
-                                                name: format!("mq"),
-                                                label: format!("Master Quest Dungeons"),
-                                                default: Some(json!("0")),
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Select,
-                                                placeholder: None,
-                                                options: (0..=12).map(|mq| (mq.to_string(), mq.to_string())).collect(),
-                                            },
-                                        ]),
-                                        submit: Some(format!("Roll")),
-                                    }),
-                                    ("Roll seed (custom settings)", ActionButton::Message {
-                                        message: format!("!seed {} ${{mq}}mq", fr::S5_SETTINGS.into_iter().map(|setting| format!("{0} ${{{0}}}", setting.name)).format(" ")),
-                                        help_text: Some(format!("Pick a set of draftable settings without doing a full draft.")),
-                                        survey: Some(fr::S5_SETTINGS.into_iter().map(|setting| SurveyQuestion {
-                                            name: setting.name.to_owned(),
-                                            label: setting.display.to_owned(),
-                                            default: Some(json!(setting.default)),
-                                            help_text: None,
-                                            kind: SurveyQuestionKind::Radio,
-                                            placeholder: None,
-                                            options: iter::once((setting.default.to_owned(), setting.default_display.to_owned()))
-                                                .chain(setting.other.iter().map(|(name, _, display)| (name.to_string(), display.to_string())))
-                                                .chain((setting.name == "dungeon-er").then(|| (format!("mixed"), format!("dungeon ER (mixed)"))))
-                                                .collect(),
-                                        }).chain(iter::once(SurveyQuestion {
-                                            name: format!("mq"),
-                                            label: format!("Master Quest Dungeons"),
-                                            default: Some(json!("0")),
-                                            help_text: None,
-                                            kind: SurveyQuestionKind::Select,
-                                            placeholder: None,
-                                            options: (0..=12).map(|mq| (mq.to_string(), mq.to_string())).collect(),
-                                        })).collect()),
-                                        submit: Some(format!("Roll")),
-                                    }),
-                                    ("Start settings draft", ActionButton::Message {
-                                        message: format!("!seed draft ${{advanced}} ${{mq}}mq"),
-                                        help_text: Some(format!("Pick the settings here in the chat.")),
-                                        survey: Some(vec![
-                                            SurveyQuestion {
-                                                name: format!("advanced"),
-                                                label: format!("Allow advanced settings"),
-                                                default: None,
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Bool,
-                                                placeholder: None,
-                                                options: Vec::default(),
-                                            },
-                                            SurveyQuestion {
-                                                name: format!("mq"),
-                                                label: format!("Master Quest Dungeons"),
-                                                default: Some(json!("0")),
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Select,
-                                                placeholder: None,
-                                                options: (0..=12).map(|mq| (mq.to_string(), mq.to_string())).collect(),
-                                            },
-                                        ]),
-                                        submit: Some(format!("Start Draft")),
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::TriforceBlitz => ctx.send_message(
-                                "Welcome to Triforce Blitz! Learn more at https://triforceblitz.com/",
-                                true,
-                                vec![
-                                    ("Roll S4 co-op seed", ActionButton::Message {
-                                        message: format!("!seed s4coop"),
-                                        help_text: Some(format!("Create a Triforce Blitz season 4 co-op seed.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                    ("Seed of the day", ActionButton::Message {
-                                        message: format!("!seed daily"),
-                                        help_text: Some(format!("Link the current seed of the day.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                    ("More presets", ActionButton::Message {
-                                        message: format!("!seed ${{preset}}"),
-                                        help_text: Some(format!("Select a preset and create a seed.")),
-                                        survey: Some(vec![
-                                            SurveyQuestion {
-                                                name: format!("preset"),
-                                                label: format!("Preset"),
-                                                default: None,
-                                                help_text: None,
-                                                kind: SurveyQuestionKind::Select,
-                                                placeholder: None,
-                                                options: vec![
-                                                    (format!("s3"), format!("S3")),
-                                                    (format!("jr"), format!("Jabu's Revenge")),
-                                                    (format!("s2"), format!("S2")),
-                                                ],
-                                            },
-                                        ]),
-                                        submit: Some(format!("Roll")),
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::TriforceBlitzProgressionSpoiler => ctx.send_message(
-                                "Welcome to Triforce Blitz Progression Spoiler!",
-                                true,
-                                vec![
-                                    ("Roll seed", ActionButton::Message {
-                                        message: format!("!seed"),
-                                        help_text: Some(format!("Create a seed with the current settings for the mode.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::WeTryToBeBetterS1 => ctx.send_message(
-                                "Bienvenue ! Ceci est une practice room pour le tournoi WeTryToBeBetter. Vous pouvez obtenir des renseignements supplémentaires ici : https://midos.house/event/wttbb/1",
-                                true,
-                                vec![
-                                    ("Roll seed", ActionButton::Message {
-                                        message: format!("!seed"),
-                                        help_text: Some(format!("Roll une seed avec les settings utilisés pour le tournoi.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                ],
-                            ).await?,
-                            Goal::WeTryToBeBetterS2 => ctx.send_message(
-                                "Bienvenue ! Ceci est une practice room pour le tournoi WeTryToBeBetter saison 2. Vous pouvez obtenir des renseignements supplémentaires ici : https://midos.house/event/wttbb/2",
-                                true,
-                                vec![
-                                    ("Roll seed", ActionButton::Message {
-                                        message: format!("!seed"),
-                                        help_text: Some(format!("Roll une seed avec les settings utilisés pour le tournoi.")),
-                                        survey: None,
-                                        submit: None,
-                                    }),
-                                ],
-                            ).await?,
                         },
-                        RaceState::Rolled(_) => ctx.say("@entrants I just restarted. You may have to reconfigure !breaks and !fpa. Sorry about that.").await?,
-                        RaceState::Draft { .. } | RaceState::Rolling | RaceState::SpoilerSent => unreachable!(),
+                        RaceState::Draft { .. } => this.advance_draft(ctx, &state).await?,
+                        RaceState::Rolling | RaceState::Rolled(_) | RaceState::SpoilerSent => {}
                     }
+                    (existing_seed, official_data, race_state, high_seed_name, low_seed_name, fpa_enabled)
                 }
-                (
-                    seed::Data::default(),
-                    None,
-                    RaceState::default(),
-                    format!("Team A"),
-                    format!("Team B"),
-                    false,
-                )
-            };
+            }
             transaction.commit().await.to_racetime()?;
             new_data
         });
@@ -4082,9 +2607,9 @@ impl RaceHandler<GlobalState> for Handler {
                         if let Ok((video_url, state)) = restreams.iter().exactly_one();
                         if let Some(French) = state.language;
                         then {
-                            format!("Cette race est restreamée en français chez {video_url} — l'auto-start est désactivé. Les organisateurs du tournoi peuvent utiliser “!monitor” pour devenir race monitor, puis pour inviter les restreamers en tant que race monitor et leur autoriser le force start.")
+                            format!("Cette race est restreamée en français chez {video_url} — l'auto-start est désactivé. Les organisateurs du tournoi peuvent utiliser \"!monitor\" pour devenir race monitor, puis pour inviter les restreamers en tant que race monitor et leur autoriser le force start.")
                         } else {
-                            format!("This race is being restreamed {restreams_text} — auto-start is disabled. Tournament organizers can use “!monitor” to become race monitors, then invite the restreamer{0} as race monitor{0} to allow them to force-start.", if restreams.len() == 1 { "" } else { "s" })
+                            format!("This race is being restreamed {restreams_text} — auto-start is disabled. Tournament organizers can use \"!monitor\" to become race monitors, then invite the restreamer{0} as race monitor{0} to allow them to force-start.", if restreams.len() == 1 { "" } else { "s" })
                         }
                     }
                 } else if let Ok((video_url, state)) = restreams.iter().exactly_one() {
@@ -4092,13 +2617,13 @@ impl RaceHandler<GlobalState> for Handler {
                         if let French = goal.language();
                         if let Some(French) = state.language;
                         then {
-                            format!("Cette race est restreamée en français chez {video_url} — l'auto start est désactivé. Le restreamer peut utiliser “!ready” pour débloquer l'auto-start.")
+                            format!("Cette race est restreamée en français chez {video_url} — l'auto start est désactivé. Le restreamer peut utiliser \"!ready\" pour débloquer l'auto-start.")
                         } else {
-                            format!("This race is being restreamed {restreams_text} — auto-start is disabled. The restreamer can use “!ready” to unlock auto-start.")
+                            format!("This race is being restreamed {restreams_text} — auto-start is disabled. The restreamer can use \"!ready\" to unlock auto-start.")
                         }
                     }
                 } else {
-                    format!("This race is being restreamed {restreams_text} — auto-start is disabled. Restreamers can use “!ready” once the restream is ready. Auto-start will be unlocked once all restreams are ready.")
+                    format!("This race is being restreamed {restreams_text} — auto-start is disabled. Restreamers can use \"!ready\" once the restream is ready. Auto-start will be unlocked once all restreams are ready.")
                 };
                 ctx.send_message(&text, true, Vec::default()).await?;
             }
@@ -4109,48 +2634,14 @@ impl RaceHandler<GlobalState> for Handler {
                     let event_id = Some((event.series, &*event.event));
                     match *state {
                         RaceState::Init => match goal {
-                            | Goal::CoOpS3
-                            | Goal::CopaDoBrasil
-                            | Goal::LeagueS8
-                            | Goal::MixedPoolsS2
-                            | Goal::MixedPoolsS3
-                            | Goal::MixedPoolsS4
-                            | Goal::Mq
-                            | Goal::Pic7
-                            | Goal::Sgl2023
-                            | Goal::Sgl2024
-                            | Goal::SongsOfHope
-                            | Goal::TriforceBlitzProgressionSpoiler
-                                => this.roll_seed(ctx, goal.preroll_seeds(event_id), goal.rando_version(Some(event)), goal.single_settings().expect("goal has no single settings"), goal.unlock_spoiler_log(true, false), English, "a", format!("seed")).await,
-                            | Goal::WeTryToBeBetterS1
-                            | Goal::WeTryToBeBetterS2
-                                => this.roll_seed(ctx, goal.preroll_seeds(event_id), goal.rando_version(Some(event)), goal.single_settings().expect("goal has no single settings"), goal.unlock_spoiler_log(true, false), French, "une", format!("seed")).await,
-                            | Goal::Cc7
-                            | Goal::MultiworldS3
-                            | Goal::MultiworldS4
-                            | Goal::MultiworldS5
-                            | Goal::Rsl
-                            | Goal::TournoiFrancoS3
-                            | Goal::TournoiFrancoS4
-                            | Goal::TournoiFrancoS5
-                                => unreachable!("should have draft state set"),
-                            | Goal::Crosskeys2025
-                                => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await,
-                            Goal::NineDaysOfSaws => unreachable!("9dos series has concluded"),
-                            Goal::PicRs2 => this.roll_rsl_seed(ctx, rsl::VersionedPreset::Fenhl {
-                                version: Some((Version::new(2, 3, 8), 10)),
-                                preset: rsl::DevFenhlPreset::Pictionary,
-                            }, 1, goal.unlock_spoiler_log(true, false), English, "a", format!("seed")).await,
-                            Goal::StandardRuleset => if let (Series::Standard, "8" | "8cc") = (event.series, &*event.event) {
-                                this.roll_seed(ctx, goal.preroll_seeds(event_id), goal.rando_version(Some(event)), s::s8_settings(), goal.unlock_spoiler_log(true, false), English, "an", format!("S8 seed")).await
-                            } else {
-                                let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
-                                let mut settings = event::Data::new(&mut transaction, Series::Standard, "w").await.to_racetime()?.expect("missing weeklies event").single_settings.expect("no settings configured for weeklies");
-                                transaction.commit().await.to_racetime()?;
-                                settings.insert(format!("password_lock"), json!(true));
-                                this.roll_seed(ctx, goal.preroll_seeds(event_id), goal.rando_version(Some(event)), settings, goal.unlock_spoiler_log(true, false), English, "a", format!("weekly seed")).await
+                            Goal::Cc7 => unreachable!("should have draft state set"),
+                            Goal::Crosskeys2025 => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await,
+                            Goal::StandardRuleset => {
+                                let mut settings = serde_json::Map::default();
+                                settings.insert("password_lock".into(), serde_json::json!(true));
+                                this.roll_seed(ctx, goal.preroll_seeds(event_id), goal.rando_version(Some(event)), settings, goal.unlock_spoiler_log(true, false), English, "a", format!("seed")).await
                             },
-                            Goal::TriforceBlitz => this.roll_tfb_dev_seed(ctx, true, goal.unlock_spoiler_log(true, false), English, "a", format!("Triforce Blitz S4 co-op seed")).await,
+
                         },
                         RaceState::Draft { .. } => this.advance_draft(ctx, &state).await?,
                         RaceState::Rolling | RaceState::Rolled(_) | RaceState::SpoilerSent => {}
@@ -4351,15 +2842,15 @@ impl RaceHandler<GlobalState> for Handler {
                         }).await?;
                     },
                     _ => ctx.say(if let French = goal.language() {
-                        format!("Désolé {reply_to}, les seules commandes sont “!fpa on”, “!fpa off” ou “!fpa”.")
+                        format!("Désolé {reply_to}, les seules commandes sont \"!fpa on\", \"!fpa off\" ou \"!fpa\".")
                     } else {
-                        format!("Sorry {reply_to}, I don't recognize that subcommand. Use “!fpa on” or “!fpa off”, or just “!fpa” to invoke FPA.")
+                        format!("Sorry {reply_to}, I don't recognize that subcommand. Use \"!fpa on\", \"!fpa off\", or just \"!fpa\" to invoke FPA.")
                     }).await?,
                 },
                 [..] => ctx.say(if let French = goal.language() {
-                    format!("Désolé {reply_to}, les seules commandes sont “!fpa on”, “!fpa off” ou “!fpa”.")
+                    format!("Désolé {reply_to}, les seules commandes sont \"!fpa on\", \"!fpa off\" ou \"!fpa\".")
                 } else {
-                    format!("Sorry {reply_to}, I didn't quite understand that. Use “!fpa on” or “!fpa off”, or just “!fpa” to invoke FPA.")
+                    format!("Sorry {reply_to}, I didn't quite understand that. Use \"!fpa on\", \"!fpa off\", or just \"!fpa\" to invoke FPA.")
                 }).await?,
             },
             "lock" => if self.can_monitor(ctx, is_monitor, msg).await.to_racetime()? {
@@ -4480,7 +2971,7 @@ impl RaceHandler<GlobalState> for Handler {
                                         ).await.edit_with_host(&ctx.global_state.host_info, &access_token, &ctx.global_state.http_client, CATEGORY, &ctx.data().await.slug).await?;
                                     }
                                     restreams.entry(restream_url).or_default().restreamer_racetime_id = Some(restreamer_racetime_id.clone());
-                                    ctx.say("Restreamer assigned. Use “!ready” once the restream is ready. Auto-start will be unlocked once all restreams are ready.").await?; //TODO mention restreamer
+                                    ctx.say("Restreamer assigned. Use \"!ready\" once the restream is ready. Auto-start will be unlocked once all restreams are ready.").await?; //TODO mention restreamer
                                 }
                                 Err(e) => ctx.say(format!("Sorry {reply_to}, I couldn't parse the restreamer: {e}")).await?,
                             }
@@ -4506,7 +2997,7 @@ impl RaceHandler<GlobalState> for Handler {
                 }).await?;
             },
             "score" => if_chain! {
-                if let Goal::TriforceBlitz | Goal::TriforceBlitzProgressionSpoiler = goal;
+                if false; // Removed old TriforceBlitz variants
                 if let Some(OfficialRaceData { ref event, ref mut scores, .. }) = self.official_data;
                 then {
                     if let Some(UserData { mut ref id, .. }) = msg.user {
@@ -4521,24 +3012,12 @@ impl RaceHandler<GlobalState> for Handler {
                             if_chain! {
                                 if let Some((pieces, duration)) = args.split_first();
                                 if let Ok(pieces) = pieces.parse();
-                                if pieces <= tfb::piece_count(event.team_config);
+                                if pieces <= 0; // Removed tfb module reference
                                 then {
-                                    let new_score = tfb::Score {
-                                        team_config: event.team_config,
-                                        last_collection_time: if pieces == 0 {
-                                            Duration::default()
-                                        } else {
-                                            let Some(last_collection_time) = parse_duration(&duration.join(" "), DurationUnit::Hours) else {
-                                                ctx.say(format!("Sorry {reply_to}, I don't recognize that time format. Example format: 1h23m45s")).await?;
-                                                return Ok(())
-                                            };
-                                            last_collection_time
-                                        },
-                                        pieces,
-                                    };
+                                    let new_score = (); // Removed tfb module reference
                                     *score = Some(new_score);
                                     ctx.say(if let Some(old_score) = old_score {
-                                        format!("Score edited: {new_score} (was: {old_score})")
+                                        format!("Score edited: {:?} (was: {:?})", new_score, old_score)
                                     } else {
                                         format!("Score reported: {new_score}")
                                     }).await?;
@@ -4552,7 +3031,7 @@ impl RaceHandler<GlobalState> for Handler {
                                     ctx.send_message(
                                         &format!("Sorry {reply_to}, I didn't quite understand that. Please use this button to try again:"),
                                         false,
-                                        vec![tfb::report_score_button(event.team_config, None)],
+                                        vec![], // Removed tfb module reference
                                     ).await?;
                                 }
                             }
@@ -4586,13 +3065,11 @@ impl RaceHandler<GlobalState> for Handler {
                                 let event = self.official_data.as_ref().map(|OfficialRaceData { event, .. }| event);
                                 self.roll_seed(ctx, goal.preroll_seeds(event.map(|event| (event.series, &*event.event))), goal.rando_version(event), settings, unlock_spoiler_log, language, article, description).await
                             },
-                            SeedCommandParseResult::Rsl { preset, world_count, unlock_spoiler_log, language, article, description } => self.roll_rsl_seed(ctx, preset, world_count, unlock_spoiler_log, language, article, description).await,
-                            SeedCommandParseResult::Tfb { version, unlock_spoiler_log, language, article, description } => self.roll_tfb_seed(ctx, version, unlock_spoiler_log, language, article, description).await,
-                            SeedCommandParseResult::TfbDev { coop, unlock_spoiler_log, language, article, description } => self.roll_tfb_dev_seed(ctx, coop, unlock_spoiler_log, language, article, description).await,
+                            // Removed old Rsl, Tfb, and TfbDev variants
                             SeedCommandParseResult::QueueExisting { data, language, article, description } => self.queue_existing_seed(ctx, data, language, article, description).await,
                             SeedCommandParseResult::SendPresets { language, msg } => {
                                 ctx.say(if let French = language {
-                                    format!("Désolé {reply_to}, {msg}. Veuillez utiliser un des suivants :")
+                                    format!("Désolé {reply_to}, {msg}. Veuillez utiliser un des suivants :")
                                 } else {
                                     format!("Sorry {reply_to}, {msg}. Use one of the following:")
                                 }).await?;
@@ -4635,13 +3112,13 @@ impl RaceHandler<GlobalState> for Handler {
             },
             "settings" => lock!(@read state = self.race_state; self.send_settings(ctx, if let RaceState::Draft { .. } = *state {
                 if let French = goal.language() {
-                    "Settings pouvant être actuellement choisis :"
+                    "Settings pouvant être actuellement choisis :"
                 } else {
                     "Currently draftable settings:"
                 }
             } else {
                 if let French = goal.language() {
-                    "Settings pouvant être choisis :"
+                    "Settings pouvant être choisis :"
                 } else {
                     "Draftable settings:"
                 }
@@ -4664,7 +3141,7 @@ impl RaceHandler<GlobalState> for Handler {
                 format!("Désolé {reply_to}, je ne reconnais pas cette commande.")
             } else {
                 format!("Sorry {reply_to}, I don't recognize that command.")
-            }).await?, //TODO “did you mean”? list of available commands with !help?
+            }).await?, //TODO "did you mean"? list of available commands with !help?
         }
         Ok(())
     }
@@ -4678,7 +3155,7 @@ impl RaceHandler<GlobalState> for Handler {
                     EntrantStatusValue::Requested => if entrants.contains(&entrant.user.id) {
                         ctx.accept_request(&entrant.user.id).await?;
                     },
-                    EntrantStatusValue::Done => if let Goal::TriforceBlitz | Goal::TriforceBlitzProgressionSpoiler = goal {
+                    EntrantStatusValue::Done => if false { // Removed old TriforceBlitz variants
                         let (key, reply_to) = if let Some(ref team) = entrant.team {
                             (team.slug.clone(), &team.name)
                         } else {
@@ -4688,7 +3165,7 @@ impl RaceHandler<GlobalState> for Handler {
                             ctx.send_message(
                                 &format!("{reply_to}, please report your score:"),
                                 false,
-                                vec![tfb::report_score_button(event.team_config, entrant.finish_time)],
+                                vec![], // Removed tfb module reference
                             ).await?;
                             entry.insert(None);
                         }
@@ -4698,7 +3175,7 @@ impl RaceHandler<GlobalState> for Handler {
             }
         }
         if !self.start_saved {
-            if let (Goal::Rsl, Some(start)) = (goal, data.started_at) {
+            if false { // Removed old Rsl variant
                 sqlx::query!("UPDATE rsl_seeds SET start = $1 WHERE room = $2", start, format!("https://{}{}", racetime_host(), ctx.data().await.url)).execute(&ctx.global_state.db_pool).await.to_racetime()?;
                 self.start_saved = true;
             }
@@ -4748,7 +3225,7 @@ impl RaceHandler<GlobalState> for Handler {
                             while Self::should_handle_inner(&*ctx.data().await, ctx.global_state.clone(), Some(None)).await {
                                 let (_, ()) = tokio::join!(
                                     ctx.say(if let French = goal.language() {
-                                        "@entrants Rappel : pause dans 5 minutes."
+                                        "@entrants Rappel : pause dans 5 minutes."
                                     } else {
                                         "@entrants Reminder: Next break in 5 minutes."
                                     }),
@@ -4756,7 +3233,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 );
                                 if !Self::should_handle_inner(&*ctx.data().await, ctx.global_state.clone(), Some(None)).await { break }
                                 let msg = if let French = goal.language() {
-                                    format!("@entrants C'est l'heure de la pause ! Elle durera {}.", French.format_duration(breaks.duration, true))
+                                    format!("@entrants C'est l'heure de la pause ! Elle durera {}.", French.format_duration(breaks.duration, true))
                                 } else {
                                     format!("@entrants Break time! Please pause for {}.", English.format_duration(breaks.duration, true))
                                 };
@@ -4778,106 +3255,13 @@ impl RaceHandler<GlobalState> for Handler {
                     });
                 }
                 match goal {
-                    Goal::Pic7 | Goal::PicRs2 => {
-                        self.goal_notifications.get_or_insert_with(|| {
-                            let ctx = ctx.clone();
-                            tokio::spawn(async move {
-                                let initial_wait = ctx.data().await.started_at.expect("in-progress race with no start time") + TimeDelta::minutes(match goal {
-                                    Goal::Pic7 => 10,
-                                    Goal::PicRs2 => 25,
-                                    _ => unreachable!(),
-                                }) - Utc::now();
-                                if let Ok(initial_wait) = initial_wait.to_std() {
-                                    sleep(initial_wait).await;
-                                    if !Self::should_handle_inner(&*ctx.data().await, ctx.global_state.clone(), Some(None)).await { return }
-                                    let (_, ()) = tokio::join!(
-                                        ctx.say("@entrants Reminder: 5 minutes until you can start drawing/playing."),
-                                        sleep(Duration::from_secs(5 * 60)),
-                                    );
-                                    let _ = ctx.say("@entrants You may now start drawing/playing.").await;
-                                }
-                            })
-                        });
-                    }
-                    Goal::TriforceBlitz => if ctx.data().await.time_limit > Duration::from_secs(2 * 60 * 60) {
-                        self.goal_notifications.get_or_insert_with(|| {
-                            let ctx = ctx.clone();
-                            tokio::spawn(async move {
-                                let initial_wait = ctx.data().await.started_at.expect("in-progress race with no start time") + TimeDelta::hours(2) - Utc::now();
-                                if let Ok(initial_wait) = initial_wait.to_std() {
-                                    sleep(initial_wait).await;
-                                    let is_1v1 = {
-                                        let data = ctx.data().await;
-                                        if !Self::should_handle_inner(&*data, ctx.global_state.clone(), Some(None)).await { return }
-                                        data.entrants_count == 2
-                                    };
-                                    let _ = ctx.say(if is_1v1 {
-                                        "@entrants Time limit reached. If anyone has found at least 1 Triforce piece, please .done. If neither player has any pieces, please continue and .done when one is found."
-                                    } else {
-                                        "@entrants Time limit reached. If you've found at least 1 Triforce piece, please mark yourself as done. If you haven't, you may continue playing until you find one."
-                                    }).await;
-                                }
-                            })
-                        });
-                    },
-                    Goal::TriforceBlitzProgressionSpoiler => {
-                        self.goal_notifications.get_or_insert_with(|| {
-                            let ctx = ctx.clone();
-                            tokio::spawn(async move {
-                                let initial_wait = ctx.data().await.started_at.expect("in-progress race with no start time") + TimeDelta::minutes(10) - Utc::now();
-                                if let Ok(initial_wait) = initial_wait.to_std() {
-                                    sleep(initial_wait).await;
-                                    if !Self::should_handle_inner(&*ctx.data().await, ctx.global_state.clone(), Some(None)).await { return }
-                                    let (_, ()) = tokio::join!(
-                                        ctx.say("@entrants Reminder: 5 minutes until you can start playing."),
-                                        sleep(Duration::from_secs(5 * 60)),
-                                    );
-                                    let (_, ()) = tokio::join!(
-                                        ctx.say("@entrants You may now start playing."),
-                                        sleep(Duration::from_secs((60 + 45) * 60)),
-                                    );
-                                    let is_1v1 = {
-                                        let data = ctx.data().await;
-                                        if !Self::should_handle_inner(&*data, ctx.global_state.clone(), Some(None)).await { return }
-                                        data.entrants_count == 2
-                                    };
-                                    let _ = ctx.say(if is_1v1 {
-                                        "@entrants Time limit reached. If anyone has found at least 1 Triforce piece, please .done. If neither player has any pieces, please continue and .done when one is found."
-                                    } else {
-                                        "@entrants Time limit reached. If you've found at least 1 Triforce piece, please mark yourself as done. If you haven't, you may continue playing until you find one."
-                                    }).await;
-                                }
-                            })
-                        });
-                    }
-                    | Goal::Cc7
-                    | Goal::CoOpS3
-                    | Goal::CopaDoBrasil
                     | Goal::Crosskeys2025
-                    | Goal::LeagueS8
-                    | Goal::MixedPoolsS2
-                    | Goal::MixedPoolsS3
-                    | Goal::MixedPoolsS4
-                    | Goal::Mq
-                    | Goal::MultiworldS3
-                    | Goal::MultiworldS4
-                    | Goal::MultiworldS5
-                    | Goal::NineDaysOfSaws
-                    | Goal::Rsl
-                    | Goal::Sgl2023
-                    | Goal::Sgl2024
-                    | Goal::SongsOfHope
                     | Goal::StandardRuleset
-                    | Goal::TournoiFrancoS3
-                    | Goal::TournoiFrancoS4
-                    | Goal::TournoiFrancoS5
-                    | Goal::WeTryToBeBetterS1
-                    | Goal::WeTryToBeBetterS2
                         => {}
                 }
             }
             RaceStatusValue::Finished => if self.unlock_spoiler_log(ctx, goal).await? {
-                if let Goal::TriforceBlitz | Goal::TriforceBlitzProgressionSpoiler = goal {
+                if false { // Removed old TriforceBlitz variants
                     if self.check_tfb_finish(ctx).await? {
                         self.cleaned_up.store(true, atomic::Ordering::SeqCst);
                     } else {
@@ -4977,7 +3361,7 @@ impl RaceHandler<GlobalState> for Handler {
                     }
                 }
                 self.unlock_spoiler_log(ctx, goal).await?;
-                if let Goal::Rsl = goal {
+                if false { // Removed old Rsl variant
                     sqlx::query!("DELETE FROM rsl_seeds WHERE room = $1", format!("https://{}{}", racetime_host(), ctx.data().await.url)).execute(&ctx.global_state.db_pool).await.to_racetime()?;
                 }
                 self.cleaned_up.store(true, atomic::Ordering::SeqCst);
@@ -5065,7 +3449,7 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                     };
                     then {
                         if let Some(entrants) = entrants {
-                            format!("{phase_round} : {entrants}")
+                            format!("{phase_round} : {entrants}")
                         } else {
                             phase_round
                         }
@@ -5200,7 +3584,7 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                     });
                 }
             });
-            Err("remember to send your video to an organizer once you're done") //TODO “please check your direct messages” for private async parts, “will be handled here in the match thread” for public async parts
+            Err("remember to send your video to an organizer once you're done") //TODO "please check your direct messages" for private async parts, "will be handled here in the match thread" for public async parts
         }
     };
     let handle_mode = cal_event.should_create_room(&mut *transaction, event).await.ok();
@@ -5219,20 +3603,20 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
             let mut msg = MessageBuilder::default();
             msg.push("La race commence ");
             msg.push_timestamp(cal_event.start().expect("opening room for official race without start time"), serenity_utils::message::TimestampStyle::Relative);
-            msg.push(" : ");
+            msg.push(" : ");
             match cal_event.race.entrants {
                 Entrants::Open | Entrants::Count { .. } => {
                     msg.push_safe(phase_round);
                 },
                 Entrants::Named(ref entrants) => {
                     msg.push_safe(phase_round);
-                    msg.push(" : ");
+                    msg.push(" : ");
                     msg.push_safe(entrants);
                 }
                 Entrants::Two([ref team1, ref team2]) => {
                     msg.push_safe(phase_round);
                     //TODO adjust for asyncs
-                    msg.push(" : ");
+                    msg.push(" : ");
                     msg.mention_entrant(&mut *transaction, event.discord_guild, team1).await.to_racetime()?;
                     msg.push(" vs ");
                     msg.mention_entrant(&mut *transaction, event.discord_guild, team2).await.to_racetime()?;
@@ -5240,7 +3624,7 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                 Entrants::Three([ref team1, ref team2, ref team3]) => {
                     msg.push_safe(phase_round);
                     //TODO adjust for asyncs
-                    msg.push(" : ");
+                    msg.push(" : ");
                     msg.mention_entrant(&mut *transaction, event.discord_guild, team1).await.to_racetime()?;
                     msg.push(" vs ");
                     msg.mention_entrant(&mut *transaction, event.discord_guild, team2).await.to_racetime()?;

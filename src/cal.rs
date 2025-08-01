@@ -2618,7 +2618,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                             let schedule = http_client.get("https://league.ootrandomizer.com/scheduleJson")
                                 .send().await?
                                 .detailed_error_for_status().await?
-                                .json_with_text_in_error::<league::Schedule>().await?;
+                                .json_with_text_in_error::<serde_json::Value>().await?; // Removed league module reference
                             for match_data in schedule.matches {
                                 if match_data.id <= 938 { continue } // seasons 5 to 8
                                 let mut new_race = Race {

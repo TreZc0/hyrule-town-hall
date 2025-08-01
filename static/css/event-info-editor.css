@@ -1,0 +1,328 @@
+/* Event Info Editor Styles */
+.event-info-editor-container {
+    margin: 20px 0;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.editor-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 15px;
+    background: #f8f9fa;
+    border-bottom: 1px solid #ddd;
+    border-radius: 8px 8px 0 0;
+}
+
+.toolbar-group {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+}
+
+.toolbar-btn {
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    background: #fff;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.toolbar-btn:hover {
+    background: #e9ecef;
+    border-color: #adb5bd;
+}
+
+.toolbar-btn:active {
+    background: #dee2e6;
+}
+
+.toolbar-btn.save-btn {
+    background: #28a745;
+    color: white;
+    border-color: #28a745;
+}
+
+.toolbar-btn.save-btn:hover {
+    background: #218838;
+    border-color: #1e7e34;
+}
+
+.toolbar-btn.delete-btn {
+    background: #dc3545;
+    color: white;
+    border-color: #dc3545;
+}
+
+.toolbar-btn.delete-btn:hover {
+    background: #c82333;
+    border-color: #bd2130;
+}
+
+.event-info-editor {
+    min-height: 400px;
+    padding: 20px;
+    border: none;
+    outline: none;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    color: #333;
+}
+
+.event-info-editor:focus {
+    background: #fafafa;
+}
+
+.event-info-editor h1,
+.event-info-editor h2,
+.event-info-editor h3,
+.event-info-editor h4,
+.event-info-editor h5,
+.event-info-editor h6 {
+    margin: 20px 0 10px 0;
+    color: #2c3e50;
+    font-weight: 600;
+}
+
+.event-info-editor h1 {
+    font-size: 28px;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 10px;
+}
+
+.event-info-editor h2 {
+    font-size: 24px;
+    border-bottom: 1px solid #bdc3c7;
+    padding-bottom: 8px;
+}
+
+.event-info-editor h3 {
+    font-size: 20px;
+    color: #34495e;
+}
+
+.event-info-editor p {
+    margin: 10px 0;
+}
+
+.event-info-editor ul,
+.event-info-editor ol {
+    margin: 10px 0;
+    padding-left: 30px;
+}
+
+.event-info-editor li {
+    margin: 5px 0;
+}
+
+.event-info-editor a {
+    color: #3498db;
+    text-decoration: none;
+}
+
+.event-info-editor a:hover {
+    text-decoration: underline;
+}
+
+.event-info-editor blockquote {
+    margin: 15px 0;
+    padding: 10px 20px;
+    border-left: 4px solid #3498db;
+    background: #f8f9fa;
+    font-style: italic;
+}
+
+.event-info-editor code {
+    background: #f1f2f6;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+}
+
+.event-info-editor pre {
+    background: #f8f9fa;
+    padding: 15px;
+    border-radius: 5px;
+    overflow-x: auto;
+    border: 1px solid #e9ecef;
+}
+
+/* Macro Dropdown */
+.macro-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    z-index: 1000;
+    min-width: 200px;
+}
+
+.macro-item {
+    padding: 10px 15px;
+    cursor: pointer;
+    border-bottom: 1px solid #f0f0f0;
+    transition: background 0.2s ease;
+}
+
+.macro-item:hover {
+    background: #f8f9fa;
+}
+
+.macro-item:last-child {
+    border-bottom: none;
+}
+
+/* Messages */
+.message {
+    padding: 10px 15px;
+    margin: 10px 0;
+    border-radius: 4px;
+    font-weight: 500;
+}
+
+.message-success {
+    background: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.message-error {
+    background: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+/* Table of Contents */
+.toc {
+    background: #f8f9fa;
+    padding: 20px;
+    border-radius: 8px;
+    margin: 20px 0;
+    border: 1px solid #e9ecef;
+}
+
+.toc h2 {
+    margin-top: 0;
+    color: #495057;
+}
+
+.toc ul {
+    list-style: none;
+    padding-left: 0;
+}
+
+.toc li {
+    margin: 8px 0;
+}
+
+.toc a {
+    color: #007bff;
+    text-decoration: none;
+    padding: 5px 0;
+    display: block;
+}
+
+.toc a:hover {
+    text-decoration: underline;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .editor-toolbar {
+        flex-direction: column;
+        gap: 8px;
+    }
+    
+    .toolbar-group {
+        justify-content: center;
+    }
+    
+    .event-info-editor {
+        padding: 15px;
+        font-size: 14px;
+    }
+    
+    .event-info-editor h1 {
+        font-size: 24px;
+    }
+    
+    .event-info-editor h2 {
+        font-size: 20px;
+    }
+    
+    .event-info-editor h3 {
+        font-size: 18px;
+    }
+}
+
+/* Placeholder styling */
+.event-info-editor[contenteditable="true"]:empty:before {
+    content: "Start writing your event information here...";
+    color: #999;
+    font-style: italic;
+}
+
+/* Focus styles */
+.event-info-editor:focus {
+    outline: none;
+    box-shadow: inset 0 0 0 2px #3498db;
+}
+
+/* Selection styles */
+.event-info-editor ::selection {
+    background: #3498db;
+    color: white;
+}
+
+/* Link insertion dialog */
+.link-dialog {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    z-index: 1001;
+    min-width: 300px;
+}
+
+.link-dialog input {
+    width: 100%;
+    padding: 8px;
+    margin: 5px 0;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.link-dialog button {
+    margin: 10px 5px 0 0;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.link-dialog .btn-primary {
+    background: #007bff;
+    color: white;
+}
+
+.link-dialog .btn-secondary {
+    background: #6c757d;
+    color: white;
+} 

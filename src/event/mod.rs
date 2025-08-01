@@ -19,6 +19,7 @@ use {
 
 pub(crate) mod configure;
 pub(crate) mod enter;
+pub(crate) mod info_content;
 pub(crate) mod setup;
 pub(crate) mod teams;
 pub(crate) mod roles;
@@ -261,11 +262,7 @@ impl<'a> Data<'a> {
                 discord_volunteer_info_channel: row.discord_volunteer_info_channel.map(|PgSnowflake(id)| id),
                 discord_async_channel: row.discord_async_channel.map(|PgSnowflake(id)| id),
                 rando_version: row.rando_version.map(|Json(rando_version)| rando_version),
-                single_settings: if series == Series::CopaDoBrasil && event == "1" {
-                    Some(br::s1_settings()) // support for randomized starting song
-                } else {
-                    row.single_settings.map(|Json(single_settings)| single_settings)
-                },
+                single_settings: row.single_settings.map(|Json(single_settings)| single_settings),
                 team_config: row.team_config,
                 enter_flow: row.enter_flow.map(|Json(flow)| flow),
                 show_opt_out: row.show_opt_out,
@@ -299,59 +296,10 @@ impl<'a> Data<'a> {
         //TODO parse weights at compile time
 
         Ok(match (self.series, &*self.event) {
-            (Series::BattleRoyale, "1") => from_file!("../../assets/event/ohko/chests-1-8.0.json"), //TODO reroll with the plando
-            (Series::CoOp, "3") => ChestAppearances::VANILLA,
-            (Series::CopaDoBrasil, "1") => from_file!("../../assets/event/br/chests-1-7.1.143.json"),
-            (Series::League, "4") => from_file!("../../assets/event/league/chests-4-7.1.94.json"),
-            (Series::League, "5") => from_file!("../../assets/event/league/chests-4-7.1.94.json"), //TODO S5 was generated on Dev versions between 7.1.184 and 7.1.200
-            (Series::League, "6") => from_file!("../../assets/event/league/chests-6-8.0.22.json"),
-            (Series::League, "7") => from_file!("../../assets/event/league/chests-7-8.1.69.json"),
-            (Series::League, "8") => from_file!("../../assets/event/league/chests-8-8.2.55.json"),
-            (Series::MixedPools, "1") => from_file!("../../assets/event/mp/chests-1-6.2.100-fenhl.4.json"),
-            (Series::MixedPools, "2") => from_file!("../../assets/event/mp/chests-2-7.1.117-fenhl.17.json"),
-            (Series::MixedPools, "3") => from_file!("../../assets/event/mp/chests-3-8.1.36-fenhl.6.riir.4.json"),
-            (Series::MixedPools, "4") => from_file!("../../assets/event/mp/chests-4-8.2.69-fenhl.4.riir.5.json"),
-            (Series::Mq, "1") => from_file!("../../assets/event/mq/chests-1-8.2.json"),
-            (Series::Multiworld, "1" | "2") => ChestAppearances::VANILLA, // CAMC off or classic and no keys in overworld
-            (Series::Multiworld, "3") => mw::s3_chests(&Draft {
-                high_seed: Id::dummy(), // Draft::complete_randomly doesn't check for active team
-                went_first: None,
-                skipped_bans: 0,
-                settings: HashMap::default(),
-            }.complete_randomly(draft::Kind::MultiworldS3).await.unwrap()),
-            (Series::Multiworld, "4") => from_file!("../../assets/event/mw/chests-4-7.1.198.json"),
-            (Series::Multiworld, "5") => from_file!("../../assets/event/mw/chests-5-8.2.63.json"),
-            (Series::NineDaysOfSaws, _) => ChestAppearances::VANILLA, // no CAMC in SAWS
-            (Series::Pictionary, _) => ChestAppearances::VANILLA, // no CAMC in Pictionary
-            (Series::Rsl, "1") => from_file!("../../assets/event/rsl/chests-1-4c526c2.json"),
-            (Series::Rsl, "2") => from_file!("../../assets/event/rsl/chests-2-7028072.json"),
-            (Series::Rsl, "3") => from_file!("../../assets/event/rsl/chests-3-a0f568b.json"),
-            (Series::Rsl, "4") => from_file!("../../assets/event/rsl/chests-4-da4dae5.json"),
-            (Series::Rsl, "5") => {
-                // rsl/5 moved from version 20cd31a of the RSL script to version 05bfcd2 after the first two races of the first Swiss round.
-                // For the sake of simplicity, only the new version is used for chests weights right now.
-                //TODO After the event, the version should be randomized based on the total number of races played on each version.
-                from_file!("../../assets/event/rsl/chests-5-05bfcd2.json")
-            }
-            (Series::Rsl, "6") => from_file!("../../assets/event/rsl/chests-6-248f8b5.json"),
-            (Series::Rsl, "7") => from_file!("../../assets/event/rsl/chests-7-104253e.json"), //TODO include RSL-Lite, adjust for simulated drafts
-            (Series::Scrubs, "5") => from_file!("../../assets/event/scrubs/chests-5-7.1.198.json"),
-            (Series::Scrubs, "6") => from_file!("../../assets/event/scrubs/chests-6-8.1.73.json"),
-            (Series::SongsOfHope, "1") => from_file!("../../assets/event/soh/chests-1-8.1.json"),
-            (Series::SpeedGaming, "2023onl" | "2023live") => from_file!("../../assets/event/sgl/chests-2023-42da4aa.json"),
-            (Series::SpeedGaming, "2024onl" | "2024live") => from_file!("../../assets/event/sgl/chests-2024-ee4d35b.json"),
             (Series::Standard, "w") => s::weekly_chest_appearances(),
             (Series::Standard, "6") => from_file!("../../assets/event/s/chests-6-6.9.10.json"),
             (Series::Standard, "7" | "7cc") => from_file!("../../assets/event/s/chests-7-7.1.198.json"),
             (Series::Standard, "8" | "8cc") => from_file!("../../assets/event/s/chests-8-8.2.json"),
-            (Series::TournoiFrancophone, "3") => from_file!("../../assets/event/fr/chests-3-7.1.83-r.1.json"),
-            (Series::TournoiFrancophone, "4") => from_file!("../../assets/event/fr/chests-4-8.1.45-rob.105.json"),
-            (Series::TournoiFrancophone, "5") => from_file!("../../assets/event/fr/chests-5-8.2.64-rob.135.json"),
-            (Series::TriforceBlitz, "2") => from_file!("../../assets/event/tfb/chests-2-7.1.3-blitz.42.json"),
-            (Series::TriforceBlitz, "3") => from_file!("../../assets/event/tfb/chests-3-8.1.32-blitz.57.json"),
-            (Series::TriforceBlitz, "4coop") => from_file!("../../assets/event/tfb/chests-4coop-8.2.64-blitz.87.json"),
-            (Series::WeTryToBeBetter, "1") => from_file!("../../assets/event/scrubs/chests-5-7.1.198.json"),
-            (Series::WeTryToBeBetter, "2") => from_file!("../../assets/event/wttbb/chests-2-8.2.json"),
             (_series, _event) => {
                 ChestAppearances::random()
             }
@@ -359,33 +307,11 @@ impl<'a> Data<'a> {
     }
 
     pub(crate) fn asyncs_allowed(&self) -> bool {
-        match self.series {
-            Series::SpeedGaming => false,
-            _ => true,
-        }
+        true
     }
 
     pub(crate) fn is_single_race(&self) -> bool {
-        match self.series {
-            Series::BattleRoyale => false,
-            Series::CoOp => false,
-            Series::CopaDoBrasil => false,
-            Series::Crosskeys => false,
-            Series::League => false,
-            Series::MixedPools => false,
-            Series::Mq => false,
-            Series::Multiworld => false,
-            Series::NineDaysOfSaws => true,
-            Series::Pictionary => true,
-            Series::Rsl => false,
-            Series::Scrubs => false,
-            Series::SongsOfHope => false,
-            Series::SpeedGaming => false,
-            Series::Standard => false,
-            Series::TournoiFrancophone => false,
-            Series::TriforceBlitz => false,
-            Series::WeTryToBeBetter => false,
-        }
+        false
     }
 
     pub(crate) fn match_source(&self) -> MatchSource<'_> {
@@ -406,14 +332,7 @@ impl<'a> Data<'a> {
 
     pub(crate) fn draft_kind(&self) -> Option<draft::Kind> {
         match (self.series, &*self.event) {
-            (Series::Multiworld, "3") => Some(draft::Kind::MultiworldS3),
-            (Series::Multiworld, "4") => Some(draft::Kind::MultiworldS4),
-            (Series::Multiworld, "5") => Some(draft::Kind::MultiworldS5),
-            (Series::Rsl, "7") => Some(draft::Kind::RslS7),
             (Series::Standard, "7" | "7cc") => Some(draft::Kind::S7),
-            (Series::TournoiFrancophone, "3") => Some(draft::Kind::TournoiFrancoS3),
-            (Series::TournoiFrancophone, "4") => Some(draft::Kind::TournoiFrancoS4),
-            (Series::TournoiFrancophone, "5") => Some(draft::Kind::TournoiFrancoS5),
             (_, _) => None,
         }
     }
@@ -842,50 +761,49 @@ pub(crate) async fn info(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let header = data.header(&mut transaction, me.as_ref(), Tab::Info, false).await?;
-    let content = match data.series {
-        Series::BattleRoyale => ohko::info(&mut transaction, &data).await?,
-        Series::CoOp => coop::info(&mut transaction, &data).await?,
-        Series::CopaDoBrasil => br::info(&mut transaction, &data).await?,
-        Series::Crosskeys => xkeys::info(&mut transaction, &data).await?,
-        Series::League => league::info(&mut transaction, &data).await?,
-        Series::MixedPools => mp::info(&mut transaction, &data).await?,
-        Series::Mq => None,
-        Series::Multiworld => mw::info(&mut transaction, &data).await?,
-        Series::NineDaysOfSaws => Some(ndos::info(&mut transaction, &data).await?),
-        Series::Pictionary => pic::info(&mut transaction, &data).await?,
-        Series::Rsl => rsl::info(&mut transaction, &data).await?,
-        Series::Scrubs => scrubs::info(&mut transaction, &data).await?,
-        Series::SongsOfHope => soh::info(&mut transaction, &data).await?,
-        Series::SpeedGaming => sgl::info(&mut transaction, &data).await?,
-        Series::Standard => s::info(&mut transaction, &data).await?,
-        Series::TournoiFrancophone => fr::info(&mut transaction, &data).await?,
-        Series::TriforceBlitz => tfb::info(&mut transaction, &data).await?,
-        Series::WeTryToBeBetter => wttbb::info(&mut transaction, &data).await?,
-    };
-    let content = html! {
-        : header;
-        @if let Some(content) = content {
-            : content;
-        } else if let Some(organizers) = English.join_html_opt(data.organizers(&mut transaction).await?) {
-            article {
-                p {
-                    : "This event ";
-                    @if data.is_ended() {
-                        : "was";
-                    } else {
-                        : "is";
+    
+    // First try to get content from database
+    let db_content = info_content::get_info_content(&mut transaction, &data).await?;
+    
+    let content = if let Some(db_content) = db_content {
+        // Use database content if available
+        html! {
+            : header;
+            : db_content;
+        }
+    } else {
+        // Fall back to hardcoded content
+        let hardcoded_content = match data.series {
+            Series::Crosskeys => xkeys::info(&mut transaction, &data).await?,
+            Series::Standard => s::info(&mut transaction, &data).await?,
+        };
+        
+        html! {
+            : header;
+            @if let Some(content) = hardcoded_content {
+                : content;
+            } else if let Some(organizers) = English.join_html_opt(data.organizers(&mut transaction).await?) {
+                article {
+                    p {
+                        : "This event ";
+                        @if data.is_ended() {
+                            : "was";
+                        } else {
+                            : "is";
+                        }
+                        : " organized by ";
+                        : organizers;
+                        : ".";
                     }
-                    : " organized by ";
-                    : organizers;
-                    : ".";
                 }
-            }
-        } else {
-            article {
-                p : "No information about this event available yet.";
+            } else {
+                article {
+                    p : "No information about this event available yet.";
+                }
             }
         }
     };
+    
     Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &data.display_name, content).await?)
 }
 
@@ -1212,14 +1130,10 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User
                                         : form_field("confirm", &mut errors, html! {
                                             input(type = "checkbox", id = "confirm", name = "confirm");
                                             label(for = "confirm") {
-                                                @if let Series::CoOp | Series::Multiworld = data.series {
-                                                    : "We have read the above and are ready to play the seed";
+                                                @if let TeamConfig::Solo = data.team_config {
+                                                    : "I am ready to play the seed";
                                                 } else {
-                                                    @if let TeamConfig::Solo = data.team_config {
-                                                        : "I am ready to play the seed";
-                                                    } else {
-                                                        : "We are ready to play the seed";
-                                                    }
+                                                    : "We are ready to play the seed";
                                                 }
                                             }
                                         });
@@ -1233,83 +1147,11 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User
                     @if let Some(async_info) = async_info {
                         : async_info;
                     } else {
-                        @match data.series {
-                            | Series::CoOp
-                            | Series::CopaDoBrasil
-                            | Series::Crosskeys
-                            | Series::MixedPools
-                            | Series::Mq
-                            | Series::Rsl
-                            | Series::Standard
-                            | Series::TournoiFrancophone
-                            | Series::WeTryToBeBetter
-                                => @if let French = data.language {
-                                    p : "Planifiez vos matches dans les fils du canal dédié.";
-                                } else {
-                                    p : "Please schedule your matches using the Discord match threads.";
-                                }
-                            | Series::BattleRoyale
-                            | Series::League
-                            | Series::Scrubs
-                                => @unimplemented // no signups on Mido's House
-                            Series::Multiworld => @if data.is_started(&mut transaction).await? {
-                                //TODO adjust for other match data sources?
-                                //TODO get this team's known matchup(s) from start.gg
-                                p : "Please schedule your matches using Discord threads in the scheduling channel.";
-                                //TODO form to submit matches
+                                                @match data.series {
+                            Series::Crosskeys | Series::Standard => @if let French = data.language {
+                                p : "Planifiez vos matches dans les fils du canal dédié.";
                             } else {
-                                //TODO if any vods are still missing, show form to add them
-                                p : "Waiting for the start of the tournament and round 1 pairings. Keep an eye out for an announcement on Discord."; //TODO include start date?
-                            }
-                            Series::NineDaysOfSaws => @if data.is_ended() {
-                                p : "This race has been completed."; //TODO ranking and finish time
-                            } else if let Some(ref race_room) = data.url {
-                                p {
-                                    : "Please join ";
-                                    a(href = race_room.to_string()) : "the race room";
-                                    : " as soon as possible. You will receive further instructions there.";
-                                }
-                            } else {
-                                : "Waiting for the race room to be opened, which should happen around 30 minutes before the scheduled starting time. Keep an eye out for an announcement on Discord.";
-                            }
-                            Series::Pictionary => @if data.is_ended() {
-                                p : "This race has been completed."; //TODO ranking and finish time
-                            } else if let Some(ref race_room) = data.url {
-                                @match row.role.try_into().expect("non-Pictionary role in Pictionary team") {
-                                    pic::Role::Sheikah => p {
-                                        : "Please join ";
-                                        a(href = race_room.to_string()) : "the race room";
-                                        : " as soon as possible. You will receive further instructions there.";
-                                    }
-                                    pic::Role::Gerudo => p {
-                                        : "Please keep an eye on ";
-                                        a(href = race_room.to_string()) : "the race room";
-                                        : " (but do not join). The spoiler log will be posted there.";
-                                    }
-                                }
-                            } else {
-                                : "Waiting for the race room to be opened, which should happen around 30 minutes before the scheduled starting time. Keep an eye out for an announcement on Discord.";
-                            }
-                            Series::SongsOfHope => @if data.is_started(&mut transaction).await? {
-                                p : "Please schedule your matches using Discord threads in the scheduling channel.";
-                            } else {
-                                p { //TODO indicate whether qualified?
-                                    : "Please see the rules document for how to qualify, and "; //TODO linkify
-                                    a(href = uri!(races(data.series, &*data.event))) : "the race schedule";
-                                    : " for upcoming qualifiers.";
-                                }
-                            }
-                            Series::SpeedGaming => p { //TODO indicate whether qualified?
-                                : "Please see the rules document for how to qualify, and "; //TODO linkify
-                                a(href = uri!(races(data.series, &*data.event))) : "the race schedule";
-                                : " for upcoming qualifiers.";
-                            }
-                            Series::TriforceBlitz => @if data.is_started(&mut transaction).await? {
-                                //TODO get this entrant's known matchup(s)
-                                p : "Please schedule your matches using Discord threads in the scheduling channel.";
-                            } else {
-                                //TODO if any vods are still missing, show form to add them
-                                p : "Waiting for the start of the tournament and round 1 pairings. Keep an eye out for an announcement on Discord."; //TODO include start date?
+                                p : "Please schedule your matches using the Discord match threads.";
                             }
                         }
                     }
