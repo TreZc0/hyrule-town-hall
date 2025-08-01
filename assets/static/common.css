@@ -418,7 +418,7 @@ p.error {
 }
 
 .settings-link:hover::after {
-  content: attr(title);
+  content: attr(data-tooltip);
   position: absolute;
   bottom: 100%;
   left: 50%;
@@ -432,6 +432,6 @@ p.error {
   white-space: pre-line;
   z-index: 1000;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-  max-width: 600px;
+  max-width: 350px;
   text-align: center;
 }
