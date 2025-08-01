@@ -2270,27 +2270,21 @@ pub(crate) async fn race_table(
                         }
                         @if has_buttons {
                             td {
-                                @if options.can_edit {
-                                    @if let Some(user) = user {
-                                        @let is_admin = user.id == Id::from(16287394041462225947_u64);
-                                        @let is_organizer = event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(user));
-                                        @if is_admin || is_organizer {
-                                            a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
-                                        } else {
-                                            @match race.schedule {
-                                                RaceSchedule::Live { .. } => {
-                                                    @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
-                                                    @if all_teams_consented {
-                                                        a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
-                                                    } else {
-                                                        // Show edit button for organizers even without consent
-                                                        a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
-                                                    }
+                                @if let Some(user) = user {
+                                    @let is_admin = user.id == Id::from(16287394041462225947_u64);
+                                    @let is_organizer = event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(user));
+                                    @if is_admin || is_organizer {
+                                        a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
+                                    } else if options.can_edit {
+                                        @match race.schedule {
+                                            RaceSchedule::Live { .. } => {
+                                                @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                                @if all_teams_consented {
+                                                    a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
                                                 }
-                                                RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {
-                                                    // Show edit button for organizers on async and unscheduled races
-                                                    a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
-                                                }
+                                            }
+                                            RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {
+                                                a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
                                             }
                                         }
                                     }
