@@ -1398,6 +1398,12 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 CommandDataOptionValue::Integer(game) => i16::try_from(game).expect("game number out of range"),
                                 _ => panic!("unexpected slash command option type"),
                             });
+                            
+                            // Defer the response immediately to prevent timeout
+                            interaction.create_response(ctx, CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()
+                                .ephemeral(true)
+                            )).await?;
+                            
                             if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, false, None).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
@@ -1412,10 +1418,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             .push("/submit> to schedule races for this event.")
                                             .build()
                                     };
-                                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
                                         .content(response_content)
-                                    )).await?;
+                                    ).await?;
                                     transaction.rollback().await?;
                                 } else if team.is_some() || is_organizer {
                                     let start = match interaction.data.options[0].value {
@@ -1424,8 +1429,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     };
                                     if let Some(start) = parse_timestamp(start) {
                                         if (start - Utc::now()).to_std().map_or(true, |schedule_notice| schedule_notice < event.min_schedule_notice) {
-                                            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                .ephemeral(true)
+                                            interaction.edit_response(ctx, EditInteractionResponse::new()
                                                 .content(if event.min_schedule_notice <= Duration::default() {
                                                     if let French = event.language {
                                                         format!("Désolé mais cette date est dans le passé.")
@@ -1439,7 +1443,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         format!("Sorry, races must be scheduled at least {} in advance.", English.format_duration(event.min_schedule_notice, true))
                                                     }
                                                 })
-                                            )).await?;
+                                            ).await?;
                                             transaction.rollback().await?;
                                         } else {
                                             race.schedule.set_live_start(start);
@@ -1462,10 +1466,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         if let Some(channel) = event.discord_race_room_channel {
                                                             channel.say(ctx, &msg).await?;
                                                         }
-                                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                            .ephemeral(false)
+                                                        interaction.edit_response(ctx, EditInteractionResponse::new()
                                                             .content(msg)
-                                                        )).await?;
+                                                        ).await?;
                                                     } else {
                                                         let mut response_content = MessageBuilder::default();
                                                         response_content.push(if let Some(game) = cal_event.race.game { format!("Game {game}") } else { format!("This race") });
@@ -1474,10 +1477,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         let response_content = response_content
                                                             .push(". The race room will be opened momentarily.")
                                                             .build();
-                                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                            .ephemeral(false)
+                                                        interaction.edit_response(ctx, EditInteractionResponse::new()
                                                             .content(response_content)
-                                                        )).await?;
+                                                        ).await?;
                                                     }
                                                     transaction.commit().await?;
                                                 })
@@ -1501,32 +1503,29 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         response_content.build()
                                                     }
                                                 };
-                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                    .ephemeral(false)
+                                                interaction.edit_response(ctx, EditInteractionResponse::new()
                                                     .content(response_content)
-                                                )).await?;
+                                                ).await?;
                                             }
                                         }
                                     } else {
-                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                            .ephemeral(true)
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
                                             .content(if let French = event.language {
                                                 "Désolé, cela n'est pas un timestamp au format de Discord. Vous pouvez utiliser <https://hammertime.cyou/> pour en générer un."
                                             } else {
                                                 "Sorry, that doesn't look like a Discord timestamp. You can use <https://hammertime.cyou/> to generate one."
                                             })
-                                        )).await?;
+                                        ).await?;
                                         transaction.rollback().await?;
                                     }
                                 } else {
-                                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
                                         .content(if let French = event.language {
                                             "Désolé, seuls les participants de cette race et les organisateurs peuvent utiliser cette commande."
                                         } else {
                                             "Sorry, only participants in this race and organizers can use this command."
                                         })
-                                    )).await?;
+                                    ).await?;
                                     transaction.rollback().await?;
                                 }
                             }
@@ -2781,6 +2780,11 @@ pub(crate) async fn result_async_command(
     ctx: &DiscordCtx,
     interaction: &CommandInteraction,
 ) -> Result<(), Error> {
+    // Defer the response immediately to prevent timeout
+    interaction.create_response(ctx, CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()
+        .ephemeral(true)
+    )).await?;
+    
     let mut transaction = {
         let discord_data = ctx.data.read().await;
         discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
@@ -2800,10 +2804,9 @@ pub(crate) async fn result_async_command(
     ).fetch_one(&mut *transaction).await?.exists;
 
     if !is_organizer {
-        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-            .ephemeral(true)
+        interaction.edit_response(ctx, EditInteractionResponse::new()
             .content("You must be an event organizer to use this command.")
-        )).await?;
+        ).await?;
         transaction.rollback().await?;
         return Ok(());
     }
@@ -2828,10 +2831,9 @@ pub(crate) async fn result_async_command(
         match find_race_from_thread(&mut transaction, thread_id).await? {
             Some((race_id, async_part)) => (race_id, async_part as i64),
             None => {
-                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                    .ephemeral(true)
+                interaction.edit_response(ctx, EditInteractionResponse::new()
                     .content("This command must be used in an async race thread, or you must provide race_id and async_part parameters.")
-                )).await?;
+                ).await?;
                 transaction.rollback().await?;
                 return Ok(());
             }
@@ -2846,10 +2848,9 @@ pub(crate) async fn result_async_command(
     // Parse the time (format: hh:mm:ss)
     let time_parts: Vec<&str> = time_str.split(':').collect();
     if time_parts.len() != 3 {
-        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-            .ephemeral(true)
+        interaction.edit_response(ctx, EditInteractionResponse::new()
             .content("Time must be in format hh:mm:ss")
-        )).await?;
+        ).await?;
         transaction.rollback().await?;
         return Ok(());
     }
@@ -2904,9 +2905,9 @@ pub(crate) async fn result_async_command(
         3 => "3rd",
         n => &format!("{}th", n),
     };
-    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+    interaction.edit_response(ctx, EditInteractionResponse::new()
         .content(format!("Time recorded for {} half of this async: {}", ordinal, time_str))
-    )).await?;
+    ).await?;
 
     // Check if both async parts are complete
     let async_times = sqlx::query!(
