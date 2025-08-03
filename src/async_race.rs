@@ -273,20 +273,8 @@ impl AsyncRaceManager {
             content.push(format!("**Seed Settings:** {}", crosskeys_options.as_seed_options_str()));
             content.push_line("");
             
-            // Create race options string without delay setting
-            let mut race_options = Vec::new();
-            let race_options_full = crosskeys_options.as_race_options_str();
-            if race_options_full.contains("ALLOWED") {
-                race_options.push("hovering and moldorm bouncing ALLOWED");
-            } else {
-                race_options.push("hovering and moldorm bouncing BANNED");
-            }
-            // Note: We exclude the delay setting as requested
-            let race_options_str = if race_options.is_empty() {
-                "standard race rules".to_string()
-            } else {
-                race_options.join(", ")
-            };
+            // Use the new method that excludes delay setting
+            let race_options_str = crosskeys_options.as_race_options_str_no_delay();
             
             content.push(format!("**Race Rules:** {}", race_options_str));
             content.push_line("");

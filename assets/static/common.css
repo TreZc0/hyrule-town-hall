@@ -552,6 +552,9 @@ p.error {
   white-space: pre-line;
   z-index: 1000;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-  max-width: 350px;
-  text-align: center;
+  max-width: 500px;
+  min-width: 300px;
+  text-align: left;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
