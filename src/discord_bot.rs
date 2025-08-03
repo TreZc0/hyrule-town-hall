@@ -1402,7 +1402,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             
                             // Defer the response immediately to prevent timeout
                             interaction.create_response(ctx, CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()
-                                .ephemeral(true)
+                                .ephemeral(false)
                             )).await?;
                             
                             if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, false, None).await? {
@@ -1596,7 +1596,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         (cal::EventKind::Async2, was_scheduled)
                                                     } else {
                                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                            .ephemeral(true)
+                                                            .ephemeral(false)
                                                             .content("Sorry, only participants in this race can use this command for now. Please contact TreZ to edit the schedule.") //TODO allow TOs to schedule as async (with team parameter)
                                                         )).await?;
                                                         transaction.rollback().await?;
@@ -1621,7 +1621,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         (cal::EventKind::Async3, was_scheduled)
                                                     } else {
                                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                            .ephemeral(true)
+                                                            .ephemeral(false)
                                                             .content("Sorry, only participants in this race can use this command for now. Please contact TreZ to edit the schedule.") //TODO allow TOs to schedule as async (with team parameter)
                                                         )).await?;
                                                         transaction.rollback().await?;
@@ -2759,7 +2759,7 @@ pub(crate) async fn result_async_command(
 ) -> Result<(), Error> {
     // Defer the response immediately to prevent timeout
     interaction.create_response(ctx, CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()
-        .ephemeral(true)
+        .ephemeral(false)
     )).await?;
     
     let mut transaction = {
