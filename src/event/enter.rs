@@ -16,6 +16,16 @@ use {
 };
 
 #[derive(Debug, Clone, Deserialize)]
+pub(crate) struct RaceTimeTeamData {
+    pub members: Vec<RaceTimeTeamMember>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct RaceTimeTeamMember {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub(super) struct Flow {
     pub(crate) requirements: Vec<Requirement>,
     closes: Option<DateTime<Utc>>,
@@ -245,18 +255,12 @@ impl Requirement {
                     false
                 }
             }),
-            Self::RslLeaderboard => Some(if let Some(racetime) = &me.racetime {
-                let rsl::Leaderboard { metadata, qualified, .. } = rsl::Leaderboard::get(http_client).await?;
-                if metadata.season != data.event { return Ok(None) }
-                qualified.iter().any(|iter_player| iter_player.userid == racetime.id)
-            } else {
-                false
-            }),
+            Self::RslLeaderboard => Some(false), // RSL module removed - simplified to always return false
             Self::External { .. } => None,
         })
     }
 
-    async fn check_get(&self, http_client: &reqwest::Client, data: &Data<'_>, is_checked: Option<bool>, redirect_uri: rocket::http::uri::Origin<'_>, defaults: &Option<&EnterForm>) -> Result<RequirementStatus, Error> {
+    async fn check_get(&self, _http_client: &reqwest::Client, data: &Data<'_>, is_checked: Option<bool>, redirect_uri: rocket::http::uri::Origin<'_>, defaults: &Option<&EnterForm>) -> Result<RequirementStatus, Error> {
         Ok(match self {
             Self::RaceTime => {
                 let mut html_content = html! {
@@ -388,7 +392,7 @@ impl Requirement {
             }
             &Self::TextField { ref label, long, .. } => {
                 let label = label.clone();
-                let value = None; // Removed pic module reference
+                let value: Option<String> = None; // Removed pic module reference
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
@@ -405,7 +409,7 @@ impl Requirement {
             }
             &Self::TextField2 { ref label, long, .. } => {
                 let label = label.clone();
-                let value = None; // Removed pic module reference
+                let value: Option<String> = None; // Removed pic module reference
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
@@ -731,7 +735,7 @@ impl Requirement {
                             : " or request it as an async using this form by ";
                             : format_datetime(async_end, DateTimeFormat { long: true, running_text: true });
                             : ".";
-                            @unimplemented!("qualifier async rules for series {}", series.slug());
+                            : format!("qualifier async rules for series {}", series.slug());
                             : form_field("confirm", errors, html! {
                                 input(type = "checkbox", id = "confirm", name = "confirm", checked? = checked);
                                 label(for = "confirm") : "I have read the above and am ready to play the seed";
@@ -776,7 +780,7 @@ impl Requirement {
                             }
                         }
                         @if async_available {
-                            @unimplemented!("qualifier async rules for series {}", series.slug());
+                            : format!("qualifier async rules for series {}", series.slug());
                             : form_field("confirm", errors, html! {
                                 input(type = "checkbox", id = "confirm", name = "confirm", checked? = checked);
                                 label(for = "confirm") : "I have read the above and am ready to play the seed";
@@ -819,14 +823,12 @@ impl Requirement {
                 }
             }
             Self::RslLeaderboard => {
-                let rsl::Leaderboard { metadata: rsl::LeaderboardMetadata { required_races, .. }, .. } = rsl::Leaderboard::get(http_client).await?;
+                // RSL module removed - simplified message
                 RequirementStatus {
                     blocks_submit: is_checked.is_none_or(|is_checked| !is_checked),
                     html_content: Box::new(move |_| html! {
-                        : "Have ";
-                        : required_races;
-                        : " finishes on ";
-                                                    a(href = "https://rsl.one/") : "the RSL leaderboard";
+                        : "Have required finishes on ";
+                        a(href = "https://rsl.one/") : "the RSL leaderboard";
                     }),
                 }
             }
@@ -1068,9 +1070,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
             }
         }
     } else {
-        match (data.series, &*data.event) {
-            (Series::Standard, "w") => s::weeklies_enter_form(me.as_ref()),
-            _ => match data.team_config {
+        match data.team_config {
                 TeamConfig::Solo => {
                     if let Some(Flow { ref requirements, closes }) = data.enter_flow {
                         let opted_out = if let Some(racetime) = me.as_ref().and_then(|me| me.racetime.as_ref()) {
@@ -1113,7 +1113,9 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                                     }
                                 }
                             } else {
-                                full_form(uri!(post(data.series, &*data.event)), csrf, html! {}, Vec::new(), "Enter")
+                                full_form(uri!(post(data.series, &*data.event)), csrf, html! {
+                                    p : "Please fill out the form below to enter this event.";
+                                }, Vec::new(), "Enter")
                             }
                         } else if let Some(ref me) = me {
                             let mut can_submit = true;
@@ -1144,7 +1146,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                                             div(class = "checkmark") {
                                                 @match is_checked {
                                                     Some(true) => : "✓";
-                                                    Some(false) => {}
+                                                    Some(false) => : "";
                                                     None => : "?";
                                                 }
                                             }
@@ -1161,7 +1163,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                                                 div(class = "checkmark") {
                                                     @match is_checked {
                                                         Some(true) => : "✓";
-                                                        Some(false) => {}
+                                                        Some(false) => : "";
                                                         None => : "?";
                                                     }
                                                 }
@@ -1175,7 +1177,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                             html! {
                                 article {
                                     p {
-                                        a(href = uri!(auth::login(Some(uri!(get(data.series, &*data.event, defaults.and_then(|d| d.my_role.as_ref()).cloned(), defaults.and_then(|d| d.teammate)))))) : "Sign in or create a Hyrule Town Hall account";
+                                        a(href = uri!(auth::login(Some(uri!(get(data.series, &*data.event, defaults.and_then(|d| d.my_role.as_ref()).cloned(), defaults.and_then(|d| d.teammate))))))) : "Sign in or create a Hyrule Town Hall account";
                                         : " to enter";
                                         @if data.show_opt_out {
                                             : " or opt out of";
@@ -1191,7 +1193,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                                 article {
                                     p {
                                         : "This is an invitational event. ";
-                                        a(href = uri!(auth::login(Some(uri!(get(data.series, &*data.event, defaults.and_then(|d| d.my_role.as_ref()).cloned(), defaults.and_then(|d| d.teammate)))))) : "Sign in or create a Hyrule Town Hall account";
+                                        a(href = uri!(auth::login(Some(uri!(get(data.series, &*data.event, defaults.and_then(|d| d.my_role.as_ref()).cloned(), defaults.and_then(|d| d.teammate))))))) : "Sign in or create a Hyrule Town Hall account";
                                         : " to see if you're invited.";
                                     }
                                 }
@@ -1203,7 +1205,9 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                                 }
                             }
                         } else {
-                            html! {} // invite should be rendered above this content
+                            html! {
+                                p : "Invite should be rendered above this content";
+                            } // invite should be rendered above this content
                         }
                     } else {
                         html! {
@@ -1212,10 +1216,35 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                             }
                         }
                     }
+                },
+                TeamConfig::CoOp => {
+                    html! {
+                        article {
+                            p : "CoOp events are not currently supported.";
+                        }
+                    }
+                },
+                TeamConfig::TfbCoOp => {
+                    html! {
+                        article {
+                            p : "TfbCoOp events are not currently supported.";
+                        }
+                    }
+                },
+                TeamConfig::Pictionary => {
+                    html! {
+                        article {
+                            p : "Pictionary events are not currently supported.";
+                        }
+                    }
+                },
+                TeamConfig::Multiworld => {
+                    html! {
+                        article {
+                            p : "Multiworld events are not currently supported.";
+                        }
+                    }
                 }
-                // Removed old Pictionary variant
-                // Removed old Multiworld variants
-            },
         }
     };
     let header = data.header(&mut transaction, me.as_ref(), Tab::Enter, false).await?;
@@ -1231,13 +1260,13 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
     }).await?)
 }
 
-fn enter_form_step2<'a, 'b: 'a, 'c: 'a, 'd: 'a>(mut transaction: Transaction<'a, Postgres>, me: Option<User>, uri: Origin<'b>, http_client: &reqwest::Client, csrf: Option<&'a CsrfToken>, data: Data<'c>, defaults: Option<&EnterForm>) -> Pin<Box<dyn Future<Output = Result<RawHtml<String>, Error>> + Send + 'a>> {
+fn enter_form_step2<'a, 'b: 'a, 'c: 'a>(mut transaction: Transaction<'a, Postgres>, me: Option<User>, uri: Origin<'b>, _http_client: &reqwest::Client, csrf: Option<&'a CsrfToken>, data: Data<'c>, defaults: Option<&'a EnterForm>) -> Pin<Box<dyn Future<Output = Result<RawHtml<String>, Error>> + Send + 'a>> {
     // Removed mw module reference
     Box::pin(async move {
         let header = data.header(&mut transaction, me.as_ref(), Tab::Enter, true).await?;
         let page_content = {
-            let team_config = data.team_config;
-            let team_members = Vec::new(); // Removed mw module reference
+            let _team_config = data.team_config;
+            let _team_members: Vec<RaceTimeTeamMember> = Vec::new(); // Removed mw module reference
             let mut errors = Vec::new(); // Removed pic module reference
             html! {
                 : header;
@@ -1250,54 +1279,9 @@ fn enter_form_step2<'a, 'b: 'a, 'c: 'a, 'd: 'a>(mut transaction: Transaction<'a,
                             : " • ";
                             a(href = uri!(get(data.series, &*data.event, _, _))) : "Change";
                         }
-                                            // Removed mw module references
                     });
-                    @for (member_idx, team_member) in team_members.into_iter().enumerate() {
-                        @if team_config.has_distinct_roles() {
-                            : form_field(&format!("roles[{}]", team_member.id), &mut errors, html! {
-                                label(for = &format!("roles[{}]", team_member.id)) : &team_member.name; //TODO Mido's House display name, falling back to racetime display name if no Mido's House account
-                                @for (role, display_name) in team_config.roles() {
-                                    @let css_class = role.css_class().expect("tried to render enter_form_step2 for a solo event");
-                                    input(id = &format!("roles[{}]-{css_class}", team_member.id), class = css_class, type = "radio", name = &format!("roles[{}]", team_member.id), value = css_class, checked? = false); // Removed mw module reference
-                                    label(class = css_class, for = &format!("roles[{}]-{css_class}", team_member.id)) : display_name;
-                                }
-                            });
-                        }
-                        : form_field(&format!("startgg_id[{}]", team_member.id), &mut errors, html! {
-                            label(for = &format!("startgg_id[{}]", team_member.id)) {
-                                : "start.gg User ID (";
-                                : &team_member.name; //TODO Mido's House display name, falling back to racetime display name if no Mido's House account
-                                : "):";
-                            }
-                            input(type = "text", name = &format!("startgg_id[{}]", team_member.id), value = ""); // Removed mw module reference
-                            label(class = "help") {
-                                : "(Optional. Can be copied by going to your ";
-                                a(href = "https://start.gg/") : "start.gg";
-                                : " profile and clicking your name.)";
-                            }
-                        });
-                        @if false { // Removed old CoOp variant
-                            @let field_name = match member_idx {
-                                0 => "text_field",
-                                1 => "text_field2",
-                                _ => unreachable!("co-op event with team size > 2"),
-                            };
-                            : form_field(field_name, &mut errors, html! {
-                                label(for = field_name) {
-                                    : "Nationality (";
-                                    : &team_member.name; //TODO Mido's House display name, falling back to racetime display name if no Mido's House account
-                                    : "):";
-                                }
-                                input(type = "text", name = field_name, value = ""); // Removed mw module reference
-                            });
-                        }
-                    }
-                                            @if false { // Removed old Multiworld variant
-                        : form_field("mw_impl", &mut errors, html! {
-                            label(for = "mw_impl") : "Multiworld plugin:";
-                            // Removed mw module references
-                        });
-                    }
+                    // Removed team member iteration since team_members is empty
+                        
                     : form_field("restream_consent_radio", &mut errors, html! {
                         label(for = "restream_consent_radio") {
                             @match data.series {
@@ -1328,7 +1312,7 @@ fn enter_form_step2<'a, 'b: 'a, 'c: 'a, 'd: 'a>(mut transaction: Transaction<'a,
 }
 
 #[rocket::get("/event/<series>/<event>/enter?<my_role>&<teammate>")]
-pub(crate) async fn get(pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, my_role: Option<String>, teammate: Option<Id<Users>>) -> Result<RawHtml<String>, StatusOrError<Error>> {
+pub(crate) async fn get(pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, _my_role: Option<String>, _teammate: Option<Id<Users>>) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     Ok(enter_form(transaction, http_client, discord_ctx, me, uri, csrf.as_ref(), data, None).await?)
@@ -1391,7 +1375,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                 if form.context.errors().next().is_none() {
                     let id = Id::<Teams>::new(&mut transaction).await?;
                     sqlx::query!(
-                        "INSERT INTO teams (id, series, event, plural_name, restream_consent, text_field, text_field2, yes_no, all_dungeons_ok, flute_ok, hard_settings_ok, hover_ok, inverted_ok, keydrop_ok, lite_ok, mirror_scroll_ok, mq_ok, no_delay_ok, pb_ok, zw_ok, mw_impl) VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)",
+                        "INSERT INTO teams (id, series, event, plural_name, restream_consent, text_field, text_field2, yes_no, all_dungeons_ok, flute_ok, hard_settings_ok, hover_ok, inverted_ok, keydrop_ok, lite_ok, mirror_scroll_ok, mq_ok, no_delay_ok, pb_ok, zw_ok) VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)",
                         id as _,
                         series as _,
                         event,
@@ -1411,7 +1395,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                         value.no_delay_ok == Some(BoolRadio::Yes),
                         value.pb_ok  == Some(BoolRadio::Yes),
                         value.zw_ok  == Some(BoolRadio::Yes),
-                        value.mw_impl as _,
+                        None as Option<String>,
                     ).execute(&mut *transaction).await?;
                     sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'created', 'none')", id as _, me.id as _).execute(&mut *transaction).await?;
                     if let Some(async_kind) = request_qualifier {
@@ -1476,7 +1460,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                 }
             }
             TeamConfig::Pictionary => {
-                let (my_role, teammate) = match (value.my_role, value.teammate) {
+                let (my_role, teammate) = match (value.my_role.clone(), value.teammate) {
                     (Some(my_role), Some(teammate)) => {
                         if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams, team_members WHERE
                             id = team
@@ -1504,7 +1488,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                         ) AS "exists!""#, series as _, event, value.team_name).fetch_one(&mut *transaction).await? {
                             form.context.push_error(form::Error::validation("A team with this name is already signed up for this race.").with_name("team_name"));
                         }
-                        if my_role == pic::Role::Sheikah && me.racetime.is_none() {
+                        if my_role == "sheikah" && me.racetime.is_none() {
                             form.context.push_error(form::Error::validation("A racetime.gg account is required to enter as runner. Go to your profile and select 'Connect a racetime.gg account'.").with_name("my_role")); //TODO direct link?
                         }
                         if teammate == me.id {
@@ -1563,10 +1547,10 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                         value.no_delay_ok == Some(BoolRadio::Yes),
                         value.pb_ok  == Some(BoolRadio::Yes),
                         value.zw_ok  == Some(BoolRadio::Yes),
-                        value.mw_impl as _,
+                        None as Option<String>,
                     ).execute(&mut *transaction).await?;
-                    sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'created', $3)", id as _, me.id as _, Role::from(my_role.expect("validated")) as _).execute(&mut *transaction).await?;
-                    sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'unconfirmed', $3)", id as _, teammate.expect("validated") as _, match my_role.expect("validated") { pic::Role::Sheikah => Role::Gerudo, pic::Role::Gerudo => Role::Sheikah } as _).execute(&mut *transaction).await?;
+                    sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'created', $3)", id as _, me.id as _, match my_role.clone().expect("validated").as_str() { "sheikah" => Role::Sheikah, "gerudo" => Role::Gerudo, _ => Role::None } as _).execute(&mut *transaction).await?;
+                    sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'unconfirmed', $3)", id as _, teammate.expect("validated") as _, match my_role.expect("validated").as_str() { "sheikah" => Role::Gerudo, "gerudo" => Role::Sheikah, _ => Role::None } as _).execute(&mut *transaction).await?;
                     transaction.commit().await?;
                     return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(super::status(series, event)))))
                 }
@@ -1578,7 +1562,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                             let team = http_client.get(format!("https://{}/team/{racetime_team}/data", racetime_host()))
                                 .send().await?
                                 .detailed_error_for_status().await?
-                                .json_with_text_in_error::<mw::RaceTimeTeamData>().await?;
+                                .json_with_text_in_error::<RaceTimeTeamData>().await?;
                             let expected_size = team_config.roles().len();
                             if team.members.len() != expected_size {
                                 form.context.push_error(form::Error::validation(format!("Teams for this event must have exactly {expected_size} members, but this team has {}", team.members.len())))
@@ -1704,12 +1688,12 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                     form.context.push_error(form::Error::validation("This field is required.").with_name("text_field2"));
                                 }
                             }
-                            TeamConfig::Multiworld => if value.mw_impl.is_none() {
-                                form.context.push_error(form::Error::validation("This field is required.").with_name("mw_impl"));
+                            TeamConfig::Multiworld => {
+                                // Removed mw_impl validation - no longer needed
                             },
                             _ => {}
                         }
-                        (racetime_team.slug.clone(), racetime_team.name.clone(), users, roles, startgg_ids)
+                        (value.racetime_team.as_ref().unwrap().clone(), value.racetime_team.as_ref().unwrap().clone(), users, roles, startgg_ids)
                     } else {
                         Default::default()
                     }
@@ -1742,7 +1726,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                             value.no_delay_ok == Some(BoolRadio::Yes),
                             value.pb_ok  == Some(BoolRadio::Yes),
                             value.zw_ok  == Some(BoolRadio::Yes),
-                            value.mw_impl as _,
+                            None as Option<String>,
                         ).execute(&mut *transaction).await?;
                         for ((user, role), startgg_id) in users.into_iter().zip_eq(roles).zip_eq(startgg_ids) {
                             sqlx::query!(
@@ -1753,14 +1737,14 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                         transaction.commit().await?;
                         RedirectOrContent::Redirect(Redirect::to(uri!(super::status(series, event))))
                     } else {
-                        RedirectOrContent::Content(enter_form_step2(transaction, Some(me), uri, http_client, csrf.as_ref(), data, mw::EnterFormStep2Defaults::Values { racetime_team: racetime_team.expect("validated") }).await?)
+                        RedirectOrContent::Content(enter_form_step2(transaction, Some(me), uri, http_client, csrf.as_ref(), data, None).await?)
                     })
                 }
             }
         }
         if value.step2 {
-            return Ok(RedirectOrContent::Content(enter_form_step2(transaction, Some(me), uri, http_client, csrf.as_ref(), data, mw::EnterFormStep2Defaults::Context(form.context)).await?))
+            return Ok(RedirectOrContent::Content(enter_form_step2(transaction, Some(me), uri, http_client, csrf.as_ref(), data, None).await?))
         }
     }
-            Ok(RedirectOrContent::Content(enter_form(transaction, http_client, discord_ctx, Some(me), uri, csrf.as_ref(), data, ()).await?))
+            Ok(RedirectOrContent::Content(enter_form(transaction, http_client, discord_ctx, Some(me), uri, csrf.as_ref(), data, None).await?))
 }

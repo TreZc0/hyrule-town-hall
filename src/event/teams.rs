@@ -576,7 +576,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
 
             let teams = if let QualifierKind::Rank = qualifier_kind {
                 // teams are manually ranked so include ones that haven't submitted qualifier asyncs
-                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams WHERE
+                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, qualifier_rank FROM teams WHERE
                     series = $1
                     AND event = $2
                     AND NOT resigned
@@ -1286,17 +1286,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                         : "✓";
                                     }
                                 }
-                                @if let TeamConfig::Multiworld = data.team_config {
-                                    td {
-                                        @if let Some(team) = team {
-                                            @match None::<()> { // Removed mw_impl field
-                                                None => : "?";
-                                                Some(mw::Impl::BizHawkCoOp) => : "bizhawk-co-op";
-                                                Some(mw::Impl::MidosHouse) => : "MH MW";
-                                            }
-                                        }
-                                    }
-                                }
+                                // Removed multiworld display logic - no longer needed
                             }
                         }
                     }

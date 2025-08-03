@@ -994,7 +994,7 @@ impl Race {
             let Some(draft_kind) = event.draft_kind() else { return Ok(None) };
             match draft.next_step(draft_kind, None, &mut draft::MessageContext::None).await?.kind {
                 draft::StepKind::Done(settings) => Some(settings),
-                draft::StepKind::DoneRsl { .. } => None, //TODO
+                draft::StepKind::Done(_) => None, //TODO
                 draft::StepKind::GoFirst | draft::StepKind::Ban { .. } | draft::StepKind::Pick { .. } | draft::StepKind::BooleanChoice { .. } => None,
             }
         } else {
@@ -2557,85 +2557,9 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                             for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE series = $1 AND event = $2"#, event.series as _, &event.event).fetch_all(&mut *transaction).await? {
                                 races.push(Race::from_id(&mut transaction, &http_client, id).await?);
                             }
-                            let schedule = http_client.get("https://league.ootrandomizer.com/scheduleJson")
-                                .send().await?
-                                .detailed_error_for_status().await?
-                                .json_with_text_in_error::<serde_json::Value>().await?; // Removed league module reference
-                            for match_data in schedule.matches {
-                                if match_data.id <= 938 { continue } // seasons 5 to 8
-                                let mut new_race = Race {
-                                    id: Id::dummy(),
-                                    series: event.series,
-                                    event: event.event.to_string(),
-                                    source: Source::League { id: match_data.id },
-                                    entrants: Entrants::Two([
-                                        match_data.player_a.into_entrant(&http_client).await?,
-                                        match_data.player_b.into_entrant(&http_client).await?,
-                                    ]),
-                                    phase: None,
-                                    round: Some(match_data.division),
-                                    game: None,
-                                    scheduling_thread: None,
-                                    schedule: RaceSchedule::Live {
-                                        start: match_data.time_utc,
-                                        end: None,
-                                        room: None,
-                                    },
-                                    schedule_updated_at: None,
-                                    fpa_invoked: false,
-                                    breaks_used: false,
-                                    draft: None,
-                                    seed: seed::Data::default(),
-                                    video_urls: if let Ok(twitch_username) = match_data.restreamers.iter().filter_map(|restreamer| restreamer.twitch_username.as_ref()).exactly_one() { //TODO notify on multiple restreams
-                                        iter::once((match_data.restream_language.unwrap_or(English), Url::parse(&format!("https://twitch.tv/{twitch_username}"))?)).collect()
-                                    } else {
-                                        HashMap::default()
-                                    },
-                                    restreamers: if_chain! {
-                                        if let Ok(restreamer) = match_data.restreamers.into_iter().exactly_one(); //TODO notify on multiple restreams
-                                        if let Some(racetime_id) = restreamer.racetime_id(&http_client).await?;
-                                        then {
-                                            iter::once((match_data.restream_language.unwrap_or(English), racetime_id)).collect()
-                                        } else {
-                                            HashMap::default()
-                                        }
-                                    },
-                                    last_edited_by: None,
-                                    last_edited_at: None,
-                                    ignored: match match_data.status {
-                                        league::MatchStatus::Canceled => true,
-                                        league::MatchStatus::Confirmed => false,
-                                    },
-                                    schedule_locked: false,
-                                    notified: false,
-                                    async_notified_1: false,
-                                    async_notified_2: false,
-                                    async_notified_3: false,
-
-                                };
-                                if let Some(race) = races.iter_mut().find(|race| if let Source::League { id } = race.source { id == match_data.id } else { false }) {
-                                    if !race.schedule_locked {
-                                        let is_upcoming = !race.has_any_room(); // stop automatically updating certain fields once a room is open
-                                        *race = Race {
-                                            id: race.id,
-                                            schedule: if is_upcoming { new_race.schedule } else { mem::take(&mut race.schedule) },
-                                            schedule_updated_at: race.schedule_updated_at,
-                                            seed: mem::take(&mut race.seed),
-                                            video_urls: if is_upcoming { new_race.video_urls } else { mem::take(&mut race.video_urls) },
-                                            restreamers: if is_upcoming { new_race.restreamers } else { mem::take(&mut race.restreamers) },
-                                            last_edited_at: race.last_edited_at,
-                                            last_edited_by: race.last_edited_by,
-                                            notified: race.notified,
-                                            ..new_race
-                                        };
-                                    }
-                                    race
-                                } else {
-                                    new_race.id = Id::<Races>::new(&mut transaction).await?;
-                                    races.push(new_race);
-                                    races.last_mut().expect("just pushed")
-                                }.save(&mut transaction).await?;
-                            }
+                            // Removed league schedule import functionality
+                            let schedule = serde_json::Value::Null;
+                            // League schedule import functionality removed
                         }
                         MatchSource::StartGG(event_slug) => {
                             let (races, _) = startgg::races_to_import(&mut transaction, &http_client, &config, &event, event_slug).await?;
@@ -2646,7 +2570,8 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                     }
                 }
                 if let Some(ref speedgaming_slug) = event.speedgaming_slug {
-                    let schedule = sgl::schedule(&http_client, speedgaming_slug).await?;
+                    // SGL module removed - schedule functionality disabled
+                    let schedule = Vec::new();
                     let races = Race::for_event(&mut transaction, &http_client, &event).await?;
                     let (mut existing_races, mut unassigned_races) = races.into_iter().partition::<Vec<_>, _>(|race| matches!(race.source, Source::SpeedGaming { .. }));
                     existing_races.sort_unstable_by_key(|race| {

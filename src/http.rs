@@ -661,9 +661,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         favicon::favicon_ico,
         favicon::favicon_png,
         legal::legal_disclaimer,
-        crate::mw::index,
-        crate::mw::platforms,
-        crate::mw::install_macos,
+        // Removed mw module routes - no longer needed
         notification::notifications,
         notification::dismiss,
         seed::get,

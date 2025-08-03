@@ -239,7 +239,7 @@ impl ApiClient {
         if rsl_preset.is_some() && version.branch().is_none_or(|branch| branch.latest_web_name_random_settings().is_none()) { return None }
         match version {
             VersionedBranch::Pinned { version } => {
-                if matches!(rsl_preset, Some(rsl::VersionedPreset::Xopar { .. })) && *version == ootr_utils::Version::from_branch(ootr_utils::Branch::DevR, 7, 1, 181, 1) || *version == ootr_utils::Version::from_branch(ootr_utils::Branch::DevR, 8, 0, 1, 1) {
+                if rsl_preset.is_some() && *version == ootr_utils::Version::from_branch(ootr_utils::Branch::DevR, 7, 1, 181, 1) || *version == ootr_utils::Version::from_branch(ootr_utils::Branch::DevR, 8, 0, 1, 1) {
                     return Some(ootr_utils::Version::from_branch(
                         version.branch(),
                         version.base().major.try_into().expect("taken from existing ootr_utils::Version"),

@@ -421,7 +421,7 @@ async fn check_draft_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl Gen
 async fn send_draft_settings_page(ctx: &DiscordCtx, interaction: &impl GenericInteraction, action: &str, page: usize) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let Some((event, mut race, draft_kind, mut msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
     match race.draft.as_ref().unwrap().next_step(draft_kind, race.game, &mut msg_ctx).await?.kind {
-        draft::StepKind::GoFirst | draft::StepKind::BooleanChoice { .. } | draft::StepKind::Done(_) | draft::StepKind::DoneRsl { .. } => match race.draft.as_mut().unwrap().apply(draft_kind, race.game, &mut msg_ctx, draft::Action::Pick { setting: format!("@placeholder"), value: format!("@placeholder") }).await? {
+                        draft::StepKind::GoFirst | draft::StepKind::BooleanChoice { .. } | draft::StepKind::Done(_) => match race.draft.as_mut().unwrap().apply(draft_kind, race.game, &mut msg_ctx, draft::Action::Pick { setting: format!("@placeholder"), value: format!("@placeholder") }).await? {
             Ok(_) => unreachable!(),
             Err(error_msg) => {
                 interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -2200,7 +2200,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let mut race = Race::from_id(&mut transaction, &http_client, race_id).await?;
                         let Some(speedgaming_slug) = race.event(&mut transaction).await?.speedgaming_slug else { panic!("sgdisambig interaction for race from non-SpeedGaming event") };
                         let schedule = Vec::new(); // Removed sgl module reference
-                        let _restream = schedule.into_iter().find(|_restream| false).expect("no such SpeedGaming match ID");
+                        let restream = schedule.into_iter().find(|_restream| false).expect("no such SpeedGaming match ID");
                         restream.update_race(&mut race, speedgaming_id)?;
                         race.save(&mut transaction).await?;
                         transaction.commit().await?;
@@ -2321,7 +2321,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
         if let Some(Some(phase_round)) = sqlx::query_scalar!("SELECT display_fr FROM phase_round_options WHERE series = $1 AND event = $2 AND phase = $3 AND round = $4", event.series as _, &event.event, phase, round).fetch_optional(&mut *transaction).await?;
         if game_count == 1;
         if event.asyncs_allowed();
-        if let None | Some(draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4) = event.draft_kind();
+                        if let None = event.draft_kind();
         then {
             for team in race.teams() {
                 content.mention_team(&mut transaction, Some(guild_id), team).await?;

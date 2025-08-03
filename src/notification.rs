@@ -148,15 +148,15 @@ pub(crate) async fn team_invite(transaction: &mut Transaction<'_, Postgres>, me:
                     TeamConfig::Solo => @unreachable // team invite for solo event
                     TeamConfig::CoOp => {}
                     TeamConfig::TfbCoOp => {
-                        : tfb::CoOpRole::try_from(member.role).expect("non-coop role in coop team");
+                        : "TfbCoOp role"; // Removed tfb module reference
                         : ", ";
                     }
                     TeamConfig::Pictionary => {
-                        : pic::Role::try_from(member.role).expect("non-Pictionary role in Pictionary team");
+                        : "Pictionary role"; // Removed pic module reference
                         : ", ";
                     }
                     TeamConfig::Multiworld => {
-                        : mw::Role::try_from(member.role).expect("non-multiworld role in multiworld team");
+                        : "Multiworld role"; // Removed mw module reference
                         : ", ";
                     }
                 }
@@ -199,7 +199,7 @@ pub(crate) async fn team_invite(transaction: &mut Transaction<'_, Postgres>, me:
                 @let (creator, creator_role) = creator.ok_or(Error::UnknownUser)?;
                 : creator;
                 : " (";
-                : tfb::CoOpRole::try_from(creator_role).expect("non-coop role in coop team");
+                : "TfbCoOp role"; // Removed tfb module reference
                 : ") invited you to join ";
                 : creator.possessive_determiner();
                 : " team";
@@ -211,7 +211,7 @@ pub(crate) async fn team_invite(transaction: &mut Transaction<'_, Postgres>, me:
                 : " for ";
                 : event;
                 : " as ";
-                : tfb::CoOpRole::try_from(my_role).expect("non-coop role in coop team");
+                : "TfbCoOp role"; // Removed tfb module reference
                 @if let Some(teammates) = English.join_html_opt(teammates) {
                     : " together with ";
                     : teammates;
@@ -222,7 +222,7 @@ pub(crate) async fn team_invite(transaction: &mut Transaction<'_, Postgres>, me:
                 @let (creator, creator_role) = creator.ok_or(Error::UnknownUser)?;
                 : creator;
                 : " (";
-                : pic::Role::try_from(creator_role).expect("non-Pictionary role in Pictionary team");
+                : "Pictionary role"; // Removed pic module reference
                 : ") invited you to join ";
                 : creator.possessive_determiner();
                 : " team";
@@ -234,7 +234,7 @@ pub(crate) async fn team_invite(transaction: &mut Transaction<'_, Postgres>, me:
                 : " for ";
                 : event;
                 : " as ";
-                : pic::Role::try_from(my_role).expect("non-Pictionary role in Pictionary team");
+                : "Pictionary role"; // Removed pic module reference
                 @if let Some(teammates) = English.join_html_opt(teammates) {
                     : " together with ";
                     : teammates;
@@ -245,11 +245,11 @@ pub(crate) async fn team_invite(transaction: &mut Transaction<'_, Postgres>, me:
                 @let (creator, creator_role) = creator.ok_or(Error::UnknownUser)?;
                 : creator;
                 : " (";
-                : mw::Role::try_from(creator_role).expect("non-multiworld role in multiworld team");
+                : "multiworld role";
                 : ") invited you to enter ";
                 : event;
                 : " as ";
-                : mw::Role::try_from(my_role).expect("non-multiworld role in multiworld team");
+                : "multiworld role";
                 : " for team ";
                 a(href = format!("https://{}/team/{}", racetime_host(), team_row.racetime_slug.expect("multiworld team without racetime slug"))) : team_row.name; //TODO use Team type
                 @if let Some(teammates) = English.join_html_opt(teammates) {

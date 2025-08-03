@@ -1111,9 +1111,6 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User
                                         AsyncKind::Tiebreaker1 | AsyncKind::Tiebreaker2 => p : "Play the tiebreaker async to qualify for the bracket stage of the tournament.";
                                     }
                                     @match data.series {
-                                        // Removed old CoOp variant
-                                        Series::MixedPools => : mp::async_rules(&data);
-                                        // Removed old Multiworld variant
                                         _ => {}
                                     }
                                     : full_form(uri!(event::request_async(data.series, &*data.event)), csrf, html! {
@@ -1391,7 +1388,7 @@ pub(crate) async fn confirm_signup(pool: &State<PgPool>, http_client: &State<req
         }
         Ok(if form.context.errors().next().is_some() {
             RedirectOrContent::Content(match value.source {
-                AcceptFormSource::Enter => enter::enter_form(transaction, http_client, discord_ctx, Some(me), uri, csrf.as_ref(), data, enter::EnterFormDefaults::Context(form.context)).await?,
+                AcceptFormSource::Enter => enter::enter_form(transaction, http_client, discord_ctx, Some(me), uri, csrf.as_ref(), data, None).await?,
                 AcceptFormSource::Notifications => {
                     transaction.rollback().await?;
                     crate::notification::list(pool, Some(me), uri, csrf.as_ref(), form.context).await?
@@ -1582,7 +1579,7 @@ pub(crate) async fn resign_post(pool: &State<PgPool>, http_client: &State<reqwes
         }
         Ok(if form.context.errors().next().is_some() {
             RedirectOrContent::Content(match value.source {
-                ResignFormSource::Enter => enter::enter_form(transaction, http_client, discord_ctx, Some(me), uri, csrf.as_ref(), data, enter::EnterFormDefaults::Context(form.context)).await?,
+                ResignFormSource::Enter => enter::enter_form(transaction, http_client, discord_ctx, Some(me), uri, csrf.as_ref(), data, None).await?,
                 ResignFormSource::Notifications => {
                     transaction.rollback().await?;
                     crate::notification::list(pool, Some(me), uri, csrf.as_ref(), form.context).await?

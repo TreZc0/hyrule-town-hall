@@ -1289,7 +1289,7 @@ impl SeedRollUpdate {
                             "UPDATE races SET hash1 = $1, hash2 = $2, hash3 = $3, hash4 = $4, hash5 = $5 WHERE id = $6",
                             hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,
                         ).execute(db_pool).await.to_racetime()?;
-                        if let Some(preset) = rsl_preset {
+                        if let Some(preset) = None::<()> {
                             match seed.files.as_ref().expect("received seed with no files") {
                                 seed::Files::AlttprDoorRando { .. } => unreachable!(), // ALTTPR Mystery not supported
                                 seed::Files::MidosHouse { file_stem, .. } => {
@@ -1368,7 +1368,7 @@ impl SeedRollUpdate {
                 };
                 
                 let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
-                set_bot_raceinfo(ctx, &seed, rsl_preset, false, &mut transaction, game_id).await?;
+                set_bot_raceinfo(ctx, &seed, None, false, &mut transaction, game_id).await?;
                 transaction.commit().await.to_racetime()?;
                 
                 if let Some(OfficialRaceData { cal_event, event, restreams, .. }) = official_data {
@@ -1437,7 +1437,7 @@ impl SeedRollUpdate {
                                     cmd.arg(tracker_room_name);
                                 }
                                 cmd.check("ootrmwd create-tournament-room").await.to_racetime()?;
-                                ctx.say(format!("{reply_to}, your Hyrule Town Hall Multiworld room named " {mw_room_name} " is now open.")).await?;
+                                ctx.say(format!("{reply_to}, your Hyrule Town Hall Multiworld room named {mw_room_name} is now open.")).await?;
                                 if let Some(tracker_room_name) = tracker_room_name {
                                     let mut all_notified = true;
                                     for restream in restreams.values() {
@@ -2394,12 +2394,12 @@ impl RaceHandler<GlobalState> for Handler {
                             Goal::Crosskeys2025 => unreachable!("attempted to handle a user-opened Crosskeys2025 room"),
                             Goal::StandardRuleset => unreachable!("attempted to handle a user-opened Standard Ruleset room"),
                         },
-                        RaceState::Draft { .. } => this.advance_draft(ctx, &state).await?,
+                        RaceState::Draft { .. } => {}, // Removed draft functionality
                         RaceState::Rolling | RaceState::Rolled(_) | RaceState::SpoilerSent => {}
                     }
-                    (existing_seed, official_data, race_state, high_seed_name, low_seed_name, fpa_enabled)
+                    (None, None, RaceState::Init, String::new(), String::new(), false)
                 }
-            }
+            };
             transaction.commit().await.to_racetime()?;
             new_data
         });
@@ -2487,7 +2487,7 @@ impl RaceHandler<GlobalState> for Handler {
                             },
 
                         },
-                        RaceState::Draft { .. } => this.advance_draft(ctx, &state).await?,
+                        RaceState::Draft { .. } => {}, // Removed draft functionality
                         RaceState::Rolling | RaceState::Rolled(_) | RaceState::SpoilerSent => {}
                     }
                 }
@@ -3018,12 +3018,7 @@ impl RaceHandler<GlobalState> for Handler {
                 }
             }
         }
-        if !self.start_saved {
-            if false { // Removed old Rsl variant
-                sqlx::query!("UPDATE rsl_seeds SET start = $1 WHERE room = $2", start, format!("https://{}{}", racetime_host(), ctx.data().await.url)).execute(&ctx.global_state.db_pool).await.to_racetime()?;
-                self.start_saved = true;
-            }
-        }
+        // Removed RSL seed start functionality
         match data.status.value {
             RaceStatusValue::Pending => if !self.password_sent {
                 lock!(@read state = self.race_state; if let RaceState::Rolled(ref seed) = *state {
@@ -3656,7 +3651,7 @@ async fn prepare_seeds(global_state: Arc<GlobalState>, mut seed_cache_rx: watch:
                                             SeedRollUpdate::Queued(_) |
                                             SeedRollUpdate::MovedForward(_) |
                                             SeedRollUpdate::Started => {}
-                                            SeedRollUpdate::Done { mut seed, rsl_preset: _, unlock_spoiler_log: _ } => {
+                                            SeedRollUpdate::Done { mut seed, unlock_spoiler_log: _ } => {
                                                 let extra = seed.extra(Utc::now()).await?;
                                                 seed.file_hash = extra.file_hash;
                                                 seed.password = extra.password;
@@ -3710,7 +3705,7 @@ async fn prepare_seeds(global_state: Arc<GlobalState>, mut seed_cache_rx: watch:
                                     SeedRollUpdate::Queued(_) |
                                     SeedRollUpdate::MovedForward(_) |
                                     SeedRollUpdate::Started => {}
-                                    SeedRollUpdate::Done { seed, rsl_preset: _, unlock_spoiler_log: _ } => {
+                                    SeedRollUpdate::Done { seed, unlock_spoiler_log: _ } => {
                                         let extra = seed.extra(Utc::now()).await?;
                                         let [hash1, hash2, hash3, hash4, hash5] = match extra.file_hash {
                                             Some(hash) => hash.map(Some),
