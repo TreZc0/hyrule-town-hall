@@ -372,6 +372,8 @@ pub(crate) struct Race {
     pub(crate) restreamers: HashMap<Language, String>,
     pub(crate) last_edited_by: Option<Id<Users>>,
     pub(crate) last_edited_at: Option<DateTime<Utc>>,
+    /// An ignored race is treated as if it didn't exist for most purposes, with the notable exception of auto-import.
+    /// This allows a race to be “deleted” without being recreated automatically.
     pub(crate) ignored: bool,
     pub(crate) schedule_locked: bool,
     pub(crate) notified: bool,
@@ -746,10 +748,10 @@ impl Race {
     pub(crate) async fn for_scheduling_channel(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, channel_id: ChannelId, game: Option<i16>, include_started: bool) -> Result<Vec<Self>, Error> {
         let mut races = Vec::default();
         let rows = match (game, include_started) {
-            (None, false) => sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE scheduling_thread = $1 AND (start IS NULL OR start > NOW())"#, PgSnowflake(channel_id) as _).fetch_all(&mut **transaction).await?,
-            (None, true) => sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE scheduling_thread = $1"#, PgSnowflake(channel_id) as _).fetch_all(&mut **transaction).await?,
-            (Some(game), false) => sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE scheduling_thread = $1 AND game = $2 AND (start IS NULL OR start > NOW())"#, PgSnowflake(channel_id) as _, game).fetch_all(&mut **transaction).await?,
-            (Some(game), true) => sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE scheduling_thread = $1 AND game = $2"#, PgSnowflake(channel_id) as _, game).fetch_all(&mut **transaction).await?,
+            (None, false) => sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND scheduling_thread = $1 AND (start IS NULL OR start > NOW())"#, PgSnowflake(channel_id) as _).fetch_all(&mut **transaction).await?,
+            (None, true) => sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND scheduling_thread = $1"#, PgSnowflake(channel_id) as _).fetch_all(&mut **transaction).await?,
+            (Some(game), false) => sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND scheduling_thread = $1 AND game = $2 AND (start IS NULL OR start > NOW())"#, PgSnowflake(channel_id) as _, game).fetch_all(&mut **transaction).await?,
+            (Some(game), true) => sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND scheduling_thread = $1 AND game = $2"#, PgSnowflake(channel_id) as _, game).fetch_all(&mut **transaction).await?,
         };
         for id in rows {
             races.push(Self::from_id(&mut *transaction, http_client, id).await?);
@@ -762,7 +764,8 @@ impl Race {
     pub(crate) async fn game_count(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<i16, Error> {
         let ([team1, team2, team3], [p1, p2, p3], [p1_discord, p2_discord], [p1_racetime, p2_racetime], [p1_twitch, p2_twitch], [total, finished]) = self.entrants.to_db();
         Ok(sqlx::query_scalar!(r#"SELECT game AS "game!" FROM races WHERE
-            series = $1
+            NOT ignored
+            AND series = $1
             AND event = $2
             AND phase IS NOT DISTINCT FROM $3
             AND round IS NOT DISTINCT FROM $4
@@ -809,7 +812,8 @@ impl Race {
             if let Some(game) = self.game;
             let ([team1, team2, team3], [p1, p2, p3], [p1_discord, p2_discord], [p1_racetime, p2_racetime], [p1_twitch, p2_twitch], [total, finished]) = self.entrants.to_db();
             if let Some(id) = sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE
-                series = $1
+                NOT ignored
+                AND series = $1
                 AND event = $2
                 AND phase IS NOT DISTINCT FROM $3
                 AND round IS NOT DISTINCT FROM $4
@@ -1252,25 +1256,25 @@ impl Event {
 
     pub(crate) async fn rooms_to_open(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client) -> Result<Vec<Self>, Error> {
         let mut events = Vec::default();
-        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE room IS NULL AND start IS NOT NULL AND start > NOW() AND (start <= NOW() + TIME '00:30:00' OR (team1 IS NULL AND p1_discord IS NULL AND p1 IS NULL AND (series != 's' OR event != 'w') AND start <= NOW() + TIME '01:00:00'))"#).fetch_all(&mut **transaction).await? {
+        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND room IS NULL AND start IS NOT NULL AND start > NOW() AND (start <= NOW() + TIME '00:30:00' OR (team1 IS NULL AND p1_discord IS NULL AND p1 IS NULL AND (series != 's' OR event != 'w') AND start <= NOW() + TIME '01:00:00'))"#).fetch_all(&mut **transaction).await? {
             events.push(Self {
                 race: Race::from_id(&mut *transaction, http_client, id).await?,
                 kind: EventKind::Normal,
             })
         }
-        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE async_room1 IS NULL AND async_notified_1 IS NOT TRUE AND async_start1 IS NOT NULL AND async_start1 > NOW() AND async_start1 <= NOW() + TIME '00:30:00'"#).fetch_all(&mut **transaction).await? {
+        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND async_room1 IS NULL AND async_notified_1 IS NOT TRUE AND async_start1 IS NOT NULL AND async_start1 > NOW() AND async_start1 <= NOW() + TIME '00:30:00'"#).fetch_all(&mut **transaction).await? {
             events.push(Self {
                 race: Race::from_id(&mut *transaction, http_client, id).await?,
                 kind: EventKind::Async1,
             });
         }
-        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE async_room2 IS NULL AND async_notified_2 IS NOT TRUE AND async_start2 IS NOT NULL AND async_start2 > NOW() AND async_start2 <= NOW() + TIME '00:30:00'"#).fetch_all(&mut **transaction).await? {
+        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND async_room2 IS NULL AND async_notified_2 IS NOT TRUE AND async_start2 IS NOT NULL AND async_start2 > NOW() AND async_start2 <= NOW() + TIME '00:30:00'"#).fetch_all(&mut **transaction).await? {
             events.push(Self {
                 race: Race::from_id(&mut *transaction, http_client, id).await?,
                 kind: EventKind::Async2,
             });
         }
-        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE async_room3 IS NULL AND async_notified_3 IS NOT TRUE AND async_start3 IS NOT NULL AND async_start3 > NOW() AND async_start3 <= NOW() + TIME '00:30:00'"#).fetch_all(&mut **transaction).await? {
+        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND async_room3 IS NULL AND async_notified_3 IS NOT TRUE AND async_start3 IS NOT NULL AND async_start3 > NOW() AND async_start3 <= NOW() + TIME '00:30:00'"#).fetch_all(&mut **transaction).await? {
             events.push(Self {
                 race: Race::from_id(&mut *transaction, http_client, id).await?,
                 kind: EventKind::Async3,
