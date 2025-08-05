@@ -25,6 +25,9 @@ use {
         handler::HandlerMethods as _,
     }, sqlx::{
         types::Json, Database, Decode, Encode, postgres::types::PgInterval
+    }, std::{
+        marker::Sync,
+        cmp::Ordering::{Less, Greater, Equal},
     }
 };
 
@@ -197,6 +200,7 @@ pub(crate) struct CommandIds {
     pub(crate) schedule: CommandId,
     pub(crate) schedule_async: CommandId,
     pub(crate) result_async: CommandId,
+    pub(crate) forfeit_async: CommandId,
     pub(crate) schedule_remove: CommandId,
     pub(crate) second: Option<CommandId>,
     pub(crate) skip: Option<CommandId>,
@@ -868,6 +872,31 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 );
                 idx
             };
+            let forfeit_async = {
+                let idx = commands.len();
+                commands.push(CreateCommand::new("forfeit-async")
+                    .kind(CommandType::ChatInput)
+                    .add_context(InteractionContext::Guild)
+                    .description("Marks a player as forfeiting in an async race part. Only for organizers.")
+                    .add_option(CreateCommandOption::new(
+                        CommandOptionType::String,
+                        "race_id",
+                        "The ID of the race (optional when used in async thread)",
+                    )
+                        .required(false)
+                    )
+                    .add_option(CreateCommandOption::new(
+                        CommandOptionType::Integer,
+                        "async_part",
+                        "The async part number (1, 2, or 3) (optional when used in async thread)",
+                    )
+                        .min_int_value(1)
+                        .max_int_value(3)
+                        .required(false)
+                    )
+                );
+                idx
+            };
             let schedule_remove = {
                 let idx = commands.len();
                 commands.push(CreateCommand::new("schedule-remove")
@@ -1009,6 +1038,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 schedule: commands[schedule].id,
                 schedule_async: commands[schedule_async].id,
                 result_async: commands[result_async].id,
+                forfeit_async: commands[forfeit_async].id,
                 schedule_remove: commands[schedule_remove].id,
                 second: second.map(|idx| commands[idx].id),
                 skip: skip.map(|idx| commands[idx].id),
@@ -1531,6 +1561,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             }
                         } else if interaction.data.id == command_ids.result_async {
                             result_async_command(ctx, &interaction).await?;
+                        } else if interaction.data.id == command_ids.forfeit_async {
+                            forfeit_async_command(ctx, &interaction).await?;
                         } else if interaction.data.id == command_ids.schedule_async {
                             let game = interaction.data.options.get(1).map(|option| match option.value {
                                 CommandDataOptionValue::Integer(game) => i16::try_from(game).expect("game number out of range"),
@@ -2780,15 +2812,172 @@ pub(crate) async fn result_async_command(
     ctx: &DiscordCtx,
     interaction: &CommandInteraction,
 ) -> Result<(), Error> {
+    handle_async_command(ctx, interaction, false).await
+}
+
+pub(crate) async fn forfeit_async_command(
+    ctx: &DiscordCtx,
+    interaction: &CommandInteraction,
+) -> Result<(), Error> {
+    handle_async_command(ctx, interaction, true).await
+}
+
+// Helper function for external reporting (start.gg, challonge, etc.)
+async fn report_async_race_to_external_platforms(
+    ctx: &DiscordCtx,
+    race: &Race,
+    async_times: &[(i32, Option<PgInterval>)],
+    results: &[(i32, Duration)],
+) -> Result<(), Error> {
+    // --- Begin external reporting code ---
+    let cal_event = cal::Event { race: race.clone(), kind: cal::EventKind::Normal };
+    let discord_data = ctx.data.read().await;
+    let http_client = discord_data.get::<HttpClient>().expect("HTTP client missing from Discord context");
+    let startgg_token = discord_data.get::<StartggToken>().expect("start.gg token missing from Discord context");
+    let challonge_api_key = discord_data.get::<ChallongeApiKey>().expect("Challonge API key missing from Discord context");
+    // Report to start.gg if applicable
+    if let Ok(Some(startgg_set_url)) = cal_event.race.startgg_set_url() {
+        let mut total_times: Vec<(i32, Option<Duration>)> = results.iter()
+            .map(|(part, time)| (*part, Some(*time)))
+            .collect();
+        for (async_part, finish_time) in async_times {
+            if finish_time.is_none() {
+                total_times.push((*async_part, None));
+            }
+        }
+        total_times.sort_by(|a, b| {
+            match (a.1, b.1) {
+                (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
+                (Some(_), None) => Less,
+                (None, Some(_)) => Greater,
+                (None, None) => Equal,
+            }
+        });
+        if let Some((winner_part, _)) = total_times.first() {
+            let winner_team = match winner_part {
+                1 => race.teams().next(),
+                2 => race.teams().nth(1),
+                3 => race.teams().nth(2),
+                _ => None,
+            };
+            if let Some(winner_team) = winner_team {
+                if let Some(startgg_id) = &winner_team.startgg_id {
+                    let set_id = if let Some(set_id) = startgg_set_url.path_segments()
+                        .and_then(|segments| segments.last())
+                        .and_then(|last| last.parse::<u64>().ok())
+                    {
+                        startgg::ID(set_id.to_string())
+                    } else {
+                        startgg::ID(startgg_set_url.to_string())
+                    };
+                    match startgg::query_uncached::<startgg::ReportOneGameResultMutation>(
+                        http_client,
+                        startgg_token,
+                        startgg::report_one_game_result_mutation::Variables {
+                            set_id,
+                            winner_entrant_id: startgg_id.clone(),
+                        }
+                    ).await {
+                        Ok(_) => {},
+                        Err(e) => {
+                            eprintln!("Failed to report async race result to start.gg: {:?}", e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Report to challonge if applicable
+    if let cal::Source::Challonge { ref id } = cal_event.race.source {
+        let mut total_times: Vec<(i32, Option<Duration>)> = results.iter()
+            .map(|(part, time)| (*part, Some(*time)))
+            .collect();
+        for (async_part, finish_time) in async_times {
+            if finish_time.is_none() {
+                total_times.push((*async_part, None));
+            }
+        }
+        total_times.sort_by(|a, b| {
+            match (a.1, b.1) {
+                (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
+                (Some(_), None) => Less,
+                (None, Some(_)) => Greater,
+                (None, None) => Equal,
+            }
+        });
+        if let Some((winner_part, _)) = total_times.first() {
+            let winner_team = match winner_part {
+                1 => race.teams().next(),
+                2 => race.teams().nth(1),
+                3 => race.teams().nth(2),
+                _ => None,
+            };
+            if let Some(winner_team) = winner_team {
+                let match_id = id.clone();
+                let winner_id = winner_team.challonge_id.clone();
+                if let Some(winner_id) = winner_id {
+                    let endpoint = format!("https://api.challonge.com/v2/matches/{}/report", match_id);
+                    let payload = serde_json::json!({
+                        "match": {
+                            "winner_id": winner_id,
+                            "scores_csv": "1-0"
+                        }
+                    });
+                    match http_client.put(&endpoint)
+                        .header(reqwest::header::ACCEPT, "application/json")
+                        .header(reqwest::header::CONTENT_TYPE, "application/vnd.api+json")
+                        .header("Authorization-Type", "v1")
+                        .header(reqwest::header::AUTHORIZATION, challonge_api_key)
+                        .json(&payload)
+                        .send()
+                        .await {
+                            Ok(_) => {},
+                            Err(e) => {
+                                eprintln!("Failed to report async race result to challonge: {:?}", e);
+                            }
+                        }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn get_display_order(race: &Race, async_part: i32) -> i32 {
+    match &race.schedule {
+        RaceSchedule::Async { start1, start2, start3, .. } => {
+            // Get all scheduled start times that are not None
+            let mut scheduled_times = Vec::new();
+            if let Some(time) = start1 { scheduled_times.push((1, *time)); }
+            if let Some(time) = start2 { scheduled_times.push((2, *time)); }
+            if let Some(time) = start3 { scheduled_times.push((3, *time)); }
+            
+            // Sort by start time
+            scheduled_times.sort_by_key(|&(_, time)| time);
+            
+            // Find the position of this async part in the sorted list
+            if let Some(position) = scheduled_times.iter().position(|&(part, _)| part == async_part as u8) {
+                (position + 1) as i32 // Convert to 1-based display order
+            } else {
+                // Fallback to async_part number if not found
+                async_part
+            }
+        }
+        _ => async_part, // Fallback
+    }
+}
+
+async fn handle_async_command(
+    ctx: &DiscordCtx,
+    interaction: &CommandInteraction,
+    is_forfeit: bool,
+) -> Result<(), Error> {
     // Defer the response immediately to prevent timeout
     interaction.create_response(ctx, CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()
         .ephemeral(false)
     )).await?;
     
-    let mut transaction = {
-        let discord_data = ctx.data.read().await;
-        discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
-    };
+    let mut transaction = ctx.data.read().await.get::<DbPool>().as_ref().expect("database connection pool missing from Discord context").begin().await?;
 
     // Check if user is an organizer
     let user_id = interaction.user.id;
@@ -2840,28 +3029,6 @@ pub(crate) async fn result_async_command(
         }
     };
 
-    let time_str = interaction.data.options.iter()
-        .find(|opt| opt.name == "time")
-        .and_then(|opt| opt.value.as_str())
-        .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
-
-    // Parse the time (format: hh:mm:ss)
-    let time_parts: Vec<&str> = time_str.split(':').collect();
-    if time_parts.len() != 3 {
-        interaction.edit_response(ctx, EditInteractionResponse::new()
-            .content("Time must be in format hh:mm:ss")
-        ).await?;
-        transaction.rollback().await?;
-        return Ok(());
-    }
-
-    let hours: i32 = time_parts[0].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
-    let minutes: i32 = time_parts[1].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
-    let seconds: i32 = time_parts[2].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
-
-    let total_seconds = hours * 3600 + minutes * 60 + seconds;
-    let duration = Duration::from_secs(total_seconds as u64);
-
     // Get the optional link parameter
     let link: Option<String> = interaction.data.options.iter()
         .find(|opt| opt.name == "link")
@@ -2869,45 +3036,106 @@ pub(crate) async fn result_async_command(
         .map(|s| s.to_string());
 
     // Get the user who ran the command
-    let user = User::from_discord(&mut *transaction, user_id).await?;
+    let user = User::from_discord(&mut *transaction, user_id).await?.ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
 
     // Load race data early so we can use it for display order
     let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await.map_err(|_e| Error::Sql(sqlx::Error::RowNotFound))?;
 
-    // Insert the async time
-    let pg_interval = PgInterval {
-        months: 0,
-        days: 0,
-        microseconds: duration.as_secs() as i64 * 1_000_000,
-    };
-    sqlx::query!(
-        r#"
-        INSERT INTO async_times (race_id, async_part, finish_time, recorded_by, link)
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (race_id, async_part) DO UPDATE SET
-            finish_time = EXCLUDED.finish_time,
-            recorded_at = NOW(),
-            recorded_by = EXCLUDED.recorded_by,
-            link = EXCLUDED.link
-        "#,
-        race_id,
-        async_part as i32,
-        pg_interval,
-        user.unwrap().id as _,
-        link,
-    ).execute(&mut *transaction).await?;
+    if is_forfeit {
+        // Record forfeit (finish_time = NULL)
+        sqlx::query!(
+            r#"
+            INSERT INTO async_times (race_id, async_part, finish_time, recorded_by, link)
+            VALUES ($1, $2, NULL, $3, $4)
+            ON CONFLICT (race_id, async_part) DO UPDATE SET
+                finish_time = NULL,
+                recorded_at = NOW(),
+                recorded_by = EXCLUDED.recorded_by,
+                link = EXCLUDED.link
+            "#,
+            race_id,
+            async_part as i32,
+            user.id as _,
+            link,
+        ).execute(&mut *transaction).await?;
 
-    // Send immediate response for the time recording
-    let display_order = get_display_order(&race, async_part as i32);
-    let ordinal = match display_order {
-        1 => "1st",
-        2 => "2nd", 
-        3 => "3rd",
-        n => &format!("{}th", n),
-    };
-    interaction.edit_response(ctx, EditInteractionResponse::new()
-        .content(format!("Time recorded for {} half of this async: {}", ordinal, time_str))
-    ).await?;
+        // Send immediate response
+        let display_order = get_display_order(&race, async_part as i32);
+        let ordinal = match display_order {
+            1 => "1st",
+            2 => "2nd", 
+            3 => "3rd",
+            n => &format!("{}th", n),
+        };
+        
+        let content = format!("Forfeit recorded for {} half of this async.", ordinal);
+        
+        interaction.edit_response(ctx, EditInteractionResponse::new()
+            .content(content)
+        ).await?;
+    } else {
+        // Record time result
+        let time_str = interaction.data.options.iter()
+            .find(|opt| opt.name == "time")
+            .and_then(|opt| opt.value.as_str())
+            .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
+
+        // Parse the time (format: hh:mm:ss)
+        let time_parts: Vec<&str> = time_str.split(':').collect();
+        if time_parts.len() != 3 {
+            interaction.edit_response(ctx, EditInteractionResponse::new()
+                .content("Time must be in format hh:mm:ss")
+            ).await?;
+            transaction.rollback().await?;
+            return Ok(());
+        }
+
+        let hours: i32 = time_parts[0].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+        let minutes: i32 = time_parts[1].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+        let seconds: i32 = time_parts[2].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+
+        let total_seconds = hours * 3600 + minutes * 60 + seconds;
+        let duration = Duration::from_secs(total_seconds as u64);
+
+        // Insert the async time
+        let pg_interval = PgInterval {
+            months: 0,
+            days: 0,
+            microseconds: (total_seconds as i64) * 1_000_000,
+        };
+
+        sqlx::query!(
+            r#"
+            INSERT INTO async_times (race_id, async_part, finish_time, recorded_by, link)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (race_id, async_part) DO UPDATE SET
+                finish_time = EXCLUDED.finish_time,
+                recorded_at = NOW(),
+                recorded_by = EXCLUDED.recorded_by,
+                link = EXCLUDED.link
+            "#,
+            race_id,
+            async_part as i32,
+            pg_interval,
+            user.id as _,
+            link,
+        ).execute(&mut *transaction).await?;
+
+        // Send immediate response
+        let display_order = get_display_order(&race, async_part as i32);
+        let ordinal = match display_order {
+            1 => "1st",
+            2 => "2nd", 
+            3 => "3rd",
+            n => &format!("{}th", n),
+        };
+        
+        let content = format!("Time recorded for {} half of this async: {}", ordinal, time_str);
+        
+        interaction.edit_response(ctx, EditInteractionResponse::new()
+            .content(content)
+        ).await?;
+    }
 
     // Check if both async parts are complete
     let async_times = sqlx::query!(
@@ -2918,31 +3146,6 @@ pub(crate) async fn result_async_command(
         "#,
         race_id
     ).fetch_all(&mut *transaction).await?;
-    
-    // Helper function to get display order for async part
-    fn get_display_order(race: &Race, async_part: i32) -> i32 {
-        match &race.schedule {
-            RaceSchedule::Async { start1, start2, start3, .. } => {
-                // Get all scheduled start times that are not None
-                let mut scheduled_times = Vec::new();
-                if let Some(time) = start1 { scheduled_times.push((1, *time)); }
-                if let Some(time) = start2 { scheduled_times.push((2, *time)); }
-                if let Some(time) = start3 { scheduled_times.push((3, *time)); }
-                
-                // Sort by start time
-                scheduled_times.sort_by_key(|&(_, time)| time);
-                
-                // Find the position of this async part in the sorted list
-                if let Some(position) = scheduled_times.iter().position(|&(part, _)| part == async_part as u8) {
-                    (position + 1) as i32 // Convert to 1-based display order
-                } else {
-                    // Fallback to async_part number if not found
-                    async_part
-                }
-            }
-            _ => async_part, // Fallback
-        }
-    }
     
     if async_times.len() >= 2 {
         // Both parts are complete, finalize the race
@@ -2988,14 +3191,12 @@ pub(crate) async fn result_async_command(
                     + (finish_time.months as i64) * 30 * 86400;
                 Some((at.async_part, Duration::from_secs(seconds as u64)))
             } else {
-                None // Skip records without finish times
+                None // Skip records without finish times (forfeits)
             }
         }).collect::<Vec<_>>();
 
-        // Send result to results channel
-
         // Find the winning and losing players
-        let mut total_times: Vec<(i32, Duration, &Team)> = results.iter()
+        let mut total_times: Vec<(i32, Option<Duration>, &Team)> = results.iter()
             .map(|(part, time)| {
                 let team = match part {
                     1 => race.teams().next(),
@@ -3003,10 +3204,34 @@ pub(crate) async fn result_async_command(
                     3 => race.teams().nth(2),
                     _ => None,
                 };
-                (*part, *time, team.unwrap())
+                (*part, Some(*time), team.unwrap())
             })
             .collect();
-        total_times.sort_by(|a, b| a.1.cmp(&b.1));
+        
+        // Add forfeiting players with None time
+        for async_time in &async_times {
+            if async_time.finish_time.is_none() {
+                let team = match async_time.async_part {
+                    1 => race.teams().next(),
+                    2 => race.teams().nth(1),
+                    3 => race.teams().nth(2),
+                    _ => None,
+                };
+                if let Some(team) = team {
+                    total_times.push((async_time.async_part, None, team));
+                }
+            }
+        }
+        
+        total_times.sort_by(|a, b| {
+            // Sort by finish time, with None (forfeits) coming last
+            match (a.1, b.1) {
+                (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
+                (Some(_), None) => Less,
+                (None, Some(_)) => Greater,
+                (None, None) => Equal,
+            }
+        });
         
         let (_winner_part, winner_time, winner_team) = &total_times[0];
         let (_loser_part, loser_time, loser_team) = &total_times[1];
@@ -3032,19 +3257,27 @@ pub(crate) async fn result_async_command(
         
         content.mention_user(&winner_player);
         content.push(" (");
-        content.push(format!("{:02}:{:02}:{:02}", 
-            winner_time.as_secs() / 3600,
-            (winner_time.as_secs() % 3600) / 60,
-            winner_time.as_secs() % 60
-        ));
+        if let Some(winner_time) = winner_time {
+            content.push(format!("{:02}:{:02}:{:02}", 
+                winner_time.as_secs() / 3600,
+                (winner_time.as_secs() % 3600) / 60,
+                winner_time.as_secs() % 60
+            ));
+        } else { // this should never happen.
+            content.push("DNF");
+        }
         content.push(") defeats ");
         content.mention_user(&loser_player);
         content.push(" (");
-        content.push(format!("{:02}:{:02}:{:02}", 
-            loser_time.as_secs() / 3600,
-            (loser_time.as_secs() % 3600) / 60,
-            loser_time.as_secs() % 60
-        ));
+        if let Some(loser_time) = loser_time {
+            content.push(format!("{:02}:{:02}:{:02}", 
+                loser_time.as_secs() / 3600,
+                (loser_time.as_secs() % 3600) / 60,
+                loser_time.as_secs() % 60
+            ));
+        } else {
+            content.push("DNF");
+        }
         content.push(")");
         
         // Add links if available
@@ -3088,118 +3321,13 @@ pub(crate) async fn result_async_command(
             scheduling_thread.say(ctx, content.build()).await?;
         }
 
-        // Report to external platforms (start.gg, challonge, etc.)
-        // For async races, we need to handle external reporting manually since the existing
-        // racetime_bot reporting functions expect different data structures
-        let cal_event = cal::Event { race: race.clone(), kind: cal::EventKind::Normal };
-        
-        // Get global state components
-        let discord_data = ctx.data.read().await;
-        let http_client = discord_data.get::<HttpClient>().expect("HTTP client missing from Discord context");
-        let startgg_token = discord_data.get::<StartggToken>().expect("start.gg token missing from Discord context");
-        let challonge_api_key = discord_data.get::<ChallongeApiKey>().expect("Challonge API key missing from Discord context");
-        
-        // Report to start.gg if applicable
-        if let Ok(Some(startgg_set_url)) = cal_event.race.startgg_set_url() {
-            // Find the winning team based on total time
-            let mut total_times: Vec<(i32, Duration)> = results.iter()
-                .map(|(part, time)| (*part, *time))
-                .collect();
-            total_times.sort_by(|a, b| a.1.cmp(&b.1));
-            
-            if let Some((winner_part, _)) = total_times.first() {
-                // Find the team for the winning part
-                let winner_team = match winner_part {
-                    1 => race.teams().next(),
-                    2 => race.teams().nth(1),
-                    3 => race.teams().nth(2),
-                    _ => None,
-                };
-                
-                if let Some(winner_team) = winner_team {
-                    if let Some(startgg_id) = &winner_team.startgg_id {
-                        // Extract set ID from URL (e.g., "https://start.gg/tournament/hth-test/event/main-event/set/90052950" -> "90052950")
-                        let set_id = if let Some(set_id) = startgg_set_url.path_segments()
-                            .and_then(|segments| segments.last())
-                            .and_then(|last| last.parse::<u64>().ok())
-                        {
-                            startgg::ID(set_id.to_string())
-                        } else {
-                            startgg::ID(startgg_set_url.to_string())
-                        };
-                        
-                        // Use the existing start.gg reporting function
-                        match startgg::query_uncached::<startgg::ReportOneGameResultMutation>(
-                            http_client,
-                            startgg_token,
-                            startgg::report_one_game_result_mutation::Variables {
-                                set_id,
-                                winner_entrant_id: startgg_id.clone(),
-                            }
-                        ).await {
-                            Ok(_) => {
-                                // Success - could log this
-                            }
-                            Err(e) => {
-                                // Log error but don't fail the command
-                                eprintln!("Failed to report async race result to start.gg: {:?}", e);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Report to challonge if applicable
-        if let cal::Source::Challonge { ref id } = cal_event.race.source {
-            // Find the winning team based on total time
-            let mut total_times: Vec<(i32, Duration)> = results.iter()
-                .map(|(part, time)| (*part, *time))
-                .collect();
-            total_times.sort_by(|a, b| a.1.cmp(&b.1));
-            
-            if let Some((winner_part, _)) = total_times.first() {
-                // Find the team for the winning part
-                let winner_team = match winner_part {
-                    1 => race.teams().next(),
-                    2 => race.teams().nth(1),
-                    3 => race.teams().nth(2),
-                    _ => None,
-                };
-                
-                if let Some(winner_team) = winner_team {
-                    // Report to challonge API
-                    let match_id = id.clone();
-                    let winner_id = winner_team.challonge_id.clone();
-                    
-                    if let Some(winner_id) = winner_id {
-                        let endpoint = format!("https://api.challonge.com/v2/matches/{}/report", match_id);
-                        let payload = serde_json::json!({
-                            "match": {
-                                "winner_id": winner_id,
-                                "scores_csv": "1-0" // For async races, we report as 1-0 since it's a single game
-                            }
-                        });
-                        
-                        match http_client.put(&endpoint)
-                            .header(reqwest::header::ACCEPT, "application/json")
-                            .header(reqwest::header::CONTENT_TYPE, "application/vnd.api+json")
-                            .header("Authorization-Type", "v1")
-                            .header(reqwest::header::AUTHORIZATION, challonge_api_key)
-                            .json(&payload)
-                            .send()
-                            .await {
-                                Ok(_) => {
-                                    // Success - could log this
-                                }
-                                Err(e) => {
-                                    // Log error but don't fail the command
-                                    eprintln!("Failed to report async race result to challonge: {:?}", e);
-                                }
-                            }
-                    }
-                }
-            }
+        // Extract the fields we need for external reporting
+        let async_times_parsed: Vec<(i32, Option<PgInterval>)> = async_times.iter()
+            .map(|at| (at.async_part, at.finish_time.clone()))
+            .collect();
+        if let Err(e) = report_async_race_to_external_platforms(ctx, &race, &async_times_parsed, &results).await {
+            transaction.rollback().await?;
+            return Err(e);
         }
     }
 
