@@ -3095,7 +3095,6 @@ async fn handle_async_command(
         let seconds: i32 = time_parts[2].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
 
         let total_seconds = hours * 3600 + minutes * 60 + seconds;
-        let duration = Duration::from_secs(total_seconds as u64);
 
         // Insert the async time
         let pg_interval = PgInterval {
