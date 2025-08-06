@@ -1344,13 +1344,13 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         name => panic!("unexpected option for /reset-race: {name}"),
                                     }
                                 }
-                                if !reset_draft && !reset_schedule {
+                                let Some(aspects_reset) = NEVec::try_from_vec(reset_draft.then_some("draft").into_iter().chain(reset_schedule.then_some("schedule")).collect_vec()) else {
                                     interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                         .ephemeral(true)
                                         .content("Please specify at least one thing to delete using the slash command's options.")
                                     )).await?;
                                     return Ok(())
-                                }
+                                };
                                 let http_client = {
                                     let data = ctx.data.read().await;
                                     data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone()
@@ -1428,9 +1428,15 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         }
                                         
                                         transaction.commit().await?;
+                                        let verb = if aspects_reset.len() == NonZero::<usize>::MIN { " has" } else { " have" };
+                                        let response_content = MessageBuilder::default()
+                                            .push(English.join_str(aspects_reset))
+                                            .push(verb)
+                                            .push(" been reset.")
+                                            .build();
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                            .ephemeral(true)
-                                            .content("done")
+                                            .ephemeral(false)
+                                            .content(response_content)
                                         )).await?;
                                     }
                                     Err(_) => {
