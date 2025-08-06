@@ -2011,6 +2011,19 @@ pub(crate) async fn race_table(
         }
         false
     };
+    
+    // Check if any race has custom settings that would show in a settings column
+    let has_settings = 'has_settings: {
+        for race in races {
+            if !race.show_seed() {
+                // Check for Crosskeys2025 races
+                if let Some(racetime_bot::Goal::Crosskeys2025) = racetime_bot::Goal::for_event(race.series, &race.event) {
+                    break 'has_settings true
+                }
+            }
+        }
+        false
+    };
     let has_buttons = options.can_create || options.can_edit;
     let now = Utc::now();
     Ok(html! {
@@ -2036,6 +2049,9 @@ pub(crate) async fn race_table(
                     th : "Links";
                     @if has_seeds {
                         th : "Seed";
+                    }
+                    @if !has_seeds && has_settings {
+                        th : "Settings";
                     }
                     @if options.show_restream_consent {
                         th : "Restream Consent";
@@ -2245,13 +2261,25 @@ pub(crate) async fn race_table(
                                     }
                                 }
                                 
-                                // Add Settings link for races with custom options (including unscheduled and async)
-                                @if race.show_seed() || race.is_ended() || matches!(race.schedule, RaceSchedule::Unscheduled | RaceSchedule::Async { .. }) {
+                                // Add Settings link for races with custom options
+                                @if race.show_seed() || race.is_ended() || matches!(race.schedule, RaceSchedule::Unscheduled | RaceSchedule::Async { .. } | RaceSchedule::Live { .. }) {
                                     @if let Some(racetime_bot::Goal::Crosskeys2025) = racetime_bot::Goal::for_event(race.series, &race.event) {
                                         @if let Ok(crosskeys_options) = racetime_bot::CrosskeysRaceOptions::for_race_with_transaction(&mut *transaction, race).await {
                                             span(class = "settings-link", data_tooltip = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str_no_delay())) {
-                                                : "Hover for Settings";
+                                                : " -Hover for Settings- ";
                                             }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        @if !has_seeds && has_settings {
+                            td {
+                                // Check for Crosskeys2025 races
+                                @if let Some(racetime_bot::Goal::Crosskeys2025) = racetime_bot::Goal::for_event(race.series, &race.event) {
+                                    @if let Ok(crosskeys_options) = racetime_bot::CrosskeysRaceOptions::for_race_with_transaction(&mut *transaction, race).await {
+                                        span(class = "settings-link", data_tooltip = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str_no_delay())) {
+                                            : "-Hover for Settings-";
                                         }
                                     }
                                 }

@@ -3136,18 +3136,19 @@ async fn handle_async_command(
         ).await?;
     }
 
-    // Check if both async parts are complete
+    // Check if both async parts are complete (only count records that have been properly recorded)
     let async_times = sqlx::query!(
         r#"
         SELECT async_part, finish_time, link FROM async_times
-        WHERE race_id = $1
+        WHERE race_id = $1 AND recorded_by IS NOT NULL
         ORDER BY async_part
         "#,
         race_id
     ).fetch_all(&mut *transaction).await?;
     
-    if async_times.len() >= 2 {
-        // Both parts are complete, finalize the race
+    let expected_parts = race.teams().count();
+    if async_times.len() >= expected_parts {
+        // All parts are complete, finalize the race
         let event_name = race.event.clone();
         let event = event::Data::new(&mut transaction, race.series, &event_name).await?
             .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
@@ -3324,6 +3325,7 @@ async fn handle_async_command(
         let async_times_parsed: Vec<(i32, Option<PgInterval>)> = async_times.iter()
             .map(|at| (at.async_part, at.finish_time.clone()))
             .collect();
+        
         if let Err(e) = report_async_race_to_external_platforms(ctx, &race, &async_times_parsed, &results).await {
             transaction.rollback().await?;
             return Err(e);
