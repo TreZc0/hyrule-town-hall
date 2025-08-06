@@ -164,7 +164,7 @@ where T::Variables: Clone + Eq + Hash + Send + Sync, T::ResponseData: Clone + Se
         Ok(match cache.entry::<QueryCache<T>>().or_default().entry(variables.clone()) {
             hash_map::Entry::Occupied(mut entry) => {
                 let (retrieved, entry) = entry.get_mut();
-                if retrieved.elapsed() >= Duration::from_secs(5 * 60) {
+                if retrieved.elapsed() >= Duration::from_secs(30 * 60) {
                     *entry = query_inner::<T>(http_client, auth_token, variables, next_request).await?;
                     *retrieved = Instant::now();
                 }
@@ -396,32 +396,54 @@ pub(crate) async fn swiss_standings(
     use event_sets_query::EventSetsQueryEvent as EventSetsEvent;
     use event_sets_query::ResponseData as EventSetsResponseData;
 
+    // Helper function to fetch remaining pages sequentially
+    async fn fetch_remaining_pages<T>(
+        http_client: &reqwest::Client,
+        startgg_token: &str,
+        total_pages: i64,
+        page_vars_fn: impl Fn(i64) -> T::Variables + Send + Sync,
+        mut process_response: impl FnMut(&T::ResponseData) + Send + Sync,
+    ) -> Result<(), Error>
+    where
+        T: GraphQLQuery + 'static,
+        T::Variables: Clone + Eq + Hash + Send + Sync,
+        T::ResponseData: Clone + Send + Sync,
+    {
+        if total_pages > 1 {
+            log::info!("Fetching {} additional pages sequentially", total_pages - 1);
+            for page in 2..=total_pages {
+                let response = query_cached::<T>(http_client, startgg_token, page_vars_fn(page)).await?;
+                process_response(&response);
+            }
+        }
+        Ok(())
+    }
+    
     // First, get tournament structure to understand what rounds should exist
     let mut swiss_rounds = HashSet::<String>::new();
-    let mut page = 1;
-    loop {
-        let response = query_cached::<EventSetsQuery>(
-            http_client,
-            startgg_token,
-            event_sets_query::Variables {
-                event_slug: event_slug.to_owned(),
-                page,
-            },
-        )
-        .await?;
-        let EventSetsResponseData {
-            event: Some(EventSetsEvent {
-                sets: Some(EventSets {
-                    page_info: Some(event_sets_query::EventSetsQueryEventSetsPageInfo { total_pages: Some(tp) }),
-                    nodes: Some(sets),
-                }),
-                ..
+    
+    // Fetch all event sets pages
+    let event_sets_response = query_cached::<EventSetsQuery>(
+        http_client,
+        startgg_token,
+        event_sets_query::Variables {
+            event_slug: event_slug.to_owned(),
+            page: 1,
+        },
+    )
+    .await?;
+    
+    let total_event_pages = if let EventSetsResponseData {
+        event: Some(EventSetsEvent {
+            sets: Some(EventSets {
+                page_info: Some(event_sets_query::EventSetsQueryEventSetsPageInfo { total_pages: Some(tp) }),
+                nodes: Some(sets),
             }),
             ..
-        } = response else {
-            break;
-        };
-        
+        }),
+        ..
+    } = event_sets_response {
+        // Process first page
         for set in sets.into_iter().filter_map(|s| s) {
             let EventSetNode {
                 phase_group: Some(EventSetPhaseGroup { 
@@ -438,40 +460,78 @@ pub(crate) async fn swiss_standings(
                 swiss_rounds.insert(round_text);
             }
         }
-        
-        if page >= tp {
-            break;
-        }
-        page += 1;
-    }
+        tp
+    } else {
+        return Ok(Vec::new());
+    };
+
+    // Fetch remaining event sets pages
+    fetch_remaining_pages::<EventSetsQuery>(
+        http_client,
+        startgg_token,
+        total_event_pages,
+        |page| event_sets_query::Variables {
+            event_slug: event_slug.to_owned(),
+            page,
+        },
+        |response| {
+            let EventSetsResponseData {
+                event: Some(EventSetsEvent {
+                    sets: Some(EventSets {
+                        nodes: Some(sets),
+                        ..
+                    }),
+                    ..
+                }),
+                ..
+            } = response else { return };
+            
+            for set in sets.iter().filter_map(|s| s.as_ref()) {
+                let EventSetNode {
+                    phase_group: Some(EventSetPhaseGroup { 
+                        phase: Some(phase),
+                        rounds: Some(_rounds),
+                        ..
+                    }),
+                    full_round_text: Some(round_text),
+                    ..
+                } = set else { continue };
+                
+                // Check if this is a Swiss phase
+                if phase.name == Some("Swiss".to_string()) {
+                    swiss_rounds.insert(round_text.clone());
+                }
+            }
+        },
+    )
+    .await?;
 
     // Now get all entrants and their actual matches
     let mut all_entrants = Vec::new();
     let mut entrant_matches = std::collections::HashMap::new();
-    page = 1;
-    loop {
-        let response = query_cached::<EntrantsQuery>(
-            http_client,
-            startgg_token,
-            entrants_query::Variables {
-                slug: Some(event_slug.to_owned()),
-                page: Some(page),
-            },
-        )
-        .await?;
-        let ResponseData {
-            event: Some(Event {
-                entrants: Some(Entrants {
-                    page_info: Some(PageInfo { page: Some(_), total_pages: Some(tp) }),
-                    nodes: Some(entrants),
-                }),
-                ..
+    
+    // Fetch all entrants pages
+    let entrants_response = query_cached::<EntrantsQuery>(
+        http_client,
+        startgg_token,
+        entrants_query::Variables {
+            slug: Some(event_slug.to_owned()),
+            page: Some(1),
+        },
+    )
+    .await?;
+    
+    let total_entrant_pages = if let ResponseData {
+        event: Some(Event {
+            entrants: Some(Entrants {
+                page_info: Some(PageInfo { page: Some(_), total_pages: Some(tp) }),
+                nodes: Some(entrants),
             }),
             ..
-        } = response else {
-            break;
-        };
-        
+        }),
+        ..
+    } = entrants_response {
+        // Process first page
         for entrant in entrants.into_iter().filter_map(|e| e) {
             let EntrantNode {
                 id: Some(entrant_id),
@@ -510,12 +570,73 @@ pub(crate) async fn swiss_standings(
             entrant_matches.insert(entrant_id.to_string(), (entrant_name.clone(), wins, losses, total_matches));
             all_entrants.push((entrant_name, wins, losses));
         }
-        
-        if page >= tp {
-            break;
-        }
-        page += 1;
-    }
+        tp
+    } else {
+        return Ok(Vec::new());
+    };
+
+    // Fetch remaining entrants pages
+    fetch_remaining_pages::<EntrantsQuery>(
+        http_client,
+        startgg_token,
+        total_entrant_pages,
+        |page| entrants_query::Variables {
+            slug: Some(event_slug.to_owned()),
+            page: Some(page),
+        },
+        |response| {
+            let ResponseData {
+                event: Some(Event {
+                    entrants: Some(Entrants {
+                        nodes: Some(entrants),
+                        ..
+                    }),
+                    ..
+                }),
+                ..
+            } = response else { return };
+            
+            for entrant in entrants.iter().filter_map(|e| e.as_ref()) {
+                let EntrantNode {
+                    id: Some(entrant_id),
+                    name: Some(entrant_name),
+                    paginated_sets: Some(paginated_sets),
+                    ..
+                } = entrant else { continue };
+                
+                let mut wins = 0;
+                let mut losses = 0;
+                let mut total_matches = 0; // Track ALL matches (including null winnerId)
+                
+                if let Some(set_nodes) = &paginated_sets.nodes {
+                    for set in set_nodes.iter().filter_map(|s| s.as_ref()) {
+                        let SetNode {
+                            winner_id,
+                            phase_group: Some(PhaseGroup { bracket_type, .. }),
+                            ..
+                        } = set else { continue };
+                        
+                        if *bracket_type != Some(entrants_query::BracketType::SWISS) { continue; }
+                        
+                        // Count ALL matches (including null winnerId)
+                        total_matches += 1;
+                        
+                        // Count wins/losses based on winner_id
+                        match winner_id {
+                            Some(wid) if wid.to_string() == entrant_id.to_string() => wins += 1,
+                            Some(_) => losses += 1,
+                            None => {}, // winnerId null means the match hasn't been played yet
+                        }
+                    }
+                }
+                
+                // Store the matches for this entrant
+                entrant_matches.insert(entrant_id.to_string(), (entrant_name.clone(), wins, losses, total_matches));
+                all_entrants.push((entrant_name.clone(), wins, losses));
+            }
+        },
+    )
+    .await?;
 
     // Now apply the correct bye detection logic
     let expected_rounds = swiss_rounds.len();
