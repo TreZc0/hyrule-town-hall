@@ -2252,7 +2252,7 @@ pub(crate) async fn swiss_standings(
         series as _,
         event
     )
-    .fetch_all(&mut *transaction)
+            .fetch_all(&mut *transaction)
     .await
     .ok()
     .map(|rows| rows.into_iter()
