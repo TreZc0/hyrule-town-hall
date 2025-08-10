@@ -532,7 +532,7 @@ impl<'a> Data<'a> {
             self.series as _,
             &self.event
         )
-        .fetch_all(&mut *transaction)
+        .fetch_all(&mut **transaction)
         .await
         .ok()
         .map(|rows| rows.into_iter()
