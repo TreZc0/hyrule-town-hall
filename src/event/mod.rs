@@ -1362,7 +1362,18 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User
                 : header;
                 article {
                     p : "You are not signed up for this event.";
-                    p : "You can accept, decline, or retract unconfirmed team invitations on the teams page.";
+                    p {
+                        : "If you want to change that, please see ";
+                        a(href = uri!(enter::get(data.series, &*data.event, _, _))) : "the Enter tab";
+                        : ".";
+                    }
+                    @if !matches!(data.team_config, TeamConfig::Solo) {
+                        p {
+                            : "You can accept, decline, or retract unconfirmed team invitations on ";
+                            a(href = uri!(teams::get(data.series, &*data.event))) : "the Teams tab";
+                            : ".";
+                        }
+                    }
                 }
             }
         }
