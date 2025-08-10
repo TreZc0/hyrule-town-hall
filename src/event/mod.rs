@@ -507,7 +507,7 @@ impl<'a> Data<'a> {
     }
 
     /// Returns Swiss standings for this event, if it's a Startgg event
-    pub(crate) async fn swiss_standings(&self, _transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config) -> Result<Option<Vec<startgg::SwissStanding>>, Error> {
+    pub(crate) async fn swiss_standings(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config) -> Result<Option<Vec<startgg::SwissStanding>>, Error> {
         if !matches!(self.match_source(), MatchSource::StartGG(_)) {
             return Ok(None);
         }
@@ -525,8 +525,23 @@ impl<'a> Data<'a> {
             &config.startgg_production
         };
 
+        // Get resigned teams for this event to exclude them from bye prediction
+        let resigned_entrant_ids = sqlx::query!(
+            r#"SELECT startgg_id FROM teams 
+               WHERE series = $1 AND event = $2 AND resigned = TRUE AND startgg_id IS NOT NULL"#,
+            self.series as _,
+            &self.event
+        )
+        .fetch_all(&mut *transaction)
+        .await
+        .ok()
+        .map(|rows| rows.into_iter()
+            .filter_map(|row| row.startgg_id)
+            .map(|id| id.to_string())
+            .collect::<HashSet<_>>());
+
         // Fetch Swiss standings
-        match startgg::swiss_standings(http_client, config, &slug, startgg_token).await {
+        match startgg::swiss_standings(http_client, config, &slug, startgg_token, resigned_entrant_ids.as_ref()).await {
             Ok(standings) => Ok(Some(standings)),
             Err(startgg::Error::GraphQL(errors)) => {
                 // Check if it's a query complexity error
@@ -2230,12 +2245,28 @@ pub(crate) async fn swiss_standings(
         &config.startgg_production
     };
     
+    // Get resigned teams for this event to exclude them from bye prediction
+    let resigned_entrant_ids = sqlx::query!(
+        r#"SELECT startgg_id FROM teams 
+           WHERE series = $1 AND event = $2 AND resigned = TRUE AND startgg_id IS NOT NULL"#,
+        series as _,
+        event
+    )
+    .fetch_all(&mut *transaction)
+    .await
+    .ok()
+    .map(|rows| rows.into_iter()
+        .filter_map(|row| row.startgg_id)
+        .map(|id| id.to_string())
+        .collect::<HashSet<_>>());
+
     // Fetch Swiss standings
     let standings = match startgg::swiss_standings(
         http_client.inner(),
         &*config,
         &slug,
         startgg_token,
+        resigned_entrant_ids.as_ref(),
     ).await {
         Ok(standings) => standings,
         Err(_) => {
