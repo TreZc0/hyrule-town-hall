@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id AS \"id: Id<Teams>\", name, racetime_slug, startgg_id AS \"startgg_id: startgg::ID\", challonge_id, plural_name, submitted IS NOT NULL AS \"qualified!\", pieces, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS \"mw_impl: mw::Impl\", qualifier_rank FROM teams LEFT OUTER JOIN async_teams ON (id = team) WHERE\n                    series = $1\n                    AND event = $2\n                    AND NOT resigned\n                    AND (\n                        $3\n                        OR EXISTS (SELECT 1 FROM team_members WHERE team = id AND member = $4)\n                        OR NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')\n                    )\n                    AND (kind = 'qualifier' OR kind IS NULL)\n                ",
+  "query": "SELECT id AS \"id: Id<Teams>\", name, racetime_slug, startgg_id AS \"startgg_id: startgg::ID\", challonge_id, plural_name, submitted IS NOT NULL AS \"qualified!\", pieces, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS \"mw_impl: mw::Impl\", qualifier_rank, custom_choices AS \"custom_choices: Json<HashMap<String, String>>\" FROM teams LEFT OUTER JOIN async_teams ON (id = team) WHERE\n                    series = $1\n                    AND event = $2\n                    AND NOT resigned\n                    AND (\n                        $3\n                        OR EXISTS (SELECT 1 FROM team_members WHERE team = id AND member = $4)\n                        OR NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')\n                    )\n                    AND (kind = 'qualifier' OR kind IS NULL)\n                ",
   "describe": {
     "columns": [
       {
@@ -127,6 +127,11 @@
         "ordinal": 22,
         "name": "qualifier_rank",
         "type_info": "Int2"
+      },
+      {
+        "ordinal": 23,
+        "name": "custom_choices: Json<HashMap<String, String>>",
+        "type_info": "Jsonb"
       }
     ],
     "parameters": {
@@ -160,8 +165,9 @@
       false,
       false,
       true,
-      true
+      true,
+      false
     ]
   },
-  "hash": "27ea2ff6eb40aeabfc96c3f643f2c4fbd2dba022e57f2fe33c6dd27b65f8876f"
+  "hash": "b21f77a3e11cf2f28dbbf782d3a2f8bbeddb28d9e5dfab29c71a6ff5a0d03a0d"
 }

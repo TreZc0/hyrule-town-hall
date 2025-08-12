@@ -40,6 +40,10 @@ impl Team {
         sqlx::query_as!(Self, r#"SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams WHERE series = $1 AND event = $2 AND NOT resigned"#, series as _, event).fetch_all(&mut **transaction).await
     }
 
+    pub(crate) async fn for_member(transaction: &mut Transaction<'_, Postgres>, member_id: Id<Users>) -> sqlx::Result<Vec<Self>> {
+        sqlx::query_as!(Self, r#"SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, teams.startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams, team_members WHERE NOT resigned AND id = team AND member = $1"#, member_id as _).fetch_all(&mut **transaction).await
+    }
+
     pub(crate) async fn from_event_and_member(transaction: &mut Transaction<'_, Postgres>, series: Series, event: &str, member_id: Id<Users>) -> sqlx::Result<Option<Self>> {
         sqlx::query_as!(Self, r#"SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, teams.startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams, team_members WHERE series = $1 AND event = $2 AND NOT resigned AND id = team AND member = $3"#, series as _, event, member_id as _).fetch_optional(&mut **transaction).await
     }
@@ -111,6 +115,10 @@ impl Team {
                 }
             }
         })
+    }
+
+    pub(crate) async fn into_event(self, transaction: &mut Transaction<'_, Postgres>) -> Result<event::Data<'static>, event::DataError> {
+        Ok(event::Data::new(transaction, self.series, self.event).await?.expect("team for nonexistent event"))
     }
 
     pub(crate) async fn member_ids(&self, transaction: &mut Transaction<'_, Postgres>) -> sqlx::Result<Vec<Id<Users>>> {

@@ -432,13 +432,13 @@ async fn archive(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, sort: 
                 ArchiveSortKey::EndTime => Either::Left(
                     past_events.into_iter().into_group_map_by(|event| event.end.expect("checked above").year())
                         .into_iter()
-                        .sorted_by_key(|(year, _)| Reverse(*year))
+                        .sorted_unstable_by_key(|(year, _)| Reverse(*year))
                         .map(|(year, events)| (Cow::Owned(year.to_string()), events))
                 ),
                 ArchiveSortKey::Series => Either::Right(
                     past_events.into_iter().into_group_map_by(|event| event.series)
                         .into_iter()
-                        .sorted_by_key(|(series, _)| series.display_name())
+                        .sorted_unstable_by_key(|(series, _)| series.display_name())
                         .map(|(series, events)| (Cow::Borrowed(series.display_name()), events))
                 ),
             };

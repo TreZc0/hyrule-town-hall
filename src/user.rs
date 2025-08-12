@@ -282,6 +282,24 @@ impl User {
             None
         })
     }
+
+    async fn events_organized(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<event::Data<'_>>, event::DataError> {
+        let ids = sqlx::query!(r#"SELECT series AS "series: Series", event FROM organizers WHERE organizer = $1"#, self.id as _).fetch_all(&mut **transaction).await?;
+        let mut buf = Vec::with_capacity(ids.len());
+        for row in ids {
+            buf.push(event::Data::new(&mut *transaction, row.series, row.event).await?.expect("event disappeared during transaction"));
+        }
+        Ok(buf)
+    }
+
+    async fn events_participated(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<event::Data<'static>>, event::DataError> {
+        let teams = Team::for_member(&mut *transaction, self.id).await?;
+        let mut buf = Vec::with_capacity(teams.len());
+        for team in teams {
+            buf.push(team.into_event(&mut *transaction).await?);
+        }
+        Ok(buf)
+    }
 }
 
 impl fmt::Display for User {
@@ -475,10 +493,18 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
     } else {
         html! {}
     };
+    let events_organized = user.events_organized(&mut transaction).await?;
+    let events_participated = user.events_participated(&mut transaction).await?;
     Ok(page(transaction, &me, &uri, PageStyle { kind: if me.as_ref().is_some_and(|me| *me == user) { PageKind::MyProfile } else { PageKind::Other }, ..PageStyle::default() }, &format!("{} — Hyrule Town Hall", user.display_name()), html! {
         h1 {
             bdi : user.display_name();
         }
+        p {
+            : "Mido's House user ID: ";
+            code : user.id.to_string();
+        }
+        : racetime;
+        : discord;
         @if user.is_archivist {
             p {
                 : "This user is an archivist: ";
@@ -495,7 +521,21 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
             : "Hyrule Town Hall user ID: ";
             code : user.id.to_string();
         }
-        : racetime;
-        : discord;
+        @if !events_organized.is_empty() {
+            p : "This user has organized the following events:";
+            ul {
+                @for event in events_organized {
+                    li : event;
+                }
+            }
+        }
+        @if !events_participated.is_empty() {
+            p : "This user has participated in the following events:";
+            ul {
+                @for event in events_participated {
+                    li : event;
+                }
+            }
+        }
     }).await?)
 }

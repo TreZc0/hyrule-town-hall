@@ -1718,7 +1718,7 @@ pub(crate) async fn create_race_form(mut transaction: Transaction<'_, Postgres>,
             };
             team_data.push((team.id.to_string(), name));
         }
-        team_data.sort_by(|(_, name1), (_, name2)| name1.cmp(name2));
+        team_data.sort_unstable_by(|(_, name1), (_, name2)| name1.cmp(name2));
         let phase_round_options = sqlx::query!("SELECT phase, round FROM phase_round_options WHERE series = $1 AND event = $2", event.series as _, &event.event).fetch_all(&mut *transaction).await?;
         let mut errors = ctx.errors().collect_vec();
         full_form(uri!(create_race_post(event.series, &*event.event)), csrf, html! {

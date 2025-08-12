@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id AS \"id: Id<Races>\" FROM races WHERE scheduling_thread = $1 AND game = $2 AND (start IS NULL OR start > NOW())",
+  "query": "SELECT id AS \"id: Id<Races>\" FROM races WHERE NOT ignored AND scheduling_thread = $1",
   "describe": {
     "columns": [
       {
@@ -11,13 +11,12 @@
     ],
     "parameters": {
       "Left": [
-        "Int8",
-        "Int2"
+        "Int8"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "26d0c3d3670327db0d18ccf6776e0bd2d56484dbf81ef0e02a410b810673f161"
+  "hash": "28d1115eb9ff3ad31ab609be4d8fd45a3ff9e728af00756e83e44d1dc7225038"
 }
