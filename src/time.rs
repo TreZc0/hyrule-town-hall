@@ -69,56 +69,62 @@ impl DurationUnit {
     }
 }
 
-pub(crate) fn parse_duration(mut s: &str, default_unit: DurationUnit) -> Option<Duration> {
-    let mut duration = Duration::default();
-    let mut default_unit = Some(default_unit);
-    let mut last_magnitude = None;
-    loop {
-        match s.chars().next() {
-            None => break,
-            Some(' ') => s = &s[1..],
-            Some('0'..='9') => {
-                let (_, magnitude, rest) = regex_captures!("^([0-9]+)(.*)$", s)?; //TODO allow fractional magnitudes? (e.g. 2.5h = 2h30m)
-                if last_magnitude.replace(magnitude.parse().ok()?).is_some() {
-                    return None // multiple whitespace-separated numbers
+pub(crate) fn parse_duration(mut s: &str, default_unit: Option<DurationUnit>) -> Option<Duration> {
+    Some(if let Some((_, hours, minutes, seconds)) = regex_captures!("^ *([0-9]+):([0-9]+):([0-9]+) *$", s).filter(|_| default_unit.is_none()) {
+        Duration::from_secs(60 * 60 * hours.parse::<u64>().ok()? + 60 * minutes.parse::<u64>().ok()? + seconds.parse::<u64>().ok()?)
+    } else if let Some((_, minutes, seconds)) = regex_captures!("^ *([0-9]+):([0-9]+) *$", s).filter(|_| default_unit.is_none()) {
+        Duration::from_secs(60 * minutes.parse::<u64>().ok()? + seconds.parse::<u64>().ok()?)
+    } else {
+        let mut duration = Duration::default();
+        let mut default_unit = Some(default_unit.unwrap_or(DurationUnit::Hours));
+        let mut last_magnitude = None;
+        loop {
+            match s.chars().next() {
+                None => break,
+                Some(' ') => s = &s[1..],
+                Some('0'..='9') => {
+                    let (_, magnitude, rest) = regex_captures!("^([0-9]+)(.*)$", s)?; //TODO allow fractional magnitudes? (e.g. 2.5h = 2h30m)
+                    if last_magnitude.replace(magnitude.parse().ok()?).is_some() {
+                        return None // multiple whitespace-separated numbers
+                    }
+                    s = rest;
                 }
-                s = rest;
+                Some(':') => {
+                    let magnitude = last_magnitude.take()?;
+                    duration += default_unit?.with_magnitude(magnitude);
+                    default_unit = match default_unit? {
+                        DurationUnit::Hours => Some(DurationUnit::Minutes),
+                        DurationUnit::Minutes => Some(DurationUnit::Seconds),
+                        DurationUnit::Seconds => None,
+                    };
+                    s = &s[1..];
+                }
+                Some('H' | 'h') => {
+                    let magnitude = last_magnitude.take()?;
+                    duration += Duration::from_secs(60 * 60 * magnitude);
+                    default_unit = Some(DurationUnit::Minutes);
+                    (_, s) = regex_captures!("^h(?:(?:ou)?r)?s?(.*)$"i, s)?;
+                }
+                Some('M' | 'm') => {
+                    let magnitude = last_magnitude.take()?;
+                    duration += Duration::from_secs(60 * magnitude);
+                    default_unit = Some(DurationUnit::Seconds);
+                    (_, s) = regex_captures!("^m(?:n|in(?:ute)?)?s?(.*)$"i, s)?;
+                }
+                Some('S' | 's') => {
+                    let magnitude = last_magnitude.take()?;
+                    duration += Duration::from_secs(magnitude);
+                    default_unit = None;
+                    (_, s) = regex_captures!("^s(?:ec(?:ond)?)?s?(.*)$"i, s)?;
+                }
+                _ => return None,
             }
-            Some(':') => {
-                let magnitude = last_magnitude.take()?;
-                duration += default_unit?.with_magnitude(magnitude);
-                default_unit = match default_unit? {
-                    DurationUnit::Hours => Some(DurationUnit::Minutes),
-                    DurationUnit::Minutes => Some(DurationUnit::Seconds),
-                    DurationUnit::Seconds => None,
-                };
-                s = &s[1..];
-            }
-            Some('H' | 'h') => {
-                let magnitude = last_magnitude.take()?;
-                duration += Duration::from_secs(60 * 60 * magnitude);
-                default_unit = Some(DurationUnit::Minutes);
-                (_, s) = regex_captures!("^h(?:(?:ou)?r)?s?(.*)$"i, s)?;
-            }
-            Some('M' | 'm') => {
-                let magnitude = last_magnitude.take()?;
-                duration += Duration::from_secs(60 * magnitude);
-                default_unit = Some(DurationUnit::Seconds);
-                (_, s) = regex_captures!("^m(?:n|in(?:ute)?)?s?(.*)$"i, s)?;
-            }
-            Some('S' | 's') => {
-                let magnitude = last_magnitude.take()?;
-                duration += Duration::from_secs(magnitude);
-                default_unit = None;
-                (_, s) = regex_captures!("^s(?:ec(?:ond)?)?s?(.*)$"i, s)?;
-            }
-            _ => return None,
         }
-    }
-    if let Some(magnitude) = last_magnitude {
-        duration += default_unit?.with_magnitude(magnitude);
-    }
-    Some(duration)
+        if let Some(magnitude) = last_magnitude {
+            duration += default_unit?.with_magnitude(magnitude);
+        }
+        duration
+    })
 }
 
 pub(crate) fn unparse_duration(duration: Duration) -> String {

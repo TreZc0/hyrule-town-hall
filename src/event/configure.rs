@@ -205,14 +205,14 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
         if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
             form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
         }
-        let min_schedule_notice = if let Some(time) = parse_duration(&value.min_schedule_notice, DurationUnit::Hours) {
+        let min_schedule_notice = if let Some(time) = parse_duration(&value.min_schedule_notice, None) {
             Some(time)
         } else {
             form.context.push_error(form::Error::validation("Duration must be formatted like '1:23:45' or '1h 23m 45s'.").with_name("min_schedule_notice"));
             None
         };
         let retime_window = if let Some(retime_window) = &value.retime_window {
-            if let Some(time) = parse_duration(retime_window, DurationUnit::Hours) {
+            if let Some(time) = parse_duration(retime_window, None) {
                 Some(time)
             } else {
                 form.context.push_error(form::Error::validation("Duration must be formatted like '1:23:45' or '1h 23m 45s'.").with_name("retime_window"));

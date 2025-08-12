@@ -2824,8 +2824,8 @@ impl FromStr for Breaks {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (_, duration, interval) = regex_captures!("^(.+?) ?e(?:very)? ?(.+?)$", s).ok_or(())?;
         Ok(Self {
-            duration: parse_duration(duration, DurationUnit::Minutes).ok_or(())?,
-            interval: parse_duration(interval, DurationUnit::Hours).ok_or(())?,
+            duration: parse_duration(duration, Some(DurationUnit::Minutes)).ok_or(())?,
+            interval: parse_duration(interval, Some(DurationUnit::Hours)).ok_or(())?,
         })
     }
 }
@@ -4691,7 +4691,7 @@ impl RaceHandler<GlobalState> for Handler {
                                         last_collection_time: if pieces == 0 {
                                             Duration::default()
                                         } else {
-                                            let Some(last_collection_time) = parse_duration(&duration.join(" "), DurationUnit::Hours) else {
+                                            let Some(last_collection_time) = parse_duration(&duration.join(" "), None) else {
                                                 ctx.say(format!("Sorry {reply_to}, I don't recognize that time format. Example format: 1h23m45s")).await?;
                                                 return Ok(())
                                             };
