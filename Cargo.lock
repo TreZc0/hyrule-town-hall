@@ -277,14 +277,10 @@ checksum = "bd0e0543cea0feaefb6abd6cfac9bd9df181bd790f55d29314586b4551fc7b79"
 dependencies = [
  "async-proto-derive 0.25.4",
  "byteorder",
- "chrono",
  "fallible_collections",
  "semver",
- "serde_json",
- "serenity",
  "thiserror 2.0.12",
  "tokio",
- "uuid",
 ]
 
 [[package]]
@@ -295,11 +291,15 @@ checksum = "3686c16da7dd79a6ed5f273bc0bf0b94fb0a7ab6e608046e642fde93dda90e15"
 dependencies = [
  "async-proto-derive 0.26.4",
  "byteorder",
+ "chrono",
  "fallible_collections",
  "futures",
+ "serde_json",
+ "serenity",
  "thiserror 2.0.12",
  "tokio",
  "tokio-tungstenite 0.27.0",
+ "uuid",
 ]
 
 [[package]]
@@ -4811,6 +4811,7 @@ dependencies = [
  "async-graphql",
  "async-graphql-rocket",
  "async-proto 0.25.4",
+ "async-proto 0.26.4",
  "async-trait",
  "base64 0.22.1",
  "chrono",
