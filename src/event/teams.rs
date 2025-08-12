@@ -184,7 +184,7 @@ impl Cache {
         }
     }
 
-    async fn race_data(&mut self, room: &Url) -> Result<&RaceData, cal::Error> {
+    pub(crate) async fn race_data(&mut self, room: &Url) -> Result<&RaceData, cal::Error> {
         Ok(match self.race_data.entry(room.clone()) {
             hash_map::Entry::Occupied(entry) => entry.into_mut(),
             hash_map::Entry::Vacant(entry) => entry.insert(self.http_client.get(format!("{room}/data"))

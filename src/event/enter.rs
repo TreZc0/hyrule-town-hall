@@ -1,5 +1,6 @@
 use {
     lazy_regex::Regex,
+    racetime::model::EntrantStatusValue,
     serde_with::DeserializeAs,
     crate::{
         discord_bot::ADMIN_USER,
@@ -190,6 +191,7 @@ struct RequirementStatus {
 
 impl Requirement {
     async fn is_checked(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: &User, data: &Data<'_>) -> Result<Option<bool>, Error> {
+        let mut cache = teams::Cache::new(http_client.clone());
         Ok(match self {
             Self::RaceTime => Some(me.racetime.is_some()),
             Self::RaceTimeInvite { invites, .. } => Some(me.racetime.as_ref().is_some_and(|racetime| invites.contains(&racetime.id))),
@@ -229,7 +231,21 @@ impl Requirement {
             Self::ZwOk { .. } => Some(false),
             Self::RestreamConsent { .. } => Some(false),
             Self::Qualifier { .. } => Some(false),
-            Self::TripleQualifier { .. } => Some(false),
+            Self::TripleQualifier { .. } => Some('checked: {
+                if let Some(racetime) = &me.racetime {
+                    for race in Race::for_event(transaction, http_client, data).await? {
+                        if race.phase.as_ref().is_some_and(|phase| phase == "Live Qualifier") {
+                            if let Ok(room) = race.rooms().exactly_one() {
+                                let room_data = cache.race_data(&room).await?;
+                                if room_data.entrants.iter().any(|entrant| entrant.status.value == EntrantStatusValue::Done && entrant.user.id == racetime.id) {
+                                    break 'checked true
+                                }
+                            }
+                        }
+                    }
+                }
+                false
+            }),
             Self::QualifierPlacement { num_players, min_races, need_finish, event, exclude_players } => Some(if_chain! {
                 let data = if let Some(event) = event {
                     &Data::new(&mut *transaction, data.series, event).await?.ok_or(Error::NoSuchEvent)?
@@ -244,7 +260,7 @@ impl Requirement {
                     (_, _) => unimplemented!("enter::Requirement::QualifierPlacement for event {}/{}", data.series.slug(), data.event),
                 };
                 // call signups_sorted with worst_case_extrapolation = true to calculate whether the player has secured a spot ahead of time
-                let teams = teams::signups_sorted(transaction, &mut teams::Cache::new(http_client.clone()), None, data, false, teams::QualifierKind::Score(qualifier_kind), Some(&teams::MemberUser::MidosHouse(me.clone()))).await?;
+                let teams = teams::signups_sorted(transaction, &mut cache, None, data, false, teams::QualifierKind::Score(qualifier_kind), Some(&teams::MemberUser::MidosHouse(me.clone()))).await?;
                 if let Some((placement, team)) = teams.iter().enumerate().find(|(_, team)| team.members.iter().any(|member| member.user == *me));
                 if let teams::Qualification::Multiple { num_entered, num_finished, .. } = team.qualification;
                 then {
@@ -820,9 +836,13 @@ impl Requirement {
                 let series = data.series;
                 let checked = defaults.field_value("confirm").is_some_and(|value| value == "on");
                 RequirementStatus {
-                    blocks_submit: !async_available,
+                    blocks_submit: !is_checked.unwrap() && !async_available,
                     html_content: Box::new(move |errors| html! {
-                        @if async_available {
+                        @if is_checked.unwrap() {
+                            : "Play at least one of the 3 qualifier seeds, either live or async.";
+                            br;
+                            : "If you would like to play additional asyncs, enter the event and request them from your status page.";
+                        } else if async_available {
                             : "Play at least one of the 3 qualifier seeds, either live or by requesting as an async using this form: ";
                         } else {
                             : "Play at least one of the 3 qualifier seeds, either live or async. The form to request an async will appear on this page.";
@@ -839,7 +859,7 @@ impl Requirement {
                                 }
                             }
                         }
-                        @if async_available {
+                        @if !is_checked.unwrap() && async_available {
                             @match series {
                                 Series::TriforceBlitz => : tfb::qualifier_async_rules();
                                 _ => @unimplemented
@@ -1005,7 +1025,7 @@ impl Requirement {
                     form_ctx.push_error(form::Error::validation("The qualifier seed is not yet available."));
                 }
             }
-            Self::TripleQualifier { async_starts, async_ends, .. } => {
+            Self::TripleQualifier { async_starts, async_ends, .. } => if !self.is_checked(transaction, http_client, discord_ctx, me, data).await?.unwrap_or(false) {
                 let now = Utc::now();
                 if (*async_starts).into_iter().zip_eq(*async_ends).any(|(async_start, async_end)| now >= async_start && now < async_end) {
                     if !value.confirm {
@@ -1014,7 +1034,7 @@ impl Requirement {
                 } else {
                     form_ctx.push_error(form::Error::validation("No qualifier seed is currently available."));
                 }
-            }
+            },
             Self::External { .. } => form_ctx.push_error(form::Error::validation("Please complete event entry via the external method.")),
             _ => if !self.is_checked(transaction, http_client, discord_ctx, me, data).await?.unwrap_or(false) {
                 form_ctx.push_error(form::Error::validation(match self {
@@ -1446,16 +1466,20 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                 Requirement::Qualifier { .. } => request_qualifier = Some(AsyncKind::Qualifier1),
                                 Requirement::TripleQualifier { async_starts, async_ends, .. } => {
                                     let now = Utc::now();
-                                    request_qualifier = (*async_starts).into_iter()
-                                        .zip_eq(*async_ends)
-                                        .enumerate()
-                                        .find(|&(_, (async_start, async_end))| now >= async_start && now < async_end)
-                                        .map(|(idx, _)| match idx {
-                                            0 => AsyncKind::Qualifier1,
-                                            1 => AsyncKind::Qualifier2,
-                                            2 => AsyncKind::Qualifier3,
-                                            _ => unreachable!("more than 3 qualifiers in Requirement::TripleQualifier"),
-                                        });
+                                    request_qualifier = if requirement.is_checked(&mut transaction, http_client, discord_ctx, &me, &data).await?.unwrap_or(false) {
+                                        None
+                                    } else {
+                                        (*async_starts).into_iter()
+                                            .zip_eq(*async_ends)
+                                            .enumerate()
+                                            .find(|&(_, (async_start, async_end))| now >= async_start && now < async_end)
+                                            .map(|(idx, _)| match idx {
+                                                0 => AsyncKind::Qualifier1,
+                                                1 => AsyncKind::Qualifier2,
+                                                2 => AsyncKind::Qualifier3,
+                                                _ => unreachable!("more than 3 qualifiers in Requirement::TripleQualifier"),
+                                            })
+                                    };
                                 }
                                 Requirement::BooleanChoice { .. } => {}
                                 _ => {}
