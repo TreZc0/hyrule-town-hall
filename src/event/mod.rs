@@ -188,6 +188,7 @@ pub(crate) struct Data<'a> {
     pub(crate) language: Language,
     pub(crate) asyncs_active: bool,
     pub(crate) swiss_standings: bool,
+    pub(crate) listed: bool,
 }
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
@@ -241,7 +242,8 @@ impl<'a> Data<'a> {
             manual_reporting_with_breaks,
             language AS "language: Language",
             asyncs_active,
-            swiss_standings
+            swiss_standings,
+            listed
         FROM events WHERE series = $1 AND event = $2"#, series as _, &event).fetch_optional(&mut **transaction).await?
             .map(|row| Ok::<_, DataError>(Self {
                 display_name: row.display_name,
@@ -285,6 +287,7 @@ impl<'a> Data<'a> {
                 asyncs_active: row.asyncs_active,
                 swiss_standings: row.swiss_standings,
                 series, event,
+                listed: row.listed,
             }))
             .transpose()
     }
