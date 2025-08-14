@@ -3278,8 +3278,9 @@ async fn handle_async_command(
                 if let Some(player) = player {
                     let player_name = player.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Player".to_string().into());
                     links_content.push_safe(player_name);
-                    links_content.push(": ");
+                    links_content.push(": <");
                     links_content.push(link);
+                    links_content.push(">");
                 }
             }
         }
