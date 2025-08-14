@@ -662,9 +662,6 @@ impl AsyncRaceManager {
             return Err(Error::NotStarted);
         }
         
-        // Get the user who clicked the button
-        let user = User::from_discord(&mut *transaction, user_id).await?;
-        
         // Get thread ID
         let thread_id = match async_part {
             1 => sqlx::query_scalar!("SELECT async_thread1 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
