@@ -704,9 +704,8 @@ impl AsyncRaceManager {
             // Start the timer AFTER the countdown completes
             let now = Utc::now();
             sqlx::query!(
-                "UPDATE async_times SET start_time = $1, recorded_at = NOW(), recorded_by = $2 WHERE race_id = $3 AND async_part = $4",
+                "UPDATE async_times SET start_time = $1 WHERE race_id = $2 AND async_part = $3",
                 now,
-                user.unwrap().id as _,
                 race_id,
                 async_part as i32,
             ).execute(&mut *transaction).await?;
