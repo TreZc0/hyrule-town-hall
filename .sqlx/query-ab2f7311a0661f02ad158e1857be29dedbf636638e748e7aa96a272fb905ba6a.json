@@ -6,11 +6,211 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Text",
-        "Text",
-        "Text",
-        "Text",
-        "Text",
+        {
+          "Custom": {
+            "name": "hash_icon",
+            "kind": {
+              "Enum": [
+                "Bomb",
+                "Bombos",
+                "Boomerang",
+                "Bow",
+                "Hookshot",
+                "Mushroom",
+                "Pendant",
+                "Powder",
+                "Rod",
+                "Ether",
+                "Quake",
+                "Lamp",
+                "Hammer",
+                "Shovel",
+                "Ocarina",
+                "Bug Net",
+                "Book",
+                "Bottle",
+                "Potion",
+                "Cane",
+                "Cape",
+                "Mirror",
+                "Boots",
+                "Gloves",
+                "Flippers",
+                "Pearl",
+                "Shield",
+                "Tunic",
+                "Heart",
+                "Map",
+                "Compass",
+                "Key"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "hash_icon",
+            "kind": {
+              "Enum": [
+                "Bomb",
+                "Bombos",
+                "Boomerang",
+                "Bow",
+                "Hookshot",
+                "Mushroom",
+                "Pendant",
+                "Powder",
+                "Rod",
+                "Ether",
+                "Quake",
+                "Lamp",
+                "Hammer",
+                "Shovel",
+                "Ocarina",
+                "Bug Net",
+                "Book",
+                "Bottle",
+                "Potion",
+                "Cane",
+                "Cape",
+                "Mirror",
+                "Boots",
+                "Gloves",
+                "Flippers",
+                "Pearl",
+                "Shield",
+                "Tunic",
+                "Heart",
+                "Map",
+                "Compass",
+                "Key"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "hash_icon",
+            "kind": {
+              "Enum": [
+                "Bomb",
+                "Bombos",
+                "Boomerang",
+                "Bow",
+                "Hookshot",
+                "Mushroom",
+                "Pendant",
+                "Powder",
+                "Rod",
+                "Ether",
+                "Quake",
+                "Lamp",
+                "Hammer",
+                "Shovel",
+                "Ocarina",
+                "Bug Net",
+                "Book",
+                "Bottle",
+                "Potion",
+                "Cane",
+                "Cape",
+                "Mirror",
+                "Boots",
+                "Gloves",
+                "Flippers",
+                "Pearl",
+                "Shield",
+                "Tunic",
+                "Heart",
+                "Map",
+                "Compass",
+                "Key"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "hash_icon",
+            "kind": {
+              "Enum": [
+                "Bomb",
+                "Bombos",
+                "Boomerang",
+                "Bow",
+                "Hookshot",
+                "Mushroom",
+                "Pendant",
+                "Powder",
+                "Rod",
+                "Ether",
+                "Quake",
+                "Lamp",
+                "Hammer",
+                "Shovel",
+                "Ocarina",
+                "Bug Net",
+                "Book",
+                "Bottle",
+                "Potion",
+                "Cane",
+                "Cape",
+                "Mirror",
+                "Boots",
+                "Gloves",
+                "Flippers",
+                "Pearl",
+                "Shield",
+                "Tunic",
+                "Heart",
+                "Map",
+                "Compass",
+                "Key"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "hash_icon",
+            "kind": {
+              "Enum": [
+                "Bomb",
+                "Bombos",
+                "Boomerang",
+                "Bow",
+                "Hookshot",
+                "Mushroom",
+                "Pendant",
+                "Powder",
+                "Rod",
+                "Ether",
+                "Quake",
+                "Lamp",
+                "Hammer",
+                "Shovel",
+                "Ocarina",
+                "Bug Net",
+                "Book",
+                "Bottle",
+                "Potion",
+                "Cane",
+                "Cape",
+                "Mirror",
+                "Boots",
+                "Gloves",
+                "Flippers",
+                "Pearl",
+                "Shield",
+                "Tunic",
+                "Heart",
+                "Map",
+                "Compass",
+                "Key"
+              ]
+            }
+          }
+        },
         "Int8"
       ]
     },
