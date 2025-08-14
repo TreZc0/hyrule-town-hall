@@ -3170,7 +3170,7 @@ async fn handle_async_command(
                     3 => race.teams().nth(2),
                     _ => None,
                 };
-                (part, Some(*time), team.unwrap())
+                (*part, Some(*time), team.unwrap())
             })
             .collect();
         
