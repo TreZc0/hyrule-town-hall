@@ -3377,13 +3377,12 @@ impl RaceHandler<GlobalState> for Handler {
                     Entrants::Open | Entrants::Count { .. } => event.open_stream_delay,
                     Entrants::Two(_) | Entrants::Three(_) | Entrants::Named(_) => event.invitational_stream_delay,
                 };
-                let emulator_settings_reminder = event.series == Series::Standard && event.event != "w" || event.series == Series::League; //TODO move to database
-                let prevent_late_joins = event.series == Series::SpeedGaming || event.series == Series::Standard && event.event == "8"; //TODO move to database
-                if !stream_delay.is_zero() || emulator_settings_reminder || prevent_late_joins {
+                if !stream_delay.is_zero() || event.emulator_settings_reminder || event.prevent_late_joins {
                     let delay_until = cal_event.start().expect("handling room for official race without start time") - stream_delay - TimeDelta::minutes(5);
                     if let Ok(delay) = (delay_until - Utc::now()).to_std() {
                         let ctx = ctx.clone();
-                        let requires_emote_only = event.series == Series::SpeedGaming && cal_event.race.phase.as_ref().is_some_and(|phase| phase == "Bracket");
+                        let game_audio_reminder = event.series == Series::SpeedGaming && cal_event.race.phase.as_ref().is_some_and(|phase| phase != "Qualifier");
+                        let requires_emote_only = event.series == Series::SpeedGaming && cal_event.race.phase.as_ref().is_some_and(|phase| phase != "Qualifier");
                         tokio::spawn(async move {
                             sleep_until(Instant::now() + delay).await;
                             if !Self::should_handle_inner(&*ctx.data().await, ctx.global_state.clone(), Some(None)).await { return }
@@ -3394,15 +3393,17 @@ impl RaceHandler<GlobalState> for Handler {
                                     if requires_emote_only { " and set your chat to emote only" } else { "" },
                                 )).await.expect("failed to send stream delay notice");
                             }
-                            if emulator_settings_reminder || prevent_late_joins {
+                            if event.emulator_settings_reminder || event.prevent_late_joins {
                                 sleep(stream_delay).await;
                                 let data = ctx.data().await;
                                 if !Self::should_handle_inner(&*data, ctx.global_state.clone(), Some(None)).await { return }
-                                if prevent_late_joins && data.status.value == RaceStatusValue::Open {
+                                if event.prevent_late_joins && data.status.value == RaceStatusValue::Open {
                                     ctx.set_invitational().await.expect("failed to make the room invitational");
                                 }
-                                if emulator_settings_reminder {
-                                    ctx.say("@entrants Remember to show your emulator settings!").await.expect("failed to send emulator settings notice");
+                                if event.emulator_settings_reminder {
+                                    ctx.say(format!("@entrants Remember to show your emulator settings{}!",
+                                        if game_audio_reminder { " and ensure you are streaming/recording game audio" } else { "" },
+                                    )).await.expect("failed to send emulator settings notice");
                                 }
                             }
                         });
