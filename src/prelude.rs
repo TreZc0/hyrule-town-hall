@@ -210,6 +210,7 @@ pub(crate) use {
             AsyncKind,
             MatchSource,
             TeamConfig,
+            teams::QualifierKind,
         },
         favicon::{
             self,

@@ -417,6 +417,33 @@ impl<'a> Data<'a> {
         }
     }
 
+    pub(crate) async fn qualifier_kind(&self, transaction: &mut Transaction<'_, Postgres>, me: Option<&User>) -> Result<QualifierKind, DataError> {
+        Ok(match (self.series, &*self.event) {
+            (Series::SongsOfHope, "1") => QualifierKind::SongsOfHope,
+            (Series::SpeedGaming, "2023onl" | "2024onl" | "2025onl") | (Series::Standard, "8") => {
+                QualifierKind::Score(match (self.series, &*self.event) {
+                    (Series::SpeedGaming, "2023onl") => teams::QualifierScoreKind::Sgl2023Online,
+                    (Series::SpeedGaming, "2024onl") => teams::QualifierScoreKind::Sgl2024Online,
+                    (Series::SpeedGaming, "2025onl") => teams::QualifierScoreKind::Sgl2025Online,
+                    (Series::Standard, "8") => teams::QualifierScoreKind::Standard,
+                    _ => unreachable!("checked by outer match"),
+                })
+            }
+            (_, _) => if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams WHERE series = $1 AND event = $2 AND qualifier_rank IS NOT NULL) AS "exists!""#, self.series as _, &*self.event).fetch_one(&mut **transaction).await? {
+                QualifierKind::Rank
+            } else if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM asyncs WHERE series = $1 AND event = $2 AND kind = 'qualifier') AS "exists!""#, self.series as _, &*self.event).fetch_one(&mut **transaction).await? {
+                QualifierKind::Single {
+                    show_times: self.show_qualifier_times && (
+                        sqlx::query_scalar!(r#"SELECT submitted IS NOT NULL AS "qualified!" FROM teams, async_teams, team_members WHERE async_teams.team = teams.id AND teams.series = $1 AND teams.event = $2 AND async_teams.team = team_members.team AND member = $3 AND kind = 'qualifier'"#, self.series as _, &*self.event, me.map(|me| PgSnowflake(me.id)) as _).fetch_optional(&mut **transaction).await?.unwrap_or(false)
+                        || self.is_started(transaction).await?
+                    ),
+                }
+            } else {
+                QualifierKind::None
+            },
+        })
+    }
+
     pub(crate) fn draft_kind(&self) -> Option<draft::Kind> {
         match (self.series, &*self.event) {
             (Series::Multiworld, "3") => Some(draft::Kind::MultiworldS3),
@@ -1033,7 +1060,7 @@ impl<'v> StatusContext<'v> {
     }
 }
 
-async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, data: Data<'_>, mut ctx: StatusContext<'_>) -> Result<RawHtml<String>, Error> {
+async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, data: Data<'_>, mut ctx: StatusContext<'_>) -> Result<RawHtml<String>, Error> {
     let header = data.header(&mut transaction, me.as_ref(), Tab::MyStatus, false).await?;
     let content = if let Some(ref me) = me {
         if let Some(row) = sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, role AS "role: Role", resigned, restream_consent FROM teams, team_members WHERE
@@ -1234,10 +1261,31 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User
                         } else {
                             let ctx = ctx.take_request_async();
                             let mut errors = ctx.errors().collect_vec();
+                            let qualifier_kind = data.qualifier_kind(&mut transaction, Some(me)).await?;
+                            let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.clone()), None, &data, false, qualifier_kind, None).await?;
+                            let qualified = if let Some(teams::SignupsTeam { qualification, .. }) = signups.iter().find(|teams::SignupsTeam { team, .. }| team.as_ref().is_some_and(|team| team.id == row.id)) {
+                                match qualification {
+                                    teams::Qualification::Single { qualified } | teams::Qualification::TriforceBlitz { qualified, .. } => *qualified,
+                                    teams::Qualification::Multiple { .. } => false, //TODO
+                                }
+                            } else {
+                                false
+                            };
                             Some(html! {
                                 div(class = "info") {
                                     @match async_kind {
-                                        AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 => p : "Play the qualifier async to qualify for the tournament.";
+                                        AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 => @if qualified {
+                                            p : "You are already qualified, but if you would like to async the ";
+                                            @match async_kind {
+                                                AsyncKind::Qualifier1 => : "first";
+                                                AsyncKind::Qualifier2 => : "second";
+                                                AsyncKind::Qualifier3 => : "third";
+                                                _ => @unreachable
+                                            }
+                                            : " qualifier as well, you can request it here.";
+                                        } else {
+                                            p : "Play the qualifier async to qualify for the tournament.";
+                                        }
                                         AsyncKind::Tiebreaker1 | AsyncKind::Tiebreaker2 => p : "Play the tiebreaker async to qualify for the bracket stage of the tournament.";
                                     }
                                     @match data.series {
@@ -1410,10 +1458,10 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User
 }
 
 #[rocket::get("/event/<series>/<event>/status")]
-pub(crate) async fn status(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str) -> Result<RawHtml<String>, StatusOrError<Error>> {
+pub(crate) async fn status(pool: &State<PgPool>, http_client: &State<reqwest::Client>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    Ok(status_page(transaction, me, uri, csrf.as_ref(), data, StatusContext::None).await?)
+    Ok(status_page(transaction, http_client, me, uri, csrf.as_ref(), data, StatusContext::None).await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -1448,14 +1496,14 @@ pub(crate) async fn status_post(pool: &State<PgPool>, http_client: &State<reqwes
             }
         }
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(status_page(transaction, Some(me), uri, csrf.as_ref(), data, StatusContext::Edit(form.context)).await?)
+            RedirectOrContent::Content(status_page(transaction, http_client, Some(me), uri, csrf.as_ref(), data, StatusContext::Edit(form.context)).await?)
         } else {
             sqlx::query!("UPDATE teams SET restream_consent = $1 WHERE id = $2", value.restream_consent, row.id as _).execute(&mut *transaction).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(status(series, event))))
         }
     } else {
-        RedirectOrContent::Content(status_page(transaction, Some(me), uri, csrf.as_ref(), data, StatusContext::Edit(form.context)).await?)
+        RedirectOrContent::Content(status_page(transaction, http_client, Some(me), uri, csrf.as_ref(), data, StatusContext::Edit(form.context)).await?)
     })
 }
 
@@ -1994,7 +2042,7 @@ pub(crate) struct RequestAsyncForm {
 }
 
 #[rocket::post("/event/<series>/<event>/request-async", data = "<form>")]
-pub(crate) async fn request_async(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, RequestAsyncForm>>) -> Result<RedirectOrContent, StatusOrError<Error>> {
+pub(crate) async fn request_async(pool: &State<PgPool>, http_client: &State<reqwest::Client>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, RequestAsyncForm>>) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
@@ -2029,7 +2077,7 @@ pub(crate) async fn request_async(pool: &State<PgPool>, me: User, uri: Origin<'_
         }
         if form.context.errors().next().is_some() {
             transaction.rollback().await?;
-            RedirectOrContent::Content(status_page(pool.begin().await?, Some(me), uri, csrf.as_ref(), data, StatusContext::RequestAsync(form.context)).await?)
+            RedirectOrContent::Content(status_page(pool.begin().await?, http_client, Some(me), uri, csrf.as_ref(), data, StatusContext::RequestAsync(form.context)).await?)
         } else {
             let team = team.expect("validated");
             let async_kind = async_kind.expect("validated");
@@ -2039,7 +2087,7 @@ pub(crate) async fn request_async(pool: &State<PgPool>, me: User, uri: Origin<'_
         }
     } else {
         transaction.rollback().await?;
-        RedirectOrContent::Content(status_page(pool.begin().await?, Some(me), uri, csrf.as_ref(), data, StatusContext::RequestAsync(form.context)).await?)
+        RedirectOrContent::Content(status_page(pool.begin().await?, http_client, Some(me), uri, csrf.as_ref(), data, StatusContext::RequestAsync(form.context)).await?)
     })
 }
 
@@ -2065,7 +2113,7 @@ pub(crate) struct SubmitAsyncForm {
 }
 
 #[rocket::post("/event/<series>/<event>/submit-async", data = "<form>")]
-pub(crate) async fn submit_async(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, SubmitAsyncForm>>) -> Result<RedirectOrContent, StatusOrError<Error>> {
+pub(crate) async fn submit_async(pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, SubmitAsyncForm>>) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
@@ -2139,7 +2187,7 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, discord_ctx: &State<RwFut
         ];
         if form.context.errors().next().is_some() {
             transaction.rollback().await?;
-            RedirectOrContent::Content(status_page(pool.begin().await?, Some(me), uri, csrf.as_ref(), data, StatusContext::SubmitAsync(form.context)).await?)
+            RedirectOrContent::Content(status_page(pool.begin().await?, http_client, Some(me), uri, csrf.as_ref(), data, StatusContext::SubmitAsync(form.context)).await?)
         } else {
             let team = team.expect("validated");
             let async_kind = async_kind.expect("validated");
@@ -2239,7 +2287,7 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, discord_ctx: &State<RwFut
         }
     } else {
         transaction.rollback().await?;
-        RedirectOrContent::Content(status_page(pool.begin().await?, Some(me), uri, csrf.as_ref(), data, StatusContext::SubmitAsync(form.context)).await?)
+        RedirectOrContent::Content(status_page(pool.begin().await?, http_client, Some(me), uri, csrf.as_ref(), data, StatusContext::SubmitAsync(form.context)).await?)
     })
 }
 

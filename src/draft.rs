@@ -281,9 +281,7 @@ impl Draft {
                 team_ids.sort_unstable_by_key(|team| seeding.iter().position(|iter_team| iter_team == team));
                 team_ids
             } else {
-                let qualifier_kind = teams::QualifierKind::Single { //TODO adjust to match teams::get?
-                    show_times: event.show_qualifier_times && event.is_started(&mut *transaction).await?,
-                };
+                let qualifier_kind = event.qualifier_kind(&mut *transaction, None).await?;
                 let signups = teams::signups_sorted(&mut *transaction, &mut teams::Cache::new(http_client.clone()), None, event, false, qualifier_kind, None).await?;
                 let SignupsTeam { members: members1, .. } = signups.iter().find(|SignupsTeam { team, .. }| team.as_ref().is_some_and(|team| team == team1)).expect("match with team that didn't sign up");
                 let SignupsTeam { members: members2, .. } = signups.iter().find(|SignupsTeam { team, .. }| team.as_ref().is_some_and(|team| team == team2)).expect("match with team that didn't sign up");

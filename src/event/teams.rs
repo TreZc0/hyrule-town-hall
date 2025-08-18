@@ -794,35 +794,16 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
     } else {
         false
     };
-    let qualifier_kind = match (data.series, &*data.event) {
-        (Series::SongsOfHope, "1") => QualifierKind::SongsOfHope,
-        (Series::SpeedGaming, "2023onl" | "2024onl" | "2025onl") | (Series::Standard, "8") => {
-            if is_organizer {
-                show_status = ShowStatus::Detailed;
-            } else if !data.is_started(&mut transaction).await? && Race::for_event(&mut transaction, http_client, &data).await?.into_iter().all(|race| race.phase.as_ref().is_none_or(|phase| phase != "Qualifier") || race.is_ended()) {
+    let qualifier_kind = data.qualifier_kind(&mut transaction, me.as_ref()).await?;
+    if let QualifierKind::Score(_) = qualifier_kind {
+        if !data.is_started(&mut transaction).await? {
+            if Race::for_event(&mut transaction, http_client, &data).await?.into_iter().all(|race| race.phase.as_ref().is_none_or(|phase| phase != "Qualifier") || race.is_ended()) {
                 show_status = ShowStatus::Confirmed;
+            } else if is_organizer || me.as_ref().is_some_and(|me| me.id == User::GLOBAL_ADMIN_USER_IDS[0].into()) { //TODO debug detailed status display showing weird-looking data (e.g. sgl/2025onl after qualifier 11), then show to everyone
+                show_status = ShowStatus::Detailed;
             }
-            QualifierKind::Score(match (data.series, &*data.event) {
-                (Series::SpeedGaming, "2023onl") => QualifierScoreKind::Sgl2023Online,
-                (Series::SpeedGaming, "2024onl") => QualifierScoreKind::Sgl2024Online,
-                (Series::SpeedGaming, "2025onl") => QualifierScoreKind::Sgl2025Online,
-                (Series::Standard, "8") => QualifierScoreKind::Standard,
-                _ => unreachable!("checked by outer match"),
-            })
         }
-        (_, _) => if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams WHERE series = $1 AND event = $2 AND qualifier_rank IS NOT NULL) AS "exists!""#, series as _, event).fetch_one(&mut *transaction).await? {
-            QualifierKind::Rank
-        } else if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM asyncs WHERE series = $1 AND event = $2 AND kind = 'qualifier') AS "exists!""#, series as _, event).fetch_one(&mut *transaction).await? {
-            QualifierKind::Single {
-                show_times: data.show_qualifier_times && (
-                    sqlx::query_scalar!(r#"SELECT submitted IS NOT NULL AS "qualified!" FROM teams, async_teams, team_members WHERE async_teams.team = teams.id AND teams.series = $1 AND teams.event = $2 AND async_teams.team = team_members.team AND member = $3 AND kind = 'qualifier'"#, series as _, event, me.as_ref().map(|me| PgSnowflake(me.id)) as _).fetch_optional(&mut *transaction).await?.unwrap_or(false)
-                    || data.is_started(&mut transaction).await?
-                ),
-            }
-        } else {
-            QualifierKind::None
-        },
-    };
+    }
     let show_restream_consent = is_organizer || if let Some(ref me) = me {
         data.restreamers(&mut transaction).await?.contains(me)
     } else {
@@ -1119,14 +1100,8 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                             } else {
                                                                 &data
                                                             };
-                                                            let qualifier_kind = match (data.series, &*data.event) {
-                                                                (Series::SpeedGaming, "2023onl") => QualifierScoreKind::Sgl2023Online,
-                                                                (Series::SpeedGaming, "2024onl") => QualifierScoreKind::Sgl2024Online,
-                                                                (Series::SpeedGaming, "2025onl") => QualifierScoreKind::Sgl2025Online,
-                                                                (Series::Standard, "8") => QualifierScoreKind::Standard,
-                                                                (_, _) => unimplemented!("enter::Requirement::QualifierPlacement for event {}/{}", data.series.slug(), data.event),
-                                                            };
-                                                            let teams = signups_sorted(&mut transaction, &mut cache, None, data, is_organizer, QualifierKind::Score(qualifier_kind), Some(&entrant.user)).await?;
+                                                            let qualifier_kind = data.qualifier_kind(&mut transaction, None).await?;
+                                                            let teams = signups_sorted(&mut transaction, &mut cache, None, data, is_organizer, qualifier_kind, Some(&entrant.user)).await?;
                                                             if let Some((placement, team)) = teams.iter().enumerate().find(|(_, team)| team.members.iter().any(|member| member.user == entrant.user));
                                                             if let Qualification::Multiple { num_entered, num_finished, .. } = team.qualification;
                                                             let num_qualifiers = if *need_finish { num_finished } else { num_entered };
