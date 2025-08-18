@@ -5199,9 +5199,9 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
              category_slug, client_id, client_secret);
     
     let room_url = match cal_event.should_create_room(&mut *transaction, event).await.to_racetime()? {
-        cal::RaceHandleMode::None => return Ok(None),
-        cal::RaceHandleMode::Notify => Err("please get your equipment and report to the tournament room"),
-        cal::RaceHandleMode::RaceTime => match racetime::authorize_with_host(host_info, &client_id, &client_secret, http_client).await {
+        RaceHandleMode::None => return Ok(None),
+        RaceHandleMode::Notify => Err("please get your equipment and report to the tournament room"),
+        RaceHandleMode::RaceTime => match racetime::authorize_with_host(host_info, &client_id, &client_secret, http_client).await {
             Ok((access_token, _)) => {
                 let info_user = if_chain! {
                     if let French = event.language;
@@ -5326,7 +5326,7 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
             }
             Err(e) => return Err(e),
         },
-        cal::RaceHandleMode::Discord => {
+        RaceHandleMode::Discord => {
             let task_clean_shutdown = clean_shutdown.clone();
             lock!(clean_shutdown = clean_shutdown; {
                 if clean_shutdown.should_handle_new() {
@@ -5369,7 +5369,7 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
         }
     };
     let handle_mode = cal_event.should_create_room(&mut *transaction, event).await.ok();
-    if matches!(handle_mode, Some(cal::RaceHandleMode::Discord)) {
+    if matches!(handle_mode, Some(RaceHandleMode::Discord)) {
         return Ok(None);
     }
     

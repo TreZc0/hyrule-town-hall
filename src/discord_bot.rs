@@ -1546,10 +1546,17 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     transaction.commit().await?;
                                                 })
                                             } else {
+                                                cal_event.race.save(&mut transaction).await?;
+                                                let overlapping_maintenance_windows = if let RaceHandleMode::RaceTime = cal_event.should_create_room(&mut transaction, &event).await? {
+                                                    sqlx::query_as!(Range::<DateTime<Utc>>, r#"SELECT start, end_time AS "end" FROM racetime_maintenance WHERE start < $1 AND end_time > $2"#, start + event.series.default_race_duration(), start - TimeDelta::minutes(30)).fetch_all(&mut *transaction).await?
+                                                } else {
+                                                    Vec::default()
+                                                };
                                                 transaction.commit().await?;
                                                 let response_content = if_chain! {
                                                     if let French = event.language;
                                                     if cal_event.race.game.is_none();
+                                                    if overlapping_maintenance_windows.is_empty();
                                                     then {
                                                         MessageBuilder::default()
                                                             .push("Votre race a été planifiée pour le ")
@@ -1562,6 +1569,15 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         response_content.push(if was_scheduled { " has been rescheduled for " } else { " is now scheduled for " });
                                                         response_content.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
                                                         response_content.push('.');
+                                                        for window in overlapping_maintenance_windows {
+                                                            response_content.push_line("");
+                                                            response_content.push_bold("Warning:");
+                                                            response_content.push(" this race may overlap with racetime.gg maintenance planned for ");
+                                                            response_content.push_timestamp(window.start, serenity_utils::message::TimestampStyle::ShortDateTime);
+                                                            response_content.push(" until ");
+                                                            response_content.push_timestamp(window.end, serenity_utils::message::TimestampStyle::ShortDateTime);
+                                                            response_content.push('.');
+                                                        }
                                                         response_content.build()
                                                     }
                                                 };
@@ -1750,10 +1766,17 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     transaction.commit().await?;
                                                 });
                                             } else {
+                                                cal_event.race.save(&mut transaction).await?;
+                                                let overlapping_maintenance_windows = if let RaceHandleMode::RaceTime = cal_event.should_create_room(&mut transaction, &event).await? {
+                                                    sqlx::query_as!(Range::<DateTime<Utc>>, r#"SELECT start, end_time AS "end" FROM racetime_maintenance WHERE start < $1 AND end_time > $2"#, start + event.series.default_race_duration(), start - TimeDelta::minutes(30)).fetch_all(&mut *transaction).await?
+                                                } else {
+                                                    Vec::default()
+                                                };
                                                 transaction.commit().await?;
                                                 let response_content = if_chain! {
                                                     if let French = event.language;
                                                     if cal_event.race.game.is_none();
+                                                    if overlapping_maintenance_windows.is_empty();
                                                     then {
                                                         MessageBuilder::default()
                                                             .push("La partie de votre async a été planifiée pour le ")
@@ -1767,6 +1790,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         response_content.push(if was_scheduled { " has been rescheduled for " } else { " is now scheduled for " });
                                                         response_content.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
                                                         response_content.push('.');
+                                                        for window in overlapping_maintenance_windows {
+                                                            response_content.push_line("");
+                                                            response_content.push_bold("Warning:");
+                                                            if let Entrants::Two(_) = cal_event.race.entrants {
+                                                                response_content.push(" this async half may overlap with racetime.gg maintenance planned for ");
+                                                            } else {
+                                                                response_content.push(" this async part may overlap with racetime.gg maintenance planned for ");
+                                                            }
+                                                            response_content.push_timestamp(window.start, serenity_utils::message::TimestampStyle::ShortDateTime);
+                                                            response_content.push(" until ");
+                                                            response_content.push_timestamp(window.end, serenity_utils::message::TimestampStyle::ShortDateTime);
+                                                            response_content.push('.');
+                                                        }
                                                         response_content.build()
                                                     }
                                                 };

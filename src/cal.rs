@@ -1410,18 +1410,24 @@ impl Event {
 
     pub(crate) async fn should_create_room(&self, transaction: &mut Transaction<'_, Postgres>, event: &event::Data<'_>) -> Result<RaceHandleMode, event::DataError> {
         Ok(if racetime_bot::Goal::for_event(self.race.series, &self.race.event).is_some() {
-            if self.race.series == Series::SpeedGaming && self.race.event.ends_with("live") && event.is_started(transaction).await? {
-                // don't create racetime.gg rooms for in-person races
-                RaceHandleMode::Notify
-            } else {
-                if matches!(self.kind, EventKind::Normal) || event.team_config.is_racetime_team_format() {
-                    RaceHandleMode::RaceTime
+            if_chain! {
+                if self.race.series == Series::SpeedGaming && self.race.event.ends_with("live");
+                if let Some(race_start) = self.start();
+                if event.start(transaction).await?.is_some_and(|event_start| event_start <= race_start);
+                then {
+                    // don't create racetime.gg rooms for in-person races
+                    RaceHandleMode::Notify
                 } else {
-                    // racetime.gg doesn't support single-entrant races
-                    RaceHandleMode::Discord
+                    if matches!(self.kind, EventKind::Normal) || event.team_config.is_racetime_team_format() {
+                        RaceHandleMode::RaceTime
+                    } else {
+                        // racetime.gg doesn't support single-entrant races
+                        RaceHandleMode::Discord
+                    }
                 }
             }
         } else {
+            // the organizers of this event didn't request for Mido to handle official races, so we ignore this race even if it would otherwise not be handled on racetime.gg
             RaceHandleMode::None
         })
     }
