@@ -21,10 +21,10 @@ pub(crate) struct Config {
     pub(crate) racetime_bot: ConfigRaceTime,
     #[serde(rename = "racetimeOAuth")]
     pub(crate) racetime_oauth: ConfigRaceTime,
+    pub(crate) secret_key: String,
     pub(crate) startgg: String,
     #[serde(rename = "startggOAuth")]
     pub(crate) startgg_oauth: ConfigOAuth,
-    pub(crate) secret_key: String,
 }
 
 impl Config {
