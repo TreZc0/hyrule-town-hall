@@ -576,11 +576,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             hostname: Cow::Borrowed(racetime_host()),
             ..racetime::HostInfo::default()
         })
-        .data::<ConfigRaceTime>(ConfigRaceTime {
-            client_id: String::new(),
-            client_secret: String::new(),
-        })
-        .data::<StartggToken>(if Environment::default().is_dev() { config.startgg_dev.clone() } else { config.startgg_production.clone() })
+        .data::<ConfigRaceTime>(config.racetime_bot.clone())
+        .data::<StartggToken>(config.startgg)
         .data::<ChallongeApiKey>(config.challonge_api_key.clone())
         .data::<NewRoomLock>(new_room_lock)
         .data::<CleanShutdown>(clean_shutdown)

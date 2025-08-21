@@ -264,8 +264,7 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
     }
 
     async fn process_page(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config, event: &event::Data<'_>, event_slug: &str, page: i64, races: &mut Vec<Race>, skips: &mut Vec<(ID, ImportSkipReason)>) -> Result<i64, cal::Error> {
-        let startgg_token = if Environment::default().is_dev() { &config.startgg_dev } else { &config.startgg_production };
-        let response = query_cached::<EventSetsQuery>(http_client, startgg_token, event_sets_query::Variables { event_slug: event_slug.to_owned(), page }).await?;
+        let response = query_cached::<EventSetsQuery>(http_client, &config.startgg, event_sets_query::Variables { event_slug: event_slug.to_owned(), page }).await?;
         let event_sets_query::ResponseData {
             event: Some(event_sets_query::EventSetsQueryEvent {
                 sets: Some(event_sets_query::EventSetsQueryEventSets {
