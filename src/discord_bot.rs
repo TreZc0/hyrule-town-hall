@@ -2708,64 +2708,53 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
     };
 
-    // There is already a seed rolled. Access that seed instead.
-    let (uuid, _second_half, file_hash) = match cal_event.race.seed.files {
-        // Seed already exists, get the message appropriately.
-        Some(seed::Files::AlttprDoorRando { uuid}) => (uuid, true, cal_event.race.seed.file_hash),
-        Some(_) => unimplemented!("Haven't implemented asyncs for non-door rando yet"),
-        // Roll a seed and put it in the database before returning the message.
-        None => {
-            let discord_data = discord_ctx.data.read().await;
-            let global_state = discord_data.get::<GlobalState>().expect("Global State missing from Discord context");
-            let crosskeys_options = CrosskeysRaceOptions::for_race(&global_state.db_pool, &cal_event.race).await;
-            let mut updates = global_state.clone().roll_crosskeys2025_seed(crosskeys_options);
+    // Check if this is the second part of an async (seed already exists)
+    let is_second_part = cal_event.race.seed.files.is_some();
+    
+    // If no seed exists, roll a new one
+    if !is_second_part {
+        let discord_data = discord_ctx.data.read().await;
+        let global_state = discord_data.get::<GlobalState>().expect("Global State missing from Discord context");
+        let crosskeys_options = CrosskeysRaceOptions::for_race(&global_state.db_pool, &cal_event.race).await;
+        let mut updates = global_state.clone().roll_crosskeys2025_seed(crosskeys_options);
 
-            // Loop until we get an update saying the seed data is done rolling.
-            let seed = loop {
-                match updates.recv().await {
-                    Some(racetime_bot::SeedRollUpdate::Done { seed, .. }) => break seed,
-                    Some(racetime_bot::SeedRollUpdate::Error(e)) => panic!("error rolling seed: {e} ({e:?})"),
-                    None => panic!(),
-                    _ => {}
-                }
-            };
+        // Loop until we get an update saying the seed data is done rolling.
+        let seed = loop {
+            match updates.recv().await {
+                Some(racetime_bot::SeedRollUpdate::Done { seed, .. }) => break seed,
+                Some(racetime_bot::SeedRollUpdate::Error(e)) => panic!("error rolling seed: {e} ({e:?})"),
+                None => panic!(),
+                _ => {}
+            }
+        };
 
-            let uuid = match seed.files {
-                Some(seed::Files::AlttprDoorRando { uuid}) => uuid,
-                _ => unimplemented!("handle what happens here?")
-            };
+        let uuid = match seed.files {
+            Some(seed::Files::AlttprDoorRando { uuid}) => uuid,
+            _ => unimplemented!("handle what happens here?")
+        };
 
-            let (hash1, hash2, hash3, hash4, hash5) = match seed.file_hash {
-                Some([hash1, hash2, hash3, hash4, hash5]) => (Some(hash1), Some(hash2), Some(hash3), Some(hash4), Some(hash5)),
-                None => (None, None, None, None, None)
-            };
+        let (hash1, hash2, hash3, hash4, hash5) = match seed.file_hash {
+            Some([hash1, hash2, hash3, hash4, hash5]) => (Some(hash1), Some(hash2), Some(hash3), Some(hash4), Some(hash5)),
+            None => (None, None, None, None, None)
+        };
 
-            sqlx::query!("UPDATE races SET xkeys_uuid = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7",uuid, hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,).execute(&mut *transaction).await?;
-            (uuid, false, seed.file_hash)
-        }
-    };
-
-    let seed_url =  {
-        let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("Couldn't parse URL");
-        patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{uuid}.bps"));
-        patcher_url.to_string()
-    };
+        sqlx::query!("UPDATE races SET xkeys_uuid = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7",uuid, hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,).execute(&mut *transaction).await?;
+    }
 
     for team in cal_event.active_teams() {
         let mut content = MessageBuilder::default();
         content.push("Async starting for ");
         content.mention_team(&mut transaction, event.discord_guild, team).await?;
-        content.push(format!(". Seed URL is {}. The seed will be distributed to the runner 10 minutes before their scheduled start time. Please work with them in their async channel to run the race.",seed_url));
-        if let Some([hash1, hash2, hash3, hash4, hash5]) = file_hash {
-            content.push_line("");
-            content.push(format!("The hash for the seed is {hash1}, {hash2}, {hash3}, {hash4}, {hash5}"));
+        
+        if is_second_part {
+            content.push(". **This is the second part of the async.** The runner will receive the previously generated seed as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
+        } else {
+            content.push(". A Seed has been generated and will be distributed to the runner as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
         }
+        
         let msg = content.build();
         if let Some(channel) = event.discord_organizer_channel {
             channel.say(&discord_ctx, msg).await?;
-        } else {
-            // DM Ad
-            ADMIN_USER.create_dm_channel(&discord_ctx).await?.say(&discord_ctx, msg).await?;
         }
     }
 
@@ -3303,8 +3292,9 @@ async fn handle_async_command(
                 if let Some(player) = player {
                     let player_name = player.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Player".to_string().into());
                     links_content.push_safe(player_name);
-                    links_content.push(": ");
+                    links_content.push(": <");
                     links_content.push(link);
+                    links_content.push(">");
                 }
             }
         }

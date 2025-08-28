@@ -382,6 +382,7 @@ pub(crate) async fn swiss_standings(
     _config: &Config,
     event_slug: &str,
     startgg_token: &str,
+    resigned_entrant_ids: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<SwissStanding>, Error> {
     use entrants_query::EntrantsQueryEventEntrantsNodesPaginatedSetsNodes as SetNode;
     use entrants_query::EntrantsQueryEventEntrantsNodesPaginatedSetsNodesPhaseGroup as PhaseGroup;
@@ -641,7 +642,14 @@ pub(crate) async fn swiss_standings(
     // Now apply the correct bye detection logic
     let expected_rounds = swiss_rounds.len();
     if expected_rounds > 0 {
-        for (_entrant_id, (name, wins, losses, total_matches)) in &mut entrant_matches {
+        for (entrant_id, (name, wins, losses, total_matches)) in &mut entrant_matches {
+            // Skip bye prediction for resigned entrants
+            if let Some(resigned_ids) = resigned_entrant_ids {
+                if resigned_ids.contains(entrant_id) {
+                    continue;
+                }
+            }
+            
             // Only apply byes if the total number of matches is less than expected rounds
             // This indicates that some matches were wiped from the API
             if *total_matches < expected_rounds {

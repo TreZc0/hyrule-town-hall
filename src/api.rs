@@ -725,11 +725,27 @@ pub(crate) async fn swiss_standings_endpoint(
         Some(s) if !s.is_empty() => s,
         _ => return Err(StatusOrError::Status(Status::NotFound)),
     };
+    // Get resigned teams for this event to exclude them from bye prediction
+    let resigned_entrant_ids = sqlx::query!(
+        r#"SELECT startgg_id FROM teams 
+           WHERE series = $1 AND event = $2 AND resigned = TRUE AND startgg_id IS NOT NULL"#,
+        series as _,
+        event
+    )
+    .fetch_all(&mut *transaction)
+    .await
+    .ok()
+            .map(|rows| rows.into_iter()
+            .filter_map(|row| row.startgg_id)
+            .map(|id| id.to_string())
+            .collect::<HashSet<_>>());
+
     let standings = startgg::swiss_standings(
         http_client.inner(),
         &*config,
         &slug,
         startgg_token,
+        resigned_entrant_ids.as_ref(),
     ).await.map_err(|_| StatusOrError::Status(Status::NotFound))?;
     Ok(Json(standings))
 }

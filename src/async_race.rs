@@ -294,7 +294,7 @@ impl AsyncRaceManager {
         content.push_line("");
         content.push("• After the countdown, you can finish your run and report your time");
         content.push_line("");
-        content.push("Please note in the interest of keeping a level playing field, even if running second, you will not be given the results of the match until after both players have run the seed.");
+        content.push("To maintain fairness, the final match results will only be shared after both players have completed the seed and organizers have confirmed the results.");
         
         // Instructions based on display order
         let display_order = Self::get_display_order(race, async_part);
@@ -662,9 +662,6 @@ impl AsyncRaceManager {
             return Err(Error::NotStarted);
         }
         
-        // Get the user who clicked the button
-        let user = User::from_discord(&mut *transaction, user_id).await?;
-        
         // Get thread ID
         let thread_id = match async_part {
             1 => sqlx::query_scalar!("SELECT async_thread1 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
@@ -704,9 +701,8 @@ impl AsyncRaceManager {
             // Start the timer AFTER the countdown completes
             let now = Utc::now();
             sqlx::query!(
-                "UPDATE async_times SET start_time = $1, recorded_at = NOW(), recorded_by = $2 WHERE race_id = $3 AND async_part = $4",
+                "UPDATE async_times SET start_time = $1 WHERE race_id = $2 AND async_part = $3",
                 now,
-                user.unwrap().id as _,
                 race_id,
                 async_part as i32,
             ).execute(&mut *transaction).await?;
