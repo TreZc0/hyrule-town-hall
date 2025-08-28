@@ -1,0 +1,72 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT id, display_source AS \"display_source: DisplaySource\", racetime_display_name, discord_display_name \n                FROM users \n                WHERE (display_source = $1 OR display_source = $2) AND (racetime_display_name = $3 OR discord_display_name = $3)\n                LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "display_source: DisplaySource",
+        "type_info": {
+          "Custom": {
+            "name": "user_display_source",
+            "kind": {
+              "Enum": [
+                "discord",
+                "racetime"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "racetime_display_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "discord_display_name",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "user_display_source",
+            "kind": {
+              "Enum": [
+                "discord",
+                "racetime"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "user_display_source",
+            "kind": {
+              "Enum": [
+                "discord",
+                "racetime"
+              ]
+            }
+          }
+        },
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "cd0775c8ccab7b5ac9193f6bf4e9dd9c070614b7e382fa4472adbb30d302303f"
+}

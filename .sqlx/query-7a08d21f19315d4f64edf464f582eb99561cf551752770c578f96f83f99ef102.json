@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT\n                    rb.id AS \"id: Id<RoleBindings>\",\n                    rb.series AS \"series: Series\",\n                    rb.event,\n                    rb.game_id,\n                    rb.role_type_id AS \"role_type_id: Id<RoleTypes>\",\n                    rb.min_count,\n                    rb.max_count,\n                    rt.name AS \"role_type_name\",\n                    rb.discord_role_id\n                FROM role_bindings rb\n                JOIN role_types rt ON rb.role_type_id = rt.id\n                WHERE rb.series = $1 AND rb.event = $2\n                ORDER BY rt.name\n            ",
+  "query": "SELECT rb.id as \"id: Id<RoleBindings>\", rb.series as \"series: Series\", rb.event as \"event!\", rb.game_id,\n                          rb.role_type_id as \"role_type_id: Id<RoleTypes>\", rb.min_count as \"min_count!\", \n                          rb.max_count as \"max_count!\", rt.name as \"role_type_name!\", rb.discord_role_id, rb.auto_approve\n                       FROM role_bindings rb\n                       JOIN role_types rt ON rb.role_type_id = rt.id\n                       WHERE rb.id = $1",
   "describe": {
     "columns": [
       {
@@ -15,7 +15,7 @@
       },
       {
         "ordinal": 2,
-        "name": "event",
+        "name": "event!",
         "type_info": "Varchar"
       },
       {
@@ -30,42 +30,47 @@
       },
       {
         "ordinal": 5,
-        "name": "min_count",
+        "name": "min_count!",
         "type_info": "Int4"
       },
       {
         "ordinal": 6,
-        "name": "max_count",
+        "name": "max_count!",
         "type_info": "Int4"
       },
       {
         "ordinal": 7,
-        "name": "role_type_name",
+        "name": "role_type_name!",
         "type_info": "Varchar"
       },
       {
         "ordinal": 8,
         "name": "discord_role_id",
         "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "auto_approve",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
       "Left": [
-        "Text",
-        "Text"
+        "Int4"
       ]
     },
     "nullable": [
       false,
-      false,
-      false,
+      true,
+      true,
       true,
       false,
       false,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "d42aa77631f892e3ee351c14a36d4541c2aeccda5c6567e78f3b621c1240e3d1"
+  "hash": "7a08d21f19315d4f64edf464f582eb99561cf551752770c578f96f83f99ef102"
 }

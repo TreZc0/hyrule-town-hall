@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO role_requests (role_binding_id, user_id, notes)\n               VALUES ($1, $2, $3) RETURNING id",
+  "query": "INSERT INTO role_requests (role_binding_id, user_id, notes, status)\n               VALUES ($1, $2, $3, $4) RETURNING id",
   "describe": {
     "columns": [
       {
@@ -13,12 +13,13 @@
       "Left": [
         "Int4",
         "Int8",
-        "Text"
+        "Text",
+        "Varchar"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "fa238bbeef5702a65ba258d5011fc8bf20571fbada1b2ce134389222ced4fefd"
+  "hash": "c4ab32bcc0c2b0962ded5469efbf1dcaa90206cbf456d90709a9ec975194d197"
 }

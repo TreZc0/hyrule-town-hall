@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT\n                    id AS \"id: Id<EventDisabledRoleBindings>\",\n                    series AS \"series: Series\",\n                    event,\n                    role_type_id AS \"role_type_id: Id<RoleTypes>\",\n                    created_at AS \"created_at!\"\n                FROM event_disabled_role_bindings\n                WHERE series = $1 AND event = $2\n                ORDER BY role_type_id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<EventDisabledRoleBindings>",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "series: Series",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "event",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "role_type_id: Id<RoleTypes>",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "53a264b11f1ecbcc706d0b6ef32baca51ecbaf70360198f2b168e138636a88e8"
+}

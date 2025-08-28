@@ -1,7 +1,6 @@
 use {
     crate::{
         config::ConfigRaceTime,
-        hash_icon_db::HashIconData,
         prelude::*,
         racetime_bot::{CleanShutdown, CrosskeysRaceOptions, GlobalState},
         async_race::{AsyncRaceManager, Error as AsyncRaceError},
@@ -249,6 +248,7 @@ trait GenericInteraction {
     fn guild_id(&self) -> Option<GuildId>;
     fn user_id(&self) -> UserId;
     async fn create_response(&self, cache_http: impl CacheHttp, builder: CreateInteractionResponse) -> serenity::Result<()>;
+    async fn edit_response(&self, cache_http: impl CacheHttp, builder: EditInteractionResponse) -> serenity::Result<Message>;
 }
 
 #[async_trait]
@@ -259,6 +259,9 @@ impl GenericInteraction for CommandInteraction {
 
     async fn create_response(&self, cache_http: impl CacheHttp, builder: CreateInteractionResponse) -> serenity::Result<()> {
         self.create_response(cache_http, builder).await
+    }
+    async fn edit_response(&self, cache_http: impl CacheHttp, builder: EditInteractionResponse) -> serenity::Result<Message> {
+        self.edit_response(cache_http, builder).await
     }
 }
 
@@ -271,10 +274,13 @@ impl GenericInteraction for ComponentInteraction {
     async fn create_response(&self, cache_http: impl CacheHttp, builder: CreateInteractionResponse) -> serenity::Result<()> {
         self.create_response(cache_http, builder).await
     }
+    async fn edit_response(&self, cache_http: impl CacheHttp, builder: EditInteractionResponse) -> serenity::Result<Message> {
+        self.edit_response(cache_http, builder).await
+    }
 }
 
 //TODO refactor (MH admins should have permissions, room already being open should not remove permissions but only remove the team from return)
-async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction, game: Option<i16>, allow_rooms_for_other_teams: bool, alternative_instructions: Option<&str>) -> Result<Option<(Transaction<'a, Postgres>, Race, Option<Team>)>, Box<dyn std::error::Error + Send + Sync>> {
+async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction, game: Option<i16>, allow_rooms_for_other_teams: bool, alternative_instructions: Option<&str>, already_deferred: bool) -> Result<Option<(Transaction<'a, Postgres>, Race, Option<Team>)>, Box<dyn std::error::Error + Send + Sync>> {
     let (mut transaction, http_client) = {
         let data = ctx.data.read().await;
         (
@@ -319,10 +325,16 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
                 (true, false) => { content.push("Sorry, this thread is not associated with any upcoming races. Please contact a tournament organizer to fix this."); }
                 (true, true) => { content.push("Sorry, there don't seem to be any upcoming races with that game number associated with this thread. If this seems wrong, please contact a tournament organizer to fix this."); }
             }
-            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content(content.build())
-            )).await?;
+            if already_deferred {
+                interaction.edit_response(ctx, EditInteractionResponse::new()
+                    .content(content.build())
+                ).await?;
+            } else {
+                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                    .ephemeral(true)
+                    .content(content.build())
+                )).await?;
+            }
             transaction.rollback().await?;
             None
         }
@@ -341,10 +353,16 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
                     race.has_any_room()
                 };
                 if blocked {
-                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                        .ephemeral(true)
-                        .content("Sorry, this command can't be used since a race room is already open. Please contact a tournament organizer if necessary.")
-                    )).await?;
+                    if already_deferred {
+                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                            .content("Sorry, this command can't be used since a race room is already open. Please contact a tournament organizer if necessary.")
+                        ).await?;
+                    } else {
+                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                            .ephemeral(true)
+                            .content("Sorry, this command can't be used since a race room is already open. Please contact a tournament organizer if necessary.")
+                        )).await?;
+                    }
                     transaction.rollback().await?;
                     return Ok(None)
                 }
@@ -352,10 +370,16 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
             Some((transaction, race, team))
         }
         Err(_) => {
-            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content("Sorry, this thread is associated with multiple upcoming races. Please contact a tournament organizer to fix this.")
-            )).await?;
+            if already_deferred {
+                interaction.edit_response(ctx, EditInteractionResponse::new()
+                    .content("Sorry, this thread is associated with multiple upcoming races. Please contact a tournament organizer to fix this.")
+                ).await?;
+            } else {
+                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                    .ephemeral(true)
+                    .content("Sorry, this thread is associated with multiple upcoming races. Please contact a tournament organizer to fix this.")
+                )).await?;
+            }
             transaction.rollback().await?;
             None
         }
@@ -363,7 +387,7 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
 }
 
 async fn check_draft_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction) -> Result<Option<(event::Data<'static>, Race, draft::Kind, draft::MessageContext<'a>)>, Box<dyn std::error::Error + Send + Sync>> {
-    let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, Some("You can continue the draft in the race room")).await? else { return Ok(None) };
+    let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, Some("You can continue the draft in the race room"), false).await? else { return Ok(None) };
     let guild_id = interaction.guild_id().expect("Received interaction from outside of a guild");
     let event = race.event(&mut transaction).await?;
     Ok(if let Some(team) = team {
@@ -1180,7 +1204,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         } else if Some(interaction.data.id) == command_ids.no {
                             draft_action(ctx, interaction, draft::Action::BooleanChoice(false)).await?;
                         } else if interaction.data.id == command_ids.post_status {
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false).await? {
                                 let event = race.event(&mut transaction).await?;
                                 if event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id)) {
                                     if let Some(draft_kind) = event.draft_kind() {
@@ -1434,7 +1458,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 .ephemeral(false)
                             )).await?;
                             
-                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, false, None).await? {
+                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, false, None, true).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
@@ -1568,7 +1592,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 CommandDataOptionValue::Integer(game) => i16::try_from(game).expect("game number out of range"),
                                 _ => panic!("unexpected slash command option type"),
                             });
-                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None).await? {
+                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None, false).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
@@ -1774,7 +1798,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 CommandDataOptionValue::Integer(game) => i16::try_from(game).expect("game number out of range"),
                                 _ => panic!("unexpected slash command option type"),
                             });
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None, false).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 if event.speedgaming_slug.is_some() {
@@ -1948,7 +1972,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         } else if Some(interaction.data.id) == command_ids.skip {
                             draft_action(ctx, interaction, draft::Action::Skip).await?;
                         } else if interaction.data.id == command_ids.status {
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false).await? {
                                 let event = race.event(&mut transaction).await?;
                                 if let Some(draft_kind) = event.draft_kind() {
                                     if let Some(ref draft) = race.draft {
@@ -2661,16 +2685,6 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
     Ok(transaction)
 }
 
-async fn format_hash_names_for_discord(file_hash: [String; 5], transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<String, sqlx::Error> {
-    let mut names = Vec::new();
-    for icon_name in file_hash {
-        if let Some(hash_icon_data) = HashIconData::by_name(transaction, game_id, &icon_name).await? {
-            names.push(hash_icon_data.name.clone());
-        }
-    }
-    Ok(names.join(" "))
-}
-
 pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, event: event::Data<'_>) -> Result<(),Error > {
     // This is a temporary implementation. It checks the race and sees if a seed is rolled. 
     // If it is not, it rolls a seed and adds it to the database.
@@ -2690,80 +2704,53 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
     };
 
-    // There is already a seed rolled. Access that seed instead.
-    let (uuid, _second_half, file_hash) = match cal_event.race.seed.files {
-        // Seed already exists, get the message appropriately.
-        Some(seed::Files::AlttprDoorRando { uuid}) => (uuid, true, cal_event.race.seed.file_hash.as_ref().cloned()),
-        Some(_) => unimplemented!("Haven't implemented asyncs for non-door rando yet"),
-        // Roll a seed and put it in the database before returning the message.
-        None => {
-            let discord_data = discord_ctx.data.read().await;
-            let global_state = discord_data.get::<GlobalState>().expect("Global State missing from Discord context");
-            let crosskeys_options = CrosskeysRaceOptions::for_race(&global_state.db_pool, &cal_event.race).await;
-            let mut updates = global_state.clone().roll_crosskeys2025_seed(crosskeys_options);
+    // Check if this is the second part of an async (seed already exists)
+    let is_second_part = cal_event.race.seed.files.is_some();
+    
+    // If no seed exists, roll a new one
+    if !is_second_part {
+        let discord_data = discord_ctx.data.read().await;
+        let global_state = discord_data.get::<GlobalState>().expect("Global State missing from Discord context");
+        let crosskeys_options = CrosskeysRaceOptions::for_race(&global_state.db_pool, &cal_event.race).await;
+        let mut updates = global_state.clone().roll_crosskeys2025_seed(crosskeys_options);
 
-            // Loop until we get an update saying the seed data is done rolling.
-            let seed = loop {
-                match updates.recv().await {
-                    Some(racetime_bot::SeedRollUpdate::Done { seed, .. }) => break seed,
-                    Some(racetime_bot::SeedRollUpdate::Error(e)) => panic!("error rolling seed: {e} ({e:?})"),
-                    None => panic!(),
-                    _ => {}
-                }
-            };
+        // Loop until we get an update saying the seed data is done rolling.
+        let seed = loop {
+            match updates.recv().await {
+                Some(racetime_bot::SeedRollUpdate::Done { seed, .. }) => break seed,
+                Some(racetime_bot::SeedRollUpdate::Error(e)) => panic!("error rolling seed: {e} ({e:?})"),
+                None => panic!(),
+                _ => {}
+            }
+        };
 
-            let uuid = match seed.files {
-                Some(seed::Files::AlttprDoorRando { uuid}) => uuid,
-                _ => unimplemented!("handle what happens here?")
-            };
+        let uuid = match seed.files {
+            Some(seed::Files::AlttprDoorRando { uuid}) => uuid,
+            _ => unimplemented!("handle what happens here?")
+        };
 
-            let (hash1, hash2, hash3, hash4, hash5) = match seed.file_hash {
-                Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) => (Some(hash1), Some(hash2), Some(hash3), Some(hash4), Some(hash5)),
-                None => (None, None, None, None, None)
-            };
+        let (hash1, hash2, hash3, hash4, hash5) = match seed.file_hash {
+            Some([hash1, hash2, hash3, hash4, hash5]) => (Some(hash1), Some(hash2), Some(hash3), Some(hash4), Some(hash5)),
+            None => (None, None, None, None, None)
+        };
 
-            sqlx::query!("UPDATE races SET xkeys_uuid = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7",uuid, hash1, hash2, hash3, hash4, hash5, cal_event.race.id as _,).execute(&mut *transaction).await?;
-            (uuid, false, seed.file_hash)
-        }
-    };
-
-    let seed_url =  {
-        let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("Couldn't parse URL");
-        patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{uuid}.bps"));
-        patcher_url.to_string()
-    };
+        sqlx::query!("UPDATE races SET xkeys_uuid = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7",uuid, hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,).execute(&mut *transaction).await?;
+    }
 
     for team in cal_event.active_teams() {
         let mut content = MessageBuilder::default();
         content.push("Async starting for ");
         content.mention_team(&mut transaction, event.discord_guild, team).await?;
-        content.push(format!(". Seed URL is {}. The seed will be distributed to the runner 10 minutes before their scheduled start time. While the process is automatic, please make sure to check in.",seed_url));
-        if let Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) = file_hash {
-            content.push_line("");
-            // Get the game_id for the event's series
-            let game_id = sqlx::query_scalar!(
-                r#"
-                    SELECT gs.game_id
-                    FROM game_series gs
-                    WHERE gs.series = $1
-                "#,
-                cal_event.race.series as _
-            )
-            .fetch_optional(&mut *transaction)
-            .await?
-            .unwrap_or(Some(1))
-            .unwrap_or(1);
-            
-            // Convert hash icon names to user-friendly names for Discord display
-            let hash_names = format_hash_names_for_discord([hash1.clone(), hash2.clone(), hash3.clone(), hash4.clone(), hash5.clone()], &mut transaction, game_id).await?;
-            content.push(format!("The hash for this seed is {}", hash_names));
+        
+        if is_second_part {
+            content.push(". **This is the second part of the async.** The runner will receive the previously generated seed as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
+        } else {
+            content.push(". A Seed has been generated and will be distributed to the runner as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
         }
+        
         let msg = content.build();
         if let Some(channel) = event.discord_organizer_channel {
             channel.say(&discord_ctx, msg).await?;
-        } else {
-            // DM Ad
-            ADMIN_USER.create_dm_channel(&discord_ctx).await?.say(&discord_ctx, msg).await?;
         }
     }
 
@@ -3301,8 +3288,9 @@ async fn handle_async_command(
                 if let Some(player) = player {
                     let player_name = player.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Player".to_string().into());
                     links_content.push_safe(player_name);
-                    links_content.push(": ");
+                    links_content.push(": <");
                     links_content.push(link);
+                    links_content.push(">");
                 }
             }
         }

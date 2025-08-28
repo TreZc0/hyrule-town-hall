@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT EXISTS (SELECT 1 FROM event_discord_role_overrides\n                   WHERE series = $1 AND event = $2 AND role_type_id = $3)",
+  "query": "SELECT EXISTS(SELECT 1 FROM event_disabled_role_bindings WHERE series = $1 AND event = $2 AND role_type_id = $3)",
   "describe": {
     "columns": [
       {
@@ -20,5 +20,5 @@
       null
     ]
   },
-  "hash": "049ece0db33eacfb81923827fad2ed3137df3bf8ffa35b4f8b525a2e55e5b06c"
+  "hash": "a973a2a2af0bf16779ab6cb62334b77a7ccb74c2dd45ad5f64b096af6960cbaf"
 }

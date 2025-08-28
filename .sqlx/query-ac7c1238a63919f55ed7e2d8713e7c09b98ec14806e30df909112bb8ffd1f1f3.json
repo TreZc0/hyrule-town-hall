@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT async_part, finish_time FROM async_times\n        WHERE race_id = $1\n        ORDER BY async_part\n        ",
+  "query": "\n        SELECT async_part, finish_time, link FROM async_times\n        WHERE race_id = $1 AND recorded_by IS NOT NULL\n        ORDER BY async_part\n        ",
   "describe": {
     "columns": [
       {
@@ -12,6 +12,11 @@
         "ordinal": 1,
         "name": "finish_time",
         "type_info": "Interval"
+      },
+      {
+        "ordinal": 2,
+        "name": "link",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -21,8 +26,9 @@
     },
     "nullable": [
       false,
+      true,
       true
     ]
   },
-  "hash": "bdee8be30a25c085d1464d3d46804c5e4595793a63b56baefc70c69d25ff0d0f"
+  "hash": "ac7c1238a63919f55ed7e2d8713e7c09b98ec14806e30df909112bb8ffd1f1f3"
 }

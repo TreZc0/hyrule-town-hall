@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT \n                    rr.id AS \"id: Id<RoleRequests>\",\n                    rr.role_binding_id AS \"role_binding_id: Id<RoleBindings>\",\n                    rr.user_id AS \"user_id: Id<Users>\",\n                    rr.status AS \"status: RoleRequestStatus\",\n                    rr.notes,\n                    rr.created_at,\n                    rr.updated_at,\n                    rb.series AS \"series: Series\",\n                    rb.event,\n                    rb.min_count,\n                    rb.max_count,\n                    rt.name AS \"role_type_name\"\n                FROM role_requests rr\n                JOIN role_bindings rb ON rr.role_binding_id = rb.id\n                JOIN role_types rt ON rb.role_type_id = rt.id\n                WHERE rr.user_id = $1\n                ORDER BY rr.created_at DESC\n            ",
+  "query": "\n                SELECT \n                    rr.id AS \"id: Id<RoleRequests>\",\n                    rr.role_binding_id AS \"role_binding_id: Id<RoleBindings>\",\n                    rr.user_id AS \"user_id: Id<Users>\",\n                    rr.status AS \"status: RoleRequestStatus\",\n                    rr.notes,\n                    rr.created_at,\n                    rr.updated_at,\n                    rb.series AS \"series: Series\",\n                    rb.event,\n                    rb.min_count,\n                    rb.max_count,\n                    rt.name AS \"role_type_name\"\n                FROM role_requests rr\n                JOIN role_bindings rb ON rr.role_binding_id = rb.id\n                JOIN role_types rt ON rb.role_type_id = rt.id\n                WHERE rr.role_binding_id = $1 AND rr.user_id = $2 AND rr.status IN ('pending', 'approved')\n                ORDER BY rr.created_at DESC\n                LIMIT 1\n            ",
   "describe": {
     "columns": [
       {
@@ -66,6 +66,7 @@
     ],
     "parameters": {
       "Left": [
+        "Int4",
         "Int8"
       ]
     },
@@ -84,5 +85,5 @@
       false
     ]
   },
-  "hash": "091502a70c018529e398e41e99318ccc2b27ec150340978493de3fd0a624d8d5"
+  "hash": "027daba0877ea93cf98bc23a54786fa819cb6b68417c9c93eaf96dacb442f263"
 }

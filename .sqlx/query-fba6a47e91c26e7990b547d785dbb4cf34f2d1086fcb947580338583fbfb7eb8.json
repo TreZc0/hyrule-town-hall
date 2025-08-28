@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE events \n                SET enter_flow = $1\n                WHERE series = $2 AND event = $3\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fba6a47e91c26e7990b547d785dbb4cf34f2d1086fcb947580338583fbfb7eb8"
+}

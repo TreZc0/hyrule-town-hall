@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                DELETE FROM organizers \n                WHERE series = $1 AND event = $2 AND organizer = $3\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "788c643fade46282d592c9c8129b3beae6f531e9fcc9590806d8e80615576631"
+}

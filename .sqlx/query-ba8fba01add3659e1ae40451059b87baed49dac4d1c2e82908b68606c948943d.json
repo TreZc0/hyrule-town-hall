@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, display_source AS \"display_source: DisplaySource\", racetime_display_name, racetime_id, discord_display_name, discord_username\n        FROM users \n        WHERE (racetime_display_name ILIKE $1 OR discord_display_name ILIKE $1 OR racetime_id ILIKE $1 OR discord_username ILIKE $1)\n        ORDER BY \n            CASE WHEN racetime_display_name ILIKE $1 THEN 0 ELSE 1 END,\n            CASE WHEN discord_display_name ILIKE $1 THEN 0 ELSE 1 END,\n            CASE WHEN racetime_id ILIKE $1 THEN 0 ELSE 1 END,\n            CASE WHEN discord_username ILIKE $1 THEN 0 ELSE 1 END,\n            racetime_display_name, discord_display_name\n        LIMIT 10\n    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "display_source: DisplaySource",
+        "type_info": {
+          "Custom": {
+            "name": "user_display_source",
+            "kind": {
+              "Enum": [
+                "discord",
+                "racetime"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "racetime_display_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "racetime_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "discord_display_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "discord_username",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "ba8fba01add3659e1ae40451059b87baed49dac4d1c2e82908b68606c948943d"
+}

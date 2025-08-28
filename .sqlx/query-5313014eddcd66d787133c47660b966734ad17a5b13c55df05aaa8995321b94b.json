@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT rb.id as \"id: Id<RoleBindings>\", rb.series as \"series: Series\", rb.event, rb.game_id, rb.role_type_id as \"role_type_id: Id<RoleTypes>\", rb.min_count, rb.max_count, rt.name as role_type_name, rb.discord_role_id FROM role_bindings rb JOIN role_types rt ON rb.role_type_id = rt.id WHERE rb.id = $1",
+  "query": "\n                SELECT\n                    rb.id AS \"id: Id<RoleBindings>\",\n                    rb.series AS \"series: Series\",\n                    rb.event,\n                    rb.game_id,\n                    rb.role_type_id AS \"role_type_id: Id<RoleTypes>\",\n                    rb.min_count,\n                    rb.max_count,\n                    rt.name AS \"role_type_name\",\n                    rb.discord_role_id,\n                    rb.auto_approve\n                FROM role_bindings rb\n                JOIN role_types rt ON rb.role_type_id = rt.id\n                WHERE rb.series = $1 AND rb.event = $2\n                ORDER BY rt.name\n            ",
   "describe": {
     "columns": [
       {
@@ -47,24 +47,31 @@
         "ordinal": 8,
         "name": "discord_role_id",
         "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "auto_approve",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
       "Left": [
-        "Int4"
+        "Text",
+        "Text"
       ]
     },
     "nullable": [
       false,
-      false,
-      false,
+      true,
+      true,
       true,
       false,
       false,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "3a407508a848be6af1dd51066184880a60da3ed254621fbd323c9ab9b63a6dc4"
+  "hash": "5313014eddcd66d787133c47660b966734ad17a5b13c55df05aaa8995321b94b"
 }

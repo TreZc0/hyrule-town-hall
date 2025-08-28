@@ -294,7 +294,7 @@ impl AsyncRaceManager {
         content.push_line("");
         content.push("• After the countdown, you can finish your run and report your time");
         content.push_line("");
-        content.push("Please note in the interest of keeping a level playing field, even if running second, you will not be given the results of the match until after both players have run the seed.");
+        content.push("To maintain fairness, the final match results will only be shared after both players have completed the seed and organizers have confirmed the results.");
         
         // Instructions based on display order
         let display_order = Self::get_display_order(race, async_part);

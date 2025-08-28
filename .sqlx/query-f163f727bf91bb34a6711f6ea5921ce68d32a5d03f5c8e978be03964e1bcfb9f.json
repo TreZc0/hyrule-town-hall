@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM event_disabled_role_bindings WHERE series = $1 AND event = $2 AND role_type_id = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f163f727bf91bb34a6711f6ea5921ce68d32a5d03f5c8e978be03964e1bcfb9f"
+}

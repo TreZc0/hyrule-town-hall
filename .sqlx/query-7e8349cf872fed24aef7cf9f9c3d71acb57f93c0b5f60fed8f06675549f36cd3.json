@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO role_bindings (game_id, role_type_id, min_count, max_count, discord_role_id, series, event) \n               VALUES ($1, $2, $3, $4, $5, NULL, NULL) RETURNING id",
+  "query": "INSERT INTO role_bindings (game_id, role_type_id, min_count, max_count, discord_role_id, series, event, auto_approve) \n               VALUES ($1, $2, $3, $4, $5, NULL, NULL, $6) RETURNING id",
   "describe": {
     "columns": [
       {
@@ -15,12 +15,13 @@
         "Int4",
         "Int4",
         "Int4",
-        "Int8"
+        "Int8",
+        "Bool"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "a2edad628cbd255d2f0f0eb34228c9d8281304dd205765b48e15b2156a109135"
+  "hash": "7e8349cf872fed24aef7cf9f9c3d71acb57f93c0b5f60fed8f06675549f36cd3"
 }
