@@ -252,6 +252,7 @@ trait GenericInteraction {
     fn guild_id(&self) -> Option<GuildId>;
     fn user_id(&self) -> UserId;
     async fn create_response(&self, cache_http: impl CacheHttp, builder: CreateInteractionResponse) -> serenity::Result<()>;
+    async fn edit_response(&self, cache_http: impl CacheHttp, builder: EditInteractionResponse) -> serenity::Result<Message>;
 }
 
 #[async_trait]
@@ -262,6 +263,9 @@ impl GenericInteraction for CommandInteraction {
 
     async fn create_response(&self, cache_http: impl CacheHttp, builder: CreateInteractionResponse) -> serenity::Result<()> {
         self.create_response(cache_http, builder).await
+    }
+    async fn edit_response(&self, cache_http: impl CacheHttp, builder: EditInteractionResponse) -> serenity::Result<Message> {
+        self.edit_response(cache_http, builder).await
     }
 }
 
@@ -274,10 +278,13 @@ impl GenericInteraction for ComponentInteraction {
     async fn create_response(&self, cache_http: impl CacheHttp, builder: CreateInteractionResponse) -> serenity::Result<()> {
         self.create_response(cache_http, builder).await
     }
+    async fn edit_response(&self, cache_http: impl CacheHttp, builder: EditInteractionResponse) -> serenity::Result<Message> {
+        self.edit_response(cache_http, builder).await
+    }
 }
 
 //TODO refactor (MH admins should have permissions, room already being open should not remove permissions but only remove the team from return)
-async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction, game: Option<i16>, allow_rooms_for_other_teams: bool, alternative_instructions: Option<&str>) -> Result<Option<(Transaction<'a, Postgres>, Race, Option<Team>)>, Box<dyn std::error::Error + Send + Sync>> {
+async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction, game: Option<i16>, allow_rooms_for_other_teams: bool, alternative_instructions: Option<&str>, already_deferred: bool) -> Result<Option<(Transaction<'a, Postgres>, Race, Option<Team>)>, Box<dyn std::error::Error + Send + Sync>> {
     let (mut transaction, http_client) = {
         let data = ctx.data.read().await;
         (
@@ -322,10 +329,16 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
                 (true, false) => { content.push("Sorry, this thread is not associated with any upcoming races. Please contact a tournament organizer to fix this."); }
                 (true, true) => { content.push("Sorry, there don't seem to be any upcoming races with that game number associated with this thread. If this seems wrong, please contact a tournament organizer to fix this."); }
             }
-            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content(content.build())
-            )).await?;
+            if already_deferred {
+                interaction.edit_response(ctx, EditInteractionResponse::new()
+                    .content(content.build())
+                ).await?;
+            } else {
+                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                    .ephemeral(true)
+                    .content(content.build())
+                )).await?;
+            }
             transaction.rollback().await?;
             None
         }
@@ -344,10 +357,16 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
                     race.has_any_room()
                 };
                 if blocked {
-                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                        .ephemeral(true)
-                        .content("Sorry, this command can't be used since a race room is already open. Please contact a tournament organizer if necessary.")
-                    )).await?;
+                    if already_deferred {
+                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                            .content("Sorry, this command can't be used since a race room is already open. Please contact a tournament organizer if necessary.")
+                        ).await?;
+                    } else {
+                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                            .ephemeral(true)
+                            .content("Sorry, this command can't be used since a race room is already open. Please contact a tournament organizer if necessary.")
+                        )).await?;
+                    }
                     transaction.rollback().await?;
                     return Ok(None)
                 }
@@ -355,10 +374,16 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
             Some((transaction, race, team))
         }
         Err(_) => {
-            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content("Sorry, this thread is associated with multiple upcoming races. Please contact a tournament organizer to fix this.")
-            )).await?;
+            if already_deferred {
+                interaction.edit_response(ctx, EditInteractionResponse::new()
+                    .content("Sorry, this thread is associated with multiple upcoming races. Please contact a tournament organizer to fix this.")
+                ).await?;
+            } else {
+                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                    .ephemeral(true)
+                    .content("Sorry, this thread is associated with multiple upcoming races. Please contact a tournament organizer to fix this.")
+                )).await?;
+            }
             transaction.rollback().await?;
             None
         }
@@ -366,7 +391,7 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
 }
 
 async fn check_draft_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction) -> Result<Option<(event::Data<'static>, Race, draft::Kind, draft::MessageContext<'a>)>, Box<dyn std::error::Error + Send + Sync>> {
-    let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, Some("You can continue the draft in the race room")).await? else { return Ok(None) };
+    let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, Some("You can continue the draft in the race room"), false).await? else { return Ok(None) };
     let guild_id = interaction.guild_id().expect("Received interaction from outside of a guild");
     let event = race.event(&mut transaction).await?;
     Ok(if let Some(team) = team {
@@ -1181,7 +1206,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         } else if Some(interaction.data.id) == command_ids.no {
                             draft_action(ctx, interaction, draft::Action::BooleanChoice(false)).await?;
                         } else if interaction.data.id == command_ids.post_status {
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false).await? {
                                 let event = race.event(&mut transaction).await?;
                                 if event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id)) {
                                     if let Some(draft_kind) = event.draft_kind() {
@@ -1435,7 +1460,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 .ephemeral(false)
                             )).await?;
                             
-                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, false, None).await? {
+                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, false, None, true).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
@@ -1570,7 +1595,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 CommandDataOptionValue::Integer(game) => i16::try_from(game).expect("game number out of range"),
                                 _ => panic!("unexpected slash command option type"),
                             });
-                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None).await? {
+                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None, false).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
@@ -1777,7 +1802,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 CommandDataOptionValue::Integer(game) => i16::try_from(game).expect("game number out of range"),
                                 _ => panic!("unexpected slash command option type"),
                             });
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None, false).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 if event.speedgaming_slug.is_some() {
@@ -1951,7 +1976,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         } else if Some(interaction.data.id) == command_ids.skip {
                             draft_action(ctx, interaction, draft::Action::Skip).await?;
                         } else if interaction.data.id == command_ids.status {
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false).await? {
                                 let event = race.event(&mut transaction).await?;
                                 if let Some(draft_kind) = event.draft_kind() {
                                     if let Some(ref draft) = race.draft {
