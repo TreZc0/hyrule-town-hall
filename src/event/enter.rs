@@ -1077,6 +1077,30 @@ impl Requirement {
         }
         Ok(())
     }
+
+    async fn request_qualifier(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: &User, data: &Data<'_>) -> Result<Option<AsyncKind>, Error> {
+        Ok(match self {
+            Requirement::Qualifier { .. } => Some(AsyncKind::Qualifier1),
+            Requirement::TripleQualifier { async_starts, async_ends, .. } => {
+                let now = Utc::now();
+                if self.is_checked(transaction, http_client, discord_ctx, me, data).await?.unwrap_or(false) {
+                    None
+                } else {
+                    (*async_starts).into_iter()
+                        .zip_eq(*async_ends)
+                        .enumerate()
+                        .find(|&(_, (async_start, async_end))| now >= async_start && now < async_end)
+                        .map(|(idx, _)| match idx {
+                            0 => AsyncKind::Qualifier1,
+                            1 => AsyncKind::Qualifier2,
+                            2 => AsyncKind::Qualifier3,
+                            _ => unreachable!("more than 3 qualifiers in Requirement::TripleQualifier"),
+                        })
+                }
+            }
+            _ => None,
+        })
+    }
 }
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
@@ -1195,7 +1219,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                                                 a(href = url.to_string()) : "the race room";
                                                 : " to participate in this race.";
                                             } else {
-                                                : "The race room will be opened around 30 minutes before the scheduled starting time. ";
+                                                : "The race room will be opened around 1 hour before the scheduled starting time. ";
                                                 @if me.as_ref().is_some_and(|me| me.racetime.is_some()) {
                                                     : "You don't need to sign up beforehand.";
                                                 } else {
@@ -1212,11 +1236,13 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                             }
                         } else if let Some(ref me) = me {
                             let mut can_submit = true;
+                            let mut request_qualifier = false;
                             let mut requirements_display = Vec::with_capacity(requirements.len());
                             for requirement in requirements {
                                 let is_checked = requirement.is_checked(&mut transaction, http_client, discord_ctx, me, &data).await?;
                                 let status = requirement.check_get(http_client, &data, is_checked, uri!(get(data.series, &*data.event, defaults.my_role(), defaults.teammate())), &defaults).await?;
                                 if status.blocks_submit { can_submit = false }
+                                if requirement.request_qualifier(&mut transaction, http_client, discord_ctx, me, &data).await?.is_some() { request_qualifier = true }
                                 requirements_display.push((is_checked, status.html_content));
                             }
                             let preface = html! {
@@ -1246,7 +1272,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                                             div : html_content(&mut errors);
                                         }
                                     }
-                                }, errors, "Enter")
+                                }, errors, if request_qualifier { "Enter and Request Seed" } else { "Enter" })
                             } else {
                                 html! {
                                     article {
@@ -1456,27 +1482,8 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                     } else {
                         for requirement in requirements {
                             requirement.check_form(&mut transaction, http_client, discord_ctx, &me, &data, &mut form.context, value).await?;
-                            match requirement {
-                                Requirement::Qualifier { .. } => request_qualifier = Some(AsyncKind::Qualifier1),
-                                Requirement::TripleQualifier { async_starts, async_ends, .. } => {
-                                    let now = Utc::now();
-                                    request_qualifier = if requirement.is_checked(&mut transaction, http_client, discord_ctx, &me, &data).await?.unwrap_or(false) {
-                                        None
-                                    } else {
-                                        (*async_starts).into_iter()
-                                            .zip_eq(*async_ends)
-                                            .enumerate()
-                                            .find(|&(_, (async_start, async_end))| now >= async_start && now < async_end)
-                                            .map(|(idx, _)| match idx {
-                                                0 => AsyncKind::Qualifier1,
-                                                1 => AsyncKind::Qualifier2,
-                                                2 => AsyncKind::Qualifier3,
-                                                _ => unreachable!("more than 3 qualifiers in Requirement::TripleQualifier"),
-                                            })
-                                    };
-                                }
-                                Requirement::BooleanChoice { .. } => {}
-                                _ => {}
+                            if let Some(async_kind) = requirement.request_qualifier(&mut transaction, http_client, discord_ctx, &me, &data).await? {
+                                request_qualifier = Some(async_kind);
                             }
                         }
                     }
