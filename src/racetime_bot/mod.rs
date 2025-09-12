@@ -214,7 +214,7 @@ pub(crate) enum Goal {
     MultiworldS3,
     MultiworldS4,
     MultiworldS5,
-    Mysteryd20,
+    MysteryD20,
     NineDaysOfSaws,
     Pic7,
     PicRs2,
@@ -244,7 +244,7 @@ impl Goal {
     fn from_race_data(race_data: &RaceData) -> Option<Self> {
         let Ok(bot_goal) = race_data.goal.name.parse::<Self>() else { return None };
         if race_data.goal.custom != bot_goal.is_custom() { return None }
-        if let (Goal::StandardRuleset | Goal::Crosskeys2025 | Goal::Mysteryd20, Some(_)) = (bot_goal, &race_data.opened_by) { return None }
+        if let (Goal::StandardRuleset | Goal::Crosskeys2025 | Goal::MysteryD20, Some(_)) = (bot_goal, &race_data.opened_by) { return None }
         Some(bot_goal)
     }
 
@@ -262,7 +262,7 @@ impl Goal {
             Self::MultiworldS3 => series == Series::Multiworld && event == "3",
             Self::MultiworldS4 => series == Series::Multiworld && event == "4",
             Self::MultiworldS5 => series == Series::Multiworld && event == "5",
-            Self::Mysteryd20 => series == Series::Mysteryd && event == "20",
+            Self::MysteryD20 => series == Series::MysteryD && event == "20",
             Self::NineDaysOfSaws => series == Series::NineDaysOfSaws,
             Self::Pic7 => series == Series::Pictionary && event == "7",
             Self::PicRs2 => series == Series::Pictionary && event == "rs2",
@@ -299,7 +299,7 @@ impl Goal {
             | Self::MultiworldS3
             | Self::MultiworldS4
             | Self::MultiworldS5
-            | Self::Mysteryd20
+            | Self::MysteryD20
             | Self::NineDaysOfSaws
             | Self::Pic7
             | Self::PicRs2
@@ -330,7 +330,7 @@ impl Goal {
             Self::MultiworldS3 => "3rd Multiworld Tournament",
             Self::MultiworldS4 => "4th Multiworld Tournament",
             Self::MultiworldS5 => "5th Multiworld Tournament",
-            Self::Mysteryd20 => "Deutsches Mystery Turnier 2.0",
+            Self::MysteryD20 => "Deutsches Mystery Turnier 2.0",
             Self::NineDaysOfSaws => "9 Days of SAWS",
             Self::Pic7 => "7th Pictionary Spoiler Log Race",
             Self::PicRs2 => "2nd Random Settings Pictionary Spoiler Log Race",
@@ -362,7 +362,7 @@ impl Goal {
             | Self::MultiworldS3
             | Self::MultiworldS4
             | Self::MultiworldS5
-            | Self::Mysteryd20
+            | Self::MysteryD20
             | Self::NineDaysOfSaws
             | Self::Pic7
             | Self::PicRs2
@@ -404,7 +404,7 @@ impl Goal {
             | Self::MixedPoolsS3
             | Self::MixedPoolsS4
             | Self::Mq
-            | Self::Mysteryd20
+            | Self::MysteryD20
             | Self::NineDaysOfSaws
             | Self::Pic7
             | Self::PicRs2
@@ -437,7 +437,7 @@ impl Goal {
             | Self::MultiworldS3
             | Self::MultiworldS4
             | Self::MultiworldS5
-            | Self::Mysteryd20
+            | Self::MysteryD20
             | Self::NineDaysOfSaws
             | Self::Pic7
             | Self::PicRs2
@@ -498,7 +498,7 @@ impl Goal {
                 | Self::StandardRuleset
                     => if official_race { UnlockSpoilerLog::Never } else { UnlockSpoilerLog::After },
                 | Self::Crosskeys2025
-                | Self::Mysteryd20
+                | Self::MysteryD20
                     => UnlockSpoilerLog::Never
             }
         }
@@ -543,7 +543,7 @@ impl Goal {
             Self::WeTryToBeBetterS1 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 0, 11) },
             Self::WeTryToBeBetterS2 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 2, 0) },
             Self::Crosskeys2025 => panic!("randomizer version for this goal is unused"),
-            Self::Mysteryd20 => panic!("randomizer version for this goal is unused"),
+            Self::MysteryD20 => panic!("randomizer version for this goal is unused"),
             Self::PicRs2 | Self::Rsl => panic!("randomizer version for this goal must be parsed from RSL script"),
         }
     }
@@ -563,7 +563,7 @@ impl Goal {
             Self::MultiworldS3 => None, // settings draft
             Self::MultiworldS4 => None, // settings draft
             Self::MultiworldS5 => None, // settings draft
-            Self::Mysteryd20 => None, // TODO
+            Self::MysteryD20 => None, // TODO
             Self::NineDaysOfSaws => None, // per-event settings
             Self::Pic7 => Some(pic::race7_settings()),
             Self::PicRs2 => None, // random settings
@@ -611,7 +611,7 @@ impl Goal {
             }
             | Self::Crosskeys2025
                 => ctx.say("!seed base: The tournament's base settings.").await?,
-            | Self::Mysteryd20
+            | Self::MysteryD20
                 => ctx.say("!seed base: The tournament's stable settings.").await?,
             Self::MultiworldS3 => {
                 ctx.say("!seed base: The settings used for the qualifier and tiebreaker asyncs.").await?;
@@ -856,7 +856,7 @@ impl Goal {
                 };
                 SeedCommandParseResult::Regular { settings: s::resolve_s7_draft_settings(&settings), unlock_spoiler_log, language: English, article: "a", description: format!("seed with {}", s::display_s7_draft_picks(&settings)) }
             }
-            Self::Crosskeys2025 | Self::Mysteryd20 => match args {
+            Self::Crosskeys2025 | Self::MysteryD20 => match args {
                 [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
                 [arg] if arg == "base" => SeedCommandParseResult::Alttpr,
                 [_] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I don't recognize that preset" }),
@@ -3343,7 +3343,7 @@ impl RaceHandler<GlobalState> for Handler {
                     }
                 }
                 let fpa_enabled = match goal {
-                    Goal::Crosskeys2025 | Goal::Mysteryd20 => false,
+                    Goal::Crosskeys2025 | Goal::MysteryD20 => false,
                     _ => {
                         match data.status.value {
                             RaceStatusValue::Invitational => {
@@ -3483,7 +3483,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 ],
                             ).await?,
                             Goal::Crosskeys2025 => unreachable!("attempted to handle a user-opened Crosskeys2025 room"),
-                            Goal::Mysteryd20 => unreachable!("attempted to handle a user-opened Mysteryd20 room"),
+                            Goal::MysteryD20 => unreachable!("attempted to handle a user-opened MysteryD20 room"),
                             Goal::LeagueS8 => ctx.send_message(
                                 "Welcome! This is a practice room for League Season 8. Learn more about the event at https://midos.house/event/league/8",
                                 true,
@@ -4232,7 +4232,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 => unreachable!("should have draft state set"),
                             | Goal::Crosskeys2025
                                 => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await,
-                            Goal::Mysteryd20 => this.roll_mysteryd20_seed(ctx, cal_event.clone(), English, "a").await,
+                            Goal::MysteryD20 => this.roll_mysteryd20_seed(ctx, cal_event.clone(), English, "a").await,
                             Goal::NineDaysOfSaws => unreachable!("9dos series has concluded"),
                             Goal::PicRs2 => this.roll_rsl_seed(ctx, rsl::VersionedPreset::Fenhl {
                                 version: Some((Version::new(2, 3, 8), 10)),
@@ -4946,7 +4946,7 @@ impl RaceHandler<GlobalState> for Handler {
                     | Goal::MultiworldS3
                     | Goal::MultiworldS4
                     | Goal::MultiworldS5
-                    | Goal::Mysteryd20
+                    | Goal::MysteryD20
                     | Goal::NineDaysOfSaws
                     | Goal::Rsl
                     | Goal::Sgl2023
