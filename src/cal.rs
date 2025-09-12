@@ -731,7 +731,7 @@ impl Race {
             | Series::Crosskeys
             | Series::MixedPools
             | Series::Mq
-            | Series::Mysteryde
+            | Series::Mysteryd
             | Series::SongsOfHope
             | Series::SpeedGaming
             | Series::TournoiFrancophone

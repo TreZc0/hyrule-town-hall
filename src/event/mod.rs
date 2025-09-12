@@ -372,7 +372,7 @@ impl<'a> Data<'a> {
             Series::MixedPools => false,
             Series::Mq => false,
             Series::Multiworld => false,
-            Series::Mysteryde => false,
+            Series::Mysteryd => false,
             Series::NineDaysOfSaws => true,
             Series::Pictionary => true,
             Series::Rsl => false,
@@ -851,7 +851,7 @@ pub(crate) async fn info(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
         Series::MixedPools => mp::info(&mut transaction, &data).await?,
         Series::Mq => None,
         Series::Multiworld => mw::info(&mut transaction, &data).await?,
-        Series::Mysteryde => mysteryde::info(&mut transaction, &data).await?,
+        Series::Mysteryd => mysteryd::info(&mut transaction, &data).await?,
         Series::NineDaysOfSaws => Some(ndos::info(&mut transaction, &data).await?),
         Series::Pictionary => pic::info(&mut transaction, &data).await?,
         Series::Rsl => rsl::info(&mut transaction, &data).await?,
@@ -1206,7 +1206,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, me: Option<User
                             | Series::Crosskeys
                             | Series::MixedPools
                             | Series::Mq
-                            | Series::Mysteryde
+                            | Series::Mysteryd
                             | Series::Rsl
                             | Series::Standard
                             | Series::TournoiFrancophone
