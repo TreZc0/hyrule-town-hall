@@ -207,6 +207,36 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
         } else {
             None
         };
+        // Handle StartGG sync first, regardless of other validation errors
+        if let Some(_) = value.sync_startgg_ids {
+            if let MatchSource::StartGG(event_slug) = data.match_source() {
+                match sync_startgg_participant_ids(&mut transaction, &data, &event_slug).await {
+                    Ok(sync_result) => {
+                        transaction.commit().await?;
+                        let success_msg = format!("Sync completed: {} teams synced, {} teams could not be synced", 
+                            sync_result.synced_count, sync_result.failed_count);
+                        let redirect_url = if !sync_result.failed_teams.is_empty() {
+                            let failed_list = sync_result.failed_teams.join(", ");
+                            format!("{}?sync_success={}&sync_failed={}", 
+                                uri!(get(series, event)), 
+                                urlencoding::encode(&success_msg),
+                                urlencoding::encode(&failed_list))
+                        } else {
+                            format!("{}?sync_success={}", 
+                                uri!(get(series, event)), 
+                                urlencoding::encode(&success_msg))
+                        };
+                        return Ok(RedirectOrContent::Redirect(Redirect::to(redirect_url)));
+                    }
+                    Err(sync_error) => {
+                        form.context.push_error(form::Error::validation(format!("Failed to sync StartGG participant IDs: {}", sync_error)));
+                    }
+                }
+            } else {
+                form.context.push_error(form::Error::validation("This event does not have a StartGG source configured."));
+            }
+        }
+
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(configure_form(transaction, Some(me), uri, csrf.as_ref(), data, form.context).await?)
         } else {
@@ -222,34 +252,8 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             if matches!(data.match_source(), MatchSource::StartGG(_)) || data.discord_race_results_channel.is_some() {
                 sqlx::query!("UPDATE events SET manual_reporting_with_breaks = $1 WHERE series = $2 AND event = $3", value.manual_reporting_with_breaks, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
-            if let Some(_) = value.sync_startgg_ids {
-                if let MatchSource::StartGG(event_slug) = data.match_source() {
-                    match sync_startgg_participant_ids(&mut transaction, &data, &event_slug).await {
-                        Ok(sync_result) => {
-                            transaction.commit().await?;
-                            let success_msg = format!("Sync completed: {} teams synced, {} teams could not be synced", 
-                                sync_result.synced_count, sync_result.failed_count);
-                            let redirect_url = if !sync_result.failed_teams.is_empty() {
-                                let failed_list = sync_result.failed_teams.join(", ");
-                                format!("{}?sync_success={}&sync_failed={}", 
-                                    uri!(get(series, event)), 
-                                    urlencoding::encode(&success_msg),
-                                    urlencoding::encode(&failed_list))
-                            } else {
-                                format!("{}?sync_success={}", 
-                                    uri!(get(series, event)), 
-                                    urlencoding::encode(&success_msg))
-                            };
-                            return Ok(RedirectOrContent::Redirect(Redirect::to(redirect_url)));
-                        }
-                        Err(sync_error) => {
-                            form.context.push_error(form::Error::validation(format!("Failed to sync StartGG participant IDs: {}", sync_error)));
-                        }
-                    }
-                }
-            }
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(super::info(series, event))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
         }
     } else {
         RedirectOrContent::Content(configure_form(transaction, Some(me), uri, csrf.as_ref(), data, form.context).await?)
