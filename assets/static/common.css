@@ -319,6 +319,7 @@ p.warning {
 }
 p.error {
   background-color: #ffc0c0;
+  color: black;
 }
 .info {
   border: 1px solid #00c0c0;
