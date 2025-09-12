@@ -272,7 +272,7 @@ impl Requirement {
                 if !is_checked.unwrap() {
                     //TODO offer to merge accounts like on profile
                     html_content = html! {
-                        a(href = uri!(crate::auth::racetime_login(Some(redirect_uri)))) : html_content;
+                        a(href = uri!(crate::auth::racetime_login(Some(redirect_uri))), target = "_blank") : html_content;
                     };
                 }
                 RequirementStatus {
@@ -299,7 +299,7 @@ impl Requirement {
                 };
                 if !is_checked.unwrap() {
                     html_content = html! {
-                        a(href = format!("https://{}/account/connections", racetime_host())) : html_content;
+                        a(href = format!("https://{}/account/connections", racetime_host()), target = "_blank") : html_content;
                     };
                 }
                 RequirementStatus {
@@ -314,7 +314,7 @@ impl Requirement {
                 if !is_checked.unwrap() {
                     //TODO offer to merge accounts like on profile
                     html_content = html! {
-                        a(href = uri!(crate::auth::discord_login(Some(redirect_uri)))) : html_content;
+                        a(href = uri!(crate::auth::discord_login(Some(redirect_uri))), target = "_blank") : html_content;
                     };
                 }
                 RequirementStatus {
@@ -329,7 +329,7 @@ impl Requirement {
                     blocks_submit: !is_checked.unwrap(),
                     html_content: Box::new(move |_| html! {
                         @if let Some(invite_url) = invite_url {
-                            a(href = invite_url) {
+                            a(href = invite_url, target = "_blank") {
                                 : "Join the ";
                                 bdi : name;
                                 : " Discord server";
@@ -348,7 +348,7 @@ impl Requirement {
                 };
                 if !is_checked.unwrap() {
                     html_content = html! {
-                        a(href = uri!(crate::auth::challonge_login(Some(redirect_uri)))) : html_content;
+                        a(href = uri!(crate::auth::challonge_login(Some(redirect_uri))), target = "_blank") : html_content;
                     };
                 }
                 RequirementStatus {
@@ -362,7 +362,7 @@ impl Requirement {
                 };
                 if !is_checked.unwrap() {
                     html_content = html! {
-                        a(href = uri!(crate::auth::startgg_login(Some(redirect_uri)))) : html_content;
+                        a(href = uri!(crate::auth::startgg_login(Some(redirect_uri))), target = "_blank") : html_content;
                     };
                 }
                 RequirementStatus {
