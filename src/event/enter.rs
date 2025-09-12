@@ -103,6 +103,10 @@ pub(crate) enum Requirement {
     Rules {
         document: Option<Url>,
     },
+    /// Must submit a response to a custom poll
+    Poll {
+        document: Option<Url>,
+    },
     /// For Crosskeys, opt in to or out of "All Dungeons" as a goal
     AllDungeonsOk,
     /// For Tournoi Francophone-style settings drafts, opt in to or out of hard settings
@@ -199,6 +203,7 @@ impl Requirement {
             Self::TextField2 { .. } => Some(false),
             Self::YesNo { .. } => Some(false),
             Self::Rules { .. } => Some(false),
+            Self::Poll { .. } => Some(false),
             Self::AllDungeonsOk { .. } => Some(false),
             Self::FluteOk { .. } => Some(false),
             Self::HardSettingsOk { .. } => Some(false),
@@ -460,6 +465,32 @@ impl Requirement {
                                     : "We have read and agree to ";
                                 }
                                 a(href = rules_url, target = "_blank") : "the event rules";
+                                : ".";
+                            }
+                        });
+                    }),
+                }
+            }
+            Self::Poll { document } => {
+                let checked = defaults.field_value("confirm").is_some_and(|value| value == "on");
+                let team_config = data.team_config;
+                let poll_url = if let Some(document) = document {
+                    document.to_string()
+                } else {
+                    uri!(crate::event::info(data.series, &*data.event)).to_string()
+                };
+                RequirementStatus {
+                    blocks_submit: false,
+                    html_content: Box::new(move |errors| html! {
+                        : form_field("confirm", errors, html! {
+                            input(type = "checkbox", id = "confirm", name = "confirm", checked? = checked);
+                            label(for = "confirm") {
+                                @if let TeamConfig::Solo = team_config {
+                                    : "I have submitted a response to ";
+                                } else {
+                                    : "We have submitted a response to  ";
+                                }
+                                a(href = poll_url, target = "_blank") : "the settings poll";
                                 : ".";
                             }
                         });
@@ -884,6 +915,9 @@ impl Requirement {
             Self::Rules { .. } => if !value.confirm {
                 form_ctx.push_error(form::Error::validation("This field is required.").with_name("confirm"));
             },
+            Self::Poll { .. } => if !value.confirm {
+                form_ctx.push_error(form::Error::validation("This field is required.").with_name("confirm"));
+            },
             Self::AllDungeonsOk => if value.all_dungeons_ok.is_none() {
                 form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("all_dungeons_ok"));
             },
@@ -970,6 +1004,7 @@ impl Requirement {
                     | Self::TextField2 { .. }
                     | Self::YesNo { .. }
                     | Self::Rules { .. }
+                    | Self::Poll { .. }
                     | Self::AllDungeonsOk
                     | Self::FluteOk
                     | Self::HoveringOk
