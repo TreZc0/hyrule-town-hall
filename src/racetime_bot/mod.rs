@@ -214,6 +214,7 @@ pub(crate) enum Goal {
     MultiworldS3,
     MultiworldS4,
     MultiworldS5,
+    Mysteryde20,
     NineDaysOfSaws,
     Pic7,
     PicRs2,
@@ -243,7 +244,7 @@ impl Goal {
     fn from_race_data(race_data: &RaceData) -> Option<Self> {
         let Ok(bot_goal) = race_data.goal.name.parse::<Self>() else { return None };
         if race_data.goal.custom != bot_goal.is_custom() { return None }
-        if let (Goal::StandardRuleset | Goal::Crosskeys2025, Some(_)) = (bot_goal, &race_data.opened_by) { return None }
+        if let (Goal::StandardRuleset | Goal::Crosskeys2025 | Goal::Mysteryde20, Some(_)) = (bot_goal, &race_data.opened_by) { return None }
         Some(bot_goal)
     }
 
@@ -261,6 +262,7 @@ impl Goal {
             Self::MultiworldS3 => series == Series::Multiworld && event == "3",
             Self::MultiworldS4 => series == Series::Multiworld && event == "4",
             Self::MultiworldS5 => series == Series::Multiworld && event == "5",
+            Self::Mysteryde20 => series == Series::Mysteryde && event == "20",
             Self::NineDaysOfSaws => series == Series::NineDaysOfSaws,
             Self::Pic7 => series == Series::Pictionary && event == "7",
             Self::PicRs2 => series == Series::Pictionary && event == "rs2",
@@ -297,6 +299,7 @@ impl Goal {
             | Self::MultiworldS3
             | Self::MultiworldS4
             | Self::MultiworldS5
+            | Self::Mysteryde20
             | Self::NineDaysOfSaws
             | Self::Pic7
             | Self::PicRs2
@@ -327,6 +330,7 @@ impl Goal {
             Self::MultiworldS3 => "3rd Multiworld Tournament",
             Self::MultiworldS4 => "4th Multiworld Tournament",
             Self::MultiworldS5 => "5th Multiworld Tournament",
+            Self::Mysteryde20 => "Deutsches Mystery Turnier 2.0",
             Self::NineDaysOfSaws => "9 Days of SAWS",
             Self::Pic7 => "7th Pictionary Spoiler Log Race",
             Self::PicRs2 => "2nd Random Settings Pictionary Spoiler Log Race",
@@ -358,6 +362,7 @@ impl Goal {
             | Self::MultiworldS3
             | Self::MultiworldS4
             | Self::MultiworldS5
+            | Self::Mysteryde20
             | Self::NineDaysOfSaws
             | Self::Pic7
             | Self::PicRs2
@@ -399,6 +404,7 @@ impl Goal {
             | Self::MixedPoolsS3
             | Self::MixedPoolsS4
             | Self::Mq
+            | Self::Mysteryde20
             | Self::NineDaysOfSaws
             | Self::Pic7
             | Self::PicRs2
@@ -431,6 +437,7 @@ impl Goal {
             | Self::MultiworldS3
             | Self::MultiworldS4
             | Self::MultiworldS5
+            | Self::Mysteryde20
             | Self::NineDaysOfSaws
             | Self::Pic7
             | Self::PicRs2
@@ -491,6 +498,7 @@ impl Goal {
                 | Self::StandardRuleset
                     => if official_race { UnlockSpoilerLog::Never } else { UnlockSpoilerLog::After },
                 | Self::Crosskeys2025
+                | Self::Mysteryde20
                     => UnlockSpoilerLog::Never
             }
         }
@@ -535,6 +543,7 @@ impl Goal {
             Self::WeTryToBeBetterS1 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 0, 11) },
             Self::WeTryToBeBetterS2 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 2, 0) },
             Self::Crosskeys2025 => panic!("randomizer version for this goal is unused"),
+            Self::Mysteryde20 => panic!("randomizer version for this goal is unused"),
             Self::PicRs2 | Self::Rsl => panic!("randomizer version for this goal must be parsed from RSL script"),
         }
     }
@@ -554,6 +563,7 @@ impl Goal {
             Self::MultiworldS3 => None, // settings draft
             Self::MultiworldS4 => None, // settings draft
             Self::MultiworldS5 => None, // settings draft
+            Self::Mysteryde20 => None, // TODO
             Self::NineDaysOfSaws => None, // per-event settings
             Self::Pic7 => Some(pic::race7_settings()),
             Self::PicRs2 => None, // random settings
@@ -601,6 +611,8 @@ impl Goal {
             }
             | Self::Crosskeys2025
                 => ctx.say("!seed base: The tournament's base settings.").await?,
+            | Self::Mysteryde20
+                => ctx.say("!seed base: The tournament's stable settings.").await?,
             Self::MultiworldS3 => {
                 ctx.say("!seed base: The settings used for the qualifier and tiebreaker asyncs.").await?;
                 ctx.say("!seed random: Simulate a settings draft with both teams picking randomly. The settings are posted along with the seed.").await?;
@@ -844,7 +856,7 @@ impl Goal {
                 };
                 SeedCommandParseResult::Regular { settings: s::resolve_s7_draft_settings(&settings), unlock_spoiler_log, language: English, article: "a", description: format!("seed with {}", s::display_s7_draft_picks(&settings)) }
             }
-            Self::Crosskeys2025 => match args {
+            Self::Crosskeys2025 | Self::Mysteryde20 => match args {
                 [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
                 [arg] if arg == "base" => SeedCommandParseResult::Alttpr,
                 [_] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I don't recognize that preset" }),
@@ -1464,7 +1476,7 @@ impl GlobalState {
         let update_tx2 = update_tx.clone();
         tokio::spawn(async move {
             let uuid = Uuid::new_v4();
-            let crosskeys_meta = CrosskeysMeta {
+            let crosskeys_meta = AlttprDoorRandoMeta {
                 bps: true,
                 name: uuid.to_string(),
                 race: true,
@@ -1472,7 +1484,7 @@ impl GlobalState {
                 spoiler: "full",
                 suppress_rom: true,
             };
-            let mut crosskeys_yaml = CrosskeysYaml {
+            let mut crosskeys_yaml = AlttprDoorRandoYaml {
                 placements: HashMap::default(),
                 settings: HashMap::default(),
                 start_inventory: HashMap::default(),
@@ -1488,7 +1500,7 @@ impl GlobalState {
             let pseudoboots = if crosskeys_options.pb_ok { 1 } else { 0 };
             let skullwoods = if crosskeys_options.zw_ok { "followlinked" } else { "original" };
 
-            let crosskeys_settings = CrosskeysSetting {
+            let crosskeys_settings = AlttprDoorRandoSetting {
                 accessibility: "locations",
                 bigkeyshuffle: 1,
                 compassshuffle: 1,
@@ -1512,7 +1524,7 @@ impl GlobalState {
             };
 
             if !crosskeys_options.zw_ok {
-                let crosskeys_placements = CrosskeysPlacements {
+                let crosskeys_placements = AlttprDoorRandoPlacements {
                     pinball_room: "Small Key (Skull Woods)",
                 };
                 crosskeys_yaml.placements.insert(1, crosskeys_placements);
@@ -1599,6 +1611,102 @@ impl GlobalState {
         update_rx
     }
 
+    pub(crate) fn roll_mysteryde20_seed(self: Arc<Self>) -> mpsc::Receiver<SeedRollUpdate> {
+        let (update_tx, update_rx) = mpsc::channel(128);
+        let update_tx2 = update_tx.clone();
+        tokio::spawn(async move {
+            let uuid = Uuid::new_v4();
+            
+            // Download the preset YAML from the API
+            let preset_url = "https://sahasrahbotapi.synack.live/presets/download/mangara/alttprmystery/miniturnier";
+            let response = reqwest::get(preset_url).await?;
+            let mut preset_yaml: serde_yml::Value = serde_yml::from_str(&response.text().await?)?;
+            
+            // Add the meta information using the existing struct
+            let alttpr_meta = AlttprDoorRandoMeta {
+                bps: true,
+                name: uuid.to_string(),
+                race: true,
+                skip_playthrough: true,
+                spoiler: "full",
+                suppress_rom: true,
+            };
+            
+            preset_yaml["meta"] = serde_yml::to_value(&alttpr_meta)?;
+            let yaml_file = tempfile::Builder::new().prefix("alttpr_").suffix(".yml").tempfile().at_unknown()?;
+            let yaml_path = yaml_file.path();
+            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(serde_yml::to_string(&preset_yaml)?.as_bytes()).await.at(&yaml_file)?;
+            
+            // Add retry logic with 2 retries
+            const MAX_RETRIES: u8 = 2;
+            
+            for attempt in 0..=MAX_RETRIES {
+                let output = Command::new(PYTHON)
+                    .current_dir("../alttpr")
+                    .arg("DungeonRandomizer.py")
+                    .arg("--customizer")
+                    .arg(yaml_path)
+                    .arg("--outputpath")
+                    .arg("/var/www/midos.house/seed")
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .at_command("DungeonRandomizer.py")?
+                    .wait_with_output()
+                    .await
+                    .at_command("DungeonRandomizer.py")?;
+                
+                match output.status.code() {
+                    Some(0) => {
+                        break;
+                    }
+                    Some(1) => {
+                        // Randomizer failed to generate a seed, lets retry.
+                        let last_error = Some(String::from_utf8_lossy(&output.stderr).into_owned());
+                        if attempt < MAX_RETRIES {
+                            // Wait a bit before retrying (exponential backoff)
+                            sleep(Duration::from_secs(10 + 2u64.pow(attempt as u32))).await;
+                            continue;
+                        }
+                        // Max retries reached
+                        return Err(RollError::Retries {
+                            num_retries: MAX_RETRIES + 1,
+                            last_error,
+                        });
+                    }
+                    _ => {
+                        // Other error codes - fail immediately
+                        return Err(RollError::Wheel(wheel::Error::CommandExit { 
+                            name: Cow::Borrowed("DungeonRandomizer.py"), 
+                            output 
+                        }));
+                    }
+                }
+            }
+            
+            // This swallows the hash error and just makes it empty--maybe we should surface this somehow?
+            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await.ok();
+            update_tx.send(SeedRollUpdate::Done {
+                seed: seed::Data {
+                    file_hash: file_hash,
+                    files: Some(seed::Files::AlttprDoorRando {
+                        uuid: uuid
+                    }),
+                    progression_spoiler: false,
+                    password: None,
+                },
+                rsl_preset: None,
+                unlock_spoiler_log: UnlockSpoilerLog::Never
+            }).await.allow_unreceived();
+            Ok(())
+        }.then(|res| async move {
+            match res {
+                Ok(()) => {}
+                Err(e) => update_tx2.send(SeedRollUpdate::Error(e)).await.allow_unreceived(),
+            }
+        }));
+        update_rx
+    }
     async fn retrieve_hash_and_clean_up_spoiler(uuid: Uuid) -> Result<[HashIcon; 5], RollError> {
         let spoiler_path = format!("/var/www/midos.house/seed/DR_{uuid}_Spoiler.txt");
         let destination_path = format!("/var/www/midos.house/spoilers/DR_{uuid}_Spoiler.txt");
@@ -2588,21 +2696,21 @@ impl CrosskeysRaceOptions {
 }
 
 #[derive(Clone, Serialize)]
-pub(crate) struct CrosskeysYaml {
-    placements: HashMap<u8, CrosskeysPlacements>,
-    settings: HashMap<u8, CrosskeysSetting>,
+pub(crate) struct AlttprDoorRandoYaml {
+    placements: HashMap<u8, AlttprDoorRandoPlacements>,
+    settings: HashMap<u8, AlttprDoorRandoSetting>,
     start_inventory: HashMap<u8, &'static [&'static str]>,
-    meta: CrosskeysMeta
+    meta: AlttprDoorRandoMeta
 }
 
 #[derive(Clone, Serialize)]
-pub(crate) struct CrosskeysPlacements {
+pub(crate) struct AlttprDoorRandoPlacements {
     #[serde(rename = "Skull Woods - Pinball Room")]
     pinball_room: &'static str,
 }
 
 #[derive(Clone, Serialize)]
-pub(crate) struct CrosskeysSetting {
+pub(crate) struct AlttprDoorRandoSetting {
     accessibility: &'static str,
     bigkeyshuffle: u8,
     compassshuffle: u8,
@@ -2626,7 +2734,7 @@ pub(crate) struct CrosskeysSetting {
 }
 
 #[derive(Clone, Serialize)]
-pub(crate) struct CrosskeysMeta {
+pub(crate) struct AlttprDoorRandoMeta {
     bps: bool,
     name: String,
     race: bool,
@@ -2972,6 +3080,13 @@ impl Handler {
                                 ), true, Vec::default()).await.expect("failed to send race options");
     }
 
+    async fn roll_mysteryde20_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
+        let official_start = cal_event.start().expect("handling room for official race without start time");
+        let delay_until = official_start - TimeDelta::minutes(10);
+
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_mysteryde20_seed(), language, article, "mysteryde seed".to_string()).await;
+    }
+
     async fn roll_rsl_seed(&self, ctx: &RaceContext<GlobalState>, preset: rsl::VersionedPreset, world_count: u8, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
         let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
@@ -3228,7 +3343,7 @@ impl RaceHandler<GlobalState> for Handler {
                     }
                 }
                 let fpa_enabled = match goal {
-                    Goal::Crosskeys2025 => false,
+                    Goal::Crosskeys2025 | Goal::Mysteryde20 => false,
                     _ => {
                         match data.status.value {
                             RaceStatusValue::Invitational => {
@@ -3368,6 +3483,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 ],
                             ).await?,
                             Goal::Crosskeys2025 => unreachable!("attempted to handle a user-opened Crosskeys2025 room"),
+                            Goal::Mysteryde20 => unreachable!("attempted to handle a user-opened Mysteryde20 room"),
                             Goal::LeagueS8 => ctx.send_message(
                                 "Welcome! This is a practice room for League Season 8. Learn more about the event at https://midos.house/event/league/8",
                                 true,
@@ -4116,6 +4232,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 => unreachable!("should have draft state set"),
                             | Goal::Crosskeys2025
                                 => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await,
+                            Goal::Mysteryde20 => this.roll_mysteryde20_seed(ctx, cal_event.clone(), English, "a").await,
                             Goal::NineDaysOfSaws => unreachable!("9dos series has concluded"),
                             Goal::PicRs2 => this.roll_rsl_seed(ctx, rsl::VersionedPreset::Fenhl {
                                 version: Some((Version::new(2, 3, 8), 10)),
@@ -4829,6 +4946,7 @@ impl RaceHandler<GlobalState> for Handler {
                     | Goal::MultiworldS3
                     | Goal::MultiworldS4
                     | Goal::MultiworldS5
+                    | Goal::Mysteryde20
                     | Goal::NineDaysOfSaws
                     | Goal::Rsl
                     | Goal::Sgl2023
