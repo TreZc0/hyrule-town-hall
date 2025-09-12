@@ -730,6 +730,7 @@ impl Race {
             | Series::Crosskeys
             | Series::MixedPools
             | Series::Mq
+            | Series::Mysteryde
             | Series::SongsOfHope
             | Series::SpeedGaming
             | Series::TournoiFrancophone

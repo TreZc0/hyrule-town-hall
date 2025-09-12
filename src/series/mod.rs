@@ -30,6 +30,7 @@ pub(crate) mod league;
 pub(crate) mod mp;
 pub(crate) mod mq;
 pub(crate) mod mw;
+pub(crate) mod mysteryde;
 pub(crate) mod ndos;
 pub(crate) mod ohko;
 pub(crate) mod pic;
@@ -52,6 +53,7 @@ pub(crate) enum Series {
     MixedPools,
     Mq,
     Multiworld,
+    Mysteryde,
     NineDaysOfSaws,
     Pictionary,
     Rsl,
@@ -75,6 +77,7 @@ impl Series {
             Self::MixedPools => "mp",
             Self::Mq => "mq",
             Self::Multiworld => "mw",
+            Self::Mysteryde => "mysteryde",
             Self::NineDaysOfSaws => "9dos",
             Self::Pictionary => "pic",
             Self::Rsl => "rsl",
@@ -98,6 +101,7 @@ impl Series {
             Self::MixedPools => "Mixed Pools Tournaments",
             Self::Mq => "12 MQ Tournaments",
             Self::Multiworld => "Multiworld Tournaments",
+            Self::Mysteryde => "Deutsche Mystery Turniere",
             Self::NineDaysOfSaws => "9 Days of SAWS",
             Self::Pictionary => "Pictionary Spoiler Log Races",
             Self::Rsl => "Random Settings League",
@@ -114,7 +118,7 @@ impl Series {
     pub(crate) fn default_race_duration(&self) -> TimeDelta {
         match self {
             Self::TriforceBlitz => TimeDelta::hours(2),
-            Self::BattleRoyale | Self::Crosskeys => TimeDelta::hours(2) + TimeDelta::minutes(30),
+            Self::BattleRoyale | Self::Crosskeys | Self::Mysteryde => TimeDelta::hours(2) + TimeDelta::minutes(30),
             Self::CoOp | Self::MixedPools | Self::Scrubs | Self::SpeedGaming | Self::WeTryToBeBetter => TimeDelta::hours(3),
             Self::CopaDoBrasil | Self::League | Self::NineDaysOfSaws | Self::SongsOfHope | Self::Standard | Self::TournoiFrancophone => TimeDelta::hours(3) + TimeDelta::minutes(30),
             Self::Mq | Self::Multiworld | Self::Pictionary => TimeDelta::hours(4),
