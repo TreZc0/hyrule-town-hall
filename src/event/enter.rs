@@ -1486,8 +1486,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                 msg.mention_user(&me);
                                 msg.push(" signed up for ");
                                 msg.push_safe(&data.display_name);
-                                let startgg_token = if Environment::default().is_dev() { &config.startgg_dev } else { &config.startgg_production };
-                                let response = startgg::query_cached::<startgg::UserSlugQuery>(http_client, startgg_token, startgg::user_slug_query::Variables { id: startgg_id.clone() }).await?;
+                                let response = startgg::query_cached::<startgg::UserSlugQuery>(http_client, &config.startgg, startgg::user_slug_query::Variables { id: startgg_id.clone() }).await?;
                                 if let startgg::user_slug_query::ResponseData { user: Some(startgg::user_slug_query::UserSlugQueryUser { discriminator: Some(slug) }) } = response {
                                     msg.push(" with start.gg user slug ");
                                     msg.push_mono_safe(slug);

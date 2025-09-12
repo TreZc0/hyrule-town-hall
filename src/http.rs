@@ -527,8 +527,6 @@ async fn fallback_catcher(status: Status, request: &Request<'_>) -> PageResult {
 }
 
 pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http_client: reqwest::Client, config: Config, port: u16, seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>, ootr_api_client: Arc<ootr_web::ApiClient>) -> Result<Rocket<rocket::Ignite>, crate::Error> {
-    let discord_config = if Environment::default().is_dev() { &config.discord_dev } else { &config.discord_production };
-    let racetime_config = if Environment::default().is_dev() { &config.racetime_oauth_dev } else { &config.racetime_oauth_production };
     Ok(rocket::custom(rocket::Config::figment().merge(rocket::Config {
         secret_key: SecretKey::from(&BASE64.decode(&config.secret_key)?),
         log_level: Some(rocket::config::Level::ERROR),
@@ -634,14 +632,14 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
             auth_uri: format!("https://{}/o/authorize", racetime_host()).into(),
             token_uri: format!("https://{}/o/token", racetime_host()).into(),
         },
-        racetime_config.client_id.clone(),
-        racetime_config.client_secret.clone(),
+        config.racetime_oauth.client_id.clone(),
+        config.racetime_oauth.client_secret.clone(),
         Some(uri!(base_uri(), auth::racetime_callback).to_string()),
     )))
     .attach(OAuth2::<auth::Discord>::custom(rocket_oauth2::HyperRustlsAdapter::default(), OAuthConfig::new(
         rocket_oauth2::StaticProvider::Discord,
-        discord_config.client_id.to_string(),
-        discord_config.client_secret.to_string(),
+        config.discord.client_id.to_string(),
+        config.discord.client_secret.to_string(),
         Some(uri!(base_uri(), auth::discord_callback).to_string()),
     )))
     .attach(OAuth2::<auth::Challonge>::custom(rocket_oauth2::HyperRustlsAdapter::default(), OAuthConfig::new(

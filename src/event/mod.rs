@@ -520,11 +520,7 @@ impl<'a> Data<'a> {
         };
 
         // Get the Startgg token
-        let startgg_token = if Environment::default().is_dev() {
-            &config.startgg_dev
-        } else {
-            &config.startgg_production
-        };
+        let startgg_token = &config.startgg;
 
         // Get resigned teams for this event to exclude them from bye prediction
         let resigned_entrant_ids = sqlx::query!(
@@ -2242,11 +2238,7 @@ pub(crate) async fn swiss_standings(
     };
     
     // Get the Startgg token
-    let startgg_token = if Environment::default().is_dev() {
-        &config.startgg_dev
-    } else {
-        &config.startgg_production
-    };
+    let startgg_token = &config.startgg;
     
     // Get resigned teams for this event to exclude them from bye prediction
     let resigned_entrant_ids = sqlx::query!(

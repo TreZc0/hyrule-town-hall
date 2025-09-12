@@ -5706,7 +5706,7 @@ pub(crate) async fn main(config: Config, shutdown: rocket::Shutdown, global_stat
     let ((), (), ()) = tokio::try_join!(
         prepare_seeds(global_state.clone(), seed_cache_rx, shutdown.clone()).err_into::<MainError>(),
         create_rooms(global_state.clone(), shutdown.clone()).err_into(),
-        handle_rooms(global_state, if Environment::default().is_dev() { &config.racetime_bot_dev } else { &config.racetime_bot_production }, shutdown).err_into(),
+        handle_rooms(global_state, &config.racetime_bot, shutdown).err_into(),
     )?;
     Ok(())
 }

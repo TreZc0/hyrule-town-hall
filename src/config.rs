@@ -1,47 +1,52 @@
-use {
-    anyhow::Result,
-    crate::prelude::*,
-};
-#[cfg(unix)] use {
-    anyhow::bail,
-    tokio::fs,
-};
+use crate::prelude::*;
+#[cfg(windows)] use directories::ProjectDirs;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum Error {
+    #[cfg(windows)] #[error(transparent)] Json(#[from] serde_json::Error),
+    #[error(transparent)] Wheel(#[from] wheel::Error),
+    #[cfg(unix)]
+    #[error("missing config file")]
+    Missing,
+    #[cfg(windows)]
+    #[error("failed to find project folder")]
+    ProjectDirs,
+}
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Config {
     pub(crate) challonge: ConfigOAuth,
     pub(crate) challonge_api_key: String,
-    pub(crate) discord_production: ConfigDiscord,
-    pub(crate) discord_dev: ConfigDiscord,
+    pub(crate) discord: ConfigDiscord,
     pub(crate) league_api_key: String,
     pub(crate) ootr_api_key: String,
     pub(crate) ootr_api_key_encryption: String,
-    pub(crate) racetime_bot_production: ConfigRaceTime,
-    pub(crate) racetime_bot_dev: ConfigRaceTime,
-    #[serde(rename = "racetimeOAuthProduction")]
-    pub(crate) racetime_oauth_production: ConfigRaceTime,
-    #[serde(rename = "racetimeOAuthDev")]
-    pub(crate) racetime_oauth_dev: ConfigRaceTime,
-    pub(crate) startgg_production: String,
-    pub(crate) startgg_dev: String,
+    pub(crate) racetime_bot: ConfigRaceTime,
+    #[serde(rename = "racetimeOAuth")]
+    pub(crate) racetime_oauth: ConfigRaceTime,
+    pub(crate) startgg: String,
     #[serde(rename = "startggOAuth")]
     pub(crate) startgg_oauth: ConfigOAuth,
     pub(crate) secret_key: String,
 }
 
 impl Config {
-    pub(crate) async fn load() -> Result<Self> {
+    pub(crate) async fn load() -> Result<Self, Error> {
         #[cfg(unix)] {
-            if let Some(config_path) = BaseDirectories::new().find_config_file("midos-house.json") {
-                let buf = fs::read(config_path).await?;
-                Ok(serde_json::from_slice(&buf)?)
+            if let Some(config_path) = BaseDirectories::new().find_config_file(if Environment::default().is_dev() { "midos-house-dev.json" } else { "midos-house.json" }) {
+                Ok(fs::read_json(config_path).await?)
             } else {
-                bail!("missing config file")
+                Err(Error::Missing)
             }
         }
-        #[cfg(windows)] { // allow testing without having rust-analyzer slow down the server
-            Ok(serde_json::from_slice(&Command::new("ssh").arg("midos.house").arg("cat").arg("/etc/xdg/midos-house.json").output().await?.stdout)?)
+        #[cfg(windows)] {
+            Ok(match Environment::default() {
+                Environment::Local => fs::read_json(ProjectDirs::from("net", "Fenhl", "Midos House").ok_or(Error::ProjectDirs)?.config_dir().join("dev.json")).await?,
+                // allow testing without having rust-analyzer slow down the server
+                Environment::Production => serde_json::from_slice(&Command::new("ssh").arg("midos.house").arg("cat").arg("/etc/xdg/midos-house.json").check("ssh").await?.stdout)?,
+                Environment::Dev => serde_json::from_slice(&Command::new("ssh").arg("midos.house").arg("cat").arg("/etc/xdg/midos-house-dev.json").check("ssh").await?.stdout)?,
+            })
         }
     }
 }
