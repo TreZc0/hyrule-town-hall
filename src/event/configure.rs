@@ -128,6 +128,16 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                                 label(for = "manual_reporting_with_breaks") : "Disable automatic result reporting if !breaks command is used";
                             });
                         }
+                        : form_field("asyncs_active", &mut errors, html! {
+                            input(type = "checkbox", id = "asyncs_active", name = "asyncs_active", checked? = ctx.field_value("asyncs_active").map_or(event.asyncs_active, |value| value == "on"));
+                            label(for = "asyncs_active") : "Allow async races";
+                            label(class = "help") : "(If disabled, Discord scheduling threads will not mention the /schedule-async command and async races will not be possible)";
+                        });
+                        : form_field("swiss_standings", &mut errors, html! {
+                            input(type = "checkbox", id = "swiss_standings", name = "swiss_standings", checked? = ctx.field_value("swiss_standings").map_or(event.swiss_standings, |value| value == "on"));
+                            label(for = "swiss_standings") : "Show Swiss standings tab";
+                            label(class = "help") : "(If enabled, the Swiss standings tab will be visible for this event)";
+                        });
                     }, errors, "Save");
                 }
                 h2 : "More options";
@@ -178,6 +188,8 @@ pub(crate) struct ConfigureForm {
     retime_window: Option<String>,
     manual_reporting_with_breaks: bool,
     sync_startgg_ids: Option<String>,
+    asyncs_active: bool,
+    swiss_standings: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/configure", data = "<form>")]
@@ -253,6 +265,12 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             }
             if matches!(data.match_source(), MatchSource::StartGG(_)) || data.discord_race_results_channel.is_some() {
                 sqlx::query!("UPDATE events SET manual_reporting_with_breaks = $1 WHERE series = $2 AND event = $3", value.manual_reporting_with_breaks, data.series as _, &data.event).execute(&mut *transaction).await?;
+            }
+            if value.asyncs_active != data.asyncs_active {
+                sqlx::query!("UPDATE events SET asyncs_active = $1 WHERE series = $2 AND event = $3", value.asyncs_active, data.series as _, &data.event).execute(&mut *transaction).await?;
+            }
+            if value.swiss_standings != data.swiss_standings {
+                sqlx::query!("UPDATE events SET swiss_standings = $1 WHERE series = $2 AND event = $3", value.swiss_standings, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
