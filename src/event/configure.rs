@@ -95,7 +95,7 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                             : form_field("auto_import", &mut errors, html! {
                                 input(type = "checkbox", id = "auto_import", name = "auto_import", checked? = ctx.field_value("auto_import").map_or(event.auto_import, |value| value == "on"));
                                 label(for = "auto_import") : "Automatically import new races from start.gg";
-                                label(class = "help") : "(If this option is turned off, you can import races by clicking the Import button on the Races tab.)";
+                                label(class = "help") : " (If this option is turned off, you can import races by clicking the Import button on the Races tab.)";
                             });
                             : form_field("sync_startgg_ids", &mut errors, html! {
                                 button(type = "submit", name = "sync_startgg_ids", value = "sync") : "Sync StartGG Participant IDs";
@@ -105,12 +105,14 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                         : form_field("min_schedule_notice", &mut errors, html! {
                             label(for = "min_schedule_notice") : "Minimum scheduling notice:";
                             input(type = "text", name = "min_schedule_notice", value = ctx.field_value("min_schedule_notice").map(Cow::Borrowed).unwrap_or_else(|| Cow::Owned(unparse_duration(event.min_schedule_notice)))); //TODO h:m:s fields?
+                            br;
                             label(class = "help") : "(Races must be scheduled at least this far in advance. Can be configured to be as low as 0 seconds, but note that if a race is scheduled less than 30 minutes in advance, the room is opened immediately, and if a race is scheduled less than 15 minutes in advance, the seed is posted immediately.)";
                         });
                         @if matches!(event.match_source(), MatchSource::StartGG(_)) || event.discord_race_results_channel.is_some() {
                             : form_field("retime_window", &mut errors, html! {
                                 label(for = "retime_window") : "Retime window:";
                                 input(type = "text", name = "retime_window", value = ctx.field_value("retime_window").map(Cow::Borrowed).unwrap_or_else(|| Cow::Owned(unparse_duration(event.retime_window)))); //TODO h:m:s fields?
+                                br;
                                 label(class = "help") {
                                     : "(If the time difference between ";
                                     @if event.team_config.is_racetime_team_format() {
@@ -264,8 +266,12 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             if matches!(data.match_source(), MatchSource::StartGG(_)) || data.discord_race_results_channel.is_some() {
                 sqlx::query!("UPDATE events SET manual_reporting_with_breaks = $1 WHERE series = $2 AND event = $3", value.manual_reporting_with_breaks, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
-            sqlx::query!("UPDATE events SET asyncs_active = $1 WHERE series = $2 AND event = $3", value.asyncs_active, data.series as _, &data.event).execute(&mut *transaction).await?;
-            sqlx::query!("UPDATE events SET swiss_standings = $1 WHERE series = $2 AND event = $3", value.swiss_standings, data.series as _, &data.event).execute(&mut *transaction).await?;
+            if value.asyncs_active != data.asyncs_active {
+                sqlx::query!("UPDATE events SET asyncs_active = $1 WHERE series = $2 AND event = $3", value.asyncs_active, data.series as _, &data.event).execute(&mut *transaction).await?;
+            }
+            if value.swiss_standings != data.swiss_standings {
+                sqlx::query!("UPDATE events SET swiss_standings = $1 WHERE series = $2 AND event = $3", value.swiss_standings, data.series as _, &data.event).execute(&mut *transaction).await?;
+            }
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
         }
