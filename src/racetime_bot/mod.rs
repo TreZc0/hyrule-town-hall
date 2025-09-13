@@ -1628,7 +1628,7 @@ impl GlobalState {
             const MAX_RETRIES: u8 = 2;
             
             for attempt in 0..=MAX_RETRIES {
-                let output = match timeout(Duration::from_secs(150), async {
+                let output = match timeout(Duration::from_secs(180), async {
                     Command::new(PYTHON)
                         .current_dir("../alttpr")
                         .arg("Mystery.py")
@@ -1658,7 +1658,7 @@ impl GlobalState {
                             output: std::process::Output {
                                 status: std::process::ExitStatus::from_raw(124),
                                 stdout: Vec::new(),
-                                stderr: b"Command timed out after 150 seconds".to_vec(),
+                                stderr: b"Command timed out after 180 seconds".to_vec(),
                             }
                         }));
                     }
