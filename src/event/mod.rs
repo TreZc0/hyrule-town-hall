@@ -184,6 +184,8 @@ pub(crate) struct Data<'a> {
     pub(crate) auto_import: bool,
     pub(crate) manual_reporting_with_breaks: bool,
     pub(crate) language: Language,
+    pub(crate) asyncs_active: bool,
+    pub(crate) swiss_standings: bool,
 }
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
@@ -234,7 +236,9 @@ impl<'a> Data<'a> {
             retime_window,
             auto_import,
             manual_reporting_with_breaks,
-            language AS "language: Language"
+            language AS "language: Language",
+            asyncs_active,
+            swiss_standings
         FROM events WHERE series = $1 AND event = $2"#, series as _, &event).fetch_optional(&mut **transaction).await?
             .map(|row| Ok::<_, DataError>(Self {
                 display_name: row.display_name,
@@ -275,6 +279,8 @@ impl<'a> Data<'a> {
                 auto_import: row.auto_import,
                 manual_reporting_with_breaks: row.manual_reporting_with_breaks,
                 language: row.language,
+                asyncs_active: row.asyncs_active,
+                swiss_standings: row.swiss_standings,
                 series, event,
             }))
             .transpose()
@@ -356,10 +362,7 @@ impl<'a> Data<'a> {
     }
 
     pub(crate) fn asyncs_allowed(&self) -> bool {
-        match self.series {
-            Series::SpeedGaming => false,
-            _ => true,
-        }
+        self.asyncs_active
     }
 
     pub(crate) fn is_single_race(&self) -> bool {
@@ -606,7 +609,7 @@ impl<'a> Data<'a> {
                         a(class = "button", href = uri!(races(self.series, &*self.event))) : "Races";
                     }
                 }
-                @if matches!(self.match_source(), MatchSource::StartGG(_)) {
+                @if matches!(self.match_source(), MatchSource::StartGG(_)) && self.swiss_standings {
                     @if let Tab::SwissStandings = tab {
                         a(class = "button selected", href? = is_subpage.then(|| uri!(swiss_standings(self.series, &*self.event)))) : "Swiss Standings";
                     } else {
@@ -2228,8 +2231,8 @@ pub(crate) async fn swiss_standings(
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     
-    // Only show for Startgg events
-    if !matches!(data.match_source(), MatchSource::StartGG(_)) {
+    // Only show for Startgg events with swiss_standings enabled
+    if !matches!(data.match_source(), MatchSource::StartGG(_)) || !data.swiss_standings {
         return Err(StatusOrError::Status(Status::NotFound));
     }
     
