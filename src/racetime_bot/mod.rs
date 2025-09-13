@@ -1,6 +1,7 @@
 use {
     std::{
         io::prelude::*,
+        os::windows::process::ExitStatusExt,
         process::Stdio,
         sync::atomic::{
             self,
@@ -1614,44 +1615,54 @@ impl GlobalState {
         tokio::spawn(async move {
             let uuid = Uuid::new_v4();
             
-            // Download the preset YAML from the API
-            let preset_url = "https://sahasrahbotapi.synack.live/presets/download/mangara/alttprmystery/miniturnier";
-            let response = reqwest::get(preset_url).await?;
-            let mut preset_yaml: serde_yml::Value = serde_yml::from_str(&response.text().await?)?;
+            // Download the weights YAML
+            let weights_url = "https://zeldaspeedruns.com/assets/hth/miniturnier_doors.yaml";
+            let response = reqwest::get(weights_url).await?;
+            let weights_yaml: serde_yml::Value = serde_yml::from_str(&response.text().await?)?;
             
-            // Add the meta information using the existing struct
-            let alttpr_meta = AlttprDoorRandoMeta {
-                bps: true,
-                name: uuid.to_string(),
-                race: true,
-                skip_playthrough: true,
-                spoiler: "full",
-                suppress_rom: true,
-            };
-            
-            preset_yaml["meta"] = serde_yml::to_value(&alttpr_meta)?;
             let yaml_file = tempfile::Builder::new().prefix("alttpr_").suffix(".yml").tempfile().at_unknown()?;
             let yaml_path = yaml_file.path();
-            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(serde_yml::to_string(&preset_yaml)?.as_bytes()).await.at(&yaml_file)?;
+            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(serde_yml::to_string(&weights_yaml)?.as_bytes()).await.at(&yaml_file)?;
             
             // Add retry logic with 2 retries
             const MAX_RETRIES: u8 = 2;
             
             for attempt in 0..=MAX_RETRIES {
-                let output = Command::new(PYTHON)
-                    .current_dir("../alttpr")
-                    .arg("DungeonRandomizer.py")
-                    .arg("--customizer")
-                    .arg(yaml_path)
-                    .arg("--outputpath")
-                    .arg("/var/www/midos.house/seed")
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .at_command("DungeonRandomizer.py")?
-                    .wait_with_output()
-                    .await
-                    .at_command("DungeonRandomizer.py")?;
+                let output = match timeout(Duration::from_secs(150), async {
+                    Command::new(PYTHON)
+                        .current_dir("../alttpr")
+                        .arg("Mystery.py")
+                        .arg("--weights")
+                        .arg(yaml_path)
+                        .arg("--outputpath")
+                        .arg("/var/www/midos.house/seed")
+                        .arg("--outputname")
+                        .arg(uuid.to_string())
+                        .arg("--bps")
+                        .arg("--spoiler")
+                        .arg("full")
+                        .arg("--suppress_rom")
+                        .arg("--suppress_meta")
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .spawn()
+                        .at_command("Mystery.py")?
+                        .wait_with_output()
+                        .await
+                        .at_command("Mystery.py")
+                }).await {
+                    Ok(output) => output?,
+                    Err(_) => {
+                        return Err(RollError::Wheel(wheel::Error::CommandExit { 
+                            name: Cow::Borrowed("Mystery.py"), 
+                            output: std::process::Output {
+                                status: std::process::ExitStatus::from_raw(124),
+                                stdout: Vec::new(),
+                                stderr: b"Command timed out after 150 seconds".to_vec(),
+                            }
+                        }));
+                    }
+                };
                 
                 match output.status.code() {
                     Some(0) => {
@@ -1674,7 +1685,7 @@ impl GlobalState {
                     _ => {
                         // Other error codes - fail immediately
                         return Err(RollError::Wheel(wheel::Error::CommandExit { 
-                            name: Cow::Borrowed("DungeonRandomizer.py"), 
+                            name: Cow::Borrowed("Mystery.py"), 
                             output 
                         }));
                     }
@@ -3136,7 +3147,7 @@ impl Handler {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(10);
 
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_mysteryd20_seed(), language, article, "mysteryd seed".to_string()).await;
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_mysteryd20_seed(), language, article, "Mystery seed".to_string()).await;
     }
 
     async fn roll_rsl_seed(&self, ctx: &RaceContext<GlobalState>, preset: rsl::VersionedPreset, world_count: u8, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
