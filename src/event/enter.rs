@@ -38,6 +38,8 @@ impl<'de> DeserializeAs<'de, Regex> for DeserializeRegex {
     }
 }
 
+fn make_true() -> bool { true }
+
 /// Requirements to enter an event
 #[serde_as]
 #[derive(Debug, Clone, Deserialize)]
@@ -179,8 +181,14 @@ pub(crate) enum Requirement {
     /// Must finish at least 3 races on the RSL leaderboard for this season
     RslLeaderboard,
     /// A signup requirement that cannot be checked automatically
+    #[serde(rename_all = "camelCase")]
     External {
-        text: String,
+        #[serde(default)]
+        #[serde_as(as = "Option<DeserializeRawHtml>")]
+        html: Option<RawHtml<String>>,
+        text: Option<String>,
+        #[serde(default = "make_true")]
+        blocks_submit: bool,
     },
 }
 
@@ -915,11 +923,13 @@ impl Requirement {
                     }),
                 }
             }
-            Self::External { text } => {
+            Self::External { html, text, blocks_submit } => {
+                let html = html.clone();
                 let text = text.clone();
                 RequirementStatus {
-                    blocks_submit: true,
+                    blocks_submit: *blocks_submit,
                     html_content: Box::new(move |_| html! {
+                        : html;
                         : text;
                     }),
                 }
@@ -1029,7 +1039,9 @@ impl Requirement {
                     form_ctx.push_error(form::Error::validation("No qualifier seed is currently available."));
                 }
             },
-            Self::External { .. } => form_ctx.push_error(form::Error::validation("Please complete event entry via the external method.")),
+            Self::External { blocks_submit, .. } => if *blocks_submit {
+                form_ctx.push_error(form::Error::validation("Please complete event entry via the external method."));
+            },
             _ => if !self.is_checked(transaction, http_client, discord_ctx, me, data).await?.unwrap_or(false) {
                 form_ctx.push_error(form::Error::validation(match self {
                     Self::RaceTime => Cow::Borrowed("A racetime.gg account is required to enter this event. Go to your Hyrule Town Hall profile and select 'Connect a racetime.gg account'."), //TODO direct link?
