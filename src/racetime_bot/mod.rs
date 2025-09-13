@@ -1617,11 +1617,11 @@ impl GlobalState {
             // Download the weights YAML
             let weights_url = "https://zeldaspeedruns.com/assets/hth/miniturnier_doors.yaml";
             let response = reqwest::get(weights_url).await?;
-            let weights_yaml: serde_yml::Value = serde_yml::from_str(&response.text().await?)?;
+            let weights_yaml_content = response.text().await?;
             
             let yaml_file = tempfile::Builder::new().prefix("alttpr_").suffix(".yml").tempfile().at_unknown()?;
             let yaml_path = yaml_file.path();
-            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(serde_yml::to_string(&weights_yaml)?.as_bytes()).await.at(&yaml_file)?;
+            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(weights_yaml_content.as_bytes()).await.at(&yaml_file)?;
             
             // Add retry logic with 2 retries
             const MAX_RETRIES: u8 = 2;
