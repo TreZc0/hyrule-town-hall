@@ -1,7 +1,6 @@
 use {
     std::{
         io::prelude::*,
-        os::windows::process::ExitStatusExt,
         process::Stdio,
         sync::atomic::{
             self,
@@ -1656,14 +1655,17 @@ impl GlobalState {
                 }).await {
                     Ok(output) => output?,
                     Err(_) => {
-                        return Err(RollError::Wheel(wheel::Error::CommandExit { 
-                            name: Cow::Borrowed("Mystery.py"), 
-                            output: std::process::Output {
-                                status: std::process::ExitStatus::from_raw(124),
-                                stdout: Vec::new(),
-                                stderr: b"Command timed out after 180 seconds".to_vec(),
-                            }
-                        }));
+                        // Timeout occurred - treat it like a retryable error
+                        if attempt < MAX_RETRIES {
+                            // Wait a bit before retrying (exponential backoff)
+                            sleep(Duration::from_secs(2 + 2u64.pow(attempt as u32))).await;
+                            continue;
+                        }
+                        // Max retries reached
+                        return Err(RollError::Retries {
+                            num_retries: MAX_RETRIES + 1,
+                            last_error: Some("Command timed out after 180 seconds".to_string()),
+                        });
                     }
                 };
                 
