@@ -2507,7 +2507,7 @@ impl SeedRollUpdate {
                 }
                 lock!(@write state = state; *state = RaceState::Rolled(seed));
             }
-            Self::Error(RollError::Retries { num_retries, last_error }) => {
+            Self::Error(RollError::Retries { num_retries, last_error }) | Self::Error(RollError::OotrWeb(ootr_web::Error::Retries { num_retries, last_error })) => {
                 if let Some(last_error) = last_error {
                     eprintln!("seed rolling failed {num_retries} times, sample error:\n{last_error}");
                 } else {
