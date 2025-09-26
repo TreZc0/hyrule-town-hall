@@ -485,17 +485,61 @@ async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres
     use crate::config::Config;
     
     let http_client = reqwest::Client::new();
-    let config = Config::load().await.map_err(|e| format!("Failed to load config: {}", e))?;
+    let config = Config::load().await.map_err(|e| {
+        log::error!("Failed to load config for StartGG sync: {}", e);
+        format!("Failed to load config: {}", e)
+    })?;
     
+    log::info!("Starting StartGG participant sync for event: {} (series: {})", event_slug, event.series.slug());
 
     let entrants = startgg::fetch_event_entrants(&http_client, &config, event_slug).await
-        .map_err(|e| format!("Failed to fetch entrants from StartGG: {}", e))?;
+        .map_err(|e| {
+            // Log detailed error information to systemd log
+            match &e {
+                startgg::Error::GraphQL(errors) => {
+                    log::error!("StartGG GraphQL errors during participant sync for event '{}':", event_slug);
+                    for (i, error) in errors.iter().enumerate() {
+                        log::error!("  Error {}: {}", i + 1, error.message);
+                        if let Some(locations) = &error.locations {
+                            for location in locations {
+                                log::error!("    Location: line {}, column {}", location.line, location.column);
+                            }
+                        }
+                        if let Some(path) = &error.path {
+                            log::error!("    Path: {:?}", path);
+                        }
+                    }
+                }
+                startgg::Error::Reqwest(reqwest_err) => {
+                    log::error!("StartGG HTTP request failed for event '{}': {}", event_slug, reqwest_err);
+                    if let Some(url) = reqwest_err.url() {
+                        log::error!("  Request URL: {}", url);
+                    }
+                }
+                startgg::Error::Wheel(wheel_err) => {
+                    log::error!("StartGG wheel error for event '{}': {}", event_slug, wheel_err);
+                }
+                startgg::Error::NoDataNoErrors => {
+                    log::error!("StartGG API returned no data and no errors for event '{}'", event_slug);
+                }
+                startgg::Error::NoQueryMatch(response_data) => {
+                    log::error!("StartGG query did not match expected response format for event '{}': {:?}", event_slug, response_data);
+                }
+            }
+            format!("Failed to fetch entrants from StartGG: {}", e)
+        })?;
     
     let teams = sqlx::query_as!(Team, r#"
         SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", NULL as challonge_id, plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank 
         FROM teams 
         WHERE series = $1 AND event = $2 AND startgg_id IS NULL AND NOT resigned
-    "#, event.series as _, &event.event).fetch_all(&mut **transaction).await?;
+    "#, event.series as _, &event.event).fetch_all(&mut **transaction).await
+        .map_err(|e| {
+            log::error!("Database error while fetching teams for StartGG sync (event: {}, series: {}): {}", event_slug, event.series.slug(), e);
+            e
+        })?;
+    
+    log::info!("Found {} teams to sync for event '{}'", teams.len(), event_slug);
     
     let mut synced_count = 0;
     let mut failed_teams = Vec::new();
@@ -505,27 +549,54 @@ async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres
             SELECT member, startgg_id AS "startgg_id: startgg::ID"
             FROM team_members 
             WHERE team = $1
-        "#, team.id as _).fetch_all(&mut **transaction).await?;
+        "#, team.id as _).fetch_all(&mut **transaction).await
+            .map_err(|e| {
+                log::error!("Database error while fetching team members for team {} (event: {}): {}", team.id, event_slug, e);
+                e
+            })?;
         
         if team_members.len() == 1 {
             let member = &team_members[0];
             
-            if let Some(entrant_id) = find_matching_entrant(&entrants, member.member.into(), transaction).await? {
+            if let Some(entrant_id) = find_matching_entrant(&entrants, member.member.into(), transaction).await
+                .map_err(|e| {
+                    log::error!("Error finding matching entrant for team {} (event: {}): {}", team.id, event_slug, e);
+                    e
+                })? {
                 sqlx::query!(r#"
                     UPDATE teams 
                     SET startgg_id = $1 
                     WHERE id = $2
-                "#, entrant_id as _, team.id as _).execute(&mut **transaction).await?;
+                "#, entrant_id as _, team.id as _).execute(&mut **transaction).await
+                    .map_err(|e| {
+                        log::error!("Database error while updating team {} with StartGG ID {} (event: {}): {}", team.id, entrant_id, event_slug, e);
+                        e
+                    })?;
                 
                 synced_count += 1;
+                log::debug!("Successfully synced team '{}' (ID: {}) with StartGG entrant {}", 
+                    team.name.as_deref().unwrap_or("Unknown"), team.id, entrant_id);
             } else {
                 // Could not find a matching entrant
-                failed_teams.push(team.name.clone().unwrap_or_else(|| format!("Team {}", team.id)));
+                let team_name = team.name.clone().unwrap_or_else(|| format!("Team {}", team.id));
+                log::warn!("Could not find matching StartGG entrant for team '{}' (ID: {}) in event '{}'", 
+                    team_name, team.id, event_slug);
+                failed_teams.push(team_name);
             }
+        } else {
+            log::warn!("Team '{}' (ID: {}) has {} members, expected 1 for StartGG sync (event: '{}')", 
+                team.name.as_deref().unwrap_or("Unknown"), team.id, team_members.len(), event_slug);
         }
     }
     
     let failed_count = failed_teams.len();
+    
+    log::info!("StartGG participant sync completed for event '{}': {} teams synced, {} teams failed", 
+        event_slug, synced_count, failed_count);
+    
+    if !failed_teams.is_empty() {
+        log::warn!("Failed to sync teams for event '{}': {}", event_slug, failed_teams.join(", "));
+    }
     
     Ok(SyncResult {
         synced_count,
