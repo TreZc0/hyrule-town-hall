@@ -2511,7 +2511,7 @@ impl SeedRollUpdate {
             Self::Error(e) => {
                 eprintln!("seed roll error in https://{}{}: {e} ({e:?})", racetime_host(), ctx.data().await.url);
                 if let Environment::Production = Environment::default() {
-                    wheel::night_report(&format!("{}/error", night_path()), Some(&format!("seed roll error in https://{}{}: {e} ({e:?})", racetime_host(), ctx.data().await.url))).await.to_racetime()?;
+                    log::error!("seed roll error in https://{}{}: {e} ({e:?})", racetime_host(), ctx.data().await.url);
                 }
                 ctx.say("Sorry @entrants, something went wrong while rolling the seed. Please report this error to TreZc0_ and if necessary roll the seed manually.").await?;
             }
@@ -3195,7 +3195,7 @@ impl RaceHandler<GlobalState> for Handler {
                 } else {
                     eprintln!("race handler for https://{}{} panicked", racetime_host(), data.url);
                     if let Environment::Production = Environment::default() {
-                        let _ = wheel::night_report(&format!("{}/error", night_path()), Some(&format!("race handler for https://{}{} panicked", racetime_host(), data.url))).await;
+                        log::error!("race handler for https://{}{} panicked", racetime_host(), data.url);
                     }
                 }
             });
@@ -5242,13 +5242,13 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                             Ok(Err(e)) => {
                                 eprintln!("Discord race handler errored: {e} ({e:?})");
                                 if let Environment::Production = Environment::default() {
-                                    let _ = wheel::night_report(&format!("{}/error", night_path()), Some("Discord race handler errored: {e} ({e:?})")).await;
+                                    log::error!("Discord race handler errored: {e} ({e:?})");
                                 }
                             }
                             Err(_) => {
                                 eprintln!("Discord race handler panicked");
                                 if let Environment::Production = Environment::default() {
-                                    let _ = wheel::night_report(&format!("{}/error", night_path()), Some("Discord race handler panicked")).await;
+                                    log::error!("Discord race handler panicked");
                                 }
                             }
                         }
@@ -5695,13 +5695,13 @@ async fn handle_rooms(global_state: Arc<GlobalState>, racetime_config: &ConfigRa
                 }
                 eprintln!("failed to connect to racetime.gg (retrying in {}): {e} ({e:?})", English.format_duration(wait_time, true));
                 if wait_time >= Duration::from_secs(16) {
-                    wheel::night_report(&format!("{}/error", night_path()), Some(&format!("failed to connect to racetime.gg (retrying in {}): {e} ({e:?})", English.format_duration(wait_time, true)))).await?;
+                    log::error!("failed to connect to racetime.gg (retrying in {}): {e} ({e:?})", English.format_duration(wait_time, true));
                 }
                 sleep(wait_time).await;
                 last_crash = Instant::now();
             }
             Err(e) => {
-                wheel::night_report(&format!("{}/error", night_path()), Some(&format!("error handling racetime.gg rooms: {e} ({e:?})"))).await?;
+                log::error!("error handling racetime.gg rooms: {e} ({e:?})");
                 break Err(e.into())
             }
         }

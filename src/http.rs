@@ -484,7 +484,7 @@ async fn unprocessable_content(request: &Request<'_>) -> Result<(Status, RawHtml
 #[rocket::catch(500)]
 async fn internal_server_error(request: &Request<'_>) -> PageResult {
     if let Environment::Production = Environment::default() {
-        wheel::night_report(&format!("{}/error", night_path()), Some("internal server error")).await?;
+        log::error!("internal server error");
     }
     let pool = request.guard::<&State<PgPool>>().await.expect("missing database pool");
     let me = request.guard::<User>().await.succeeded();
@@ -510,7 +510,7 @@ async fn bad_gateway(request: &Request<'_>) -> PageResult {
 async fn fallback_catcher(status: Status, request: &Request<'_>) -> PageResult {
     eprintln!("responding with unexpected HTTP status code {} {} to request {request:?}", status.code, status.reason_lossy());
     if let Environment::Production = Environment::default() {
-        wheel::night_report(&format!("{}/error", night_path()), Some(&format!("responding with unexpected HTTP status code: {} {}", status.code, status.reason_lossy()))).await?;
+        log::error!("responding with unexpected HTTP status code: {} {}", status.code, status.reason_lossy());
     }
     let pool = request.guard::<&State<PgPool>>().await.expect("missing database pool");
     let me = request.guard::<User>().await.succeeded();

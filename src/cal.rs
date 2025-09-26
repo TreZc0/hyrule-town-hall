@@ -2889,14 +2889,14 @@ pub(crate) async fn auto_import_races(db_pool: PgPool, http_client: reqwest::Cli
                 if wait_time >= Duration::from_secs(2 * 60) {
                     eprintln!("failed to auto-import races (retrying in {}): {e} ({e:?})", English.format_duration(wait_time, true));
                     if wait_time >= Duration::from_secs(10 * 60) {
-                        wheel::night_report(&format!("{}/error", night_path()), Some(&format!("failed to auto-import races (retrying in {}): {e} ({e:?})", English.format_duration(wait_time, true)))).await?;
+                        log::error!("failed to auto-import races (retrying in {}): {e} ({e:?})", English.format_duration(wait_time, true));
                     }
                 }
                 sleep(wait_time).await;
                 last_crash = Instant::now();
             }
             Err(e) => {
-                wheel::night_report(&format!("{}/error", night_path()), Some(&format!("failed to auto-import races: {e} ({e:?})"))).await?;
+                log::error!("failed to auto-import races: {e} ({e:?})");
                 break Err(e)
             }
         }
