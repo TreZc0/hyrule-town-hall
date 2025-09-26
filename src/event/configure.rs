@@ -52,7 +52,7 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
             }
         }
     } else if let Some(ref me) = me {
-        if event.organizers(&mut transaction).await?.contains(me) {
+        if event.organizers(&mut transaction).await?.contains(me) || me.is_global_admin() {
             let mut errors = ctx.errors().collect_vec();
             html! {
                 @if event.series == Series::Standard && event.event == "w" {
@@ -86,7 +86,7 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                     pre : serde_json::to_string_pretty(event.single_settings.as_ref().expect("no settings configured for weeklies"))?;
                     p {
                         : "The data above is currently not editable for technical reasons. Please contact ";
-                        : User::from_id(&mut *transaction, Id::<Users>::from(14571800683221815449_u64)).await?.ok_or(PageError::TrezUserData(1))?; // Fenhl
+                        : User::from_id(&mut *transaction, Id::<Users>::from(16287394041462225947_u64)).await?.ok_or(PageError::AdminUserData(1))?; // TreZ
                         : " if you've spotted an error in it.";
                     } //TODO make editable
                 } else {
@@ -202,7 +202,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
         if data.is_ended() {
             form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
         }
-        if !data.organizers(&mut transaction).await?.contains(&me) {
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
             form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
         }
         let min_schedule_notice = if let Some(time) = parse_duration(&value.min_schedule_notice, DurationUnit::Hours) {

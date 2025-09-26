@@ -70,6 +70,28 @@ pub(crate) struct User {
 }
 
 impl User {
+    pub(crate) const GLOBAL_ADMIN_USER_IDS: &[u64] = &[
+        16287394041462225947_u64,
+    ];
+
+    #[inline]
+    pub(crate) fn is_global_admin(&self) -> bool {
+        let my_id = u64::from(self.id);
+        Self::GLOBAL_ADMIN_USER_IDS.iter().copied().any(|admin_id| admin_id == my_id)
+    }
+
+    pub(crate) async fn primary_global_admin<E>(executor: &mut E) -> sqlx::Result<Option<Self>>
+    where
+        for<'a> &'a mut E: PgExecutor<'a>,
+    {
+        for admin_id in Self::GLOBAL_ADMIN_USER_IDS {
+            if let Some(user) = Self::from_id(&mut *executor, Id::<Users>::from(*admin_id)).await? {
+					return Ok(Some(user));
+				}
+			}
+			Ok(None)
+    }
+    
     fn from_row(
         id: Id<Users>,
         display_source: DisplaySource,
@@ -311,7 +333,7 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
     } else if me.as_ref().is_some_and(|me| me.id == user.id) {
         if let Some(racetime_user) = racetime_user {
             if let Some(racetime_user) = User::from_racetime(&mut *transaction, &racetime_user.id).await? {
-                let trez = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::TrezUserData(3))?;
+                let admin_user = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::AdminUserData(3))?;
                 html! {
                     p {
                         @let racetime = racetime_user.racetime.expect("racetime.gg user without racetime.gg ID");
@@ -326,7 +348,7 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
                         : " which belongs to a different Hyrule Town Hall account. ";
                         @if racetime_user.discord.is_some() {
                             : "That Hyrule Town Hall account is also connected to a Discord account. If you would like to merge your accounts, please contact ";
-                            : trez;
+                            : admin_user;
                             : ".";
                         } else {
                             span { //HACK fix button styling (nth-child)
@@ -388,7 +410,7 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
     } else if me.as_ref().is_some_and(|me| me.id == user.id) {
         if let Some(discord_user) = discord_user {
             if let Some(discord_user) = User::from_discord(&mut *transaction, discord_user.id).await? {
-                let trez = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::TrezUserData(4))?;
+                let admin_user = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::AdminUserData(4))?;
                 html! {
                     p {
                         @let discord = discord_user.discord.expect("Discord user without Discord ID");
@@ -411,7 +433,7 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
                         : " which belongs to a different Hyrule Town Hall account. ";
                         @if discord_user.racetime.is_some() {
                             : "That Hyrule Town Hall account is also connected to a racetime.gg account. If you would like to merge your accounts, please contact ";
-                            : trez;
+                            : admin_user;
                             : ".";
                         } else {
                             span { //HACK fix button styling (nth-child)
