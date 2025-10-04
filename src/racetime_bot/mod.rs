@@ -5610,7 +5610,11 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
             _ = sleep(Duration::from_secs(30)) => { //TODO exact timing (coordinate with everything that can change the schedule)
                 lock!(new_room_lock = global_state.new_room_lock; { // make sure a new room isn't handled before it's added to the database
                     let mut transaction = global_state.db_pool.begin().await?;
-                    for cal_event in cal::Event::rooms_to_open(&mut transaction, &global_state.http_client).await? {
+                    let rooms_to_open = cal::Event::rooms_to_open(&mut transaction, &global_state.http_client).await?;
+                    transaction.commit().await?;
+                    
+                    for cal_event in rooms_to_open {
+                        let mut transaction = global_state.db_pool.begin().await?;
                         let event = cal_event.race.event(&mut transaction).await?;
                         if let Some((is_room_url, msg)) = create_room(&mut transaction, &*global_state.discord_ctx.read().await, &global_state.host_info, &global_state.racetime_config.client_id, &global_state.racetime_config.client_secret, &global_state.extra_room_tx, &global_state.http_client, global_state.clean_shutdown.clone(), &cal_event, &event).await? {
                             // Commit immediately after room creation to prevent race conditions
