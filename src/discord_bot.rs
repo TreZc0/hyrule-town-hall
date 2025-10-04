@@ -1521,7 +1521,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                 lock!(new_room_lock = new_room_lock; {
                                                     if let Some((_, msg)) = racetime_bot::create_room(&mut transaction, ctx, &racetime_host, &racetime_config.client_id, &racetime_config.client_secret, &extra_room_tx, &http_client, clean_shutdown, &cal_event, &event).await? {
                                                         if let Some(channel) = event.discord_race_room_channel {
-                                                            channel.say(ctx, &msg).await?;
+                                                            if let Err(e) = channel.say(ctx, &msg).await {
+                                                                eprintln!("Failed to post race message to Discord race room channel: {}", e);
+                                                            }
                                                         }
                                                         interaction.edit_response(ctx, EditInteractionResponse::new()
                                                             .content(msg)
@@ -1716,7 +1718,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                             }
                                                         } else {
                                                             if let Some(channel) = event.discord_race_room_channel {
-                                                                channel.send_message(ctx, CreateMessage::default().content(&msg).allowed_mentions(CreateAllowedMentions::default())).await?;
+                                                                if let Err(e) = channel.send_message(ctx, CreateMessage::default().content(&msg).allowed_mentions(CreateAllowedMentions::default())).await {
+                                                                    eprintln!("Failed to post race message to Discord race room channel: {}", e);
+                                                                }
                                                             }
                                                         }
                                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()

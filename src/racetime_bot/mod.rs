@@ -2869,7 +2869,8 @@ impl Handler {
         if let Some(OfficialRaceData { goal, .. }) = self.official_data {
             Ok(goal)
         } else {
-            ctx.data().await.goal.name.parse()
+            let race_data = ctx.data().await;
+            Goal::from_race_data(&race_data).ok_or(GoalFromStrError)
         }
     }
 
@@ -3205,7 +3206,7 @@ impl RaceHandler<GlobalState> for Handler {
 
     async fn new(ctx: &RaceContext<GlobalState>) -> Result<Self, Error> {
         let data = ctx.data().await;
-        let goal = data.goal.name.parse::<Goal>().to_racetime()?;
+        let goal = Goal::from_race_data(&data).ok_or(GoalFromStrError).to_racetime()?;
         let (existing_seed, official_data, race_state, high_seed_name, low_seed_name, fpa_enabled) = lock!(new_room_lock = ctx.global_state.new_room_lock; { // make sure a new room isn't handled before it's added to the database
             let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
             let new_data = if let Some(cal_event) = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, format!("https://{}{}", racetime_host(), ctx.data().await.url).parse()?).await.to_racetime()? {
@@ -5638,10 +5639,16 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                                     if let Some(channel) = event.discord_race_room_channel;
                                     then {
                                         if let Some(thread) = cal_event.race.scheduling_thread {
-                                            thread.say(&*ctx, &msg).await?;
-                                            channel.send_message(&*ctx, CreateMessage::default().content(msg).allowed_mentions(CreateAllowedMentions::default())).await?;
+                                            if let Err(e) = thread.say(&*ctx, &msg).await {
+                                                eprintln!("Failed to post race message to scheduling thread: {}", e);
+                                            }
+                                            if let Err(e) = channel.send_message(&*ctx, CreateMessage::default().content(msg).allowed_mentions(CreateAllowedMentions::default())).await {
+                                                eprintln!("Failed to post race message to Discord race room channel: {}", e);
+                                            }
                                         } else {
-                                            channel.say(&*ctx, msg).await?;
+                                            if let Err(e) = channel.say(&*ctx, msg).await {
+                                                eprintln!("Failed to post race message to Discord race room channel: {}", e);
+                                            }
                                         }
                                     } else {
                                         if let Some(thread) = cal_event.race.scheduling_thread {
