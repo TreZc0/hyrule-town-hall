@@ -1952,6 +1952,7 @@ pub(crate) fn async_rules(data: &Data<'_>, async_kind: AsyncKind) -> RawHtml<Str
         p : "Rules:";
         ol {
             @match async_kind {
+                AsyncKind::Seeding => @unimplemented
                 AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 => li : "In order to play in the tournament, your team must make a reasonable attempt at completing this seed. In the event of a forfeit, you can still participate, but will be considered the bottom seed for settings draft purposes.";
                 AsyncKind::Tiebreaker1 => li : "In order to play in the top 8 bracket, your team must make a reasonable attempt at completing this seed. In the event of a forfeit, you can still participate, but will be placed at the bottom of your Swiss point group for matchup and settings draft purposes.";
                 AsyncKind::Tiebreaker2 => li : "In order to play in the top 8 bracket, your team must race the other teams of your Swiss point group on this seed.";

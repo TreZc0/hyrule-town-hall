@@ -533,6 +533,7 @@ impl<'a> Data<'a> {
                 AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 => if !self.is_started(&mut *transaction).await? {
                     return Ok(Some(kind))
                 },
+                AsyncKind::Seeding => return Ok(Some(kind)),
                 AsyncKind::Tiebreaker1 | AsyncKind::Tiebreaker2 => if let Some(team_id) = team_id {
                     if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM async_teams WHERE team = $1 AND kind = $2) AS "exists!""#, team_id as _, kind as _).fetch_one(&mut **transaction).await? {
                         return Ok(Some(kind))
@@ -1282,6 +1283,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                         } else {
                                             p : "Play the qualifier async to qualify for the tournament.";
                                         }
+                                        AsyncKind::Seeding => p : "If you would like to play the seeding async, you can request it here.";
                                         AsyncKind::Tiebreaker1 | AsyncKind::Tiebreaker2 => p : "Play the tiebreaker async to qualify for the bracket stage of the tournament.";
                                     }
                                     @match data.series {
@@ -2024,6 +2026,8 @@ pub(crate) enum AsyncKind {
     Qualifier1,
     Qualifier2,
     Qualifier3,
+    /// Like qualifier but not required to enter
+    Seeding,
     /// The tiebreaker for the highest Swiss points group with more than one team.
     Tiebreaker1,
     /// The tiebreaker for the 2nd-highest Swiss points group with more than one team.
@@ -2218,6 +2222,7 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, http_client: &State<reqwe
                             AsyncKind::Qualifier1 => "qualifier async 1",
                             AsyncKind::Qualifier2 => "qualifier async 2",
                             AsyncKind::Qualifier3 => "qualifier async 3",
+                            AsyncKind::Seeding => "seeding async",
                             AsyncKind::Tiebreaker1 => "tiebreaker async 1",
                             AsyncKind::Tiebreaker2 => "tiebreaker async 2",
                         });

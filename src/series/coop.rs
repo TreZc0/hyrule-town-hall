@@ -109,7 +109,7 @@ pub(crate) fn async_rules(async_kind: AsyncKind) -> RawHtml<String> {
         p : "Rules:";
         ol {
             @match async_kind {
-                AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 => @unimplemented
+                AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 | AsyncKind::Seeding => @unimplemented
                 AsyncKind::Tiebreaker1 => li : "In order to qualify for a brackets wildcard, your team must be among the first two to finish this seed, either as an async or live race.";
                 AsyncKind::Tiebreaker2 => @unimplemented
             }
