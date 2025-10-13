@@ -528,66 +528,12 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
             struct TeamRow {
                 team: Team,
                 custom_choices: Json<HashMap<String, String>>,
-                hard_settings_ok: bool,
-                mq_ok: bool,
-                lite_ok: bool,
                 pieces: Option<i16>,
                 qualified: bool,
-                all_dungeons_ok: bool,
-                flute_ok: bool,
-                hover_ok: bool,
-                inverted_ok: bool,
-                keydrop_ok: bool,
-                mirror_scroll_ok: bool,
-                no_delay_ok: bool,
-                pb_ok: bool,
-                zw_ok: bool,
             }
 
-            let teams = if let QualifierKind::Rank = qualifier_kind {
-                // teams are manually ranked so include ones that haven't submitted qualifier asyncs
-                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank, custom_choices AS "custom_choices: Json<HashMap<String, String>>" FROM teams WHERE
-                    series = $1
-                    AND event = $2
-                    AND NOT resigned
-                    AND (
-                        EXISTS (SELECT 1 FROM team_members WHERE team = id AND member = $3)
-                        OR NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')
-                    )
-                "#, data.series as _, &data.event, me.as_ref().map(|me| PgSnowflake(me.id)) as _).fetch(&mut **transaction)
-                    .map_ok(|row| TeamRow {
-                        team: Team {
-                            id: row.id,
-                            series: data.series,
-                            event: data.event.to_string(),
-                            name: row.name,
-                            racetime_slug: row.racetime_slug,
-                            startgg_id: row.startgg_id,
-                            challonge_id: row.challonge_id,
-                            plural_name: row.plural_name,
-                            restream_consent: row.restream_consent,
-                            mw_impl: row.mw_impl,
-                            qualifier_rank: row.qualifier_rank,
-                        },
-                        custom_choices: row.custom_choices,
-                        hard_settings_ok: row.hard_settings_ok,
-                        mq_ok: row.mq_ok,
-                        lite_ok: row.lite_ok,
-                        all_dungeons_ok: row.all_dungeons_ok,
-                        flute_ok: row.flute_ok,
-                        hover_ok: row.hover_ok,
-                        inverted_ok: row.inverted_ok,
-                        keydrop_ok: row.keydrop_ok,
-                        mirror_scroll_ok: row.mirror_scroll_ok,
-                        no_delay_ok: row.no_delay_ok,
-                        pb_ok: row.pb_ok,
-                        zw_ok: row.zw_ok,
-                        pieces: None,
-                        qualified: false,
-                    })
-                    .try_collect::<Vec<_>>().await?
-            } else {
-                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, submitted IS NOT NULL AS "qualified!", pieces, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank, custom_choices AS "custom_choices: Json<HashMap<String, String>>" FROM teams LEFT OUTER JOIN async_teams ON (id = team) WHERE
+            let teams = if let QualifierKind::Single { .. } = qualifier_kind {
+                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, challonge_id, startgg_id AS "startgg_id: startgg::ID", plural_name, submitted IS NOT NULL AS "qualified!", pieces, custom_choices AS "custom_choices: Json<HashMap<String, String>>", restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams LEFT OUTER JOIN async_teams ON (id = team) WHERE
                     series = $1
                     AND event = $2
                     AND NOT resigned
@@ -613,22 +559,41 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                             qualifier_rank: row.qualifier_rank,
                         },
                         custom_choices: row.custom_choices,
-                        hard_settings_ok: row.hard_settings_ok,
-                        mq_ok: row.mq_ok,
-                        lite_ok: row.lite_ok,
-                        all_dungeons_ok: row.all_dungeons_ok,
-                        flute_ok: row.flute_ok,
-                        hover_ok: row.hover_ok,
-                        inverted_ok: row.inverted_ok,
-                        keydrop_ok: row.keydrop_ok,
-                        mirror_scroll_ok: row.mirror_scroll_ok,
-                        no_delay_ok: row.no_delay_ok,
-                        pb_ok: row.pb_ok,
-                        zw_ok: row.zw_ok,
                         pieces: row.pieces,
                         qualified: row.qualified,
                     })
                     .try_collect().await?
+            } else {
+                // teams are manually ranked so include ones that haven't submitted qualifier asyncs
+                // also use for no qualifiers for now to avoid excluding teams that have submitted seeding asyncs (TODO display seeding async results like qual asyncs but with DNS below DNF instead of omitted)
+                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, challonge_id, startgg_id AS "startgg_id: startgg::ID", plural_name, custom_choices AS "custom_choices: Json<HashMap<String, String>>", restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams WHERE
+                    series = $1
+                    AND event = $2
+                    AND NOT resigned
+                    AND (
+                        EXISTS (SELECT 1 FROM team_members WHERE team = id AND member = $3)
+                        OR NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')
+                    )
+                "#, data.series as _, &data.event, me.as_ref().map(|me| PgSnowflake(me.id)) as _).fetch(&mut **transaction)
+                    .map_ok(|row| TeamRow {
+                        team: Team {
+                            id: row.id,
+                            series: data.series,
+                            event: data.event.to_string(),
+                            name: row.name,
+                            racetime_slug: row.racetime_slug,
+                            startgg_id: row.startgg_id,
+                            challonge_id: row.challonge_id,
+                            plural_name: row.plural_name,
+                            restream_consent: row.restream_consent,
+                            mw_impl: row.mw_impl,
+                            qualifier_rank: row.qualifier_rank,
+                        },
+                        custom_choices: row.custom_choices,
+                        pieces: None,
+                        qualified: false,
+                    })
+                    .try_collect::<Vec<_>>().await?
             };
             let roles = data.team_config.roles();
             let mut signups = Vec::with_capacity(teams.len());
@@ -656,22 +621,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     } else {
                         Qualification::Single { qualified: team.qualified }
                     },
-                    custom_choices: {
-                        let mut custom_choices = team.custom_choices.0;
-                        if team.hard_settings_ok { custom_choices.entry(format!("hard_settings")).or_insert_with(|| format!("yes")); }
-                        if team.mq_ok { custom_choices.entry(format!("mq")).or_insert_with(|| format!("yes")); }
-                        if team.lite_ok { custom_choices.entry(format!("lite")).or_insert_with(|| format!("yes")); }
-                        if team.all_dungeons_ok { custom_choices.entry(format!("all_dungeons")).or_insert_with(|| format!("yes")); }
-                        if team.flute_ok { custom_choices.entry(format!("flute")).or_insert_with(|| format!("yes")); }
-                        if team.hover_ok { custom_choices.entry(format!("hovering")).or_insert_with(|| format!("yes")); }
-                        if team.inverted_ok { custom_choices.entry(format!("inverted")).or_insert_with(|| format!("yes")); }
-                        if team.keydrop_ok { custom_choices.entry(format!("keydrop")).or_insert_with(|| format!("yes")); }
-                        if team.mirror_scroll_ok { custom_choices.entry(format!("mirror_scroll")).or_insert_with(|| format!("yes")); }
-                        if team.no_delay_ok { custom_choices.entry(format!("no_delay")).or_insert_with(|| format!("yes")); }
-                        if team.pb_ok { custom_choices.entry(format!("pseudoboots")).or_insert_with(|| format!("yes")); }
-                        if team.zw_ok { custom_choices.entry(format!("zw")).or_insert_with(|| format!("yes")); }
-                        custom_choices
-                    },
+                    custom_choices: team.custom_choices.0,
                     members,
                 });
             }
