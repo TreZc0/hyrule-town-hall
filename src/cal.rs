@@ -1456,6 +1456,8 @@ pub(crate) enum Error {
     #[error(transparent)] TimeFromLocal(#[from] wheel::traits::TimeFromLocalError<DateTime<Tz>>),
     #[error(transparent)] Url(#[from] url::ParseError),
     #[error(transparent)] Wheel(#[from] wheel::Error),
+    #[error("anonymized entrant in race without hidden entrants")]
+    AnonymizedEntrant,
     #[error("no team with this ID")]
     UnknownTeam,
     #[error("start.gg team ID {0} is not associated with a Hyrule Town Hall team")]
@@ -1466,6 +1468,12 @@ pub(crate) enum Error {
         event: String,
         racetime_id: String,
     },
+}
+
+impl From<racetime::model::AnonymousError> for Error {
+    fn from(racetime::model::AnonymousError: racetime::model::AnonymousError) -> Self {
+        Self::AnonymizedEntrant
+    }
 }
 
 impl<E: Into<Error>> From<E> for StatusOrError<Error> {
@@ -1491,6 +1499,7 @@ impl IsNetworkError for Error {
             Self::TimeFromLocal(_) => false,
             Self::Url(_) => false,
             Self::Wheel(e) => e.is_network_error(),
+            Self::AnonymizedEntrant => false,
             Self::UnknownTeam => false,
             Self::UnknownTeamStartGG(_) => false,
             Self::UnqualifiedEntrant { .. } => false,
