@@ -1,5 +1,4 @@
 use {
-    std::cmp::Reverse,
     base64::engine::{
         Engine as _,
         general_purpose::STANDARD as BASE64,

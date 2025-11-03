@@ -495,8 +495,10 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
     };
     let mut events_organized = user.events_organized(&mut transaction).await?;
     events_organized.retain(|event| event.listed);
+    events_organized.sort_by_key(|event| (event.base_start.is_some(), Reverse(event.base_start)));
     let mut events_participated = user.events_participated(&mut transaction).await?;
     events_participated.retain(|event| event.listed);
+    events_participated.sort_by_key(|event| (event.base_start.is_some(), Reverse(event.base_start)));
     Ok(page(transaction, &me, &uri, PageStyle { kind: if me.as_ref().is_some_and(|me| *me == user) { PageKind::MyProfile } else { PageKind::Other }, ..PageStyle::default() }, &format!("{} — Hyrule Town Hall", user.display_name()), html! {
         h1 {
             bdi : user.display_name();

@@ -1,9 +1,12 @@
 pub(crate) use {
     std::{
         borrow::Cow,
-        cmp::Ordering::{
-            self,
-            *,
+        cmp::{
+            Ordering::{
+                self,
+                *,
+            },
+            Reverse,
         },
         collections::{
             HashSet,

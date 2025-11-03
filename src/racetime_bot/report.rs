@@ -1,5 +1,4 @@
 use {
-    std::cmp::Reverse,
     tokio::sync::RwLockReadGuard,
     crate::{
         prelude::*,
