@@ -136,9 +136,9 @@ struct Args {
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
+    #[error(transparent)] AutoImport(#[from] cal::AutoImportError),
     #[error(transparent)] Base64(#[from] base64::DecodeError),
     #[error(transparent)] Config(#[from] config::Error),
-    #[error(transparent)] Event(#[from] event::Error),
     #[cfg(unix)] #[error(transparent)] Io(#[from] io::Error),
     #[error(transparent)] Racetime(#[from] racetime_bot::MainError),
     #[cfg(unix)] #[error(transparent)] Read(#[from] async_proto::ReadError),

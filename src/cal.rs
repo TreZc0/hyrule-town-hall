@@ -2664,7 +2664,37 @@ async fn import_race<'a>(mut transaction: Transaction<'a, Postgres>, discord_ctx
     Ok(transaction)
 }
 
-async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, config: Config, mut shutdown: rocket::Shutdown, discord_ctx: RwFuture<DiscordCtx>, new_room_lock: Arc<Mutex<()>>) -> Result<(), event::Error> {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AutoImportError {
+    #[error(transparent)] Calendar(#[from] Error),
+    #[error(transparent)] Discord(#[from] discord_bot::Error),
+    #[error(transparent)] Event(#[from] event::Error),
+    #[error(transparent)] EventData(#[from] event::DataError),
+    #[error(transparent)] Serenity(#[from] serenity::Error),
+    #[error(transparent)] Sql(#[from] sqlx::Error),
+    #[error(transparent)] Url(#[from] url::ParseError),
+    #[error(transparent)] Wheel(#[from] wheel::Error),
+    #[error("HTTP error{}: {}", if let Some(url) = .0.url() { format!(" at {url}") } else { String::default() }, .0)]
+    Http(#[from] reqwest::Error),
+}
+
+impl IsNetworkError for AutoImportError {
+    fn is_network_error(&self) -> bool {
+        match self {
+            Self::Calendar(e) => e.is_network_error(),
+            Self::Discord(_) => false,
+            Self::Event(e) => e.is_network_error(),
+            Self::EventData(_) => false,
+            Self::Serenity(_) => false,
+            Self::Sql(_) => false,
+            Self::Url(_) => false,
+            Self::Wheel(e) => e.is_network_error(),
+            Self::Http(e) => e.is_network_error(),
+        }
+    }
+}
+
+async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, config: Config, mut shutdown: rocket::Shutdown, discord_ctx: RwFuture<DiscordCtx>, new_room_lock: Arc<Mutex<()>>) -> Result<(), AutoImportError> {
     loop {
         lock!(new_room_lock = new_room_lock; {
             let mut transaction = db_pool.begin().await?;
@@ -2889,13 +2919,13 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
     Ok(())
 }
 
-pub(crate) async fn auto_import_races(db_pool: PgPool, http_client: reqwest::Client, config: Config, shutdown: rocket::Shutdown, discord_ctx: RwFuture<DiscordCtx>, new_room_lock: Arc<Mutex<()>>) -> Result<(), event::Error> {
+pub(crate) async fn auto_import_races(db_pool: PgPool, http_client: reqwest::Client, config: Config, shutdown: rocket::Shutdown, discord_ctx: RwFuture<DiscordCtx>, new_room_lock: Arc<Mutex<()>>) -> Result<(), AutoImportError> {
     let mut last_crash = Instant::now();
     let mut wait_time = Duration::from_secs(1);
     loop {
         match auto_import_races_inner(db_pool.clone(), http_client.clone(), config.clone(), shutdown.clone(), discord_ctx.clone(), new_room_lock.clone()).await {
             Ok(()) => break Ok(()),
-            Err(event::Error::Discord(discord_bot::Error::UninitializedDiscordGuild(guild_id))) => {
+            Err(AutoImportError::Discord(discord_bot::Error::UninitializedDiscordGuild(guild_id))) => {
                 let wait_time = Duration::from_secs(60);
                 eprintln!("failed to auto-import races for uninitialized Discord guild {guild_id} (retrying in {})", English.format_duration(wait_time, true));
                 sleep(wait_time).await;
