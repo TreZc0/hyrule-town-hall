@@ -2889,7 +2889,7 @@ impl Handler {
             if let Some(existing_state) = existing_state {
                 if let Some(ref official_data) = existing_state.official_data {
                     if race_data.entrants.iter().any(|entrant| entrant.status.value == EntrantStatusValue::Done && {
-                        let key = if let Some(ref team) = entrant.team { &team.slug } else { &entrant.user.id };
+                        let key = if let Some(ref team) = entrant.team { &team.slug } else { &entrant.user.as_ref().unwrap().id };
                         official_data.scores.get(key).is_some_and(|score| score.is_none())
                     }) {
                         return true
@@ -3269,7 +3269,7 @@ impl RaceHandler<GlobalState> for Handler {
                 for member in cal_event.racetime_users_to_invite(&mut transaction, &*ctx.global_state.discord_ctx.read().await, &event).await.to_racetime()? {
                     match member {
                         Ok(member) => {
-                            if let Some(entrant) = data.entrants.iter().find(|entrant| entrant.user.id == member) {
+                            if let Some(entrant) = data.entrants.iter().find(|entrant| entrant.user.as_ref().unwrap().id == member) {
                                 match entrant.status.value {
                                     EntrantStatusValue::Requested => ctx.accept_request(&member).await?,
                                     EntrantStatusValue::Invited |
@@ -4217,7 +4217,7 @@ impl RaceHandler<GlobalState> for Handler {
                 for restreamer in restreams.values().flat_map(|RestreamState { restreamer_racetime_id, .. }| restreamer_racetime_id) {
                     let data = ctx.data().await;
                     if data.monitors.iter().find(|monitor| monitor.id == *restreamer).is_some() { continue }
-                    if let Some(entrant) = data.entrants.iter().find(|entrant| entrant.user.id == *restreamer) { //TODO keep track of pending changes to the entrant list made in this method and match accordingly, e.g. players who are also monitoring should not be uninvited
+                    if let Some(entrant) = data.entrants.iter().find(|entrant| entrant.user.as_ref().unwrap().id == *restreamer) { //TODO keep track of pending changes to the entrant list made in this method and match accordingly, e.g. players who are also monitoring should not be uninvited
                         match entrant.status.value {
                             EntrantStatusValue::Requested => {
                                 ctx.accept_request(restreamer).await?;
@@ -4548,7 +4548,7 @@ impl RaceHandler<GlobalState> for Handler {
             },
             "monitor" => if self.can_monitor(ctx, is_monitor, msg).await.to_racetime()? {
                 let monitor = &msg.user.as_ref().expect("received !monitor command from bot").id;
-                if let Some(entrant) = ctx.data().await.entrants.iter().find(|entrant| entrant.user.id == *monitor) {
+                if let Some(entrant) = ctx.data().await.entrants.iter().find(|entrant| entrant.user.as_ref().unwrap().id == *monitor) {
                     match entrant.status.value {
                         EntrantStatusValue::Requested => {
                             ctx.accept_request(monitor).await?;
@@ -4677,7 +4677,7 @@ impl RaceHandler<GlobalState> for Handler {
                 then {
                     if let Some(UserData { mut ref id, .. }) = msg.user {
                         let data = ctx.data().await;
-                        if let Some(entrant) = data.entrants.iter().find(|entrant| entrant.user.id == *id) {
+                        if let Some(entrant) = data.entrants.iter().find(|entrant| entrant.user.as_ref().unwrap().id == *id) {
                             if let Some(ref team) = entrant.team {
                                 id = &team.slug;
                             }
@@ -4841,14 +4841,14 @@ impl RaceHandler<GlobalState> for Handler {
         if let Some(OfficialRaceData { ref event, ref entrants, ref mut scores, .. }) = self.official_data {
             for entrant in &data.entrants {
                 match entrant.status.value {
-                    EntrantStatusValue::Requested => if entrants.contains(&entrant.user.id) {
-                        ctx.accept_request(&entrant.user.id).await?;
+                    EntrantStatusValue::Requested => if entrants.contains(&entrant.user.as_ref().unwrap().id) {
+                        ctx.accept_request(&entrant.user.as_ref().unwrap().id).await?;
                     },
                     EntrantStatusValue::Done => if let Goal::TriforceBlitz | Goal::TriforceBlitzProgressionSpoiler = goal {
                         let (key, reply_to) = if let Some(ref team) = entrant.team {
                             (team.slug.clone(), &team.name)
                         } else {
-                            (entrant.user.id.clone(), &entrant.user.name)
+                            (entrant.user.as_ref().unwrap().id.clone(), &entrant.user.as_ref().unwrap().name)
                         };
                         if let hash_map::Entry::Vacant(entry) = scores.entry(key) {
                             ctx.send_message(

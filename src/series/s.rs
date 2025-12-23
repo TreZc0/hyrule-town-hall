@@ -164,6 +164,7 @@ pub(crate) enum WeeklyKind {
 }
 
 impl WeeklyKind {
+    /*
     pub(crate) fn cal_id_part(&self) -> &'static str {
         match self {
             Self::Kokiri => "kokiri",
@@ -172,6 +173,7 @@ impl WeeklyKind {
             Self::Gerudo => "gerudo",
         }
     }
+    */ // regular weekly schedule suspended during s/9 qualifiers
 
     pub(crate) fn next_weekly_after(&self, min_time: DateTime<impl TimeZone>) -> DateTime<Tz> {
         let mut time = match self {
@@ -302,6 +304,11 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                         }
                     }
                     : long_weekly_settings();
+                    p {
+                        : "During the qualifier phase of ";
+                        a(href = uri!(event::info(Series::Standard, "9"))) : "Standard Tournament Season 9";
+                        : ", the weeklies will be on hiatus — you can join the qualifiers instead, even if you don't intend to participate in later phases of the tournament.";
+                    }
                 }
             })
         }

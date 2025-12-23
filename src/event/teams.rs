@@ -253,20 +253,10 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                         RaceStatusValue::Invitational | RaceStatusValue::Pending | RaceStatusValue::InProgress | RaceStatusValue::Finished => {
                             let mut entrants = room_data.entrants.clone();
                             match score_kind {
-                                QualifierScoreKind::Sgl2023Online => {
-                                    entrants.retain(|entrant| entrant.user.id != "yMewn83Vj3405Jv7"); // user was banned
-                                    entrants.iter_mut().for_each(|entrant| if entrant.user.id == "raP6yoaGaNBlV4zN" { entrant.user.id = format!("JrM6PoY8Pd3Rdm5v") }); // racetime.gg account change
-                                    if race.id == Id::from(17171498007470059483_u64) {
-                                        entrants.retain(|entrant| entrant.user.id != "JrM6PoY6LQWRdm5v"); // result was annulled
-                                    }
-                                }
-                                QualifierScoreKind::Sgl2025Online => if race.id == Id::from(16334934270025688062_u64) {
-                                    entrants.retain(|entrant| !matches!(&*entrant.user.id, "jZ2EGWbRqRWYlM65" | "5JlzyB7eDzoV4GED" | "aGklxjWzqboLPdye")); // results were annulled
-                                },
                                 _ => {}
                             }
                             for entrant in &mut entrants {
-                                let user = racetime::model::UserData::try_from(entrant.user.clone())?;
+                                let user = racetime::model::UserData::try_from(entrant.user.clone().unwrap())?;
                                 match entrant.status.value {
                                     | EntrantStatusValue::Requested
                                         => {}
@@ -320,7 +310,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                     | EntrantStatusValue::Dq
                                         => {}
                                 }
-                                let user = racetime::model::UserData::try_from(entrant.user)?;
+                                let user = racetime::model::UserData::try_from(entrant.user.unwrap())?;
                                 scores.entry(MemberUser::RaceTime {
                                     id: user.id,
                                     url: user.url,
@@ -478,7 +468,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 if room_data.status.value != RaceStatusValue::Finished { continue }
                 if room_data.hide_entrants { continue }
                 let mut entrants = room_data.entrants.clone();
-                entrants.retain(|entrant| racetime::model::UserData::try_from(entrant.user.clone()).is_ok_and(|user| entrant_data.entry(MemberUser::RaceTime {
+                entrants.retain(|entrant| racetime::model::UserData::try_from(entrant.user.clone().unwrap()).is_ok_and(|user| entrant_data.entry(MemberUser::RaceTime {
                     id: user.id,
                     url: user.url,
                     name: user.name,
@@ -486,7 +476,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 let num_entrants = entrants.len();
                 entrants.sort_unstable_by_key(|entrant| (entrant.finish_time.is_none(), entrant.finish_time));
                 for (placement, entrant) in entrants.into_iter().enumerate() {
-                    let user = racetime::model::UserData::try_from(entrant.user)?;
+                    let user = racetime::model::UserData::try_from(entrant.user.unwrap())?;
                     let (num_qualifiers, qualification_level) = entrant_data.entry(MemberUser::RaceTime {
                         id: user.id,
                         url: user.url,
@@ -514,14 +504,14 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 if room_data.status.value == RaceStatusValue::Finished;
                 then {
                     let mut entrants = room_data.entrants.clone();
-                    entrants.retain(|entrant| racetime::model::UserData::try_from(entrant.user.clone()).is_ok_and(|user| entrant_data.entry(MemberUser::RaceTime {
+                    entrants.retain(|entrant| racetime::model::UserData::try_from(entrant.user.clone().unwrap()).is_ok_and(|user| entrant_data.entry(MemberUser::RaceTime {
                         id: user.id,
                         url: user.url,
                         name: user.name,
                     }).or_default().1 == QualificationLevel::ChoppinBlock));
                     entrants.sort_unstable_by_key(|entrant| (entrant.finish_time.is_none(), entrant.finish_time));
                     for entrant in entrants.drain(..entrants.len().min(32 - num_qualified)) {
-                        let user = racetime::model::UserData::try_from(entrant.user)?;
+                        let user = racetime::model::UserData::try_from(entrant.user.unwrap())?;
                         entrant_data.entry(MemberUser::RaceTime {
                             id: user.id,
                             url: user.url,

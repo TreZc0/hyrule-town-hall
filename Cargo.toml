@@ -32,7 +32,7 @@ thiserror = "2"
 anyhow = "1"
 async-graphql = { git = "https://github.com/fenhl/async-graphql", branch = "forms" }
 async-graphql-rocket = { git = "https://github.com/fenhl/async-graphql", branch = "forms" }
-async-proto = { version = "0.25", features = ["semver"] }
+async-proto = { version = "0.26", features = ["semver"] }
 async-trait = "0.1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
@@ -45,6 +45,7 @@ derivative = "2"
 derive_more = { version = "2", features = ["display", "from", "from_str"] }
 either = "1"
 enum-iterator = "2"
+env_logger = "0.11"
 futures = "0.3"
 git2 = "0.20" #TODO investigate replacing with gix
 #graphql_client = "0.11" # workaround for https://github.com/smashgg/developer-portal/issues/171 — see also https://github.com/graphql-rust/graphql-client/pull/437
@@ -57,14 +58,13 @@ itertools = "0.14"
 kuchiki = "0.8"
 lazy-regex = "3"
 log = "0.4"
-env_logger = "0.11"
-log-lock = { git = "https://github.com/fenhl/log-lock", branch = "main" }
-mhstatus = { git = "https://github.com/midoshouse/status.midos.house", branch = "main" }
+log-lock = { git = "https://github.com/fenhl/log-lock" }
+mhstatus = { git = "https://github.com/midoshouse/status.midos.house" }
 #mimalloc = "0.1.43" # fails to compile on Ubuntu
 noisy_float = "0.2"
 nonempty-collections = "1"
-ootr-utils = { git = "https://github.com/midoshouse/rust-ootr-utils", branch = "main", features = ["sqlx"] }
-racetime = "0.30.1"
+ootr-utils = { git = "https://github.com/midoshouse/rust-ootr-utils", features = ["sqlx"] }
+racetime = "0.32"
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["charset", "hickory-dns", "http2", "json", "macos-system-configuration", "rustls-tls", "stream"] }
 rocket = { git = "https://github.com/fenhl/Rocket", branch = "forms", features = ["json"] }
@@ -82,7 +82,7 @@ serde_urlencoded = "0.7.1"
 serde_with = { version = "3", features = ["json"] }
 serde_yml = "0.0.12"
 serenity = { version = "0.12.4", default-features = false, features = ["client", "gateway", "model", "rustls_backend", "temp_cache"] }
-serenity-utils = { git = "https://github.com/fenhl/serenity-utils", branch = "main" }
+serenity-utils = { git = "https://github.com/fenhl/serenity-utils" }
 smart-default = "0.7.1"
 sqlx = { version = "0.8.3", default-features = false, features = ["chrono", "json", "macros", "postgres", "runtime-tokio", "tls-rustls-ring-webpki", "uuid"] }
 tempfile = "3.20.0"

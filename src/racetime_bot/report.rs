@@ -407,7 +407,7 @@ impl Handler {
         let data = ctx.data().await;
         let Some(OfficialRaceData { ref cal_event, ref event, fpa_invoked, breaks_used, ref scores, .. }) = self.official_data else { return Ok(true) };
         Ok(if let Some(scores) = data.entrants.iter().map(|entrant| {
-            let key = if let Some(ref team) = entrant.team { &team.slug } else { &entrant.user.id };
+            let key = if let Some(ref team) = entrant.team { &team.slug } else { &entrant.user.as_ref().unwrap().id };
             match entrant.status.value {
                 EntrantStatusValue::Dnf => Some((key.clone(), tfb::Score::dnf(event.team_config))),
                 EntrantStatusValue::Done => scores.get(key).and_then(|&score| Some((key.clone(), score?))),
@@ -510,18 +510,18 @@ impl Handler {
                             let mut teams = Vec::with_capacity(data.entrants.len());
                             for entrant in &data.entrants {
                                 teams.push((if_chain! {
-                                    if let Some(user) = User::from_racetime(&mut *transaction, &entrant.user.id).await.to_racetime()?;
+                                    if let Some(user) = User::from_racetime(&mut *transaction, &entrant.user.as_ref().unwrap().id).await.to_racetime()?;
                                     if let Some(team) = Team::from_event_and_member(&mut transaction, event.series, &event.event, user.id).await.to_racetime()?;
                                     then {
                                         Entrant::MidosHouseTeam(team)
                                     } else {
                                         Entrant::Named {
-                                            name: entrant.user.full_name.clone(),
-                                            racetime_id: Some(entrant.user.id.clone()),
-                                            twitch_username: entrant.user.twitch_name.clone(),
+                                            name: entrant.user.as_ref().unwrap().full_name.clone(),
+                                            racetime_id: Some(entrant.user.as_ref().unwrap().id.clone()),
+                                            twitch_username: entrant.user.as_ref().unwrap().twitch_name.clone(),
                                         }
                                     }
-                                }, tfb_scores.remove(&entrant.user.id).expect("missing TFB score"), room.clone()));
+                                }, tfb_scores.remove(&entrant.user.as_ref().unwrap().id).expect("missing TFB score"), room.clone()));
                             }
                             if let Ok(teams) = teams.try_into() {
                                 transaction = report_1v1(transaction, ctx, cal_event, event, teams).await?;
@@ -532,15 +532,15 @@ impl Handler {
                             let mut teams = Vec::with_capacity(data.entrants.len());
                             for entrant in &data.entrants {
                                 teams.push((if_chain! {
-                                    if let Some(user) = User::from_racetime(&mut *transaction, &entrant.user.id).await.to_racetime()?;
+                                    if let Some(user) = User::from_racetime(&mut *transaction, &entrant.user.as_ref().unwrap().id).await.to_racetime()?;
                                     if let Some(team) = Team::from_event_and_member(&mut transaction, event.series, &event.event, user.id).await.to_racetime()?;
                                     then {
                                         Entrant::MidosHouseTeam(team)
                                     } else {
                                         Entrant::Named {
-                                            name: entrant.user.full_name.clone(),
-                                            racetime_id: Some(entrant.user.id.clone()),
-                                            twitch_username: entrant.user.twitch_name.clone(),
+                                            name: entrant.user.as_ref().unwrap().full_name.clone(),
+                                            racetime_id: Some(entrant.user.as_ref().unwrap().id.clone()),
+                                            twitch_username: entrant.user.as_ref().unwrap().twitch_name.clone(),
                                         }
                                     }
                                 }, entrant.finish_time, room.clone()));
