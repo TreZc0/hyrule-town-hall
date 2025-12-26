@@ -133,7 +133,7 @@ pub(crate) enum PageError {
     #[error(transparent)] Sql(#[from] sqlx::Error),
     #[error(transparent)] Wheel(#[from] wheel::Error),
     #[error("missing user data for Trezc0")]
-    TrezUserData(u8),
+    AdminUserData(u8),
 }
 
 impl<E: Into<PageError>> From<E> for StatusOrError<PageError> {
@@ -148,7 +148,7 @@ impl IsNetworkError for PageError {
             Self::Event(_) => false,
             Self::Sql(_) => false,
             Self::Wheel(e) => e.is_network_error(),
-            Self::TrezUserData(_) => false,
+            Self::AdminUserData(_) => false,
         }
     }
 }
@@ -170,7 +170,7 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
     } else {
         (None, Some(content))
     };
-    let trez = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::TrezUserData(1))?;
+    let admin_user = User::primary_global_admin(&mut *transaction).await?.ok_or(PageError::AdminUserData(1))?;
     transaction.commit().await?;
     Ok(html! {
         : Doctype;
@@ -241,7 +241,7 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                 footer {
                     p {
                         : "hosted by ";
-                        : trez;
+                        : admin_user;
                         : " • ";
                         a(href = uri!(legal::legal_disclaimer)) : "Legal";
                         : " • ";
@@ -462,11 +462,11 @@ async fn archive(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, sort: 
 #[rocket::get("/new")]
 async fn new_event(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
     let mut transaction = pool.begin().await?;
-    let trez = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::TrezUserData(2))?;
+    let admin_user = User::primary_global_admin(&mut *transaction).await?.ok_or(PageError::AdminUserData(2))?;
     page(transaction, &me, &uri, PageStyle::default(), "New Event — Hyrule Town Hall", html! {
         p {
             : "If you are planning a tournament, community race, or other event for the Zelda Speedrunning or randomizer community, or if you would like Hyrule Town Hall to archive data about a past event you organized, please contact ";
-            : trez;
+            : admin_user;
             : " to determine the specific needs of the event.";
         }
     }).await
@@ -518,7 +518,7 @@ async fn unprocessable_content(request: &Request<'_>) -> Result<(Status, RawHtml
 #[rocket::catch(500)]
 async fn internal_server_error(request: &Request<'_>) -> PageResult {
     if let Environment::Production = Environment::default() {
-        wheel::night_report(&format!("{}/error", night_path()), Some("internal server error")).await?;
+        log::error!("internal server error");
     }
     let pool = request.guard::<&State<PgPool>>().await.expect("missing database pool");
     let me = request.guard::<User>().await.succeeded();
@@ -544,7 +544,7 @@ async fn bad_gateway(request: &Request<'_>) -> PageResult {
 async fn fallback_catcher(status: Status, request: &Request<'_>) -> PageResult {
     eprintln!("responding with unexpected HTTP status code {} {} to request {request:?}", status.code, status.reason_lossy());
     if let Environment::Production = Environment::default() {
-        wheel::night_report(&format!("{}/error", night_path()), Some(&format!("responding with unexpected HTTP status code: {} {}", status.code, status.reason_lossy()))).await?;
+        log::error!("responding with unexpected HTTP status code: {} {}", status.code, status.reason_lossy());
     }
     let pool = request.guard::<&State<PgPool>>().await.expect("missing database pool");
     let me = request.guard::<User>().await.succeeded();

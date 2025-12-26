@@ -728,7 +728,7 @@ impl<'a> Data<'a> {
                     }
                 }
                 @if let Some(me) = me {
-                    @if !self.is_ended() && self.organizers(transaction).await?.contains(me) {
+                    @if !self.is_ended() && (self.organizers(transaction).await?.contains(me) || me.is_global_admin()) {
                         @if let Tab::Configure = tab {
                             a(class = "button selected", href? = is_subpage.then(|| uri!(configure::get(self.series, &*self.event)))) : "Configure";
                         } else {

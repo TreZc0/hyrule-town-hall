@@ -1341,7 +1341,7 @@ pub(crate) async fn add_role_binding(
                 "This event has ended and can no longer be configured",
             ));
         }
-        if !data.organizers(&mut transaction).await?.contains(&me) {
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
             form.context.push_error(form::Error::validation(
                 "You must be an organizer to manage roles for this event.",
             ));

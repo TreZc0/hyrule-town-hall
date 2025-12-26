@@ -90,9 +90,6 @@ impl Environment {
         }
     }
 
-    fn night_path(&self) -> &'static str {
-        if self.is_dev() { "/var/log/midoshouse/dev" } else { "/var/log/midoshouse/prod" }
-    }
 
     fn racetime_host(&self) -> &'static str {
         if self.is_dev() { "rtdev.zeldaspeedruns.com" } else { "racetime.gg" }
@@ -107,9 +104,6 @@ impl Environment {
     }
 }
 
-fn night_path() -> &'static str {
-    Environment::default().night_path()
-}
 
 fn racetime_host() -> &'static str {
     Environment::default().racetime_host()
@@ -159,6 +153,10 @@ enum Error {
 
 #[wheel::main(rocket)]
 async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
+    // Initialize logging to systemd journal via stderr
+    env_logger::Builder::from_default_env()
+        .filter_level(log::LevelFilter::Info)
+        .init();
     if let Some(subcommand) = subcommand {
         #[cfg(unix)] let mut sock = UnixStream::connect(unix_socket::PATH).await?;
         #[cfg(unix)] subcommand.write(&mut sock).await?;
@@ -190,12 +188,10 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
         }
     } else {
         let default_panic_hook = std::panic::take_hook();
-        if let Environment::Production = Environment::default() {
-            std::panic::set_hook(Box::new(move |info| {
-                let _ = wheel::night_report_sync(&format!("{}/error", night_path()), Some("thread panic"));
-                default_panic_hook(info)
-            }));
-        }
+        std::panic::set_hook(Box::new(move |info| {
+            log::error!("Thread panic: {:?}", info);
+            default_panic_hook(info)
+        }));
         let config = Config::load().await?;
         let http_client = reqwest::Client::builder()
             .user_agent(concat!("MidosHouse/", env!("CARGO_PKG_VERSION"), " (https://github.com/midoshouse/midos.house)"))

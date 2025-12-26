@@ -126,25 +126,6 @@ impl Guard for Scopes {
     }
 }
 
-struct ShowRestreamConsent<'a>(&'a cal::Race);
-
-impl Guard for ShowRestreamConsent<'_> {
-    async fn check(&self, ctx: &Context<'_>) -> Result<()> {
-        let me = &ctx.data::<ApiKey>().map_err(|e| Error {
-            message: format!("This query requires an API key. Provide one using the X-API-Key header."),
-            source: Some(Arc::new(e)),
-            extensions: None,
-        })?.user;
-        db!(db = ctx; {
-            let event = self.0.event(&mut *db).await?;
-            if event.organizers(&mut *db).await?.contains(me) || event.restreamers(&mut *db).await?.contains(me) {
-                Ok(())
-            } else {
-                Err("Only event organizers and restream coordinators can view restream consent info.".into())
-            }
-        })
-    }
-}
 
 struct EditRace(GqlId);
 
@@ -388,16 +369,16 @@ struct Race(cal::Race);
 
     /// Whether all teams in this race have consented to be restreamed.
     /// Null if the race is open (not invitational) or if the event does not use Mido's House to manage entrants.
-    /// Requires permission to view restream consent and an API key with `entrants_read` scope.
-    #[graphql(guard = Scopes { entrants_read: true, ..Scopes::default() }.and(ShowRestreamConsent(&self.0)))]
+    /// Requires an API key with `entrants_read` scope.
+    #[graphql(guard = Scopes { entrants_read: true, ..Scopes::default() })]
     async fn restream_consent(&self) -> Option<bool> {
         self.0.teams_opt().map(|mut teams| teams.all(|team| team.restream_consent))
     }
 
     /// All restream URLs for this race, organized by language.
     /// Null if the race is open (not invitational) or if the event does not use Mido's House to manage entrants.
-    /// Requires permission to view restream consent and an API key with `entrants_read` scope.
-    #[graphql(guard = Scopes { entrants_read: true, ..Scopes::default() }.and(ShowRestreamConsent(&self.0)))]
+    /// Requires an API key with `entrants_read` scope.
+    #[graphql(guard = Scopes { entrants_read: true, ..Scopes::default() })]
     async fn restream_urls(&self) -> Option<Vec<RestreamUrl>> {
         self.0.teams_opt().map(|_| {
             self.0.video_urls.iter().map(|(language, url)| RestreamUrl {
@@ -409,8 +390,8 @@ struct Race(cal::Race);
 
     /// All restreamers for this race, organized by language.
     /// Null if the race is open (not invitational) or if the event does not use Mido's House to manage entrants.
-    /// Requires permission to view restream consent and an API key with `entrants_read` scope.
-    #[graphql(guard = Scopes { entrants_read: true, ..Scopes::default() }.and(ShowRestreamConsent(&self.0)))]
+    /// Requires an API key with `entrants_read` scope.
+    #[graphql(guard = Scopes { entrants_read: true, ..Scopes::default() })]
     async fn restreamers(&self) -> Option<Vec<Restreamer>> {
         self.0.teams_opt().map(|_| {
             self.0.restreamers.iter().map(|(language, restreamer)| Restreamer {
@@ -422,8 +403,8 @@ struct Race(cal::Race);
 
     /// All confirmed volunteers for this race.
     /// Null if the race is open (not invitational) or if the event does not use Mido's House to manage entrants.
-    /// Requires permission to view restream consent and an API key with `entrants_read` scope.
-    #[graphql(guard = Scopes { entrants_read: true, ..Scopes::default() }.and(ShowRestreamConsent(&self.0)))]
+    /// Requires an API key with `entrants_read` scope.
+    #[graphql(guard = Scopes { entrants_read: true, ..Scopes::default() })]
     async fn confirmed_volunteers(&self, ctx: &Context<'_>) -> sqlx::Result<Option<Vec<ConfirmedVolunteer>>> {
         if self.0.teams_opt().is_none() {
             return Ok(None);

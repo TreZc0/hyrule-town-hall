@@ -2523,7 +2523,7 @@ impl SeedRollUpdate {
             Self::Error(e) => {
                 eprintln!("seed roll error in https://{}{}: {e} ({e:?})", racetime_host(), ctx.data().await.url);
                 if let Environment::Production = Environment::default() {
-                    wheel::night_report(&format!("{}/error", night_path()), Some(&format!("seed roll error in https://{}{}: {e} ({e:?})", racetime_host(), ctx.data().await.url))).await.to_racetime()?;
+                    log::error!("seed roll error in https://{}{}: {e} ({e:?})", racetime_host(), ctx.data().await.url);
                 }
                 ctx.say("Sorry @entrants, something went wrong while rolling the seed. Please report this error to TreZc0_ and if necessary roll the seed manually.").await?;
             }
@@ -2921,7 +2921,8 @@ impl Handler {
         if let Some(OfficialRaceData { goal, .. }) = self.official_data {
             Ok(goal)
         } else {
-            ctx.data().await.goal.name.parse()
+            let race_data = ctx.data().await;
+            Goal::from_race_data(&race_data).ok_or(GoalFromStrError)
         }
     }
 
@@ -3247,7 +3248,7 @@ impl RaceHandler<GlobalState> for Handler {
                 } else {
                     eprintln!("race handler for https://{}{} panicked", racetime_host(), data.url);
                     if let Environment::Production = Environment::default() {
-                        let _ = wheel::night_report(&format!("{}/error", night_path()), Some(&format!("race handler for https://{}{} panicked", racetime_host(), data.url))).await;
+                        log::error!("race handler for https://{}{} panicked", racetime_host(), data.url);
                     }
                 }
             });
@@ -3257,7 +3258,7 @@ impl RaceHandler<GlobalState> for Handler {
 
     async fn new(ctx: &RaceContext<GlobalState>) -> Result<Self, Error> {
         let data = ctx.data().await;
-        let goal = data.goal.name.parse::<Goal>().to_racetime()?;
+        let goal = Goal::from_race_data(&data).ok_or(GoalFromStrError).to_racetime()?;
         let (existing_seed, official_data, race_state, high_seed_name, low_seed_name, fpa_enabled) = lock!(new_room_lock = ctx.global_state.new_room_lock; { // make sure a new room isn't handled before it's added to the database
             let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
             let new_data = if let Some(cal_event) = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, format!("https://{}{}", racetime_host(), ctx.data().await.url).parse()?).await.to_racetime()? {
@@ -5350,13 +5351,13 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                             Ok(Err(e)) => {
                                 eprintln!("Discord race handler errored: {e} ({e:?})");
                                 if let Environment::Production = Environment::default() {
-                                    let _ = wheel::night_report(&format!("{}/error", night_path()), Some("Discord race handler errored: {e} ({e:?})")).await;
+                                    log::error!("Discord race handler errored: {e} ({e:?})");
                                 }
                             }
                             Err(_) => {
                                 eprintln!("Discord race handler panicked");
                                 if let Environment::Production = Environment::default() {
-                                    let _ = wheel::night_report(&format!("{}/error", night_path()), Some("Discord race handler panicked")).await;
+                                    log::error!("Discord race handler panicked");
                                 }
                             }
                         }
@@ -5717,7 +5718,11 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
             _ = sleep(Duration::from_secs(30)) => { //TODO exact timing (coordinate with everything that can change the schedule)
                 lock!(new_room_lock = global_state.new_room_lock; { // make sure a new room isn't handled before it's added to the database
                     let mut transaction = global_state.db_pool.begin().await?;
-                    for cal_event in cal::Event::rooms_to_open(&mut transaction, &global_state.http_client).await? {
+                    let rooms_to_open = cal::Event::rooms_to_open(&mut transaction, &global_state.http_client).await?;
+                    transaction.commit().await?;
+                    
+                    for cal_event in rooms_to_open {
+                        let mut transaction = global_state.db_pool.begin().await?;
                         let event = cal_event.race.event(&mut transaction).await?;
                         if let Some((is_room_url, msg)) = create_room(&mut transaction, &*global_state.discord_ctx.read().await, &global_state.host_info, &global_state.racetime_config.client_id, &global_state.racetime_config.client_secret, &global_state.http_client, global_state.clean_shutdown.clone(), &cal_event, &event).await? {
                             let ctx = global_state.discord_ctx.read().await;
@@ -5746,10 +5751,16 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                                     if let Some(channel) = event.discord_race_room_channel;
                                     then {
                                         if let Some(thread) = cal_event.race.scheduling_thread {
-                                            thread.say(&*ctx, &msg).await?;
-                                            channel.send_message(&*ctx, CreateMessage::default().content(msg).allowed_mentions(CreateAllowedMentions::default())).await?;
+                                            if let Err(e) = thread.say(&*ctx, &msg).await {
+                                                eprintln!("Failed to post race message to scheduling thread: {}", e);
+                                            }
+                                            if let Err(e) = channel.send_message(&*ctx, CreateMessage::default().content(msg).allowed_mentions(CreateAllowedMentions::default())).await {
+                                                eprintln!("Failed to post race message to Discord race room channel: {}", e);
+                                            }
                                         } else {
-                                            channel.say(&*ctx, msg).await?;
+                                            if let Err(e) = channel.say(&*ctx, msg).await {
+                                                eprintln!("Failed to post race message to Discord race room channel: {}", e);
+                                            }
                                         }
                                     } else {
                                         if let Some(thread) = cal_event.race.scheduling_thread {
@@ -5765,7 +5776,6 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                             }
                         }
                     }
-                    transaction.commit().await?;
                 });
             }
         }
@@ -5807,7 +5817,6 @@ async fn handle_rooms(global_state: Arc<GlobalState>, shutdown: rocket::Shutdown
         if racetime_connections.is_empty() {
             // No database connections found - this is now an error
             eprintln!("No racetime connections found in database. Please add entries to game_racetime_connection table.");
-            wheel::night_report(&format!("{}/error", night_path()), Some("No racetime connections found in database. Please add entries to game_racetime_connection table.")).await?;
             sleep(Duration::from_secs(60)).await; // Wait 1 minute before retrying
             continue;
         }
@@ -5853,9 +5862,6 @@ async fn handle_rooms(global_state: Arc<GlobalState>, shutdown: rocket::Shutdown
                 wait_time *= 2;
             }
             eprintln!("failed to connect any racetime.gg bots (retrying in {}): {}", English.format_duration(wait_time, true), wait_time.as_secs());
-            if wait_time >= Duration::from_secs(16) {
-                wheel::night_report(&format!("{}/error", night_path()), Some(&format!("failed to connect any racetime.gg bots (retrying in {}): {}", English.format_duration(wait_time, true), wait_time.as_secs()))).await?;
-            }
             sleep(wait_time).await;
             last_crash = Instant::now();
         } else {

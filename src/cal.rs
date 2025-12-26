@@ -2300,7 +2300,7 @@ pub(crate) async fn race_table(
                         @if has_buttons {
                             td {
                                 @if let Some(user) = user {
-                                    @let is_admin = user.id == Id::from(16287394041462225947_u64);
+                                    @let is_admin = u64::from(user.id) == User::GLOBAL_ADMIN_USER_IDS[0];
                                     @let is_organizer = event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(user));
                                     @if is_admin || is_organizer {
                                         a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
@@ -2889,14 +2889,14 @@ pub(crate) async fn auto_import_races(db_pool: PgPool, http_client: reqwest::Cli
                 if wait_time >= Duration::from_secs(2 * 60) {
                     eprintln!("failed to auto-import races (retrying in {}): {e} ({e:?})", English.format_duration(wait_time, true));
                     if wait_time >= Duration::from_secs(10 * 60) {
-                        wheel::night_report(&format!("{}/error", night_path()), Some(&format!("failed to auto-import races (retrying in {}): {e} ({e:?})", English.format_duration(wait_time, true)))).await?;
+                        log::error!("failed to auto-import races (retrying in {}): {e} ({e:?})", English.format_duration(wait_time, true));
                     }
                 }
                 sleep(wait_time).await;
                 last_crash = Instant::now();
             }
             Err(e) => {
-                wheel::night_report(&format!("{}/error", night_path()), Some(&format!("failed to auto-import races: {e} ({e:?})"))).await?;
+                log::error!("failed to auto-import races: {e} ({e:?})");
                 break Err(e)
             }
         }
@@ -2919,7 +2919,7 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, http_client: &State<reqw
 
 pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, discord_ctx: &DiscordCtx, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: event::Data<'_>, race: Race, redirect_to: Option<Origin<'_>>, ctx: Option<Context<'_>>) -> Result<RawHtml<String>, event::Error> {
     let header = event.header(&mut transaction, me.as_ref(), Tab::Races, true).await?;
-    let trez = User::from_id(&mut *transaction, Id::<Users>::from(16287394041462225947_u64)).await?.ok_or(PageError::TrezUserData(0))?;
+    let admin_user = User::primary_global_admin(&mut *transaction).await?.ok_or(PageError::AdminUserData(0))?;
     
     // Check if user is an organizer for start date editing
     let is_organizer = if let Some(ref me) = me {
@@ -3259,7 +3259,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                 }
                 p {
                     : "The data above is currently not editable for technical reasons. Please contact ";
-                    : trez;
+                    : admin_user;
                     : " if you've spotted an error in it.";
                 }
             }
@@ -3337,7 +3337,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
             }
             p {
                 : "The data above is currently not editable for technical reasons. Please contact ";
-                : trez;
+                : admin_user;
                 : " if you've spotted an error in it.";
             }
         }

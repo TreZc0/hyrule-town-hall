@@ -5,7 +5,7 @@ edition = "2024"
 
 [profile.release]
 codegen-units = 1
-lto = true
+lto = "thin"
 strip = true
 
 [lints.rust]
@@ -57,6 +57,7 @@ itertools = "0.14"
 kuchiki = "0.8"
 lazy-regex = "3"
 log = "0.4"
+env_logger = "0.11"
 log-lock = { git = "https://github.com/fenhl/log-lock", branch = "main" }
 #mimalloc = "0.1.43" # fails to compile on Ubuntu
 noisy_float = "0.2"

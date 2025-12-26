@@ -275,18 +275,31 @@ version = "0.25.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd0e0543cea0feaefb6abd6cfac9bd9df181bd790f55d29314586b4551fc7b79"
 dependencies = [
- "async-proto-derive",
+ "async-proto-derive 0.25.4",
  "byteorder",
  "chrono",
  "fallible_collections",
- "futures",
  "semver",
  "serde_json",
  "serenity",
  "thiserror 2.0.12",
  "tokio",
- "tokio-tungstenite 0.27.0",
  "uuid",
+]
+
+[[package]]
+name = "async-proto"
+version = "0.26.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3686c16da7dd79a6ed5f273bc0bf0b94fb0a7ab6e608046e642fde93dda90e15"
+dependencies = [
+ "async-proto-derive 0.26.4",
+ "byteorder",
+ "fallible_collections",
+ "futures",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-tungstenite 0.27.0",
 ]
 
 [[package]]
@@ -294,6 +307,18 @@ name = "async-proto-derive"
 version = "0.25.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c371e515f05cfa59859ff2440dbe15266d864a5619eaa5863ea5cd4cd16c03f"
+dependencies = [
+ "itertools 0.14.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.104",
+]
+
+[[package]]
+name = "async-proto-derive"
+version = "0.26.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "848bef5eaa1c1a3cb9d1fc8b9225e3856dcda4628bd7a2e31da4d4ad0596913e"
 dependencies = [
  "itertools 0.14.0",
  "proc-macro2",
@@ -1391,10 +1416,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "env_filter"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "186e05a59d4c50738528153b83b0b0194d3a29507dfec16eccd4b342903397d0"
+dependencies = [
+ "log",
+ "regex",
+]
+
+[[package]]
 name = "env_home"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7f84e12ccf0a7ddc17a6c41c93326024c42920d7ee630d04950e6926645c0fe"
+
+[[package]]
+name = "env_logger"
+version = "0.11.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13c863f0904021b108aa8b2f55046443e6b1ebde8fd4a15c399893aae4fa069f"
+dependencies = [
+ "anstream",
+ "anstyle",
+ "env_filter",
+ "jiff",
+ "log",
+]
 
 [[package]]
 name = "equivalent"
@@ -4726,7 +4774,7 @@ name = "mhstatus"
 version = "0.1.0"
 source = "git+https://github.com/midoshouse/status.midos.house?branch=main#a9670a1d4f56a2bfd9c0c4abd73ce803d6b5122b"
 dependencies = [
- "async-proto",
+ "async-proto 0.25.4",
  "base64 0.22.1",
  "clap",
  "collect-mac",
@@ -4762,7 +4810,7 @@ dependencies = [
  "anyhow",
  "async-graphql",
  "async-graphql-rocket",
- "async-proto",
+ "async-proto 0.25.4",
  "async-trait",
  "base64 0.22.1",
  "chrono",
@@ -4776,6 +4824,7 @@ dependencies = [
  "directories",
  "either",
  "enum-iterator",
+ "env_logger",
  "futures",
  "git2",
  "graphql_client",
@@ -5095,7 +5144,7 @@ name = "ootr-utils"
 version = "0.6.3"
 source = "git+https://github.com/midoshouse/rust-ootr-utils?branch=main#f1b8051af4b6eb0dc472f7018f72300196517d75"
 dependencies = [
- "async-proto",
+ "async-proto 0.25.4",
  "cargo_metadata 0.19.2",
  "dir-lock",
  "directories",
@@ -8471,9 +8520,9 @@ dependencies = [
 [[package]]
 name = "wheel"
 version = "0.15.0"
-source = "git+https://github.com/fenhl/wheel?branch=rocket-forms#c59ca4177b8780bfacbb18104124fe6d3bf5670d"
+source = "git+https://github.com/fenhl/wheel?branch=rocket-forms#c43f7ccf978534b3752a1a5988a4b68befb37f56"
 dependencies = [
- "async-proto",
+ "async-proto 0.26.4",
  "async-trait",
  "chrono",
  "clap",
@@ -8507,7 +8556,7 @@ dependencies = [
 [[package]]
 name = "wheel-derive"
 version = "0.15.0"
-source = "git+https://github.com/fenhl/wheel?branch=rocket-forms#c59ca4177b8780bfacbb18104124fe6d3bf5670d"
+source = "git+https://github.com/fenhl/wheel?branch=rocket-forms#c43f7ccf978534b3752a1a5988a4b68befb37f56"
 dependencies = [
  "itertools 0.14.0",
  "proc-macro2",
