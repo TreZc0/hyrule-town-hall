@@ -99,6 +99,13 @@ pub(crate) enum Requirement {
         #[serde_as(as = "DeserializeRawHtml")]
         label: RawHtml<String>,
     },
+    /// Must answer a custom yes/no question, stored in `custom_choices`
+    #[serde(rename_all = "camelCase")]
+    BooleanChoice {
+        key: String,
+        #[serde_as(as = "DeserializeRawHtml")]
+        label: RawHtml<String>,
+    },
     /// Must agree to the event rules
     Rules {
         document: Option<Url>,
@@ -202,6 +209,7 @@ impl Requirement {
             Self::TextField { .. } => Some(false),
             Self::TextField2 { .. } => Some(false),
             Self::YesNo { .. } => Some(false),
+            Self::BooleanChoice { .. } => Some(false),
             Self::Rules { .. } => Some(false),
             Self::Poll { .. } => Some(false),
             Self::AllDungeonsOk { .. } => Some(false),
@@ -441,6 +449,25 @@ impl Requirement {
                             label(for = "yes_no-yes") : "Yes";
                             input(id = "yes_no-no", type = "radio", name = "yes_no", value = "no", checked? = no_checked);
                             label(for = "yes_no-no") : "No";
+                        });
+                    }),
+                }
+            }
+            Self::BooleanChoice { key, label } => {
+                let key = key.clone();
+                let label = label.clone();
+                let yes_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "yes");
+                let no_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "no");
+                RequirementStatus {
+                    blocks_submit: false,
+                    html_content: Box::new(move |errors| html! {
+                        : form_field(&format!("custom_choices[{key}]"), errors, html! {
+                            label(for = &format!("custom_choices[{key}]")) : label;
+                            br;
+                            input(id = &format!("custom_choices[{key}]-yes"), type = "radio", name = &format!("custom_choices[{key}]"), value = "yes", checked? = yes_checked);
+                            label(for = &format!("custom_choices[{key}]-yes")) : "Yes";
+                            input(id = &format!("custom_choices[{key}]-no"), type = "radio", name = &format!("custom_choices[{key}]"), value = "no", checked? = no_checked);
+                            label(for = &format!("custom_choices[{key}]-no")) : "No";
                         });
                     }),
                 }
@@ -912,6 +939,9 @@ impl Requirement {
             Self::YesNo { .. } => if value.yes_no.is_none() {
                 form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("yes_no"));
             },
+            Self::BooleanChoice { key, .. } => if !value.custom_choices.contains_key(key) {
+                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name(format!("custom_choices[{key}]")));
+            },
             Self::Rules { .. } => if !value.confirm {
                 form_ctx.push_error(form::Error::validation("This field is required.").with_name("confirm"));
             },
@@ -1020,6 +1050,7 @@ impl Requirement {
                     | Self::RestreamConsent { .. }
                     | Self::Qualifier { .. }
                     | Self::TripleQualifier { .. }
+                    | Self::BooleanChoice { .. }
                     | Self::External { .. }
                         => unreachable!(),
                 }));
@@ -1095,6 +1126,7 @@ pub(crate) struct EnterForm {
     text_field: String,
     #[field(default = String::new())]
     text_field2: String,
+    custom_choices: HashMap<String, String>,
 }
 
 pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, data: Data<'_>, defaults: pic::EnterFormDefaults<'_>) -> Result<RawHtml<String>, Error> {
@@ -1420,6 +1452,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                             _ => unreachable!("more than 3 qualifiers in Requirement::TripleQualifier"),
                                         });
                                 }
+                                Requirement::BooleanChoice { .. } => {}
                                 _ => {}
                             }
                         }
@@ -1439,7 +1472,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                 if form.context.errors().next().is_none() {
                     let id = Id::<Teams>::new(&mut transaction).await?;
                     sqlx::query!(
-                        "INSERT INTO teams (id, series, event, plural_name, restream_consent, text_field, text_field2, yes_no, all_dungeons_ok, flute_ok, hard_settings_ok, hover_ok, inverted_ok, keydrop_ok, lite_ok, mirror_scroll_ok, mq_ok, no_delay_ok, pb_ok, zw_ok, mw_impl) VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)",
+                        "INSERT INTO teams (id, series, event, plural_name, restream_consent, text_field, text_field2, yes_no, all_dungeons_ok, flute_ok, hard_settings_ok, hover_ok, inverted_ok, keydrop_ok, lite_ok, mirror_scroll_ok, mq_ok, no_delay_ok, pb_ok, zw_ok, mw_impl, custom_choices) VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)",
                         id as _,
                         series as _,
                         event,
@@ -1460,6 +1493,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                         value.pb_ok  == Some(BoolRadio::Yes),
                         value.zw_ok  == Some(BoolRadio::Yes),
                         value.mw_impl as _,
+                        sqlx::types::Json(&value.custom_choices) as _,
                     ).execute(&mut *transaction).await?;
                     sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'created', 'none')", id as _, me.id as _).execute(&mut *transaction).await?;
                     if let Some(async_kind) = request_qualifier {
@@ -1590,7 +1624,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                 if form.context.errors().next().is_none() {
                     let id = Id::<Teams>::new(&mut transaction).await?;
                     sqlx::query!(
-                    "INSERT INTO teams (id, series, event, name, restream_consent, text_field, text_field2, yes_no, all_dungeons_ok, flute_ok, hard_settings_ok, hover_ok, inverted_ok, keydrop_ok, lite_ok, mirror_scroll_ok, mq_ok, no_delay_ok, pb_ok, zw_ok, mw_impl) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)",
+                    "INSERT INTO teams (id, series, event, name, restream_consent, text_field, text_field2, yes_no, all_dungeons_ok, flute_ok, hard_settings_ok, hover_ok, inverted_ok, keydrop_ok, lite_ok, mirror_scroll_ok, mq_ok, no_delay_ok, pb_ok, zw_ok, mw_impl, custom_choices) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
                         id as _,
                         series as _,
                         event,
@@ -1612,6 +1646,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                         value.pb_ok  == Some(BoolRadio::Yes),
                         value.zw_ok  == Some(BoolRadio::Yes),
                         value.mw_impl as _,
+                        sqlx::types::Json(&value.custom_choices) as _,
                     ).execute(&mut *transaction).await?;
                     sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'created', $3)", id as _, me.id as _, Role::from(my_role.expect("validated")) as _).execute(&mut *transaction).await?;
                     sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'unconfirmed', $3)", id as _, teammate.expect("validated") as _, match my_role.expect("validated") { pic::Role::Sheikah => Role::Gerudo, pic::Role::Gerudo => Role::Sheikah } as _).execute(&mut *transaction).await?;
@@ -1768,7 +1803,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                     return Ok(if value.step2 {
                         let id = Id::<Teams>::new(&mut transaction).await?;
                         sqlx::query!(
-                            "INSERT INTO teams (id, series, event, name, racetime_slug, restream_consent, text_field, text_field2, yes_no,all_dungeons_ok, flute_ok, hard_settings_ok, hover_ok, inverted_ok, keydrop_ok, lite_ok, mirror_scroll_ok, mq_ok, no_delay_ok, pb_ok, zw_ok, mw_impl) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
+                            "INSERT INTO teams (id, series, event, name, racetime_slug, restream_consent, text_field, text_field2, yes_no,all_dungeons_ok, flute_ok, hard_settings_ok, hover_ok, inverted_ok, keydrop_ok, lite_ok, mirror_scroll_ok, mq_ok, no_delay_ok, pb_ok, zw_ok, mw_impl, custom_choices) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)",
                             id as _,
                             series as _,
                             event,
@@ -1791,6 +1826,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                             value.pb_ok  == Some(BoolRadio::Yes),
                             value.zw_ok  == Some(BoolRadio::Yes),
                             value.mw_impl as _,
+                        sqlx::types::Json(&value.custom_choices) as _,
                         ).execute(&mut *transaction).await?;
                         for ((user, role), startgg_id) in users.into_iter().zip_eq(roles).zip_eq(startgg_ids) {
                             sqlx::query!(
