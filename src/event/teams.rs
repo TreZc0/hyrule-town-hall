@@ -5,6 +5,7 @@ use {
         EntrantStatusValue,
         RaceStatusValue,
     },
+    sqlx::types::Json,
     crate::{
         event::{
             Data,
@@ -166,18 +167,7 @@ pub(crate) struct SignupsTeam {
     pub(crate) team: Option<Team>,
     pub(crate) members: Vec<SignupsMember>,
     pub(crate) qualification: Qualification,
-    hard_settings_ok: bool,
-    mq_ok: bool,
-    lite_ok: bool,
-    all_dungeons_ok: bool,
-    flute_ok: bool,
-    hover_ok: bool,
-    inverted_ok: bool,
-    keydrop_ok: bool,
-    mirror_scroll_ok: bool,
-    no_delay_ok: bool,
-    pb_ok: bool,
-    zw_ok: bool,
+    pub(crate) custom_choices: HashMap<String, String>,
 }
 
 pub(crate) struct Cache {
@@ -440,18 +430,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                             }
                         }
                     },
-                    hard_settings_ok: false,
-                    mq_ok: false,
-                    lite_ok: false,
-                    all_dungeons_ok: false,
-                    flute_ok: false,
-                    hover_ok: false,
-                    inverted_ok: false,
-                    keydrop_ok: false,
-                    mirror_scroll_ok: false,
-                    no_delay_ok: false,
-                    pb_ok: false,
-                    zw_ok: false,
+                    custom_choices: HashMap::default(),
                 });
             }
             signups
@@ -541,23 +520,13 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                         user,
                     }],
                     qualification: Qualification::Single { qualified: qualification_level == QualificationLevel::Qualified },
-                    hard_settings_ok: false,
-                    mq_ok: false,
-                    lite_ok: false,
-                    all_dungeons_ok: false,
-                    flute_ok: false,
-                    hover_ok: false,
-                    inverted_ok: false,
-                    keydrop_ok: false,
-                    mirror_scroll_ok: false,
-                    no_delay_ok: false,
-                    pb_ok: false,
-                    zw_ok: false,
+                    custom_choices: HashMap::default(),
                 }).collect()
         }
         QualifierKind::None | QualifierKind::Rank | QualifierKind::Single { .. } => {
             struct TeamRow {
                 team: Team,
+                custom_choices: Json<HashMap<String, String>>,
                 hard_settings_ok: bool,
                 mq_ok: bool,
                 lite_ok: bool,
@@ -576,7 +545,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
 
             let teams = if let QualifierKind::Rank = qualifier_kind {
                 // teams are manually ranked so include ones that haven't submitted qualifier asyncs
-                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams WHERE
+                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank, custom_choices AS "custom_choices: Json<HashMap<String, String>>" FROM teams WHERE
                     series = $1
                     AND event = $2
                     AND NOT resigned
@@ -599,6 +568,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                             mw_impl: row.mw_impl,
                             qualifier_rank: row.qualifier_rank,
                         },
+                        custom_choices: row.custom_choices,
                         hard_settings_ok: row.hard_settings_ok,
                         mq_ok: row.mq_ok,
                         lite_ok: row.lite_ok,
@@ -616,7 +586,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     })
                     .try_collect::<Vec<_>>().await?
             } else {
-                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, submitted IS NOT NULL AS "qualified!", pieces, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams LEFT OUTER JOIN async_teams ON (id = team) WHERE
+                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, submitted IS NOT NULL AS "qualified!", pieces, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank, custom_choices AS "custom_choices: Json<HashMap<String, String>>" FROM teams LEFT OUTER JOIN async_teams ON (id = team) WHERE
                     series = $1
                     AND event = $2
                     AND NOT resigned
@@ -641,6 +611,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                             mw_impl: row.mw_impl,
                             qualifier_rank: row.qualifier_rank,
                         },
+                        custom_choices: row.custom_choices,
                         hard_settings_ok: row.hard_settings_ok,
                         mq_ok: row.mq_ok,
                         lite_ok: row.lite_ok,
@@ -684,18 +655,22 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     } else {
                         Qualification::Single { qualified: team.qualified }
                     },
-                    hard_settings_ok: team.hard_settings_ok,
-                    mq_ok: team.mq_ok,
-                    lite_ok: team.lite_ok,
-                    all_dungeons_ok: team.all_dungeons_ok,
-                    flute_ok: team.flute_ok,
-                    hover_ok: team.hover_ok,
-                    inverted_ok: team.inverted_ok,
-                    keydrop_ok: team.keydrop_ok,
-                    mirror_scroll_ok: team.mirror_scroll_ok,
-                    no_delay_ok: team.no_delay_ok,
-                    pb_ok: team.pb_ok,
-                    zw_ok: team.zw_ok,
+                    custom_choices: {
+                        let mut custom_choices = team.custom_choices.0;
+                        if team.hard_settings_ok { custom_choices.entry(format!("hard_settings")).or_insert_with(|| format!("yes")); }
+                        if team.mq_ok { custom_choices.entry(format!("mq")).or_insert_with(|| format!("yes")); }
+                        if team.lite_ok { custom_choices.entry(format!("lite")).or_insert_with(|| format!("yes")); }
+                        if team.all_dungeons_ok { custom_choices.entry(format!("all_dungeons")).or_insert_with(|| format!("yes")); }
+                        if team.flute_ok { custom_choices.entry(format!("flute")).or_insert_with(|| format!("yes")); }
+                        if team.hover_ok { custom_choices.entry(format!("hovering")).or_insert_with(|| format!("yes")); }
+                        if team.inverted_ok { custom_choices.entry(format!("inverted")).or_insert_with(|| format!("yes")); }
+                        if team.keydrop_ok { custom_choices.entry(format!("keydrop")).or_insert_with(|| format!("yes")); }
+                        if team.mirror_scroll_ok { custom_choices.entry(format!("mirror_scroll")).or_insert_with(|| format!("yes")); }
+                        if team.no_delay_ok { custom_choices.entry(format!("no_delay")).or_insert_with(|| format!("yes")); }
+                        if team.pb_ok { custom_choices.entry(format!("pseudoboots")).or_insert_with(|| format!("yes")); }
+                        if team.zw_ok { custom_choices.entry(format!("zw")).or_insert_with(|| format!("yes")); }
+                        custom_choices
+                    },
                     members,
                 });
             }
@@ -981,7 +956,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                         }
                     }
                 } else {
-                    @for (signup_idx, SignupsTeam { team, members, qualification, hard_settings_ok, mq_ok, lite_ok, all_dungeons_ok, flute_ok, hover_ok, inverted_ok, keydrop_ok, mirror_scroll_ok, no_delay_ok, pb_ok, zw_ok }) in signups.into_iter().enumerate() {
+                    @for (signup_idx, SignupsTeam { team, members, qualification, custom_choices, .. }) in signups.into_iter().enumerate() {
                         @let is_dimmed = match qualifier_kind {
                             QualifierKind::None => false,
                             QualifierKind::Rank => false, // unknown cutoff
@@ -1114,6 +1089,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                         enter::Requirement::TextField { .. } => {}
                                                         enter::Requirement::TextField2 { .. } => {}
                                                         enter::Requirement::YesNo { .. } => {}
+                                                        enter::Requirement::BooleanChoice { .. } => {}
                                                         enter::Requirement::Rules { .. } => {}
                                                         enter::Requirement::Poll { .. } => {}
                                                         enter::Requirement::AllDungeonsOk => {}
@@ -1236,18 +1212,18 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                             @match data.draft_kind() {
                                 None | Some(draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5) => {}
                                 Some(draft::Kind::RslS7) => td {
-                                    @if lite_ok {
+                                    @if (custom_choices.get("lite").is_some_and(|v| v == "yes")) {
                                         : "✓";
                                     }
                                 }
                                 Some(draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5) => {
                                     td {
-                                        @if hard_settings_ok {
+                                        @if (custom_choices.get("hard_settings").is_some_and(|v| v == "yes")) {
                                             : "✓";
                                         }
                                     }
                                     td {
-                                        @if mq_ok {
+                                        @if (custom_choices.get("mq").is_some_and(|v| v == "yes")) {
                                             : "✓";
                                         }
                                     }
@@ -1255,47 +1231,47 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                             }
                             @if data.series == Series::Crosskeys {
                                 td {
-                                    @if (all_dungeons_ok) {
+                                    @if (custom_choices.get("all_dungeons").is_some_and(|v| v == "yes")) {
                                         : "✓";
                                     }
                                 }
                                 td {
-                                    @if (flute_ok) {
+                                    @if (custom_choices.get("flute").is_some_and(|v| v == "yes")) {
                                         : "✓";
                                     }
                                 }
                                 td {
-                                    @if (inverted_ok) {
+                                    @if (custom_choices.get("inverted").is_some_and(|v| v == "yes")) {
                                         : "✓";
                                     }
                                 }
                                 td {
-                                    @if (keydrop_ok) {
+                                    @if (custom_choices.get("keydrop").is_some_and(|v| v == "yes")) {
                                         : "✓";
                                     }
                                 }
                                 td {
-                                    @if (mirror_scroll_ok) {
+                                    @if (custom_choices.get("mirror_scroll").is_some_and(|v| v == "yes")) {
                                         : "✓";
                                     }
                                 }
                                 td {
-                                    @if (pb_ok) {
+                                    @if (custom_choices.get("pseudoboots").is_some_and(|v| v == "yes")) {
                                         : "✓";
                                     }
                                 }
                                 td {
-                                    @if (zw_ok) {
+                                    @if (custom_choices.get("zw").is_some_and(|v| v == "yes")) {
                                         : "✓";
                                     }
                                 }
                                 td {
-                                    @if (hover_ok) {
+                                    @if (custom_choices.get("hovering").is_some_and(|v| v == "yes")) {
                                         : "✓";
                                     }
                                 }
                                 td {
-                                    @if (no_delay_ok) {
+                                    @if (custom_choices.get("no_delay").is_some_and(|v| v == "yes")) {
                                         : "✓";
                                     }
                                 }
