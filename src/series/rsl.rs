@@ -575,35 +575,3 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
         _ => None,
     })
 }
-
-pub(crate) fn async_rules(async_kind: AsyncKind) -> RawHtml<String> {
-    match async_kind {
-        AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 | AsyncKind::Seeding => unimplemented!(),
-        AsyncKind::Tiebreaker1 => html! {
-            p {
-                : "Welcome to the tie breaker for 4-1";
-                br;
-                : "The seed that has been rolled for this tie breaker is a normal RSL seed, no blocks/bans have been applied";
-                br;
-                : "This tie breaker is for placement. You are already qualified for the brackets";
-                br;
-                : "Quick reminder to not stream this tie breaker and there will be no breaks during this tie breaker";
-                br;
-                : "Good luck";
-            }
-        },
-        AsyncKind::Tiebreaker2 => html! {
-            p {
-                : "Welcome to the tie breaker for 3-2";
-                br;
-                : "The seed that has been rolled for this tie breaker is a normal RSL seed, no blocks/bans have been applied";
-                br;
-                : "This tie breaker is to qualify for the brackets. The top 2 of this tie breaker will proceed to to the top 8 brackets";
-                br;
-                : "Quick reminder to not stream this tie breaker and there will be no breaks during this tie breaker";
-                br;
-                : "Good luck";
-            }
-        },
-    }
-}
