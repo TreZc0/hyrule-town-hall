@@ -1,22 +1,9 @@
 use crate::{
     event::{Data, Tab},
     prelude::*,
-    user::DisplaySource,
-    game,
+    user::DisplaySource
 };
 use rocket::response::content::RawText;
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum SetupError {
-    #[error(transparent)] Data(#[from] event::DataError),
-    #[error(transparent)] Event(#[from] event::Error),
-    #[error(transparent)] Game(#[from] game::GameError),
-    #[error(transparent)] Page(#[from] PageError),
-    #[error(transparent)] Sql(#[from] sqlx::Error),
-    #[error(transparent)] Url(#[from] url::ParseError),
-    #[error(transparent)] Json(#[from] serde_json::Error),
-    #[error(transparent)] ParseInt(#[from] std::num::ParseIntError),
-}
 
 async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
     let header = event.header(&mut transaction, me.as_ref(), Tab::Setup, false).await?;

@@ -3466,18 +3466,6 @@ impl EffectiveRoleBinding {
     }
 }
 
-#[derive(FromForm, CsrfForm)]
-pub(crate) struct DisableRoleBindingForm {
-    #[field(default = String::new())]
-    csrf: String,
-}
-
-#[derive(FromForm, CsrfForm)]
-pub(crate) struct EnableRoleBindingForm {
-    #[field(default = String::new())]
-    csrf: String,
-}
-
 #[rocket::post("/event/<series>/<event>/role-types/<role_type_id>/disable-binding")]
 pub(crate) async fn disable_role_binding(
     pool: &State<PgPool>,

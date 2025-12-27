@@ -739,11 +739,11 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     _ => unreachable!("QualifierKind::Multiple must use Qualification::Multiple"),
                 };
                 let (num2, score2) = match *qualification2 {
-<<<<<<< HEAD
                     Qualification::Multiple { num_entered, num_finished, score } => match score_kind { //TODO determine based on enter flow
-=======
-                    Qualification::Multiple { num_entered, num_finished, score } => match score_kind {
                         QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online => (num_finished, score),
+                        QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => (num_entered, score),
+                    },
+                    _ => unreachable!("QualifierKind::Multiple must use Qualification::Multiple"),
                 };
                 let required_qualifiers = match score_kind { //TODO determine based on enter flow
                     QualifierScoreKind::Standard => 5,
@@ -1067,11 +1067,11 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                     }
                                 }
                                 (QualifierKind::Single { show_times: true }, Qualification::TriforceBlitz { pieces, .. }) => td : pieces;
-<<<<<<< HEAD
                                 (QualifierKind::Score(QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online), Qualification::Multiple { num_entered, num_finished, score }) => { //TODO determine based on enter flow
-=======
-                                (QualifierKind::Score(QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online), Qualification::Multiple { num_entered, num_finished, score }) => {
                                     td(style = "text-align: right;") : num_entered;
+                                    td(style = "text-align: right;") : num_finished;
+                                    td(style = "text-align: right;") : format!("{score:.2}");
+                                }
                                 (QualifierKind::Score(QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online), Qualification::Multiple { num_entered, num_finished: _, score }) => {
                                     td(style = "text-align: right;") : num_entered;
                                     td(style = "text-align: right;") : format!("{score:.2}");
@@ -1129,32 +1129,16 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                             let teams = signups_sorted(&mut transaction, &mut cache, None, data, is_organizer, QualifierKind::Score(qualifier_kind), Some(&entrant.user)).await?;
                                                             if let Some((placement, team)) = teams.iter().enumerate().find(|(_, team)| team.members.iter().any(|member| member.user == entrant.user));
                                                             if let Qualification::Multiple { num_entered, num_finished, .. } = team.qualification;
-<<<<<<< HEAD
                                                             let num_qualifiers = if *need_finish { num_finished } else { num_entered };
-=======
-                                                            let num_qualifiers = match qualifier_kind {
-                                                                QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online => num_finished,
-                                                                QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => num_entered,
-                                                            };
->>>>>>> 16fa217 (sgl: Qualifier scoring and info pages for 2025)
                                                             then {
                                                                 if num_qualifiers < *min_races {
                                                                     html! {
                                                                         : "Not eligible (needs ";
                                                                         : min_races - num_qualifiers;
-<<<<<<< HEAD
                                                                         @if *need_finish {
                                                                             : " more finish";
                                                                             @if min_races - num_qualifiers != 1 {
                                                                                 : "es";
-=======
-                                                                        @match qualifier_kind {
-                                                                            QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online => {
-                                                                                : " more finish";
-                                                                                @if min_races - num_qualifiers != 1 {
-                                                                                    : "es";
-                                                                                }
->>>>>>> 16fa217 (sgl: Qualifier scoring and info pages for 2025)
                                                                             }
                                                                         } else {
                                                                             : " more race";
