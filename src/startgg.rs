@@ -313,7 +313,7 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
 
 /// Fetches all entrants for a given event slug
 pub(crate) async fn fetch_event_entrants(http_client: &reqwest::Client, config: &Config, event_slug: &str) -> Result<Vec<(ID, String, Vec<Option<ID>>)>, Error> {
-    let startgg_token = if Environment::default().is_dev() { &config.startgg_dev } else { &config.startgg_production };
+    let startgg_token = &config.startgg;
     let mut all_entrants = Vec::new();
     let mut page = 1;
     

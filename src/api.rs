@@ -694,11 +694,7 @@ pub(crate) async fn swiss_standings_endpoint(
     if !matches!(event_data.match_source(), MatchSource::StartGG(_)) || !event_data.swiss_standings {
         return Err(StatusOrError::Status(Status::NotFound));
     }
-    let startgg_token = if Environment::default().is_dev() {
-        &config.startgg_dev
-    } else {
-        &config.startgg_production
-    };
+    let startgg_token = &config.startgg;
     // Extract slug from the event's URL
     let slug = match event_data.url.as_ref().and_then(|url| url.path().strip_prefix('/').map(|s| s.to_string())) {
         Some(s) if !s.is_empty() => s,

@@ -1,0 +1,29 @@
+{
+  "challonge": {
+    "clientID": "your-challonge-client-id",
+    "clientSecret": "your-challonge-client-secret"
+  },
+  "challongeApiKey": "your-challonge-api-key",
+  "discord": {
+    "clientID": "your-discord-client-id",
+    "clientSecret": "your-discord-client-secret",
+    "botToken": "your-discord-bot-token"
+  },
+  "leagueApiKey": "your-league-api-key",
+  "ootrApiKey": "your-ootr-api-key",
+  "ootrApiKeyEncryption": "your-ootr-api-key-encryption",
+  "racetimeBot": {
+    "clientID": "your-racetime-bot-client-id",
+    "clientSecret": "your-racetime-bot-client-secret"
+  },
+  "racetimeOAuth": {
+    "clientID": "your-racetime-oauth-client-id",
+    "clientSecret": "your-racetime-oauth-client-secret"
+  },
+  "startgg": "your-startgg-api-key",
+  "startggOAuth": {
+    "clientID": "your-startgg-oauth-client-id",
+    "clientSecret": "your-startgg-oauth-client-secret"
+  },
+  "secretKey": "your-secret-key"
+}
