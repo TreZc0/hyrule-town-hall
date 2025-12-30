@@ -59,11 +59,12 @@ lazy-regex = "3"
 log = "0.4"
 env_logger = "0.11"
 log-lock = { git = "https://github.com/fenhl/log-lock", branch = "main" }
+mhstatus = { git = "https://github.com/midoshouse/status.midos.house", branch = "main" }
 #mimalloc = "0.1.43" # fails to compile on Ubuntu
 noisy_float = "0.2"
 nonempty-collections = "1"
 ootr-utils = { git = "https://github.com/midoshouse/rust-ootr-utils", branch = "main", features = ["sqlx"] }
-racetime = "0.27.1"
+racetime = "0.28"
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["charset", "hickory-dns", "http2", "json", "macos-system-configuration", "rustls-tls", "stream"] }
 rocket = { git = "https://github.com/fenhl/Rocket", branch = "forms", features = ["json"] }
@@ -72,18 +73,19 @@ rocket_csrf = { git = "https://github.com/fenhl/rocket_csrf", branch = "forms" }
 rocket_oauth2 = { git = "https://github.com/fenhl/rocket_oauth2", branch = "forms" }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = { package = "serde_json_path_to_error", version = "0.1" }
 serde_json_inner = { package = "serde_json", version = "1", features = [
     "preserve_order", # required to correctly render progression spoilers
 ] }
-serde_json = { package = "serde_json_path_to_error", version = "0.1" }
 serde_plain = "1"
+serde_urlencoded = "0.7.1"
 serde_with = { version = "3", features = ["json"] }
 serde_yml = "0.0.12"
 serenity = { version = "0.12.4", default-features = false, features = ["client", "gateway", "model", "rustls_backend", "temp_cache"] }
 serenity-utils = { git = "https://github.com/fenhl/serenity-utils", branch = "main" }
 smart-default = "0.7.1"
 sqlx = { version = "0.8.3", default-features = false, features = ["chrono", "json", "macros", "postgres", "runtime-tokio", "tls-rustls-ring-webpki", "uuid"] }
-tempfile = "3.19.1"
+tempfile = "3.20.0"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "net", "parking_lot", "process", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["io"] }
@@ -92,8 +94,6 @@ url = { version = "2", features = ["serde"] }
 uuid = {version = "1.17.0", features = ["v4"]}
 wheel = { git = "https://github.com/fenhl/wheel", branch = "rocket-forms", features = ["chrono", "racetime", "reqwest", "rocket", "serde_json"] }
 yup-oauth2 = "12"
-mhstatus = { git = "https://github.com/midoshouse/status.midos.house", branch = "main" }
-serde_urlencoded = "0.7.1"
 urlencoding = "2"
 
 [target.'cfg(unix)'.dependencies]
