@@ -18,6 +18,7 @@ use {
         CreateSelectMenu,
         CreateSelectMenuKind,
         CreateSelectMenuOption,
+        ScheduledEventId,
     },
     sqlx::types::Json,
     chrono::LocalResult,
@@ -379,8 +380,9 @@ pub(crate) struct Race {
     pub(crate) schedule_locked: bool,
     pub(crate) notified: bool,
     pub(crate) async_notified_1: bool,
-    pub(crate) async_notified_2: bool,  
+    pub(crate) async_notified_2: bool,
     pub(crate) async_notified_3: bool,
+    pub(crate) discord_scheduled_event_id: Option<PgSnowflake<ScheduledEventId>>,
 }
 
 impl Race {
@@ -456,7 +458,8 @@ impl Race {
             notified,
             async_notified_1,
             async_notified_2,
-            async_notified_3
+            async_notified_3,
+            discord_scheduled_event_id AS "discord_scheduled_event_id: PgSnowflake<ScheduledEventId>"
         FROM races WHERE id = $1"#, id as _).fetch_one(&mut **transaction).await?;
         let source = if let Some(id) = row.challonge_match {
             Source::Challonge { id }
@@ -609,6 +612,7 @@ impl Race {
             async_notified_1: row.async_notified_1,
             async_notified_2: row.async_notified_2,
             async_notified_3: row.async_notified_3,
+            discord_scheduled_event_id: row.discord_scheduled_event_id.map(|PgSnowflake(id)| PgSnowflake(id)),
             id, source, entrants,
         })
     }
@@ -678,6 +682,7 @@ impl Race {
                     async_notified_1: false,
                     async_notified_2: false,
                     async_notified_3: false,
+                    discord_scheduled_event_id: None,
                 });
                 races.last_mut().expect("just pushed")
             }.save(&mut *transaction).await?,
@@ -1113,10 +1118,10 @@ impl Race {
             None => (None, None, None, None, false, None, None),
         };
         sqlx::query!("
-            INSERT INTO races              (startgg_set, start, series, event, async_start2, async_start1, room, scheduling_thread, async_room1, async_room2, draft_state, async_end1, async_end2, end_time, team1, team2, web_id, web_gen_time, file_stem, hash1, hash2, hash3, hash4, hash5, game, id,  p1,  p2,  last_edited_by, last_edited_at, video_url, phase, round, ignored, p3,  startgg_event, total, finished, tfb_uuid, video_url_fr, restreamer, restreamer_fr, locked_spoiler_log_path, video_url_pt, restreamer_pt, p1_twitch, p2_twitch, p1_discord, p2_discord, schedule_locked, team3, schedule_updated_at, video_url_de, restreamer_de, sheet_timestamp, league_id, p1_racetime, p2_racetime, async_start3, async_room3, async_end3, challonge_match, seed_password, speedgaming_id, notified, is_tfb_dev, fpa_invoked, breaks_used, xkeys_uuid, async_notified_1, async_notified_2, async_notified_3)
-            VALUES                         ($1,          $2,    $3,     $4,    $5,           $6,           $7,   $8,                $9,          $10,         $11,         $12,        $13,        $14,      $15,   $16,   $17,    $18,          $19,       $20,   $21,   $22,   $23,   $24,   $25,  $26, $27, $28, $29,            $30,            $31,       $32,   $33,   $34,     $35, $36,           $37,   $38,      $39,      $40,          $41,        $42,           $43,                     $44,          $45,           $46,       $47,       $48,        $49,        $50,             $51,   $52,                 $53,          $54,           $55,             $56,       $57,         $58,         $59,          $60,         $61,        $62,             $63,           $64,            $65,      $66,        $67,         $68,          $69,        $70,        $71,        $72)
-            ON CONFLICT (id) DO UPDATE SET (startgg_set, start, series, event, async_start2, async_start1, room, scheduling_thread, async_room1, async_room2, draft_state, async_end1, async_end2, end_time, team1, team2, web_id, web_gen_time, file_stem, hash1, hash2, hash3, hash4, hash5, game, id,  p1,  p2,  last_edited_by, last_edited_at, video_url, phase, round, ignored, p3,  startgg_event, total, finished, tfb_uuid, video_url_fr, restreamer, restreamer_fr, locked_spoiler_log_path, video_url_pt, restreamer_pt, p1_twitch, p2_twitch, p1_discord, p2_discord, schedule_locked, team3, schedule_updated_at, video_url_de, restreamer_de, sheet_timestamp, league_id, p1_racetime, p2_racetime, async_start3, async_room3, async_end3, challonge_match, seed_password, speedgaming_id, notified, is_tfb_dev, fpa_invoked, breaks_used, xkeys_uuid, async_notified_1, async_notified_2, async_notified_3)
-            =                              ($1,          $2,    $3,     $4,    $5,           $6,           $7,   $8,                $9,          $10,         $11,         $12,        $13,        $14,      $15,   $16,   $17,    $18,          $19,       $20,   $21,   $22,   $23,   $24,   $25,  $26, $27, $28, $29,            $30,            $31,       $32,   $33,   $34,     $35, $36,           $37,   $38,      $39,      $40,          $41,        $42,           $43,                     $44,          $45,           $46,       $47,       $48,        $49,        $50,             $51,   $52,                 $53,          $54,           $55,             $56,       $57,         $58,         $59,          $60,         $61,        $62,             $63,           $64,            $65,      $66,        $67,         $68,          $69,        $70,        $71,        $72)
+            INSERT INTO races              (startgg_set, start, series, event, async_start2, async_start1, room, scheduling_thread, async_room1, async_room2, draft_state, async_end1, async_end2, end_time, team1, team2, web_id, web_gen_time, file_stem, hash1, hash2, hash3, hash4, hash5, game, id,  p1,  p2,  last_edited_by, last_edited_at, video_url, phase, round, ignored, p3,  startgg_event, total, finished, tfb_uuid, video_url_fr, restreamer, restreamer_fr, locked_spoiler_log_path, video_url_pt, restreamer_pt, p1_twitch, p2_twitch, p1_discord, p2_discord, schedule_locked, team3, schedule_updated_at, video_url_de, restreamer_de, sheet_timestamp, league_id, p1_racetime, p2_racetime, async_start3, async_room3, async_end3, challonge_match, seed_password, speedgaming_id, notified, is_tfb_dev, fpa_invoked, breaks_used, xkeys_uuid, async_notified_1, async_notified_2, async_notified_3, discord_scheduled_event_id)
+            VALUES                         ($1,          $2,    $3,     $4,    $5,           $6,           $7,   $8,                $9,          $10,         $11,         $12,        $13,        $14,      $15,   $16,   $17,    $18,          $19,       $20,   $21,   $22,   $23,   $24,   $25,  $26, $27, $28, $29,            $30,            $31,       $32,   $33,   $34,     $35, $36,           $37,   $38,      $39,      $40,          $41,        $42,           $43,                     $44,          $45,           $46,       $47,       $48,        $49,        $50,             $51,   $52,                 $53,          $54,           $55,             $56,       $57,         $58,         $59,          $60,         $61,        $62,             $63,           $64,            $65,      $66,        $67,         $68,          $69,        $70,        $71,        $72,                       $73)
+            ON CONFLICT (id) DO UPDATE SET (startgg_set, start, series, event, async_start2, async_start1, room, scheduling_thread, async_room1, async_room2, draft_state, async_end1, async_end2, end_time, team1, team2, web_id, web_gen_time, file_stem, hash1, hash2, hash3, hash4, hash5, game, id,  p1,  p2,  last_edited_by, last_edited_at, video_url, phase, round, ignored, p3,  startgg_event, total, finished, tfb_uuid, video_url_fr, restreamer, restreamer_fr, locked_spoiler_log_path, video_url_pt, restreamer_pt, p1_twitch, p2_twitch, p1_discord, p2_discord, schedule_locked, team3, schedule_updated_at, video_url_de, restreamer_de, sheet_timestamp, league_id, p1_racetime, p2_racetime, async_start3, async_room3, async_end3, challonge_match, seed_password, speedgaming_id, notified, is_tfb_dev, fpa_invoked, breaks_used, xkeys_uuid, async_notified_1, async_notified_2, async_notified_3, discord_scheduled_event_id)
+            =                              ($1,          $2,    $3,     $4,    $5,           $6,           $7,   $8,                $9,          $10,         $11,         $12,        $13,        $14,      $15,   $16,   $17,    $18,          $19,       $20,   $21,   $22,   $23,   $24,   $25,  $26, $27, $28, $29,            $30,            $31,       $32,   $33,   $34,     $35, $36,           $37,   $38,      $39,      $40,          $41,        $42,           $43,                     $44,          $45,           $46,       $47,       $48,        $49,        $50,             $51,   $52,                 $53,          $54,           $55,             $56,       $57,         $58,         $59,          $60,         $61,        $62,             $63,           $64,            $65,      $66,        $67,         $68,          $69,        $70,        $71,        $72,                       $73)
         ",
             startgg_set as _,
             start,
@@ -1189,7 +1194,8 @@ impl Race {
             xkeys_uuid,
             self.async_notified_1,
             self.async_notified_2,
-            self.async_notified_3
+            self.async_notified_3,
+            self.discord_scheduled_event_id as _
         ).execute(&mut **transaction).await?;
         Ok(())
     }
@@ -1969,6 +1975,7 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
                     async_notified_1: false,
                     async_notified_2: false,
                     async_notified_3: false,
+                    discord_scheduled_event_id: None,
                     scheduling_thread,
                 };
                 if game == 1 {
@@ -2770,7 +2777,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                     async_notified_1: false,
                                     async_notified_2: false,
                                     async_notified_3: false,
-
+                                    discord_scheduled_event_id: None,
                                 };
                                 if let Some(race) = races.iter_mut().find(|race| if let Source::League { id } = race.source { id == match_data.id } else { false }) {
                                     if !race.schedule_locked {

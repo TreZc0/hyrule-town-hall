@@ -41,6 +41,7 @@ mod challonge;
 mod config;
 mod discord_bot;
 mod discord_role_manager;
+mod discord_scheduled_events;
 mod draft;
 mod event;
 mod favicon;
@@ -208,14 +209,35 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             .hickory_dns(true)
             .build()?;
         let discord_builder = serenity_utils::builder(config.discord.bot_token.clone()).await?;
+        let mut db_options = PgConnectOptions::default()
+            .username("mido")
+            .database(if Environment::default().is_dev() { "fados_house" } else { "midos_house" })
+            .application_name("midos-house")
+            .log_slow_statements(log::LevelFilter::Warn, Duration::from_secs(10));
+
+        // Override with config if provided
+        if let Some(ref db_config) = config.database {
+            if let Some(ref host) = db_config.host {
+                db_options = db_options.host(host);
+            }
+            if let Some(port) = db_config.port {
+                db_options = db_options.port(port);
+            }
+            if let Some(ref username) = db_config.username {
+                db_options = db_options.username(username);
+            }
+            if let Some(ref password) = db_config.password {
+                db_options = db_options.password(password);
+            }
+            if let Some(ref database) = db_config.database {
+                db_options = db_options.database(database);
+            }
+        }
+
         let db_pool = PgPoolOptions::default()
             .max_connections(16)
-            .connect_with(PgConnectOptions::default()
-                .username("mido")
-                .database(if Environment::default().is_dev() { "fados_house" } else { "midos_house" })
-                .application_name("midos-house")
-                .log_slow_statements(log::LevelFilter::Warn, Duration::from_secs(10))
-            ).await?;
+            .connect_with(db_options)
+            .await?;
         let seed_metadata = Arc::default();
         let ootr_api_client = Arc::new(ootr_web::ApiClient::new(http_client.clone(), config.ootr_api_key.clone(), config.ootr_api_key_encryption.clone()));
         let rocket = http::rocket(

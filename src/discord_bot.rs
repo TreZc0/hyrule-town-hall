@@ -34,7 +34,7 @@ pub(crate) const ADMIN_USER: UserId = UserId::new(82783364175630336); // TreZ
 const BUTTONS_PER_PAGE: usize = 25;
 
 /// A wrapper around serenity's Discord snowflake types that can be stored in a PostgreSQL database as a BIGINT.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct PgSnowflake<T>(pub(crate) T);
 
 impl<'r, T: From<NonZero<u64>>, DB: Database> Decode<'r, DB> for PgSnowflake<T>
@@ -1409,6 +1409,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             last_edited_at: race.last_edited_at,
                                             ignored: race.ignored,
                                             schedule_locked: race.schedule_locked,
+                                            discord_scheduled_event_id: race.discord_scheduled_event_id,
                                         };
                                         race.save(&mut transaction).await?;
                                         
@@ -1506,7 +1507,16 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             race.schedule.set_live_start(start);
                                             race.schedule_updated_at = Some(Utc::now());
                                             race.save(&mut transaction).await?;
-                                            let cal_event = cal::Event { kind: cal::EventKind::Normal, race };
+                                            // Create or update Discord scheduled event
+                                            match crate::discord_scheduled_events::create_discord_scheduled_event(ctx, &mut transaction, &mut race, &event).await {
+                                                Ok(()) => {
+                                                    race.save(&mut transaction).await?; // Save updated discord_scheduled_event_id
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("Failed to create Discord scheduled event for race {}: {}", race.id, e);
+                                                }
+                                            }
+                                            let mut cal_event = cal::Event { kind: cal::EventKind::Normal, race };
                                             if start - Utc::now() < TimeDelta::minutes(30) {
                                                 let (http_client, new_room_lock, racetime_host, racetime_config, clean_shutdown) = {
                                                     let data = ctx.data.read().await;
@@ -1543,7 +1553,15 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     transaction.commit().await?;
                                                 })
                                             } else {
-                                                cal_event.race.save(&mut transaction).await?;
+                                                // Create Discord scheduled event for races scheduled > 30 minutes in advance
+                                                match crate::discord_scheduled_events::create_discord_scheduled_event(ctx, &mut transaction, &mut cal_event.race, &event).await {
+                                                    Ok(()) => {
+                                                        cal_event.race.save(&mut transaction).await?;
+                                                    }
+                                                    Err(e) => {
+                                                        eprintln!("Failed to create Discord scheduled event for race {}: {}", cal_event.race.id, e);
+                                                    }
+                                                }
                                                 let overlapping_maintenance_windows = if let RaceHandleMode::RaceTime = cal_event.should_create_room(&mut transaction, &event).await? {
                                                     sqlx::query_as!(Range::<DateTime<Utc>>, r#"SELECT start, end_time AS "end" FROM racetime_maintenance WHERE start < $1 AND end_time > $2"#, start + event.series.default_race_duration(), start - TimeDelta::minutes(30)).fetch_all(&mut *transaction).await?
                                                 } else {
@@ -1865,6 +1883,15 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         }
                                         RaceSchedule::Live { .. } => {
                                             sqlx::query!("UPDATE races SET start = NULL, schedule_updated_at = NOW() WHERE id = $1", race.id as _).execute(&mut *transaction).await?;
+                                            // Delete Discord scheduled event
+                                            let mut race_mut = race.clone();
+                                            if let Err(e) = crate::discord_scheduled_events::delete_discord_scheduled_event(ctx, &mut transaction, &mut race_mut, &event).await {
+                                                eprintln!("Failed to delete Discord scheduled event for race {}: {}", race.id, e);
+                                            }
+                                            if race_mut.discord_scheduled_event_id.is_none() && race.discord_scheduled_event_id.is_some() {
+                                                // Event was deleted, update the database
+                                                race_mut.save(&mut transaction).await?;
+                                            }
                                             transaction.commit().await?;
                                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                                 .ephemeral(false)

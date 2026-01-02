@@ -5,7 +5,19 @@
     "columns": [],
     "parameters": {
       "Left": [
-        "Varchar",
+        {
+          "Custom": {
+            "name": "role_request_status",
+            "kind": {
+              "Enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "aborted"
+              ]
+            }
+          }
+        },
         "Int4"
       ]
     },

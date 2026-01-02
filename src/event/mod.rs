@@ -190,6 +190,8 @@ pub(crate) struct Data<'a> {
     pub(crate) language: Language,
     pub(crate) asyncs_active: bool,
     pub(crate) swiss_standings: bool,
+    pub(crate) discord_events_enabled: bool,
+    pub(crate) discord_events_require_restream: bool,
     pub(crate) listed: bool,
 }
 
@@ -247,6 +249,8 @@ impl<'a> Data<'a> {
             language AS "language: Language",
             asyncs_active,
             swiss_standings,
+            discord_events_enabled,
+            discord_events_require_restream,
             listed
         FROM events WHERE series = $1 AND event = $2"#, series as _, &event).fetch_optional(&mut **transaction).await?
             .map(|row| Ok::<_, DataError>(Self {
@@ -292,6 +296,8 @@ impl<'a> Data<'a> {
                 language: row.language,
                 asyncs_active: row.asyncs_active,
                 swiss_standings: row.swiss_standings,
+                discord_events_enabled: row.discord_events_enabled,
+                discord_events_require_restream: row.discord_events_require_restream,
                 series, event,
                 listed: row.listed,
             }))

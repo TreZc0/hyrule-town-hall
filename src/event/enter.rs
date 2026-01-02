@@ -1513,8 +1513,22 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                 }
                 if form.context.errors().next().is_none() {
                     let id = Id::<Teams>::new(&mut transaction).await?;
+                    // Merge old-style boolean choices into custom_choices
+                    let mut custom_choices = value.custom_choices.clone();
+                    if value.all_dungeons_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("all_dungeons")).or_insert(format!("yes")); }
+                    if value.flute_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("flute")).or_insert(format!("yes")); }
+                    if value.hard_settings_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hard_settings")).or_insert(format!("yes")); }
+                    if value.hover_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hovering")).or_insert(format!("yes")); }
+                    if value.inverted_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("inverted")).or_insert(format!("yes")); }
+                    if value.keydrop_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("keydrop")).or_insert(format!("yes")); }
+                    if value.lite_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("lite")).or_insert(format!("yes")); }
+                    if value.mirror_scroll_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mirror_scroll")).or_insert(format!("yes")); }
+                    if value.mq_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mq")).or_insert(format!("yes")); }
+                    if value.no_delay_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("no_delay")).or_insert(format!("yes")); }
+                    if value.pb_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("pseudoboots")).or_insert(format!("yes")); }
+                    if value.zw_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("zw")).or_insert(format!("yes")); }
                     sqlx::query!(
-                        "INSERT INTO teams (id, series, event, plural_name, restream_consent, text_field, text_field2, yes_no, all_dungeons_ok, flute_ok, hard_settings_ok, hover_ok, inverted_ok, keydrop_ok, lite_ok, mirror_scroll_ok, mq_ok, no_delay_ok, pb_ok, zw_ok, mw_impl, custom_choices) VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)",
+                        "INSERT INTO teams (id, series, event, plural_name, restream_consent, text_field, text_field2, yes_no, mw_impl, custom_choices) VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9)",
                         id as _,
                         series as _,
                         event,
@@ -1522,20 +1536,8 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                         value.text_field,
                         value.text_field2,
                         value.yes_no == Some(BoolRadio::Yes),
-                        value.all_dungeons_ok == Some(BoolRadio::Yes),
-                        value.flute_ok == Some(BoolRadio::Yes),
-                        value.hard_settings_ok == Some(BoolRadio::Yes),
-                        value.hover_ok == Some(BoolRadio::Yes),
-                        value.inverted_ok == Some(BoolRadio::Yes),
-                        value.keydrop_ok == Some(BoolRadio::Yes),
-                        value.lite_ok == Some(BoolRadio::Yes),
-                        value.mirror_scroll_ok == Some(BoolRadio::Yes),
-                        value.mq_ok == Some(BoolRadio::Yes),
-                        value.no_delay_ok == Some(BoolRadio::Yes),
-                        value.pb_ok  == Some(BoolRadio::Yes),
-                        value.zw_ok  == Some(BoolRadio::Yes),
                         value.mw_impl as _,
-                        sqlx::types::Json(&value.custom_choices) as _,
+                        sqlx::types::Json(&custom_choices) as _,
                     ).execute(&mut *transaction).await?;
                     sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'created', 'none')", id as _, me.id as _).execute(&mut *transaction).await?;
                     if let Some(async_kind) = request_qualifier {
@@ -1664,8 +1666,22 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                 };
                 if form.context.errors().next().is_none() {
                     let id = Id::<Teams>::new(&mut transaction).await?;
+                    // Merge old-style boolean choices into custom_choices
+                    let mut custom_choices = value.custom_choices.clone();
+                    if value.all_dungeons_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("all_dungeons")).or_insert(format!("yes")); }
+                    if value.flute_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("flute")).or_insert(format!("yes")); }
+                    if value.hard_settings_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hard_settings")).or_insert(format!("yes")); }
+                    if value.hover_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hovering")).or_insert(format!("yes")); }
+                    if value.inverted_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("inverted")).or_insert(format!("yes")); }
+                    if value.keydrop_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("keydrop")).or_insert(format!("yes")); }
+                    if value.lite_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("lite")).or_insert(format!("yes")); }
+                    if value.mirror_scroll_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mirror_scroll")).or_insert(format!("yes")); }
+                    if value.mq_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mq")).or_insert(format!("yes")); }
+                    if value.no_delay_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("no_delay")).or_insert(format!("yes")); }
+                    if value.pb_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("pseudoboots")).or_insert(format!("yes")); }
+                    if value.zw_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("zw")).or_insert(format!("yes")); }
                     sqlx::query!(
-                    "INSERT INTO teams (id, series, event, name, restream_consent, text_field, text_field2, yes_no, all_dungeons_ok, flute_ok, hard_settings_ok, hover_ok, inverted_ok, keydrop_ok, lite_ok, mirror_scroll_ok, mq_ok, no_delay_ok, pb_ok, zw_ok, mw_impl, custom_choices) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
+                    "INSERT INTO teams (id, series, event, name, restream_consent, text_field, text_field2, yes_no, mw_impl, custom_choices) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
                         id as _,
                         series as _,
                         event,
@@ -1674,20 +1690,8 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                         value.text_field,
                         value.text_field2,
                         value.yes_no == Some(BoolRadio::Yes),
-                        value.all_dungeons_ok == Some(BoolRadio::Yes),
-                        value.flute_ok == Some(BoolRadio::Yes),
-                        value.hard_settings_ok == Some(BoolRadio::Yes),
-                        value.hover_ok == Some(BoolRadio::Yes),
-                        value.inverted_ok == Some(BoolRadio::Yes),
-                        value.keydrop_ok == Some(BoolRadio::Yes),
-                        value.lite_ok == Some(BoolRadio::Yes),
-                        value.mirror_scroll_ok == Some(BoolRadio::Yes),
-                        value.mq_ok == Some(BoolRadio::Yes),
-                        value.no_delay_ok == Some(BoolRadio::Yes),
-                        value.pb_ok  == Some(BoolRadio::Yes),
-                        value.zw_ok  == Some(BoolRadio::Yes),
                         value.mw_impl as _,
-                        sqlx::types::Json(&value.custom_choices) as _,
+                        sqlx::types::Json(&custom_choices) as _,
                     ).execute(&mut *transaction).await?;
                     sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'created', $3)", id as _, me.id as _, Role::from(my_role.expect("validated")) as _).execute(&mut *transaction).await?;
                     sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'unconfirmed', $3)", id as _, teammate.expect("validated") as _, match my_role.expect("validated") { pic::Role::Sheikah => Role::Gerudo, pic::Role::Gerudo => Role::Sheikah } as _).execute(&mut *transaction).await?;
@@ -1843,8 +1847,22 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                 if form.context.errors().next().is_none() {
                     return Ok(if value.step2 {
                         let id = Id::<Teams>::new(&mut transaction).await?;
+                        // Merge old-style boolean choices into custom_choices
+                        let mut custom_choices = value.custom_choices.clone();
+                        if value.all_dungeons_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("all_dungeons")).or_insert(format!("yes")); }
+                        if value.flute_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("flute")).or_insert(format!("yes")); }
+                        if value.hard_settings_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hard_settings")).or_insert(format!("yes")); }
+                        if value.hover_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hovering")).or_insert(format!("yes")); }
+                        if value.inverted_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("inverted")).or_insert(format!("yes")); }
+                        if value.keydrop_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("keydrop")).or_insert(format!("yes")); }
+                        if value.lite_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("lite")).or_insert(format!("yes")); }
+                        if value.mirror_scroll_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mirror_scroll")).or_insert(format!("yes")); }
+                        if value.mq_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mq")).or_insert(format!("yes")); }
+                        if value.no_delay_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("no_delay")).or_insert(format!("yes")); }
+                        if value.pb_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("pseudoboots")).or_insert(format!("yes")); }
+                        if value.zw_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("zw")).or_insert(format!("yes")); }
                         sqlx::query!(
-                            "INSERT INTO teams (id, series, event, name, racetime_slug, restream_consent, text_field, text_field2, yes_no,all_dungeons_ok, flute_ok, hard_settings_ok, hover_ok, inverted_ok, keydrop_ok, lite_ok, mirror_scroll_ok, mq_ok, no_delay_ok, pb_ok, zw_ok, mw_impl, custom_choices) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)",
+                            "INSERT INTO teams (id, series, event, name, racetime_slug, restream_consent, text_field, text_field2, yes_no, mw_impl, custom_choices) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
                             id as _,
                             series as _,
                             event,
@@ -1854,20 +1872,8 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                             value.text_field,
                             value.text_field2,
                             value.yes_no == Some(BoolRadio::Yes),
-                            value.all_dungeons_ok == Some(BoolRadio::Yes),
-                            value.flute_ok == Some(BoolRadio::Yes),
-                            value.hard_settings_ok == Some(BoolRadio::Yes),
-                            value.hover_ok == Some(BoolRadio::Yes),
-                            value.inverted_ok == Some(BoolRadio::Yes),
-                            value.keydrop_ok == Some(BoolRadio::Yes),
-                            value.lite_ok == Some(BoolRadio::Yes),
-                            value.mirror_scroll_ok == Some(BoolRadio::Yes),
-                            value.mq_ok == Some(BoolRadio::Yes),
-                            value.no_delay_ok == Some(BoolRadio::Yes),
-                            value.pb_ok  == Some(BoolRadio::Yes),
-                            value.zw_ok  == Some(BoolRadio::Yes),
                             value.mw_impl as _,
-                        sqlx::types::Json(&value.custom_choices) as _,
+                        sqlx::types::Json(&custom_choices) as _,
                         ).execute(&mut *transaction).await?;
                         for ((user, role), startgg_id) in users.into_iter().zip_eq(roles).zip_eq(startgg_ids) {
                             sqlx::query!(

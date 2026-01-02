@@ -25,6 +25,8 @@ pub(crate) struct Config {
     pub(crate) startgg: String,
     #[serde(rename = "startggOAuth")]
     pub(crate) startgg_oauth: ConfigOAuth,
+    #[serde(default)]
+    pub(crate) database: Option<ConfigDatabase>,
 }
 
 impl Config {
@@ -69,4 +71,14 @@ pub(crate) struct ConfigOAuth {
     #[serde(rename = "clientID")]
     pub(crate) client_id: String,
     pub(crate) client_secret: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConfigDatabase {
+    pub(crate) host: Option<String>,
+    pub(crate) port: Option<u16>,
+    pub(crate) username: Option<String>,
+    pub(crate) password: Option<String>,
+    pub(crate) database: Option<String>,
 }

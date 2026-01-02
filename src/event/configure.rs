@@ -138,6 +138,18 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                             label(for = "swiss_standings") : "Show Swiss standings tab";
                             label(class = "help") : "(If enabled, the Swiss standings tab will be visible for this event)";
                         });
+                        @if event.discord_guild.is_some() {
+                            : form_field("discord_events_enabled", &mut errors, html! {
+                                input(type = "checkbox", id = "discord_events_enabled", name = "discord_events_enabled", checked? = ctx.field_value("discord_events_enabled").map_or(event.discord_events_enabled, |value| value == "on"));
+                                label(for = "discord_events_enabled") : "Create Discord scheduled events for races";
+                                label(class = "help") : "(If enabled, Discord scheduled events will be automatically created when races are scheduled)";
+                            });
+                            : form_field("discord_events_require_restream", &mut errors, html! {
+                                input(type = "checkbox", id = "discord_events_require_restream", name = "discord_events_require_restream", checked? = ctx.field_value("discord_events_require_restream").map_or(event.discord_events_require_restream, |value| value == "on"));
+                                label(for = "discord_events_require_restream") : "Only create Discord events for races with restreams";
+                                label(class = "help") : "(If enabled, Discord scheduled events will only be created for races that have at least one restream URL set)";
+                            });
+                        }
                     }, errors, "Save");
                 }
                 h2 : "More options";
@@ -190,6 +202,8 @@ pub(crate) struct ConfigureForm {
     sync_startgg_ids: Option<String>,
     asyncs_active: bool,
     swiss_standings: bool,
+    discord_events_enabled: bool,
+    discord_events_require_restream: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/configure", data = "<form>")]
@@ -271,6 +285,12 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             }
             if value.swiss_standings != data.swiss_standings {
                 sqlx::query!("UPDATE events SET swiss_standings = $1 WHERE series = $2 AND event = $3", value.swiss_standings, data.series as _, &data.event).execute(&mut *transaction).await?;
+            }
+            if value.discord_events_enabled != data.discord_events_enabled {
+                sqlx::query!("UPDATE events SET discord_events_enabled = $1 WHERE series = $2 AND event = $3", value.discord_events_enabled, data.series as _, &data.event).execute(&mut *transaction).await?;
+            }
+            if value.discord_events_require_restream != data.discord_events_require_restream {
+                sqlx::query!("UPDATE events SET discord_events_require_restream = $1 WHERE series = $2 AND event = $3", value.discord_events_require_restream, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
