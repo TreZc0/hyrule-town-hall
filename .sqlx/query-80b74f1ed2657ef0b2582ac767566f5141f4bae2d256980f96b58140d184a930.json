@@ -26,19 +26,7 @@
       {
         "ordinal": 4,
         "name": "status: VolunteerSignupStatus",
-        "type_info": {
-          "Custom": {
-            "name": "volunteer_signup_status",
-            "kind": {
-              "Enum": [
-                "pending",
-                "confirmed",
-                "declined",
-                "aborted"
-              ]
-            }
-          }
-        }
+        "type_info": "Varchar"
       },
       {
         "ordinal": 5,

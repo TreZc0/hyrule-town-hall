@@ -2,7 +2,7 @@ use {
     crate::{
         config::ConfigRaceTime,
         prelude::*,
-        racetime_bot::{CleanShutdown, CrosskeysRaceOptions, GlobalState},
+        racetime_bot::{AlttprDeRaceOptions, CleanShutdown, CrosskeysRaceOptions, GlobalState},
         async_race::{AsyncRaceManager, Error as AsyncRaceError},
     }, serenity::all::{
         CacheHttp,
@@ -606,6 +606,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let ban = draft_kind.map(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
+                    draft::Kind::AlttprDe9 => CreateCommand::new("ban")
+                        .kind(CommandType::ChatInput)
+                        .add_context(InteractionContext::Guild)
+                        .description("Bans a mode from being played in this match."),
                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("ban")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -644,6 +648,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let draft = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
+                    draft::Kind::AlttprDe9 => CreateCommand::new("draft")
+                        .kind(CommandType::ChatInput)
+                        .add_context(InteractionContext::Guild)
+                        .description("Picks a mode for a game (same as /pick)."),
                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("draft")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -658,9 +666,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 });
                 Some(idx)
             });
-            let first = draft_kind.map(|draft_kind| {
+            let first = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
+                    draft::Kind::AlttprDe9 => return None, // AlttprDe9 doesn't have a first/second choice, turn order is fixed
                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("first")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -694,12 +703,12 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             .required(false)
                         ),
                 });
-                idx
+                Some(idx)
             });
             let no = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::RslS7 => return None,
+                    draft::Kind::AlttprDe9 | draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::RslS7 => return None,
                     draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => CreateCommand::new("no")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -712,6 +721,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let pick = draft_kind.map(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
+                    draft::Kind::AlttprDe9 => CreateCommand::new("pick")
+                        .kind(CommandType::ChatInput)
+                        .add_context(InteractionContext::Guild)
+                        .description("Picks a mode for a game in the match."),
                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("pick")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -937,9 +950,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 );
                 idx
             };
-            let second = draft_kind.map(|draft_kind| {
+            let second = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
+                    draft::Kind::AlttprDe9 => return None, // AlttprDe9 doesn't have a first/second choice, turn order is fixed
                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("second")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -973,11 +987,12 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             .required(false)
                         ),
                 });
-                idx
+                Some(idx)
             });
-            let skip = draft_kind.map(|draft_kind| {
+            let skip = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
+                    draft::Kind::AlttprDe9 => return None, // AlttprDe9 doesn't allow skipping
                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("skip")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -993,7 +1008,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         .description_localized("en-GB", "Skips the final pick of the settings draft.")
                         .description_localized("en-US", "Skips the final pick of the settings draft."),
                 });
-                idx
+                Some(idx)
             });
             let status = {
                 let idx = commands.len();
@@ -1034,7 +1049,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let yes = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::RslS7 => return None,
+                    draft::Kind::AlttprDe9 | draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::RslS7 => return None,
                     draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => CreateCommand::new("yes")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -1194,7 +1209,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             }
                                         }
                                     }
-                                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => {}
+                                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::AlttprDe9 => {}
                                 }
                                 draft_action(ctx, interaction, draft::Action::GoFirst(true)).await?;
                             }
@@ -2035,7 +2050,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             }
                                         }
                                     }
-                                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => {}
+                                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::AlttprDe9 => {}
                                 }
                                 draft_action(ctx, interaction, draft::Action::GoFirst(false)).await?;
                             }
@@ -2732,6 +2747,17 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             content.push_line("");
             content.push(draft.next_step(draft_kind, race.game, &mut msg_ctx).await?.message);
             transaction = msg_ctx.into_transaction();
+        }
+    }
+    if matches!(racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event"), racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB) {
+        let alttprde_options = AlttprDeRaceOptions::for_race(ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"), race, event.round_modes.as_ref()).await;
+        content.push_line("");
+        content.push_line("");
+        if let Some(mode_display) = alttprde_options.mode_display() {
+            content.push(format!("This race will be played in {} mode with {}.", mode_display, alttprde_options.as_race_options_str()));
+        } else {
+            // Mode not yet determined - draft will show separately, just mention race rules
+            content.push(format!("This race will be played with {}.", alttprde_options.as_race_options_str()));
         }
     }
     if let racetime_bot::Goal::Crosskeys2025 = racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event") {

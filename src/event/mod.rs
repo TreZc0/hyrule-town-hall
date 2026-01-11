@@ -193,6 +193,9 @@ pub(crate) struct Data<'a> {
     pub(crate) discord_events_enabled: bool,
     pub(crate) discord_events_require_restream: bool,
     pub(crate) listed: bool,
+    /// Maps round names to mode names for swiss events where mode is fixed per round.
+    /// Example: {"Round 1": "ambrozia", "Round 2": "crosskeys"}
+    pub(crate) round_modes: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
@@ -251,7 +254,8 @@ impl<'a> Data<'a> {
             swiss_standings,
             discord_events_enabled,
             discord_events_require_restream,
-            listed
+            listed,
+            round_modes AS "round_modes: Json<HashMap<String, String>>"
         FROM events WHERE series = $1 AND event = $2"#, series as _, &event).fetch_optional(&mut **transaction).await?
             .map(|row| Ok::<_, DataError>(Self {
                 display_name: row.display_name,
@@ -300,6 +304,7 @@ impl<'a> Data<'a> {
                 discord_events_require_restream: row.discord_events_require_restream,
                 series, event,
                 listed: row.listed,
+                round_modes: row.round_modes.map(|Json(round_modes)| round_modes),
             }))
             .transpose()
     }
@@ -385,6 +390,7 @@ impl<'a> Data<'a> {
 
     pub(crate) fn is_single_race(&self) -> bool {
         match self.series {
+            Series::AlttprDe => false,
             Series::BattleRoyale => false,
             Series::CoOp => false,
             Series::CopaDoBrasil => false,
@@ -452,6 +458,14 @@ impl<'a> Data<'a> {
 
     pub(crate) fn draft_kind(&self) -> Option<draft::Kind> {
         match (self.series, &*self.event) {
+            // AlttprDe events: only need draft if round_modes is not set
+            (Series::AlttprDe, "9bracket" | "9swissa" | "9swissb") => {
+                if self.round_modes.is_some() {
+                    None // Mode is fixed per round, no draft needed
+                } else {
+                    Some(draft::Kind::AlttprDe9)
+                }
+            }
             (Series::Multiworld, "3") => Some(draft::Kind::MultiworldS3),
             (Series::Multiworld, "4") => Some(draft::Kind::MultiworldS4),
             (Series::Multiworld, "5") => Some(draft::Kind::MultiworldS5),
@@ -901,6 +915,7 @@ pub(crate) async fn info(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let header = data.header(&mut transaction, me.as_ref(), Tab::Info, false).await?;
     let content = match data.series {
+        Series::AlttprDe => alttprde::info(&mut transaction, &data).await?,
         Series::BattleRoyale => ohko::info(&mut transaction, &data).await?,
         Series::CoOp => coop::info(&mut transaction, &data).await?,
         Series::CopaDoBrasil => br::info(&mut transaction, &data).await?,
@@ -1324,6 +1339,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                         : async_info;
                     } else {
                         @match data.series {
+                            | Series::AlttprDe
                             | Series::CoOp
                             | Series::CopaDoBrasil
                             | Series::Crosskeys

@@ -201,6 +201,9 @@ pub(crate) enum UnlockSpoilerLog {
 #[derive(Clone, Copy, PartialEq, Eq, Sequence)]
 #[cfg_attr(unix, derive(Protocol))]
 pub(crate) enum Goal {
+    AlttprDe9Bracket,
+    AlttprDe9SwissA,
+    AlttprDe9SwissB,
     Cc7,
     CoOpS3,
     CopaDoBrasil,
@@ -243,12 +246,15 @@ impl Goal {
     fn from_race_data(race_data: &RaceData) -> Option<Self> {
         let Ok(bot_goal) = race_data.goal.name.parse::<Self>() else { return None };
         if race_data.goal.custom != bot_goal.is_custom() { return None }
-        if let (Goal::StandardRuleset | Goal::Crosskeys2025 | Goal::MysteryD20, Some(_)) = (bot_goal, &race_data.opened_by) { return None }
+        if let (Goal::StandardRuleset | Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::Crosskeys2025 | Goal::MysteryD20, Some(_)) = (bot_goal, &race_data.opened_by) { return None }
         Some(bot_goal)
     }
 
     fn matches_event(&self, series: Series, event: &str) -> bool {
         match self {
+            Self::AlttprDe9Bracket => series == Series::AlttprDe && event == "9bracket",
+            Self::AlttprDe9SwissA => series == Series::AlttprDe && event == "9swissa",
+            Self::AlttprDe9SwissB => series == Series::AlttprDe && event == "9swissb",
             Self::Cc7 => series == Series::Standard && event == "7cc",
             Self::CoOpS3 => series == Series::CoOp && event == "3",
             Self::CopaDoBrasil => series == Series::CopaDoBrasil && event == "1",
@@ -286,6 +292,9 @@ impl Goal {
             | Self::StandardRuleset
             | Self::TriforceBlitz
                 => false,
+            | Self::AlttprDe9Bracket
+            | Self::AlttprDe9SwissA
+            | Self::AlttprDe9SwissB
             | Self::Cc7
             | Self::CoOpS3
             | Self::CopaDoBrasil
@@ -317,6 +326,7 @@ impl Goal {
 
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
+            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => "9. Deutsches ALTTPR Turnier",
             Self::Cc7 => "Standard Tournament Season 7 Challenge Cup",
             Self::CoOpS3 => "Co-op Tournament Season 3",
             Self::CopaDoBrasil => "Copa do Brasil",
@@ -350,6 +360,9 @@ impl Goal {
 
     fn language(&self) -> Language {
         match self {
+            | Self::AlttprDe9Bracket
+            | Self::AlttprDe9SwissA
+            | Self::AlttprDe9SwissB
             | Self::Cc7
             | Self::CoOpS3
             | Self::Crosskeys2025
@@ -387,6 +400,7 @@ impl Goal {
 
     fn draft_kind(&self) -> Option<draft::Kind> {
         match self {
+            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => Some(draft::Kind::AlttprDe9),
             Self::Cc7 => Some(draft::Kind::S7),
             Self::MultiworldS3 => Some(draft::Kind::MultiworldS3),
             Self::MultiworldS4 => Some(draft::Kind::MultiworldS4),
@@ -422,6 +436,9 @@ impl Goal {
     /// See the [`PrerollMode`] docs.
     pub(crate) fn preroll_seeds(&self, event: Option<(Series, &str)>) -> PrerollMode {
         match self {
+            | Self::AlttprDe9Bracket
+            | Self::AlttprDe9SwissA
+            | Self::AlttprDe9SwissB
             | Self::Crosskeys2025
             | Self::Sgl2023
             | Self::Sgl2024
@@ -496,6 +513,9 @@ impl Goal {
                 | Self::CoOpS3
                 | Self::StandardRuleset
                     => if official_race { UnlockSpoilerLog::Never } else { UnlockSpoilerLog::After },
+                | Self::AlttprDe9Bracket
+                | Self::AlttprDe9SwissA
+                | Self::AlttprDe9SwissB
                 | Self::Crosskeys2025
                 | Self::MysteryD20
                     => UnlockSpoilerLog::Never
@@ -541,6 +561,7 @@ impl Goal {
             Self::TriforceBlitzProgressionSpoiler => VersionedBranch::Latest { branch: rando::Branch::DevBlitz },
             Self::WeTryToBeBetterS1 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 0, 11) },
             Self::WeTryToBeBetterS2 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 2, 0) },
+            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => panic!("randomizer version for this goal is unused"),
             Self::Crosskeys2025 => panic!("randomizer version for this goal is unused"),
             Self::MysteryD20 => panic!("randomizer version for this goal is unused"),
             Self::PicRs2 | Self::Rsl => panic!("randomizer version for this goal must be parsed from RSL script"),
@@ -550,6 +571,7 @@ impl Goal {
     /// Only returns a value for goals that only have one possible set of settings.
     pub(crate) fn single_settings(&self) -> Option<seed::Settings> {
         match self {
+            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => None, // per-race settings
             Self::Cc7 => None, // settings draft
             Self::CoOpS3 => Some(coop::s3_settings()),
             Self::CopaDoBrasil => Some(br::s1_settings()),
@@ -608,6 +630,9 @@ impl Goal {
                 ctx.say("!seed draft: Pick the settings here in the chat.").await?;
                 ctx.say("!seed <setting> <value> <setting> <value>... (e.g. !seed deku open camc off): Pick a set of draftable settings without doing a full draft. Use “!settings” for a list of available settings.").await?;
             }
+            | Self::AlttprDe9Bracket
+            | Self::AlttprDe9SwissA
+            | Self::AlttprDe9SwissB
             | Self::Crosskeys2025
                 => ctx.say("!seed base: The tournament's base settings.").await?,
             | Self::MysteryD20
@@ -855,7 +880,7 @@ impl Goal {
                 };
                 SeedCommandParseResult::Regular { settings: s::resolve_s7_draft_settings(&settings), unlock_spoiler_log, language: English, article: "a", description: format!("seed with {}", s::display_s7_draft_picks(&settings)) }
             }
-            Self::Crosskeys2025 | Self::MysteryD20 => match args {
+            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB | Self::Crosskeys2025 | Self::MysteryD20 => match args {
                 [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
                 [arg] if arg == "base" => SeedCommandParseResult::Alttpr,
                 [_] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I don't recognize that preset" }),
@@ -1608,12 +1633,100 @@ impl GlobalState {
         update_rx
     }
 
+    pub(crate) fn roll_alttprde9_seed(self: Arc<Self>, alttprde_options: AlttprDeRaceOptions) -> mpsc::Receiver<SeedRollUpdate> {
+        let (update_tx, update_rx) = mpsc::channel(128);
+        let update_tx2 = update_tx.clone();
+        tokio::spawn(async move {
+            // Build the URL from mode and custom choices
+            let api_url = alttprde_options.seed_url()
+                .ok_or_else(|| RollError::AlttprDe(format!("Mode not yet drafted - cannot roll seed")))?;
+
+            // Call the boothisman.de API to get the YAML
+            let response = reqwest::get(&api_url).await?;
+            let yaml_content = response.text().await?;
+
+            // Generate a UUID for this seed
+            let uuid = Uuid::new_v4();
+
+            // Save YAML to temp file
+            let yaml_file = tempfile::Builder::new().prefix("alttprde_").suffix(".yml").tempfile().at_unknown()?;
+            let yaml_path = yaml_file.path();
+            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(yaml_content.as_bytes()).await.at(&yaml_file)?;
+
+            // Run DungeonRandomizer.py with the YAML (same as Crosskeys)
+            const MAX_RETRIES: u8 = 2;
+
+            for attempt in 0..=MAX_RETRIES {
+                let output = Command::new(PYTHON)
+                    .current_dir("../alttpr")
+                    .arg("DungeonRandomizer.py")
+                    .arg("--customizer")
+                    .arg(yaml_path)
+                    .arg("--outputpath")
+                    .arg("/var/www/midos.house/seed")
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .at_command("DungeonRandomizer.py")?
+                    .wait_with_output()
+                    .await
+                    .at_command("DungeonRandomizer.py")?;
+
+                match output.status.code() {
+                    Some(0) => {
+                        break;
+                    }
+                    Some(1) => {
+                        // Randomizer failed to generate a seed, lets retry.
+                        let last_error = Some(String::from_utf8_lossy(&output.stderr).into_owned());
+                        if attempt < MAX_RETRIES {
+                            // Wait a bit before retrying (exponential backoff)
+                            sleep(Duration::from_secs(10 + 2u64.pow(attempt as u32))).await;
+                            continue;
+                        }
+                        // Max retries reached
+                        return Err(RollError::Retries {
+                            num_retries: MAX_RETRIES + 1,
+                            last_error,
+                        });
+                    }
+                    _ => {
+                        // Other error codes - fail immediately
+                        return Err(RollError::Wheel(wheel::Error::CommandExit {
+                            name: Cow::Borrowed("DungeonRandomizer.py"),
+                            output
+                        }));
+                    }
+                }
+            }
+
+            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await.ok();
+            update_tx.send(SeedRollUpdate::Done {
+                seed: seed::Data {
+                    file_hash,
+                    files: Some(seed::Files::AlttprDoorRando { uuid }),
+                    progression_spoiler: false,
+                    password: None,
+                },
+                rsl_preset: None,
+                unlock_spoiler_log: UnlockSpoilerLog::Never,
+            }).await.allow_unreceived();
+            Ok(())
+        }.then(|res: Result<(), RollError>| async move {
+            match res {
+                Ok(()) => {}
+                Err(e) => update_tx2.send(SeedRollUpdate::Error(e)).await.allow_unreceived(),
+            }
+        }));
+        update_rx
+    }
+
     pub(crate) fn roll_mysteryd20_seed(self: Arc<Self>) -> mpsc::Receiver<SeedRollUpdate> {
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
         tokio::spawn(async move {
             let uuid = Uuid::new_v4();
-            
+
             // Download the weights YAML
             let weights_url = "https://zeldaspeedruns.com/assets/hth/miniturnier_doors.yaml";
             let response = reqwest::get(weights_url).await?;
@@ -2225,6 +2338,8 @@ pub(crate) enum RollError {
     #[cfg(windows)]
     #[error("failed to access user directories")]
     UserDirs,
+    #[error("{0}")]
+    AlttprDe(String),
 }
 
 impl From<mpsc::error::SendError<SeedRollUpdate>> for RollError {
@@ -2759,7 +2874,120 @@ impl CrosskeysRaceOptions {
             zw_ok: team_rows.iter().all(|row| row.custom_choices.get("zw").is_some_and(|v| v == "yes")),
         })
     }
-    
+
+}
+
+#[derive(Clone)]
+pub(crate) struct AlttprDeRaceOptions {
+    /// The mode for this race (e.g., "ambrozia", "crosskeys", "enemizer", "inverted", "open")
+    pub(crate) mode: Option<String>,
+    /// Custom choices from player signups, merged together.
+    /// These become URL query parameters for boothisman.de.
+    pub(crate) custom_choices: HashMap<String, String>,
+}
+
+impl AlttprDeRaceOptions {
+    pub(crate) fn mode_display(&self) -> Option<String> {
+        self.mode.as_ref().map(|mode| {
+            alttprde::MODES.iter()
+                .find(|m| m.name == mode)
+                .map(|m| m.display.to_owned())
+                .unwrap_or_else(|| mode.clone())
+        })
+    }
+
+    pub(crate) fn as_seed_options_str(&self) -> String {
+        match self.mode_display() {
+            Some(mode_display) => format!("{} mode", mode_display),
+            None => format!("mode not yet drafted"),
+        }
+    }
+
+    pub(crate) fn as_race_options_str(&self) -> String {
+        format!("standard race rules")
+    }
+
+    /// Build the full URL for generating a seed from boothisman.de
+    pub(crate) fn seed_url(&self) -> Option<String> {
+        let mode = self.mode.as_ref()?;
+        let base_url = format!("https://www.boothisman.de/Turnier/{}.php", mode);
+        if self.custom_choices.is_empty() {
+            Some(base_url)
+        } else {
+            let params: Vec<String> = self.custom_choices.iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect();
+            Some(format!("{}?{}", base_url, params.join("&")))
+        }
+    }
+
+    pub(crate) async fn for_race(db_pool: &PgPool, race: &Race, round_modes: Option<&HashMap<String, String>>) -> Self {
+        // Check round_modes first (for swiss events with fixed mode per round)
+        let mode = if let (Some(round_modes), Some(round)) = (round_modes, &race.round) {
+            round_modes.get(round).cloned()
+        } else {
+            None
+        }.or_else(|| {
+            // Fall back to draft state
+            race.draft.as_ref().and_then(|draft| {
+                let game = race.game.unwrap_or(1);
+                alttprde::mode_for_game(&draft.settings, game).map(|m| m.name.to_owned())
+            })
+        });
+
+        // Get custom choices from teams
+        let teams = race.teams();
+        let team_rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _)
+            .fetch_all(db_pool).await.expect("Database read failed");
+
+        // Collect raw choices from all teams (only include if BOTH players said yes)
+        // For alttprde, a setting is only enabled if both players opted in
+        let mut choice_counts: HashMap<String, u32> = HashMap::new();
+        let num_teams = team_rows.len() as u32;
+
+        for row in &team_rows {
+            if let Some(obj) = row.custom_choices.as_object() {
+                for (key, value) in obj {
+                    let is_yes = match value {
+                        serde_json::Value::String(s) => s == "yes" || s == "1" || s == "true",
+                        serde_json::Value::Bool(b) => *b,
+                        serde_json::Value::Number(n) => n.as_i64().is_some_and(|n| n != 0),
+                        _ => false,
+                    };
+                    if is_yes {
+                        *choice_counts.entry(key.clone()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        // Build URL params - only include choices where both players said yes
+        let mut custom_choices = HashMap::new();
+        for (key, count) in choice_counts {
+            if count >= num_teams && num_teams > 0 {
+                // Both players agreed to this option
+                let url_value = match key.as_str() {
+                    // Special case: pottery becomes "lottery"
+                    "pots" => "lottery".to_owned(),
+                    // Special case: pool_hard becomes pool=1
+                    "pool_hard" => {
+                        custom_choices.insert("pool".to_owned(), "1".to_owned());
+                        continue;
+                    }
+                    // Special case: pool_expert becomes pool=2 (overwrites hard if both set)
+                    "pool_expert" => {
+                        custom_choices.insert("pool".to_owned(), "2".to_owned());
+                        continue;
+                    }
+                    // All other boolean choices become "1"
+                    _ => "1".to_owned(),
+                };
+                custom_choices.insert(key, url_value);
+            }
+        }
+
+        AlttprDeRaceOptions { mode, custom_choices }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -2954,6 +3182,7 @@ impl Handler {
                 None
             });
             let available_settings = available_settings.unwrap_or_else(|| match draft_kind {
+                draft::Kind::AlttprDe9 => alttprde::MODES.iter().map(|m| Cow::Owned(format!("{}: {} mode", m.name, m.display))).collect(),
                 draft::Kind::S7 => s::S7_SETTINGS.into_iter().map(|setting| Cow::Owned(setting.description())).collect(),
                 draft::Kind::MultiworldS3 => mw::S3_SETTINGS.iter().copied().map(|mw::Setting { description, .. }| Cow::Borrowed(description)).collect(),
                 draft::Kind::MultiworldS4 => mw::S4_SETTINGS.iter().copied().map(|mw::Setting { description, .. }| Cow::Borrowed(description)).collect(),
@@ -3018,10 +3247,11 @@ impl Handler {
             lock!(@write state = self.race_state; if let Some(draft_kind) = goal.draft_kind() {
                 match *state {
                     RaceState::Init => match draft_kind {
-                        draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use “!seed draft” to start one.")).await?,
-                        draft::Kind::RslS7 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use “!seed draft” to start one. For more info about these options, use !presets")).await?,
-                        draft::Kind::TournoiFrancoS3 => ctx.say(format!("Désolé {reply_to}, le draft n'a pas débuté. Utilisez “!seed draft” pour en commencer un. Pour plus d'infos, utilisez !presets")).await?,
-                        draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use “!seed draft” to start one. For more info about these options, use !presets / le draft n'a pas débuté. Utilisez “!seed draft” pour en commencer un. Pour plus d'infos, utilisez !presets")).await?,
+                        draft::Kind::AlttprDe9 => ctx.say(format!("Sorry {reply_to}, no mode draft has been started. Use \"!seed draft\" to start one. Available modes: Ambroz1a, Crosskeys, Enemizer, Inverted, Open")).await?,
+                        draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use \"!seed draft\" to start one.")).await?,
+                        draft::Kind::RslS7 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use \"!seed draft\" to start one. For more info about these options, use !presets")).await?,
+                        draft::Kind::TournoiFrancoS3 => ctx.say(format!("Désolé {reply_to}, le draft n'a pas débuté. Utilisez \"!seed draft\" pour en commencer un. Pour plus d'infos, utilisez !presets")).await?,
+                        draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use \"!seed draft\" to start one. For more info about these options, use !presets / le draft n'a pas débuté. Utilisez \"!seed draft\" pour en commencer un. Pour plus d'infos, utilisez !presets")).await?,
                     },
                     RaceState::Draft { state: ref mut draft, .. } => {
                         let is_active_team = if let Some(OfficialRaceData { ref cal_event, ref event, .. }) = self.official_data {
@@ -3059,6 +3289,7 @@ impl Handler {
                             }
                         } else {
                             match draft_kind {
+                                draft::Kind::AlttprDe9 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the mode draft.")).await?,
                                 draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the settings draft.")).await?,
                                 draft::Kind::RslS7 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the weights draft.")).await?,
                                 draft::Kind::TournoiFrancoS3 => ctx.say(format!("Désolé {reply_to}, mais ce n'est pas votre tour.")).await?,
@@ -3135,6 +3366,24 @@ impl Handler {
         let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
         self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_seed(preroll, true, delay_until, version, settings, unlock_spoiler_log), language, article, description).await;
+    }
+
+    async fn roll_alttprde9_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
+        let official_start = cal_event.start().expect("handling room for official race without start time");
+        let delay_until = official_start - TimeDelta::minutes(10);
+
+        // Get event to access round_modes for swiss events
+        let mut transaction = ctx.global_state.db_pool.begin().await.expect("failed to start transaction");
+        let event = event::Data::new(&mut transaction, cal_event.race.series, &*cal_event.race.event).await.expect("failed to load event").expect("event not found");
+        transaction.commit().await.expect("failed to commit transaction");
+
+        let alttprde_options = AlttprDeRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race, event.round_modes.as_ref()).await;
+        let seed_options_str = alttprde_options.as_seed_options_str();
+        let race_options_str = alttprde_options.as_race_options_str();
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_alttprde9_seed(alttprde_options), language, article, format!("seed with {}", seed_options_str)).await;
+        ctx.send_message(format!("@entrants Remember: this race will be played with {}!",
+                                    race_options_str
+                                ), true, Vec::default()).await.expect("failed to send race options");
     }
 
     async fn roll_crosskeys2025_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
@@ -3325,7 +3574,7 @@ impl RaceHandler<GlobalState> for Handler {
                             )
                         }
                     }
-                }, goal != Goal::Crosskeys2025, Vec::default()).await?;
+                }, !matches!(goal, Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::Crosskeys2025), Vec::default()).await?;
                 let (race_state, high_seed_name, low_seed_name) = if let Some(draft_kind) = event.draft_kind() {
                     let state = cal_event.race.draft.clone().expect("missing draft state");
                     let [high_seed_name, low_seed_name] = if let draft::StepKind::Done(_) | draft::StepKind::DoneRsl { .. } = state.next_step(draft_kind, cal_event.race.game, &mut draft::MessageContext::None).await.to_racetime()?.kind {
@@ -3412,7 +3661,7 @@ impl RaceHandler<GlobalState> for Handler {
                     }
                 }
                 let fpa_enabled = match goal {
-                    Goal::Crosskeys2025 | Goal::MysteryD20 => false,
+                    Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::Crosskeys2025 | Goal::MysteryD20 => false,
                     _ => {
                         match data.status.value {
                             RaceStatusValue::Invitational => {
@@ -3551,6 +3800,7 @@ impl RaceHandler<GlobalState> for Handler {
                                     }),
                                 ],
                             ).await?,
+                            Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB => unreachable!("attempted to handle a user-opened AlttprDe9 room"),
                             Goal::Crosskeys2025 => unreachable!("attempted to handle a user-opened Crosskeys2025 room"),
                             Goal::MysteryD20 => unreachable!("attempted to handle a user-opened MysteryD20 room"),
                             Goal::LeagueS8 => ctx.send_message(
@@ -4299,6 +4549,10 @@ impl RaceHandler<GlobalState> for Handler {
                             | Goal::TournoiFrancoS4
                             | Goal::TournoiFrancoS5
                                 => unreachable!("should have draft state set"),
+                            | Goal::AlttprDe9Bracket
+                            | Goal::AlttprDe9SwissA
+                            | Goal::AlttprDe9SwissB
+                                => this.roll_alttprde9_seed(ctx, cal_event.clone(), English, "a").await,
                             | Goal::Crosskeys2025
                                 => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await,
                             Goal::MysteryD20 => this.roll_mysteryd20_seed(ctx, cal_event.clone(), English, "a").await,
@@ -5016,6 +5270,9 @@ impl RaceHandler<GlobalState> for Handler {
                             })
                         });
                     }
+                    | Goal::AlttprDe9Bracket
+                    | Goal::AlttprDe9SwissA
+                    | Goal::AlttprDe9SwissB
                     | Goal::Cc7
                     | Goal::CoOpS3
                     | Goal::CopaDoBrasil

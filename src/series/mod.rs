@@ -23,6 +23,7 @@ use {
     chrono::TimeDelta,
 };
 
+pub(crate) mod alttprde;
 pub(crate) mod br;
 pub(crate) mod coop;
 pub(crate) mod fr;
@@ -45,6 +46,7 @@ pub(crate) mod xkeys;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Sequence)]
 pub(crate) enum Series {
+    AlttprDe,
     BattleRoyale,
     CoOp,
     CopaDoBrasil,
@@ -69,6 +71,7 @@ pub(crate) enum Series {
 impl Series {
     pub(crate) fn slug(&self) -> &'static str {
         match self {
+            Self::AlttprDe => "alttprde",
             Self::BattleRoyale => "ohko",
             Self::CoOp => "coop",
             Self::CopaDoBrasil => "br",
@@ -93,6 +96,7 @@ impl Series {
 
     pub(crate) fn display_name(&self) -> &'static str {
         match self {
+            Self::AlttprDe => "Deutsche ALTTPR Turniere",
             Self::BattleRoyale => "Battle Royale",
             Self::CoOp => "Co-op Tournaments",
             Self::CopaDoBrasil => "Copa do Brasil",
@@ -118,7 +122,7 @@ impl Series {
     pub(crate) fn default_race_duration(&self) -> TimeDelta {
         match self {
             Self::TriforceBlitz => TimeDelta::hours(2),
-            Self::BattleRoyale | Self::Crosskeys | Self::MysteryD => TimeDelta::hours(2) + TimeDelta::minutes(30),
+            Self::AlttprDe | Self::BattleRoyale | Self::Crosskeys | Self::MysteryD => TimeDelta::hours(2) + TimeDelta::minutes(30),
             Self::CoOp | Self::MixedPools | Self::Scrubs | Self::SpeedGaming | Self::WeTryToBeBetter => TimeDelta::hours(3),
             Self::CopaDoBrasil | Self::League | Self::NineDaysOfSaws | Self::SongsOfHope | Self::Standard | Self::TournoiFrancophone => TimeDelta::hours(3) + TimeDelta::minutes(30),
             Self::Mq | Self::Multiworld | Self::Pictionary => TimeDelta::hours(4),

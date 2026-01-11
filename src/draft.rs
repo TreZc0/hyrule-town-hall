@@ -64,6 +64,7 @@ impl fmt::Display for Team {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Kind {
     // when defining a new variant, make sure to add it to event::Data::draft_kind and racetime_bot::Goal::draft_kind
+    AlttprDe9,
     S7,
     MultiworldS3,
     MultiworldS4,
@@ -77,6 +78,7 @@ pub(crate) enum Kind {
 impl Kind {
     fn language(&self) -> Language {
         match self {
+            | Self::AlttprDe9
             | Self::S7
             | Self::MultiworldS3
             | Self::MultiworldS4
@@ -239,7 +241,7 @@ pub(crate) struct Draft {
 impl Draft {
     pub(crate) async fn for_game1(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, kind: Kind, event: &event::Data<'_>, phase: Option<&str>, [team1, team2]: [&team::Team; 2]) -> Result<Self, cal::Error> {
         let [high_seed, low_seed] = match kind {
-            Kind::S7 | Kind::RslS7 => [
+            Kind::AlttprDe9 | Kind::S7 | Kind::RslS7 => [
                 min_by_key(team1, team2, |team| team.qualifier_rank).id,
                 max_by_key(team1, team2, |team| team.qualifier_rank).id,
             ],
@@ -315,7 +317,7 @@ impl Draft {
             went_first: None,
             skipped_bans: 0,
             settings: match kind {
-                Kind::S7 | Kind::MultiworldS3 | Kind::MultiworldS5 => HashMap::default(),
+                Kind::AlttprDe9 | Kind::S7 | Kind::MultiworldS3 | Kind::MultiworldS5 => HashMap::default(),
                 // accessibility accommodation for The Aussie Boiiz in mw/4 to default to CSMC
                 Kind::MultiworldS4 => HashMap::from_iter(
                     (loser == Id::from(17814073240662869290_u64) || winner == Id::from(17814073240662869290_u64))
@@ -343,6 +345,15 @@ impl Draft {
 
     fn pick_count(&self, kind: Kind) -> u8 {
         match kind {
+            Kind::AlttprDe9 => {
+                // Count: low_seed_ban, high_seed_ban, game1_mode, game2_mode (game3_mode is auto-assigned)
+                let mut count = 0;
+                if self.settings.contains_key("low_seed_ban") { count += 1; }
+                if self.settings.contains_key("high_seed_ban") { count += 1; }
+                if self.settings.contains_key("game1_mode") { count += 1; }
+                if self.settings.contains_key("game2_mode") { count += 1; }
+                count
+            }
             Kind::S7 => self.skipped_bans + u8::try_from(self.settings.len()).unwrap(),
             Kind::RslS7 => self.skipped_bans
                 + u8::try_from(rsl::FORCE_OFF_SETTINGS.into_iter().filter(|&rsl::ForceOffSetting { name, .. }| self.settings.contains_key(name)).count()).unwrap()
@@ -358,6 +369,188 @@ impl Draft {
 
     pub(crate) async fn next_step(&self, kind: Kind, game: Option<i16>, msg_ctx: &mut MessageContext<'_>) -> Result<Step, Error> {
         Ok(match kind {
+            Kind::AlttprDe9 => {
+                // For AlttprDe9, the draft is done once before the Bo3.
+                // If draft is complete, return Done with the mode for the current game.
+                if self.settings.contains_key("game3_mode") {
+                    // Draft is complete - return the mode for this game
+                    let game_num = game.unwrap_or(1);
+                    let mode = alttprde::mode_for_game(&self.settings, game_num)
+                        .expect("game3_mode set means all modes should be set");
+                    Step {
+                        kind: StepKind::Done(collect![format!("mode") => json!(mode.name)]),
+                        message: match msg_ctx {
+                            MessageContext::None => String::default(),
+                            MessageContext::Discord { .. } => format!(
+                                "Mode draft completed. Game {}: {}",
+                                game_num, mode.display
+                            ),
+                            MessageContext::RaceTime { .. } => format!(
+                                "Playing {} mode",
+                                mode.display
+                            ),
+                        },
+                    }
+                } else {
+                    // Draft in progress
+                    let step_num = self.pick_count(kind);
+                    // Get available modes (not yet banned or picked)
+                    let available_modes: Vec<_> = alttprde::MODES.iter()
+                        .filter(|m| {
+                            !self.settings.get("low_seed_ban").is_some_and(|b| b == m.name) &&
+                            !self.settings.get("high_seed_ban").is_some_and(|b| b == m.name) &&
+                            !self.settings.get("game1_mode").is_some_and(|b| b == m.name) &&
+                            !self.settings.get("game2_mode").is_some_and(|b| b == m.name)
+                        })
+                        .collect();
+
+                    match step_num {
+                        0 => {
+                            // Lower seed bans first
+                            Step {
+                                kind: StepKind::Ban {
+                                    team: Team::LowSeed,
+                                    available_settings: BanSettings(vec![
+                                        ("Modes", available_modes.iter().map(|m| BanSetting {
+                                            name: m.name,
+                                            display: m.display,
+                                            default: m.name,
+                                            default_display: m.display,
+                                            description: Cow::Owned(format!("{} mode", m.display)),
+                                        }).collect()),
+                                    ]),
+                                    skippable: false,
+                                    rsl: false,
+                                },
+                                message: match msg_ctx {
+                                    MessageContext::None => String::default(),
+                                    MessageContext::Discord { transaction, guild_id, command_ids, teams, .. } => {
+                                        let (_, mut low_seed) = teams.iter().partition::<Vec<_>, _>(|team| team.id == self.high_seed);
+                                        let low_seed = low_seed.remove(0);
+                                        MessageBuilder::default()
+                                            .mention_team(transaction, Some(*guild_id), low_seed).await?
+                                            .push(": You are the lower seed. Ban a mode using ")
+                                            .mention_command(command_ids.ban.unwrap(), "ban")
+                                            .push(".")
+                                            .build()
+                                    }
+                                    MessageContext::RaceTime { low_seed_name, .. } => format!(
+                                        "{low_seed_name}, you are the lower seed. Ban a mode using \"!ban <mode>\". Available modes: {}",
+                                        available_modes.iter().map(|m| m.name).collect::<Vec<_>>().join(", ")
+                                    ),
+                                },
+                            }
+                        }
+                        1 => {
+                            // Higher seed bans second
+                            Step {
+                                kind: StepKind::Ban {
+                                    team: Team::HighSeed,
+                                    available_settings: BanSettings(vec![
+                                        ("Modes", available_modes.iter().map(|m| BanSetting {
+                                            name: m.name,
+                                            display: m.display,
+                                            default: m.name,
+                                            default_display: m.display,
+                                            description: Cow::Owned(format!("{} mode", m.display)),
+                                        }).collect()),
+                                    ]),
+                                    skippable: false,
+                                    rsl: false,
+                                },
+                                message: match msg_ctx {
+                                    MessageContext::None => String::default(),
+                                    MessageContext::Discord { transaction, guild_id, command_ids, teams, .. } => {
+                                        let (mut high_seed, _) = teams.iter().partition::<Vec<_>, _>(|team| team.id == self.high_seed);
+                                        let high_seed = high_seed.remove(0);
+                                        MessageBuilder::default()
+                                            .mention_team(transaction, Some(*guild_id), high_seed).await?
+                                            .push(": You are the higher seed. Ban a mode using ")
+                                            .mention_command(command_ids.ban.unwrap(), "ban")
+                                            .push(".")
+                                            .build()
+                                    }
+                                    MessageContext::RaceTime { high_seed_name, .. } => format!(
+                                        "{high_seed_name}, you are the higher seed. Ban a mode using \"!ban <mode>\". Available modes: {}",
+                                        available_modes.iter().map(|m| m.name).collect::<Vec<_>>().join(", ")
+                                    ),
+                                },
+                            }
+                        }
+                        2 => {
+                            // Higher seed picks game 1 mode
+                            Step {
+                                kind: StepKind::Pick {
+                                    team: Team::HighSeed,
+                                    available_choices: DraftSettings(vec![
+                                        ("Modes", available_modes.iter().map(|m| DraftSetting {
+                                            name: m.name,
+                                            display: m.display,
+                                            options: vec![DraftSettingChoice { name: m.name, display: Cow::Borrowed(m.display) }],
+                                            description: Cow::Owned(format!("{} mode for Game 1", m.display)),
+                                        }).collect()),
+                                    ]),
+                                    skippable: false,
+                                    rsl: false,
+                                },
+                                message: match msg_ctx {
+                                    MessageContext::None => String::default(),
+                                    MessageContext::Discord { transaction, guild_id, command_ids, teams, .. } => {
+                                        let (mut high_seed, _) = teams.iter().partition::<Vec<_>, _>(|team| team.id == self.high_seed);
+                                        let high_seed = high_seed.remove(0);
+                                        MessageBuilder::default()
+                                            .mention_team(transaction, Some(*guild_id), high_seed).await?
+                                            .push(": Pick the mode for Game 1 using ")
+                                            .mention_command(command_ids.pick.unwrap(), "pick")
+                                            .push(".")
+                                            .build()
+                                    }
+                                    MessageContext::RaceTime { high_seed_name, .. } => format!(
+                                        "{high_seed_name}, pick the mode for Game 1 using \"!pick <mode>\". Available modes: {}",
+                                        available_modes.iter().map(|m| m.name).collect::<Vec<_>>().join(", ")
+                                    ),
+                                },
+                            }
+                        }
+                        3 => {
+                            // Lower seed picks game 2 mode, game 3 is auto-assigned
+                            Step {
+                                kind: StepKind::Pick {
+                                    team: Team::LowSeed,
+                                    available_choices: DraftSettings(vec![
+                                        ("Modes", available_modes.iter().map(|m| DraftSetting {
+                                            name: m.name,
+                                            display: m.display,
+                                            options: vec![DraftSettingChoice { name: m.name, display: Cow::Borrowed(m.display) }],
+                                            description: Cow::Owned(format!("{} mode for Game 2", m.display)),
+                                        }).collect()),
+                                    ]),
+                                    skippable: false,
+                                    rsl: false,
+                                },
+                                message: match msg_ctx {
+                                    MessageContext::None => String::default(),
+                                    MessageContext::Discord { transaction, guild_id, command_ids, teams, .. } => {
+                                        let (_, mut low_seed) = teams.iter().partition::<Vec<_>, _>(|team| team.id == self.high_seed);
+                                        let low_seed = low_seed.remove(0);
+                                        MessageBuilder::default()
+                                            .mention_team(transaction, Some(*guild_id), low_seed).await?
+                                            .push(": Pick the mode for Game 2 using ")
+                                            .mention_command(command_ids.pick.unwrap(), "pick")
+                                            .push(". The remaining mode will be used for Game 3.")
+                                            .build()
+                                    }
+                                    MessageContext::RaceTime { low_seed_name, .. } => format!(
+                                        "{low_seed_name}, pick the mode for Game 2 using \"!pick <mode>\". Available: {}. The remaining mode will be used for Game 3.",
+                                        available_modes.iter().map(|m| m.name).collect::<Vec<_>>().join(", ")
+                                    ),
+                                },
+                            }
+                        }
+                        4.. => unreachable!("pick_count should not exceed 4 for AlttprDe9"),
+                    }
+                }
+            }
             Kind::S7 => {
                 if let Some(went_first) = self.went_first {
                     match self.pick_count(kind) {
@@ -1238,7 +1431,7 @@ impl Draft {
                     Kind::TournoiFrancoS3 => &fr::S3_SETTINGS[..],
                     Kind::TournoiFrancoS4 => &fr::S4_SETTINGS[..],
                     Kind::TournoiFrancoS5 => &fr::S5_SETTINGS[..],
-                    Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 => unreachable!(),
+                    Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 => unreachable!(),
                 };
                 if let Some(went_first) = self.went_first {
                     let mut pick_count = self.pick_count(kind);
@@ -1255,7 +1448,7 @@ impl Draft {
                                 Kind::TournoiFrancoS3 => fr::resolve_s3_draft_settings(&self.settings),
                                 Kind::TournoiFrancoS4 => fr::resolve_s4_draft_settings(&self.settings),
                                 Kind::TournoiFrancoS5 => fr::resolve_s5_draft_settings(&self.settings),
-                                Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 => unreachable!(),
+                                Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 => unreachable!(),
                             }),
                             message: match msg_ctx {
                                 MessageContext::None => String::default(),
@@ -1267,7 +1460,7 @@ impl Draft {
                                 MessageContext::RaceTime { .. } => fr::display_draft_picks(kind.language(), all_settings, &self.settings),
                             },
                         }),
-                        (Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7, _, _) => unreachable!(),
+                        (Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7, _, _) => unreachable!(),
                     };
                     if select_mixed_dungeons {
                         Step {
@@ -1381,13 +1574,13 @@ impl Draft {
                                     Kind::TournoiFrancoS3 => 10,
                                     Kind::TournoiFrancoS4 => 8,
                                     Kind::TournoiFrancoS5 => 8,
-                                    Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 => unreachable!(),
+                                    Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 => unreachable!(),
                                 };
                                 let hard_settings_ok = self.settings.get("hard_settings_ok").map(|hard_settings_ok| &**hard_settings_ok).unwrap_or("no") == "ok";
                                 let can_ban = match kind {
                                     Kind::TournoiFrancoS3 | Kind::TournoiFrancoS4 => n < round_count - 2 || self.settings.get(team.choose("high_seed_has_picked", "low_seed_has_picked")).map(|has_picked| &**has_picked).unwrap_or("no") == "yes",
                                     Kind::TournoiFrancoS5 => n == 4 || n == 5,
-                                    Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 => unreachable!(),
+                                    Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 => unreachable!(),
                                 };
                                 let skippable = n == round_count - 1 && can_ban;
                                 let (hard_settings, classic_settings) = all_settings.iter()
@@ -1604,6 +1797,168 @@ impl Draft {
 
     pub(crate) async fn apply(&mut self, kind: Kind, game: Option<i16>, msg_ctx: &mut MessageContext<'_>, action: Action) -> Result<Result<String, String>, Error> {
         Ok(match kind {
+            Kind::AlttprDe9 => {
+                let step = self.next_step(kind, game, &mut MessageContext::None).await?;
+                match step.kind {
+                    StepKind::Done(_) => Err(match msg_ctx {
+                        MessageContext::None => String::default(),
+                        MessageContext::Discord { .. } => format!("Sorry, the mode draft is already completed."),
+                        MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, the mode draft is already completed."),
+                    }),
+                    StepKind::Ban { available_settings, team, .. } => {
+                        // Validate the action is a ban
+                        let mode_name = match action {
+                            Action::Ban { setting } => setting,
+                            Action::Pick { setting, .. } => setting, // Treat pick as ban during ban phase
+                            _ => return Ok(Err(match msg_ctx {
+                                MessageContext::None => String::default(),
+                                MessageContext::Discord { command_ids, .. } => MessageBuilder::default()
+                                    .push("Please use ")
+                                    .mention_command(command_ids.ban.unwrap(), "ban")
+                                    .push(" to ban a mode.")
+                                    .build(),
+                                MessageContext::RaceTime { reply_to, .. } => format!(
+                                    "Sorry {reply_to}, please use \"!ban <mode>\" to ban a mode."
+                                ),
+                            })),
+                        };
+                        // Validate the mode exists and is available
+                        if available_settings.get(&mode_name).is_none() {
+                            let available_modes: Vec<_> = alttprde::MODES.iter()
+                                .filter(|m| {
+                                    !self.settings.get("low_seed_ban").is_some_and(|b| b == m.name) &&
+                                    !self.settings.get("high_seed_ban").is_some_and(|b| b == m.name)
+                                })
+                                .collect();
+                            return Ok(Err(match msg_ctx {
+                                MessageContext::None => String::default(),
+                                MessageContext::Discord { .. } => {
+                                    let mut content = MessageBuilder::default();
+                                    content.push("Sorry, that mode is not available. Use one of: ");
+                                    for (i, mode) in available_modes.iter().enumerate() {
+                                        if i > 0 { content.push(", "); }
+                                        content.push_mono(mode.name);
+                                    }
+                                    content.build()
+                                }
+                                MessageContext::RaceTime { reply_to, .. } => format!(
+                                    "Sorry {reply_to}, that mode is not available. Use one of: {}",
+                                    available_modes.iter().map(|m| m.name).collect::<Vec<_>>().join(", ")
+                                ),
+                            }));
+                        }
+                        // Store the ban
+                        let ban_key = match team {
+                            Team::LowSeed => "low_seed_ban",
+                            Team::HighSeed => "high_seed_ban",
+                        };
+                        let mode = alttprde::MODES.iter().find(|m| m.name == mode_name).unwrap();
+                        self.settings.insert(Cow::Borrowed(ban_key), Cow::Owned(mode_name));
+                        Ok(match msg_ctx {
+                            MessageContext::None | MessageContext::RaceTime { .. } => String::default(),
+                            MessageContext::Discord { transaction, guild_id, team: team_data, .. } => MessageBuilder::default()
+                                .mention_team(transaction, Some(*guild_id), team_data).await?
+                                .push(if team_data.name_is_plural() { " have banned " } else { " has banned " })
+                                .push(mode.display)
+                                .push('.')
+                                .build(),
+                        })
+                    }
+                    StepKind::Pick { available_choices, team, .. } => {
+                        // Validate the action is a pick
+                        let mode_name = match action {
+                            Action::Pick { setting, .. } => setting,
+                            Action::Ban { setting } => setting, // Treat ban as pick during pick phase
+                            _ => return Ok(Err(match msg_ctx {
+                                MessageContext::None => String::default(),
+                                MessageContext::Discord { command_ids, .. } => MessageBuilder::default()
+                                    .push("Please use ")
+                                    .mention_command(command_ids.pick.unwrap(), "pick")
+                                    .push(" to pick a mode.")
+                                    .build(),
+                                MessageContext::RaceTime { reply_to, .. } => format!(
+                                    "Sorry {reply_to}, please use \"!pick <mode>\" to pick a mode."
+                                ),
+                            })),
+                        };
+                        // Validate the mode exists and is available
+                        if available_choices.get(&mode_name).is_none() {
+                            let available_modes: Vec<_> = alttprde::MODES.iter()
+                                .filter(|m| {
+                                    !self.settings.get("low_seed_ban").is_some_and(|b| b == m.name) &&
+                                    !self.settings.get("high_seed_ban").is_some_and(|b| b == m.name) &&
+                                    !self.settings.get("game1_mode").is_some_and(|b| b == m.name) &&
+                                    !self.settings.get("game2_mode").is_some_and(|b| b == m.name)
+                                })
+                                .collect();
+                            return Ok(Err(match msg_ctx {
+                                MessageContext::None => String::default(),
+                                MessageContext::Discord { .. } => {
+                                    let mut content = MessageBuilder::default();
+                                    content.push("Sorry, that mode is not available. Use one of: ");
+                                    for (i, mode) in available_modes.iter().enumerate() {
+                                        if i > 0 { content.push(", "); }
+                                        content.push_mono(mode.name);
+                                    }
+                                    content.build()
+                                }
+                                MessageContext::RaceTime { reply_to, .. } => format!(
+                                    "Sorry {reply_to}, that mode is not available. Use one of: {}",
+                                    available_modes.iter().map(|m| m.name).collect::<Vec<_>>().join(", ")
+                                ),
+                            }));
+                        }
+                        // Store the pick
+                        let pick_key = match team {
+                            Team::HighSeed => "game1_mode",
+                            Team::LowSeed => "game2_mode",
+                        };
+                        let mode = alttprde::MODES.iter().find(|m| m.name == mode_name).unwrap();
+                        self.settings.insert(Cow::Borrowed(pick_key), Cow::Owned(mode_name));
+
+                        // If game2_mode was just set, auto-assign game3_mode
+                        if pick_key == "game2_mode" {
+                            let remaining_mode = alttprde::MODES.iter()
+                                .find(|m| {
+                                    !self.settings.get("low_seed_ban").is_some_and(|b| b == m.name) &&
+                                    !self.settings.get("high_seed_ban").is_some_and(|b| b == m.name) &&
+                                    !self.settings.get("game1_mode").is_some_and(|b| b == m.name) &&
+                                    !self.settings.get("game2_mode").is_some_and(|b| b == m.name)
+                                })
+                                .expect("there should be one remaining mode");
+                            self.settings.insert(Cow::Borrowed("game3_mode"), Cow::Borrowed(remaining_mode.name));
+
+                            Ok(match msg_ctx {
+                                MessageContext::None | MessageContext::RaceTime { .. } => String::default(),
+                                MessageContext::Discord { transaction, guild_id, team: team_data, .. } => {
+                                    MessageBuilder::default()
+                                        .mention_team(transaction, Some(*guild_id), team_data).await?
+                                        .push(if team_data.name_is_plural() { " have picked " } else { " has picked " })
+                                        .push(mode.display)
+                                        .push(" for Game 2. ")
+                                        .push(remaining_mode.display)
+                                        .push(" will be used for Game 3.")
+                                        .build()
+                                }
+                            })
+                        } else {
+                            Ok(match msg_ctx {
+                                MessageContext::None | MessageContext::RaceTime { .. } => String::default(),
+                                MessageContext::Discord { transaction, guild_id, team: team_data, .. } => MessageBuilder::default()
+                                    .mention_team(transaction, Some(*guild_id), team_data).await?
+                                    .push(if team_data.name_is_plural() { " have picked " } else { " has picked " })
+                                    .push(mode.display)
+                                    .push(" for Game 1.")
+                                    .build(),
+                            })
+                        }
+                    }
+                    StepKind::GoFirst | StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => {
+                        // AlttprDe9 doesn't use these step types
+                        unreachable!("AlttprDe9 draft should not have GoFirst, BooleanChoice, or DoneRsl steps")
+                    }
+                }
+            }
             Kind::S7 => {
                 let resolved_action = match action {
                     Action::Ban { setting } => if let Some(setting) = s::S7_SETTINGS.into_iter().find(|&s::Setting { name, .. }| *name == setting) {
@@ -2853,7 +3208,7 @@ impl Draft {
                     Kind::TournoiFrancoS3 => &fr::S3_SETTINGS[..],
                     Kind::TournoiFrancoS4 => &fr::S4_SETTINGS[..],
                     Kind::TournoiFrancoS5 => &fr::S5_SETTINGS[..],
-                    Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 => unreachable!(),
+                    Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 => unreachable!(),
                 };
                 let resolved_action = match action {
                     Action::Ban { setting } => if let Some(setting) = all_settings.iter().find(|&&fr::Setting { name, .. }| *name == setting) {
