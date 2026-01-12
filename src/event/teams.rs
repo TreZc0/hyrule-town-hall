@@ -835,6 +835,15 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
         }),
         ShowStatus::None => {}
     }
+    if let Some(ref enter_flow) = data.enter_flow {
+        for requirement in &enter_flow.requirements {
+            if let enter::Requirement::BooleanChoice { label, .. } = requirement {
+                column_headers.push(html! {
+                    th : label;
+                });
+            }
+        }
+    }
     match data.draft_kind() {
         None | Some(draft::Kind::AlttprDe9 | draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5) => {}
         Some(draft::Kind::RslS7) => column_headers.push(html! {
@@ -848,35 +857,6 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                 th : "MQ OK";
             });
         }
-    }
-    if data.series == Series::Crosskeys {
-        column_headers.push(html! {
-            th : "All Dungeons";
-        });
-        column_headers.push(html! {
-            th : "Flute";
-        });
-        column_headers.push(html! {
-            th : "Inverted";
-        });
-        column_headers.push(html! {
-            th : "Keydrop";
-        });
-        column_headers.push(html! {
-            th : "Mirror Scroll";
-        });
-        column_headers.push(html! {
-            th : "Pseudoboots";
-        });
-        column_headers.push(html! {
-            th : "ZW";
-        });
-        column_headers.push(html! {
-            th : "Hovering/Moldorm Bouncing";
-        });
-        column_headers.push(html! {
-            th : "No Delay";
-        });
     }
     if show_restream_consent {
         column_headers.push(html! {
@@ -1152,6 +1132,17 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                 }
                                 ShowStatus::None => {}
                             }
+                            @if let Some(ref enter_flow) = data.enter_flow {
+                                @for requirement in &enter_flow.requirements {
+                                    @if let enter::Requirement::BooleanChoice { key, .. } = requirement {
+                                        td {
+                                            @if custom_choices.get(key).is_some_and(|v| v == "yes") {
+                                                : "✓";
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             @match data.draft_kind() {
                                 None | Some(draft::Kind::AlttprDe9 | draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5) => {}
                                 Some(draft::Kind::RslS7) => td {
@@ -1171,54 +1162,6 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                         }
                                     }
                                 }
-                            }
-                            @if data.series == Series::Crosskeys {
-                                td {
-                                    @if (custom_choices.get("all_dungeons").is_some_and(|v| v == "yes")) {
-                                        : "✓";
-                                    }
-                                }
-                                td {
-                                    @if (custom_choices.get("flute").is_some_and(|v| v == "yes")) {
-                                        : "✓";
-                                    }
-                                }
-                                td {
-                                    @if (custom_choices.get("inverted").is_some_and(|v| v == "yes")) {
-                                        : "✓";
-                                    }
-                                }
-                                td {
-                                    @if (custom_choices.get("keydrop").is_some_and(|v| v == "yes")) {
-                                        : "✓";
-                                    }
-                                }
-                                td {
-                                    @if (custom_choices.get("mirror_scroll").is_some_and(|v| v == "yes")) {
-                                        : "✓";
-                                    }
-                                }
-                                td {
-                                    @if (custom_choices.get("pseudoboots").is_some_and(|v| v == "yes")) {
-                                        : "✓";
-                                    }
-                                }
-                                td {
-                                    @if (custom_choices.get("zw").is_some_and(|v| v == "yes")) {
-                                        : "✓";
-                                    }
-                                }
-                                td {
-                                    @if (custom_choices.get("hovering").is_some_and(|v| v == "yes")) {
-                                        : "✓";
-                                    }
-                                }
-                                td {
-                                    @if (custom_choices.get("no_delay").is_some_and(|v| v == "yes")) {
-                                        : "✓";
-                                    }
-                                }
-
                             }
                             @if show_restream_consent {
                                 td {
