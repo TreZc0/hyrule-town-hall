@@ -1081,7 +1081,7 @@ impl<'v> StatusContext<'v> {
 async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, data: Data<'_>, mut ctx: StatusContext<'_>) -> Result<RawHtml<String>, Error> {
     let header = data.header(&mut transaction, me.as_ref(), Tab::MyStatus, false).await?;
     let content = if let Some(ref me) = me {
-        if let Some(row) = sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, role AS "role: Role", resigned, restream_consent FROM teams, team_members WHERE
+        if let Some(row) = sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, role AS "role: Role", resigned, restream_consent, custom_choices AS "custom_choices: Json<HashMap<String, String>>" FROM teams, team_members WHERE
             id = team
             AND series = $1
             AND event = $2
@@ -1435,6 +1435,25 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                     }
                                 }
                             });
+                            @if let Some(ref enter_flow) = data.enter_flow {
+                                @for requirement in &enter_flow.requirements {
+                                    @if let enter::Requirement::BooleanChoice { key, label } = requirement {
+                                        @let field_name = format!("custom_choices[{key}]");
+                                        @let field_id_yes = format!("custom_choices[{key}]-yes");
+                                        @let field_id_no = format!("custom_choices[{key}]-no");
+                                        @let yes_checked = ctx.field_value(&*field_name).map_or_else(|| row.custom_choices.get(key).is_some_and(|v| v == "yes"), |value| value == "yes");
+                                        @let no_checked = ctx.field_value(&*field_name).map_or_else(|| row.custom_choices.get(key).is_some_and(|v| v == "no"), |value| value == "no");
+                                        : form_field(&field_name, &mut errors, html! {
+                                            label(for = &field_name) : label;
+                                            br;
+                                            input(id = &field_id_yes, type = "radio", name = &field_name, value = "yes", checked? = yes_checked);
+                                            label(for = &field_id_yes) : "Yes";
+                                            input(id = &field_id_no, type = "radio", name = &field_name, value = "no", checked? = no_checked);
+                                            label(for = &field_id_no) : "No";
+                                        });
+                                    }
+                                }
+                            }
                             //TODO options to change team name or swap roles
                         }, errors, "Save");
                         p {
@@ -1489,6 +1508,7 @@ pub(crate) struct StatusForm {
     #[field(default = String::new())]
     csrf: String,
     restream_consent: bool,
+    custom_choices: HashMap<String, String>,
 }
 
 #[rocket::post("/event/<series>/<event>/status", data = "<form>")]
@@ -1518,7 +1538,7 @@ pub(crate) async fn status_post(pool: &State<PgPool>, http_client: &State<reqwes
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(status_page(transaction, http_client, Some(me), uri, csrf.as_ref(), data, StatusContext::Edit(form.context)).await?)
         } else {
-            sqlx::query!("UPDATE teams SET restream_consent = $1 WHERE id = $2", value.restream_consent, row.id as _).execute(&mut *transaction).await?;
+            sqlx::query!("UPDATE teams SET restream_consent = $1, custom_choices = $2 WHERE id = $3", value.restream_consent, Json(&value.custom_choices) as _, row.id as _).execute(&mut *transaction).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(status(series, event))))
         }
