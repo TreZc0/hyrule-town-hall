@@ -560,3 +560,8 @@ p.error {
   word-wrap: break-word;
   overflow-wrap: break-word;
 }
+
+.help {
+  margin-left: 5px;
+  font-style: oblique
+}
