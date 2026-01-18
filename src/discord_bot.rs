@@ -1628,9 +1628,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     } else {
                                         interaction.edit_response(ctx, EditInteractionResponse::new()
                                             .content(if let French = event.language {
-                                                "Désolé, cela n'est pas un timestamp au format de Discord. Vous pouvez utiliser <https://hammertime.cyou/> pour en générer un."
+                                                "Désolé, cela n'est pas un timestamp au format de Discord. Vous pouvez utiliser @time ou <https://hammertime.cyou/> pour en générer un."
                                             } else {
-                                                "Sorry, that doesn't look like a Discord timestamp. You can use <https://hammertime.cyou/> to generate one."
+                                                "Sorry, that doesn't look like a Discord timestamp. You can type `@time` or use <https://hammertime.cyou/> to generate one."
                                             })
                                         ).await?;
                                         transaction.rollback().await?;
@@ -1865,9 +1865,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                             .ephemeral(true)
                                             .content(if let French = event.language {
-                                                "Désolé, cela n'est pas un timestamp au format de Discord. Vous pouvez utiliser <https://hammertime.cyou/> pour en générer un."
+                                                "Désolé, cela n'est pas un timestamp au format de Discord. Vous pouvez utiliser `@time` ou <https://hammertime.cyou/> pour en générer un."
                                             } else {
-                                                "Sorry, that doesn't look like a Discord timestamp. You can use <https://hammertime.cyou/> to generate one."
+                                                "Sorry, that doesn't look like a Discord timestamp. You can type `@time` or use <https://hammertime.cyou/> to generate one."
                                             })
                                         )).await?;
                                         transaction.rollback().await?;
@@ -2707,7 +2707,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             content.mention_command(command_ids.schedule, "schedule");
             content.push(" pour schedule votre race en live ou ");
             content.mention_command(command_ids.schedule_async, "schedule-async");
-            content.push(" pour schedule votre async. Vous devez insérer un timestamp Discord que vous pouvez créer sur <https://hammertime.cyou/>.");
+            content.push(" pour schedule votre async. Vous devez insérer un timestamp Discord que vous pouvez créer sur <https://hammertime.cyou/> ou en tapant `@time`.");
         } else {
             for team in race.teams() {
                 content.mention_team(&mut transaction, Some(guild_id), team).await?;
@@ -2736,9 +2736,9 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
                 if event.asyncs_allowed() {
                     content.push(" to schedule as a live race or ");
                     content.mention_command(command_ids.schedule_async, "schedule-async");
-                    content.push(" to schedule as an async. These commands take a Discord timestamp, which you can generate at <https://hammertime.cyou/>.");
+                    content.push(" to schedule as an async. These commands take a Discord timestamp, which you can generate by typing `@time` or at <https://hammertime.cyou/>.");
                 } else {
-                    content.push(" to schedule your race. This command takes a Discord timestamp, which you can generate at <https://hammertime.cyou/>.");
+                    content.push(" to schedule your race. This command takes a Discord timestamp, which you can generate by typing `@time` or at <https://hammertime.cyou/>.");
                 }
                 if game_count > 1 {
                     content.push(" You can use the ");
