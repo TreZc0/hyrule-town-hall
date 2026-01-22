@@ -466,7 +466,7 @@ impl Draft {
                                     let high_seed = high_seed.remove(0);
                                     MessageBuilder::default()
                                         .mention_team(transaction, Some(*guild_id), high_seed).await?
-                                        .push(": You are the higher seed. Ban a mode using ")
+                                        .push(": You are up next. Ban a mode using ")
                                         .mention_command(command_ids.ban.unwrap(), "ban")
                                         .push(".")
                                         .build()

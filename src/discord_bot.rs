@@ -2530,20 +2530,26 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             }
                             draft::StepKind::Pick { available_choices, .. } if available_choices.get(setting).is_some() => {
                                 let setting = available_choices.get(setting).unwrap(); // `if let` guards are experimental
-                                msg_ctx.into_transaction().commit().await?;
-                                let response_content = if let French = event.language {
-                                    format!("Sélectionnez la configuration du setting {} :", setting.display)
+                                // For simple mode picks (like AlttprDe9) where there's only one option matching the setting name, skip the "select value" dialog and apply directly
+                                if setting.options.len() == 1 && setting.options[0].name == setting.name {
+                                    drop(msg_ctx);
+                                    draft_action(ctx, interaction, draft::Action::Pick { setting: setting.name.to_owned(), value: setting.name.to_owned() }).await?;
                                 } else {
-                                    format!("Select the value for the {} setting:", setting.display)
-                                };
-                                let mut response_msg = CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content(response_content);
-                                for option in setting.options {
-                                    response_msg = response_msg.button(CreateButton::new(format!("draft_option_{}__{}", setting.name, option.name)).label(option.display));
+                                    msg_ctx.into_transaction().commit().await?;
+                                    let response_content = if let French = event.language {
+                                        format!("Sélectionnez la configuration du setting {} :", setting.display)
+                                    } else {
+                                        format!("Select the value for the {} setting:", setting.display)
+                                    };
+                                    let mut response_msg = CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content(response_content);
+                                    for option in setting.options {
+                                        response_msg = response_msg.button(CreateButton::new(format!("draft_option_{}__{}", setting.name, option.name)).label(option.display));
+                                    }
+                                    response_msg = response_msg.button(CreateButton::new("draft_page_0").label(if let French = event.language { "Retour" } else { "Back" }).style(ButtonStyle::Secondary)); //TODO remember page?
+                                    interaction.create_response(ctx, CreateInteractionResponse::Message(response_msg)).await?;
                                 }
-                                response_msg = response_msg.button(CreateButton::new("draft_page_0").label(if let French = event.language { "Retour" } else { "Back" }).style(ButtonStyle::Secondary)); //TODO remember page?
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(response_msg)).await?;
                             }
                             | draft::StepKind::GoFirst
                             | draft::StepKind::Ban { .. }
