@@ -1211,10 +1211,32 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     }
                                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::AlttprDe9 => {}
                                 }
-                                draft_action(ctx, interaction, draft::Action::GoFirst(true)).await?;
+                                // Spawn on a thread with larger stack to prevent overflow in deep async call chains
+                                let ctx_clone = ctx.clone();
+                                let interaction_clone = interaction.clone();
+                                let handle = std::thread::Builder::new()
+                                    .name("draft-action-go-first".to_string())
+                                    .stack_size(4 * 1024 * 1024) // 4 MB stack
+                                    .spawn(move || {
+                                        tokio::runtime::Handle::current().block_on(async move {
+                                            draft_action(&ctx_clone, &interaction_clone, draft::Action::GoFirst(true)).await
+                                        })
+                                    })?;
+                                handle.join().map_err(|_| "draft action thread panicked")??;
                             }
                         } else if Some(interaction.data.id) == command_ids.no {
-                            draft_action(ctx, interaction, draft::Action::BooleanChoice(false)).await?;
+                            // Spawn on a thread with larger stack to prevent overflow in deep async call chains
+                            let ctx_clone = ctx.clone();
+                            let interaction_clone = interaction.clone();
+                            let handle = std::thread::Builder::new()
+                                .name("draft-action-no".to_string())
+                                .stack_size(4 * 1024 * 1024) // 4 MB stack
+                                .spawn(move || {
+                                    tokio::runtime::Handle::current().block_on(async move {
+                                        draft_action(&ctx_clone, &interaction_clone, draft::Action::BooleanChoice(false)).await
+                                    })
+                                })?;
+                            handle.join().map_err(|_| "draft action thread panicked")??;
                         } else if interaction.data.id == command_ids.post_status {
                             if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false).await? {
                                 let event = race.event(&mut transaction).await?;
@@ -2071,10 +2093,32 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     }
                                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::AlttprDe9 => {}
                                 }
-                                draft_action(ctx, interaction, draft::Action::GoFirst(false)).await?;
+                                // Spawn on a thread with larger stack to prevent overflow in deep async call chains
+                                let ctx_clone = ctx.clone();
+                                let interaction_clone = interaction.clone();
+                                let handle = std::thread::Builder::new()
+                                    .name("draft-action-go-second".to_string())
+                                    .stack_size(4 * 1024 * 1024) // 4 MB stack
+                                    .spawn(move || {
+                                        tokio::runtime::Handle::current().block_on(async move {
+                                            draft_action(&ctx_clone, &interaction_clone, draft::Action::GoFirst(false)).await
+                                        })
+                                    })?;
+                                handle.join().map_err(|_| "draft action thread panicked")??;
                             }
                         } else if Some(interaction.data.id) == command_ids.skip {
-                            draft_action(ctx, interaction, draft::Action::Skip).await?;
+                            // Spawn on a thread with larger stack to prevent overflow in deep async call chains
+                            let ctx_clone = ctx.clone();
+                            let interaction_clone = interaction.clone();
+                            let handle = std::thread::Builder::new()
+                                .name("draft-action-skip".to_string())
+                                .stack_size(4 * 1024 * 1024) // 4 MB stack
+                                .spawn(move || {
+                                    tokio::runtime::Handle::current().block_on(async move {
+                                        draft_action(&ctx_clone, &interaction_clone, draft::Action::Skip).await
+                                    })
+                                })?;
+                            handle.join().map_err(|_| "draft action thread panicked")??;
                         } else if interaction.data.id == command_ids.status {
                             if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false).await? {
                                 let event = race.event(&mut transaction).await?;
@@ -2148,7 +2192,18 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 .button(CreateButton::new("watchrole_party").label("watch party watcher"))
                             )).await?;
                         } else if Some(interaction.data.id) == command_ids.yes {
-                            draft_action(ctx, interaction, draft::Action::BooleanChoice(true)).await?;
+                            // Spawn on a thread with larger stack to prevent overflow in deep async call chains
+                            let ctx_clone = ctx.clone();
+                            let interaction_clone = interaction.clone();
+                            let handle = std::thread::Builder::new()
+                                .name("draft-action-yes".to_string())
+                                .stack_size(4 * 1024 * 1024) // 4 MB stack
+                                .spawn(move || {
+                                    tokio::runtime::Handle::current().block_on(async move {
+                                        draft_action(&ctx_clone, &interaction_clone, draft::Action::BooleanChoice(true)).await
+                                    })
+                                })?;
+                            handle.join().map_err(|_| "draft action thread panicked")??;
                         } else {
                             panic!("unexpected slash command")
                         }
@@ -2503,7 +2558,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     custom_id => if let Some(page) = custom_id.strip_prefix("ban_page_") {
                         send_draft_settings_page(ctx, interaction, "ban", page.parse().unwrap()).await?;
                     } else if let Some(setting) = custom_id.strip_prefix("ban_setting_") {
-                        draft_action(ctx, interaction, draft::Action::Ban { setting: setting.to_owned() }).await?;
+                        // Spawn on a thread with larger stack to prevent overflow in deep async call chains
+                        let setting = setting.to_owned();
+                        let ctx_clone = ctx.clone();
+                        let interaction_clone = interaction.clone();
+                        let handle = std::thread::Builder::new()
+                            .name("draft-action-ban".to_string())
+                            .stack_size(4 * 1024 * 1024) // 4 MB stack
+                            .spawn(move || {
+                                tokio::runtime::Handle::current().block_on(async move {
+                                    draft_action(&ctx_clone, &interaction_clone, draft::Action::Ban { setting }).await
+                                })
+                            })?;
+                        handle.join().map_err(|_| "draft action thread panicked")??;
                     } else if let Some(page) = custom_id.strip_prefix("draft_page_") {
                         send_draft_settings_page(ctx, interaction, "draft", page.parse().unwrap()).await?;
                     } else if let Some(setting) = custom_id.strip_prefix("draft_setting_") {
@@ -2559,7 +2626,20 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 },
                         }
                     } else if let Some((setting, value)) = custom_id.strip_prefix("draft_option_").and_then(|setting_value| setting_value.split_once("__")) {
-                        draft_action(ctx, interaction, draft::Action::Pick { setting: setting.to_owned(), value: value.to_owned() }).await?;
+                        // Spawn on a thread with larger stack to prevent overflow in deep async call chains
+                        let setting = setting.to_owned();
+                        let value = value.to_owned();
+                        let ctx_clone = ctx.clone();
+                        let interaction_clone = interaction.clone();
+                        let handle = std::thread::Builder::new()
+                            .name("draft-action-pick".to_string())
+                            .stack_size(4 * 1024 * 1024) // 4 MB stack
+                            .spawn(move || {
+                                tokio::runtime::Handle::current().block_on(async move {
+                                    draft_action(&ctx_clone, &interaction_clone, draft::Action::Pick { setting, value }).await
+                                })
+                            })?;
+                        handle.join().map_err(|_| "draft action thread panicked")??;
                     } else if let Some(speedgaming_id) = custom_id.strip_prefix("sgdisambig_") {
                         let (mut transaction, http_client) = {
                             let data = ctx.data.read().await;
