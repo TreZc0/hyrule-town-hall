@@ -3899,7 +3899,14 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 race.seed.files = Some(seed::Files::OotrWeb { id, gen_time, file_stem: Cow::Owned(file_stem) });
             }
             race.save(&mut transaction).await?;
-            
+
+            // Update Discord scheduled event if restream URLs changed
+            if race.video_urls != original_video_urls {
+                if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&*discord_ctx.read().await, &mut transaction, &race, &event).await {
+                    eprintln!("Failed to update Discord scheduled event for race {}: {}", race.id, e);
+                }
+            }
+
             // Send Discord notification if restream URLs were newly assigned or changed
             if !race.video_urls.is_empty() && race.video_urls != original_video_urls {
                 if let Some(discord_volunteer_info_channel) = event.discord_volunteer_info_channel {

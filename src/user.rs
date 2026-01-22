@@ -493,6 +493,22 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
     } else {
         html! {}
     };
+    let startgg = if let Some(ref startgg_id) = user.startgg_id {
+        html! {
+            p {
+                : "start.gg user ID: ";
+                code : startgg_id.to_string();
+            }
+        }
+    } else if me.as_ref().is_some_and(|me| me.id == user.id) {
+        html! {
+            p {
+                a(href = uri!(crate::auth::startgg_login(Some(uri!(profile(id)))))) : "Connect a start.gg account";
+            }
+        }
+    } else {
+        html! {}
+    };
     let mut events_organized = user.events_organized(&mut transaction).await?;
     events_organized.retain(|event| event.listed);
     events_organized.sort_by_key(|event| (event.base_start.is_some(), Reverse(event.base_start)));
@@ -504,11 +520,12 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
             bdi : user.display_name();
         }
         p {
-            : "Mido's House user ID: ";
+            : "Hyrule Town Hall user ID: ";
             code : user.id.to_string();
         }
         : racetime;
         : discord;
+        : startgg;
         @if user.is_archivist {
             p {
                 : "This user is an archivist: ";
@@ -520,10 +537,6 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
                 }
                 : " with adding data like race room and restream links to past races.";
             }
-        }
-        p {
-            : "Hyrule Town Hall user ID: ";
-            code : user.id.to_string();
         }
         @if !events_organized.is_empty() {
             p : "This user has organized the following events:";

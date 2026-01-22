@@ -1501,7 +1501,16 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         _ => panic!("unexpected slash command option type"),
                                     };
                                     if let Some(start) = parse_timestamp(start) {
-                                        if (start - Utc::now()).to_std().map_or(true, |schedule_notice| schedule_notice < event.min_schedule_notice) {
+                                        if (start - Utc::now()).to_std().map_or(true, |schedule_notice| schedule_notice > Duration::from_secs(365 * 24 * 60 * 60)) {
+                                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                                .content(if let French = event.language {
+                                                    format!("Désolé, les races ne peuvent pas être planifiées plus d'un an à l'avance.")
+                                                } else {
+                                                    format!("Sorry, races cannot be scheduled more than 1 year in advance.")
+                                                })
+                                            ).await?;
+                                            transaction.rollback().await?;
+                                        } else if (start - Utc::now()).to_std().map_or(true, |schedule_notice| schedule_notice < event.min_schedule_notice) {
                                             interaction.edit_response(ctx, EditInteractionResponse::new()
                                                 .content(if event.min_schedule_notice <= Duration::default() {
                                                     if let French = event.language {
@@ -1671,7 +1680,17 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         _ => panic!("unexpected slash command option type"),
                                     };
                                     if let Some(start) = parse_timestamp(start) {
-                                        if (start - Utc::now()).to_std().map_or(true, |schedule_notice| schedule_notice < event.min_schedule_notice) {
+                                        if (start - Utc::now()).to_std().map_or(true, |schedule_notice| schedule_notice > Duration::from_secs(365 * 24 * 60 * 60)) {
+                                            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                                .ephemeral(true)
+                                                .content(if let French = event.language {
+                                                    format!("Désolé, les races ne peuvent pas être planifiées plus d'un an à l'avance.")
+                                                } else {
+                                                    format!("Sorry, races cannot be scheduled more than 1 year in advance.")
+                                                })
+                                            )).await?;
+                                            transaction.rollback().await?;
+                                        } else if (start - Utc::now()).to_std().map_or(true, |schedule_notice| schedule_notice < event.min_schedule_notice) {
                                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                                 .ephemeral(true)
                                                 .content(if event.min_schedule_notice <= Duration::default() {

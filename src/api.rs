@@ -261,6 +261,15 @@ pub(crate) struct Mutation;
             race.last_edited_by = Some(me.id);
             race.last_edited_at = Some(Utc::now());
             race.save(&mut *db).await?;
+
+            // Update Discord scheduled event if applicable
+            let event = race.event(&mut *db).await?;
+            if let Some(discord_ctx) = ctx.data_opt::<crate::prelude::RwFuture<crate::discord_scheduled_events::DiscordCtx>>() {
+                if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&*discord_ctx.read().await, &mut *db, &race, &event).await {
+                    eprintln!("Failed to update Discord scheduled event for race {}: {}", race.id, e);
+                }
+            }
+
             Ok(Race(race))
         })
     }
@@ -280,6 +289,15 @@ pub(crate) struct Mutation;
             race.last_edited_by = Some(me.id);
             race.last_edited_at = Some(Utc::now());
             race.save(&mut *db).await?;
+
+            // Update Discord scheduled event if applicable
+            let event = race.event(&mut *db).await?;
+            if let Some(discord_ctx) = ctx.data_opt::<crate::prelude::RwFuture<crate::discord_scheduled_events::DiscordCtx>>() {
+                if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&*discord_ctx.read().await, &mut *db, &race, &event).await {
+                    eprintln!("Failed to update Discord scheduled event for race {}: {}", race.id, e);
+                }
+            }
+
             Ok(Race(race))
         })
     }
@@ -518,9 +536,10 @@ struct ConfirmedVolunteer {
     notes: Option<String>,
 }
 
-pub(crate) fn schema(db_pool: PgPool) -> MidosHouseSchema {
+pub(crate) fn schema(db_pool: PgPool, discord_ctx: RwFuture<crate::discord_scheduled_events::DiscordCtx>) -> MidosHouseSchema {
     Schema::build(Query, Mutation, EmptySubscription)
         .data(db_pool)
+        .data(discord_ctx)
         .finish()
 }
 
