@@ -261,21 +261,22 @@ impl AsyncRaceManager {
         let display_order = Self::get_display_order(race, async_part);
         content.push(display_order.to_string());
         content.push(" of this round.");
-        
-        // Add settings information for Crosskeys2025 events
-        if let racetime_bot::Goal::Crosskeys2025 = racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event") {
+
+        // Add settings information for Crosskeys2025 events only
+        let goal = racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event");
+        if matches!(goal, racetime_bot::Goal::Crosskeys2025) {
             let crosskeys_options = racetime_bot::CrosskeysRaceOptions::for_race(db_pool, race).await;
-            
+
             content.push_line("");
             content.push_line("");
             content.push("---");
             content.push_line("");
             content.push(format!("**Seed Settings:** {}", crosskeys_options.as_seed_options_str()));
             content.push_line("");
-            
+
             // Use the new method that excludes delay setting
             let race_options_str = crosskeys_options.as_race_options_str_no_delay();
-            
+
             content.push(format!("**Race Rules:** {}", race_options_str));
             content.push_line("");
             content.push("---");

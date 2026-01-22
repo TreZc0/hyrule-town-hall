@@ -1796,9 +1796,12 @@ impl Draft {
     }
 
     pub(crate) async fn apply(&mut self, kind: Kind, game: Option<i16>, msg_ctx: &mut MessageContext<'_>, action: Action) -> Result<Result<String, String>, Error> {
+        eprintln!("[DEBUG] apply: START");
         Ok(match kind {
             Kind::AlttprDe9 => {
+                eprintln!("[DEBUG] apply: AlttprDe9, calling next_step");
                 let step = self.next_step(kind, game, &mut MessageContext::None).await?;
+                eprintln!("[DEBUG] apply: next_step done");
                 match step.kind {
                     StepKind::Done(_) => Err(match msg_ctx {
                         MessageContext::None => String::default(),
