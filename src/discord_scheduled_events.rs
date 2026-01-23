@@ -243,6 +243,53 @@ pub(crate) async fn update_discord_scheduled_event(
         return delete_discord_scheduled_event(ctx, transaction, &mut race.clone(), event_config).await;
     }
 
+    // Try to fetch the current event to check its state
+    let current_event = guild_id.scheduled_event(&ctx.http, event_id, false).await;
+
+    // Check if event exists and is in a state where we can update it
+    // SCHEDULED = 1, ACTIVE = 2, COMPLETED = 3, CANCELLED = 4
+    // We can only update SCHEDULED events
+    use serenity::all::ScheduledEventStatus;
+    let needs_recreate = match current_event {
+        Ok(event) => event.status != ScheduledEventStatus::Scheduled,
+        Err(_) => true, // Event doesn't exist anymore
+    };
+
+    if needs_recreate {
+        // Event has started, completed, been cancelled, or doesn't exist - delete and recreate
+        // Delete the old event (if it still exists)
+        let _ = guild_id.delete_scheduled_event(&ctx.http, event_id).await;
+
+        // Clear our stored ID
+        sqlx::query!("UPDATE races SET discord_scheduled_event_id = NULL WHERE id = $1", race.id as _)
+            .execute(&mut **transaction)
+            .await?;
+
+        // Create a new event (inline to avoid recursion)
+        let title = generate_event_title(race, event_config, transaction, ctx).await?;
+        let description = generate_event_description(race, event_config);
+        let end_time = start + TimeDelta::hours(3);
+
+        let builder = CreateScheduledEvent::new(
+            ScheduledEventType::External,
+            title,
+            Timestamp::from_unix_timestamp(start.timestamp()).expect("valid timestamp"),
+        )
+        .description(description)
+        .end_time(Timestamp::from_unix_timestamp(end_time.timestamp()).expect("valid timestamp"))
+        .location(event_config.url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "https://ootrandomizer.com".to_string()));
+
+        let scheduled_event = guild_id.create_scheduled_event(&ctx.http, builder).await?;
+
+        // Store the new event ID in database
+        sqlx::query!("UPDATE races SET discord_scheduled_event_id = $1 WHERE id = $2",
+            PgSnowflake(scheduled_event.id) as _, race.id as _)
+            .execute(&mut **transaction)
+            .await?;
+
+        return Ok(());
+    }
+
     // Generate updated content
     let title = generate_event_title(race, event_config, transaction, ctx).await?;
     let description = generate_event_description(race, event_config);
