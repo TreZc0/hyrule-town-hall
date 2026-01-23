@@ -702,8 +702,10 @@ impl<'a> Data<'a> {
                         }
                     }
                 }
-                @let practice_seed_url = self.single_settings.is_some().then(|| uri!(practice_seed(self.series, &*self.event)));
+                @let is_ootr = self.game(&mut *transaction).await?.map(|g| g.name == "ootr").unwrap_or(false);
+                @let practice_seed_url = (is_ootr && self.single_settings.is_some()).then(|| uri!(practice_seed(self.series, &*self.event)));
                 @let practice_race_url = if_chain! {
+                    if is_ootr;
                     if let Some(goal) = racetime_bot::Goal::for_event(self.series, &self.event);
                     if goal.is_custom(); //TODO also support non-custom goals, see https://github.com/racetimeGG/racetime-app/issues/215
                     then {

@@ -1641,24 +1641,35 @@ impl GlobalState {
             let api_url = alttprde_options.seed_url()
                 .ok_or_else(|| RollError::AlttprDe(format!("Mode not yet drafted - cannot roll seed")))?;
 
+            eprintln!("[AlttprDe9] Starting seed roll");
+            eprintln!("[AlttprDe9] API URL: {}", api_url);
+
             // Call the boothisman.de API to get the YAML
             let response = reqwest::get(&api_url).await?;
             let yaml_content = response.text().await?;
 
+            eprintln!("[AlttprDe9] Received YAML from API ({} bytes):", yaml_content.len());
+            eprintln!("--- YAML START ---");
+            eprintln!("{}", yaml_content);
+            eprintln!("--- YAML END ---");
+
             // Generate a UUID for this seed
             let uuid = Uuid::new_v4();
+            eprintln!("[AlttprDe9] Generated UUID: {}", uuid);
 
             // Save YAML to temp file
             let yaml_file = tempfile::Builder::new().prefix("alttprde_").suffix(".yml").tempfile().at_unknown()?;
             let yaml_path = yaml_file.path();
             tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(yaml_content.as_bytes()).await.at(&yaml_file)?;
+            eprintln!("[AlttprDe9] Saved YAML to temp file: {}", yaml_path.display());
 
             // Run DungeonRandomizer.py with the YAML (same as Crosskeys)
             const MAX_RETRIES: u8 = 2;
 
             for attempt in 0..=MAX_RETRIES {
+                eprintln!("[AlttprDe9] Running DungeonRandomizer.py (attempt {}/{})", attempt + 1, MAX_RETRIES + 1);
                 let output = Command::new(PYTHON)
-                    .current_dir("../alttpr")
+                    .current_dir("../ALttPDoorRandomizer")
                     .arg("DungeonRandomizer.py")
                     .arg("--customizer")
                     .arg(yaml_path)
@@ -1672,19 +1683,36 @@ impl GlobalState {
                     .await
                     .at_command("DungeonRandomizer.py")?;
 
+                let stdout_str = String::from_utf8_lossy(&output.stdout);
+                let stderr_str = String::from_utf8_lossy(&output.stderr);
+
+                eprintln!("[AlttprDe9] DungeonRandomizer.py exited with code: {:?}", output.status.code());
+                if !stdout_str.is_empty() {
+                    eprintln!("[AlttprDe9] STDOUT:");
+                    eprintln!("{}", stdout_str);
+                }
+                if !stderr_str.is_empty() {
+                    eprintln!("[AlttprDe9] STDERR:");
+                    eprintln!("{}", stderr_str);
+                }
+
                 match output.status.code() {
                     Some(0) => {
+                        eprintln!("[AlttprDe9] DungeonRandomizer.py succeeded");
                         break;
                     }
                     Some(1) => {
                         // Randomizer failed to generate a seed, lets retry.
+                        eprintln!("[AlttprDe9] DungeonRandomizer.py failed with exit code 1");
                         let last_error = Some(String::from_utf8_lossy(&output.stderr).into_owned());
                         if attempt < MAX_RETRIES {
-                            // Wait a bit before retrying (exponential backoff)
-                            sleep(Duration::from_secs(10 + 2u64.pow(attempt as u32))).await;
+                            let backoff_secs = 10 + 2u64.pow(attempt as u32);
+                            eprintln!("[AlttprDe9] Retrying in {} seconds...", backoff_secs);
+                            sleep(Duration::from_secs(backoff_secs)).await;
                             continue;
                         }
                         // Max retries reached
+                        eprintln!("[AlttprDe9] Max retries reached, giving up");
                         return Err(RollError::Retries {
                             num_retries: MAX_RETRIES + 1,
                             last_error,
@@ -1692,6 +1720,7 @@ impl GlobalState {
                     }
                     _ => {
                         // Other error codes - fail immediately
+                        eprintln!("[AlttprDe9] DungeonRandomizer.py failed with unexpected exit code: {:?}", output.status.code());
                         return Err(RollError::Wheel(wheel::Error::CommandExit {
                             name: Cow::Borrowed("DungeonRandomizer.py"),
                             output
@@ -1700,10 +1729,23 @@ impl GlobalState {
                 }
             }
 
-            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await.ok();
+            // Verify the patch file was created
+            let patch_path = format!("/var/www/midos.house/seed/DR_{uuid}.bps");
+            eprintln!("[AlttprDe9] Checking for patch file: {}", patch_path);
+            if !tokio::fs::try_exists(&patch_path).await.at(&patch_path)? {
+                eprintln!("[AlttprDe9] ERROR: Patch file not found!");
+                return Err(RollError::AlttprDe(format!("DungeonRandomizer.py exited successfully but patch file was not found at {}", patch_path)));
+            }
+            eprintln!("[AlttprDe9] Patch file verified");
+
+            eprintln!("[AlttprDe9] Retrieving hash from spoiler file");
+            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await?;
+            eprintln!("[AlttprDe9] Hash retrieved: {:?}", file_hash);
+
+            eprintln!("[AlttprDe9] Seed roll completed successfully");
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
-                    file_hash,
+                    file_hash: Some(file_hash),
                     files: Some(seed::Files::AlttprDoorRando { uuid }),
                     progression_spoiler: false,
                     password: None,

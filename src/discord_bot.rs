@@ -98,9 +98,7 @@ impl MessageBuilderExt for MessageBuilder {
     }
 
     async fn mention_team(&mut self, transaction: &mut Transaction<'_, Postgres>, guild: Option<GuildId>, team: &Team) -> sqlx::Result<&mut Self> {
-        eprintln!("[DEBUG] mention_team: START team_id={:?}", team.id);
         if let Ok(member) = team.members(&mut *transaction).await?.into_iter().exactly_one() {
-            eprintln!("[DEBUG] mention_team: single member");
             self.mention_user(&member);
         } else {
             let team_role = if let (Some(guild), Some(racetime_slug)) = (guild, &team.racetime_slug) {
@@ -537,9 +535,7 @@ async fn send_draft_settings_page(ctx: &DiscordCtx, interaction: &impl GenericIn
 }
 
 async fn draft_action(ctx: &DiscordCtx, interaction: &impl GenericInteraction, action: draft::Action) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    eprintln!("[DEBUG] draft_action: START");
     let Some((event, mut race, draft_kind, mut msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
-    eprintln!("[DEBUG] draft_action: permissions checked, calling apply");
     match race.draft.as_mut().unwrap().apply(draft_kind, race.game, &mut msg_ctx, action).await? {
         Ok(apply_response) => {
             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -2898,11 +2894,9 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
         content.push_line("");
         content.push_line("");
         if let Some(mode_display) = alttprde_options.mode_display() {
-            content.push(format!("This race will be played in {} mode with {}.", mode_display, alttprde_options.as_race_options_str()));
-        } else {
-            // Mode not yet determined - draft will show separately, just mention race rules
-            content.push(format!("This race will be played with {}.", alttprde_options.as_race_options_str()));
+            content.push(format!("This race will be played in {} mode.", mode_display));
         }
+        // Mode not yet determined - draft will show separately
     }
     if let racetime_bot::Goal::Crosskeys2025 = racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event") {
         let crosskeys_options = CrosskeysRaceOptions::for_race(ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"), race).await;

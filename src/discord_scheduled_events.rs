@@ -150,17 +150,14 @@ fn generate_event_description(
                 ""
             };
 
-            // Extract channel name from URL if restreamer is set
-            let channel_info = if race.restreamers.get(lang).is_some() {
-                url.path()
-                    .trim_end_matches('/')
-                    .rsplit('/')
-                    .next()
-                    .map(|channel| format!(" ({})", channel))
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
+            // Extract channel name from URL
+            let channel_info = url.path()
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .filter(|s| !s.is_empty())
+                .map(|channel| format!(" ({})", channel))
+                .unwrap_or_default();
 
             format!("[{} Restream{}{}]({})", lang_str, platform, channel_info, url)
         })

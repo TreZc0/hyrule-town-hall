@@ -378,13 +378,19 @@ impl Draft {
                 let game_num = game.unwrap_or(1);
                 let mode = alttprde::mode_for_game(&self.settings, game_num)
                     .expect("game3_mode set means all modes should be set");
+                let mode1 = alttprde::mode_for_game(&self.settings, 1)
+                    .expect("game3_mode set means all modes should be set");
+                let mode2 = alttprde::mode_for_game(&self.settings, 2)
+                    .expect("game3_mode set means all modes should be set");
+                let mode3 = alttprde::mode_for_game(&self.settings, 3)
+                    .expect("game3_mode set means all modes should be set");
                 Step {
                     kind: StepKind::Done(collect![format!("mode") => json!(mode.name)]),
                     message: match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => format!(
-                            "Mode draft completed. Game {}: {}",
-                            game_num, mode.display
+                            "Mode draft completed.\nGame 1: {}\nGame 2: {}\nGame 3 (if necessary): {}",
+                            mode1.display, mode2.display, mode3.display
                         ),
                         MessageContext::RaceTime { .. } => format!(
                             "Playing {} mode",
