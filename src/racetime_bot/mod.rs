@@ -1641,21 +1641,12 @@ impl GlobalState {
             let api_url = alttprde_options.seed_url()
                 .ok_or_else(|| RollError::AlttprDe(format!("Mode not yet drafted - cannot roll seed")))?;
 
-            eprintln!("[AlttprDe9] Starting seed roll");
-            eprintln!("[AlttprDe9] API URL: {}", api_url);
-
             // Call the boothisman.de API to get the YAML
             let response = reqwest::get(&api_url).await?;
             let yaml_content = response.text().await?;
 
-            eprintln!("[AlttprDe9] Received YAML from API ({} bytes):", yaml_content.len());
-            eprintln!("--- YAML START ---");
-            eprintln!("{}", yaml_content);
-            eprintln!("--- YAML END ---");
-
             // Generate a UUID for this seed
             let uuid = Uuid::new_v4();
-            eprintln!("[AlttprDe9] Generated UUID: {}", uuid);
 
             // Parse the YAML and add meta settings
             let mut yaml_value: serde_yml::Value = serde_yml::from_str(&yaml_content)?;
@@ -1672,19 +1663,15 @@ impl GlobalState {
             }
             let updated_yaml_content = serde_yml::to_string(&yaml_value)?;
 
-            eprintln!("[AlttprDe9] Added meta settings to YAML");
-
             // Save YAML to temp file
             let yaml_file = tempfile::Builder::new().prefix("alttprde_").suffix(".yml").tempfile().at_unknown()?;
             let yaml_path = yaml_file.path();
             tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(updated_yaml_content.as_bytes()).await.at(&yaml_file)?;
-            eprintln!("[AlttprDe9] Saved YAML to temp file: {}", yaml_path.display());
 
             // Run DungeonRandomizer.py with the YAML (same as Crosskeys)
             const MAX_RETRIES: u8 = 2;
 
             for attempt in 0..=MAX_RETRIES {
-                eprintln!("[AlttprDe9] Running DungeonRandomizer.py (attempt {}/{})", attempt + 1, MAX_RETRIES + 1);
                 let output = Command::new(PYTHON)
                     .current_dir("../ALttPDoorRandomizer")
                     .arg("DungeonRandomizer.py")
@@ -1702,36 +1689,17 @@ impl GlobalState {
                     .await
                     .at_command("DungeonRandomizer.py")?;
 
-                let stdout_str = String::from_utf8_lossy(&output.stdout);
-                let stderr_str = String::from_utf8_lossy(&output.stderr);
-
-                eprintln!("[AlttprDe9] DungeonRandomizer.py exited with code: {:?}", output.status.code());
-                if !stdout_str.is_empty() {
-                    eprintln!("[AlttprDe9] STDOUT:");
-                    eprintln!("{}", stdout_str);
-                }
-                if !stderr_str.is_empty() {
-                    eprintln!("[AlttprDe9] STDERR:");
-                    eprintln!("{}", stderr_str);
-                }
-
                 match output.status.code() {
-                    Some(0) => {
-                        eprintln!("[AlttprDe9] DungeonRandomizer.py succeeded");
-                        break;
-                    }
+                    Some(0) => break,
                     Some(1) => {
                         // Randomizer failed to generate a seed, lets retry.
-                        eprintln!("[AlttprDe9] DungeonRandomizer.py failed with exit code 1");
                         let last_error = Some(String::from_utf8_lossy(&output.stderr).into_owned());
                         if attempt < MAX_RETRIES {
                             let backoff_secs = 10 + 2u64.pow(attempt as u32);
-                            eprintln!("[AlttprDe9] Retrying in {} seconds...", backoff_secs);
                             sleep(Duration::from_secs(backoff_secs)).await;
                             continue;
                         }
                         // Max retries reached
-                        eprintln!("[AlttprDe9] Max retries reached, giving up");
                         return Err(RollError::Retries {
                             num_retries: MAX_RETRIES + 1,
                             last_error,
@@ -1739,7 +1707,6 @@ impl GlobalState {
                     }
                     _ => {
                         // Other error codes - fail immediately
-                        eprintln!("[AlttprDe9] DungeonRandomizer.py failed with unexpected exit code: {:?}", output.status.code());
                         return Err(RollError::Wheel(wheel::Error::CommandExit {
                             name: Cow::Borrowed("DungeonRandomizer.py"),
                             output
@@ -1750,18 +1717,11 @@ impl GlobalState {
 
             // Verify the patch file was created
             let patch_path = format!("/var/www/midos.house/seed/DR_{uuid}.bps");
-            eprintln!("[AlttprDe9] Checking for patch file: {}", patch_path);
             if !tokio::fs::try_exists(&patch_path).await.at(&patch_path)? {
-                eprintln!("[AlttprDe9] ERROR: Patch file not found!");
                 return Err(RollError::AlttprDe(format!("DungeonRandomizer.py exited successfully but patch file was not found at {}", patch_path)));
             }
-            eprintln!("[AlttprDe9] Patch file verified");
 
-            eprintln!("[AlttprDe9] Retrieving hash from spoiler file");
             let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await?;
-            eprintln!("[AlttprDe9] Hash retrieved: {:?}", file_hash);
-
-            eprintln!("[AlttprDe9] Seed roll completed successfully");
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
                     file_hash: Some(file_hash),
@@ -2549,9 +2509,6 @@ impl SeedRollUpdate {
                 } else {
                     format!("@entrants Here is your seed: {seed_url}")
                 }).await?;
-                if let Some(ref file_hash) = extra.file_hash {
-                    ctx.say(format_hash(file_hash.clone())).await?;
-                }
                 match unlock_spoiler_log {
                     UnlockSpoilerLog::Now => ctx.say("The spoiler log is also available on the seed page.").await?,
                     UnlockSpoilerLog::Progression => ctx.say("The progression spoiler is also available on the seed page. The full spoiler will be available there after the race.").await?,
@@ -2587,6 +2544,17 @@ impl SeedRollUpdate {
                 };
                 
                 let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+
+                // Send hash to chat with proper emoji formatting
+                if let Some(ref file_hash) = extra.file_hash {
+                    let formatted_hash = format_hash_with_game_id(file_hash.clone(), &mut transaction, game_id).await.to_racetime()?;
+                    ctx.say(if let French = language {
+                        format!("Hash de la seed : {formatted_hash}")
+                    } else {
+                        format!("Seed Hash: {formatted_hash}")
+                    }).await?;
+                }
+
                 set_bot_raceinfo(ctx, &seed, rsl_preset, false, &mut transaction, game_id).await?;
                 transaction.commit().await.to_racetime()?;
                 
@@ -2738,12 +2706,6 @@ async fn format_hash_with_game_id(file_hash: [String; 5], transaction: &mut Tran
         }
     }
     Ok(emojis.join(" "))
-}
-
-fn format_hash(file_hash: [String; 5]) -> impl fmt::Display {
-    // This function is used for fallback display when we don't have database access
-    // For now, just join the hash icon names with spaces
-    file_hash.join(" ")
 }
 
 fn format_password(password: [OcarinaNote; 6]) -> impl fmt::Display {
@@ -5136,6 +5098,35 @@ impl RaceHandler<GlobalState> for Handler {
                     "Draftable settings:"
                 }
             }, reply_to).await?),
+            "reroll" => if let RaceStatusValue::Open | RaceStatusValue::Invitational = ctx.data().await.status.value {
+                lock!(@write state = self.race_state; match *state {
+                    RaceState::Init => {
+                        // Check if user is an entrant or monitor
+                        let data = ctx.data().await;
+                        let is_entrant = msg.user.as_ref().is_some_and(|user|
+                            data.entrants.iter().any(|e| e.user.as_ref().is_some_and(|u| u.id == user.id))
+                        );
+
+                        if !is_entrant && !self.can_monitor(ctx, is_monitor, msg).await.to_racetime()? {
+                            ctx.say(format!("Sorry {reply_to}, only @entrants or race monitors may use this command.")).await?;
+                        } else if let Some(settings) = goal.single_settings() {
+                            // Goal has default settings, use them to roll
+                            let event = self.official_data.as_ref().map(|OfficialRaceData { event, .. }| event);
+                            let unlock_spoiler_log = goal.unlock_spoiler_log(false, false);
+                            ctx.say(format!("@entrants Rerolling seed...")).await?;
+                            self.roll_seed(ctx, goal.preroll_seeds(event.map(|event| (event.series, &*event.event))), goal.rando_version(event), settings, unlock_spoiler_log, goal.language(), "a", format!("seed")).await;
+                        } else {
+                            // Goal requires parameters
+                            ctx.say(format!("Sorry {reply_to}, this goal requires settings to be specified. Please use the !seed command with the appropriate parameters to roll a seed.")).await?;
+                        }
+                    },
+                    RaceState::Draft { .. } => ctx.say(format!("Sorry {reply_to}, settings are currently being drafted. Please finish the draft first.")).await?,
+                    RaceState::Rolling => ctx.say(format!("Sorry {reply_to}, I'm currently rolling a seed. Please wait for it to finish.")).await?,
+                    RaceState::Rolled(_) | RaceState::SpoilerSent => ctx.say(format!("Sorry {reply_to}, a seed has already been rolled successfully. Check the race info!")).await?,
+                });
+            } else {
+                ctx.say(format!("Sorry {reply_to}, but the race has already started.")).await?;
+            },
             "unlock" => if self.can_monitor(ctx, is_monitor, msg).await.to_racetime()? {
                 self.locked = false;
                 ctx.say(if let French = goal.language() {
