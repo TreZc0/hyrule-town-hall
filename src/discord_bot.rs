@@ -753,15 +753,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     .kind(CommandType::ChatInput)
                     .add_context(InteractionContext::Guild)
                     .description("Resets the draft for this race. Staff only.")
-                    .add_option(CreateCommandOption::new(
-                        CommandOptionType::Integer,
-                        "game",
-                        "The game number within the match.",
-                    )
-                        .min_int_value(1)
-                        .max_int_value(255)
-                        .required(false)
-                    )
                 );
                 idx
             });
@@ -1082,8 +1073,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 });
                 Some(idx)
             });
-            eprintln!("DEBUG: Registering {} commands for guild {}", commands.len(), guild.id);
-            eprintln!("  reset_draft index: {:?}", reset_draft);
             let commands = guild.set_commands(ctx, commands).await?;
             ctx.data.write().await.entry::<CommandIds>().or_default().insert(guild.id, Some(CommandIds {
                 ban: ban.map(|idx| commands[idx].id),
@@ -1510,69 +1499,63 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     )).await?;
                                     return Ok(())
                                 }
-                                let game = interaction.data.options.first().and_then(|option| match option.value {
-                                    CommandDataOptionValue::Integer(value) => Some(i16::try_from(value).expect("game number out of range")),
-                                    _ => None,
-                                });
                                 let http_client = {
                                     let data = ctx.data.read().await;
                                     data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone()
                                 };
-                                match Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), game, true).await?.into_iter().at_most_one() {
+                                match Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), None, true).await?.into_iter().at_most_one() {
                                     Ok(None) => {
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                             .ephemeral(true)
-                                            .content(if game.is_some() {
-                                                "Sorry, there don't seem to be any races with that game number associated with this thread."
-                                            } else {
-                                                "Sorry, this thread is not associated with any races."
-                                            })
+                                            .content("Sorry, this thread is not associated with any races.")
                                         )).await?;
                                         transaction.rollback().await?;
                                     }
                                     Ok(Some(mut race)) => {
-                                        let (new_draft, teams) = if_chain! {
+                                        // Reset the draft
+                                        race.draft = if_chain! {
                                             if let Some(draft_kind) = event.draft_kind();
                                             if let Some(draft) = race.draft;
-                                            if let Entrants::Two(ref entrants) = race.entrants;
-                                            if let Ok(teams) = entrants.iter()
+                                            if let Entrants::Two(entrants) = &race.entrants;
+                                            if let Ok(low_seed) = entrants.iter()
                                                 .filter_map(as_variant!(Entrant::MidosHouseTeam))
-                                                .collect::<Vec<_>>()
-                                                .try_into();
+                                                .filter(|team| team.id != draft.high_seed)
+                                                .exactly_one();
                                             then {
-                                                let [team1, team2]: [&Team; 2] = teams;
-                                                let low_seed = if team1.id != draft.high_seed { team1 } else { team2 };
-                                                (Some(Draft::for_next_game(&mut transaction, draft_kind, draft.high_seed, low_seed.id).await?), Some(teams))
+                                                Some(Draft::for_next_game(&mut transaction, draft_kind, draft.high_seed, low_seed.id).await?)
                                             } else {
-                                                (None, None)
+                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                                    .ephemeral(true)
+                                                    .content("Sorry, unable to reset draft for this race.")
+                                                )).await?;
+                                                transaction.rollback().await?;
+                                                return Ok(())
                                             }
                                         };
 
-                                        if new_draft.is_none() {
-                                            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                .ephemeral(true)
-                                                .content("Sorry, unable to reset draft for this race.")
-                                            )).await?;
-                                            transaction.rollback().await?;
-                                            return Ok(())
-                                        }
-
-                                        race.draft = new_draft;
+                                        // Get teams for notification
+                                        let teams = if let Entrants::Two(entrants) = &race.entrants {
+                                            entrants.iter()
+                                                .filter_map(as_variant!(Entrant::MidosHouseTeam))
+                                                .collect::<Vec<_>>()
+                                        } else {
+                                            vec![]
+                                        };
 
                                         // Build message mentioning the teams
                                         let mut content = MessageBuilder::default();
-                                        if let Some([team1, team2]) = teams {
-                                            content.mention_team(&mut transaction, Some(guild_id), team1).await?;
+                                        if teams.len() == 2 {
+                                            content.mention_team(&mut transaction, Some(guild_id), teams[0]).await?;
                                             content.push(" ");
-                                            content.mention_team(&mut transaction, Some(guild_id), team2).await?;
+                                            content.mention_team(&mut transaction, Some(guild_id), teams[1]).await?;
                                             content.push(": The draft has been reset. ");
                                         } else {
                                             content.push("The draft has been reset. ");
                                         }
 
                                         if let Some(ref draft) = race.draft {
-                                            if let Some([team1, team2]) = teams {
-                                                let low_seed = if team1.id != draft.high_seed { team1 } else { team2 };
+                                            if teams.len() == 2 {
+                                                let low_seed = if teams[0].id != draft.high_seed { teams[0] } else { teams[1] };
                                                 content.mention_team(&mut transaction, Some(guild_id), low_seed).await?;
                                                 content.push(", you are the lower seed. Please use ");
                                                 content.mention_command(command_ids.ban.unwrap(), "ban");
