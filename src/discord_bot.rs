@@ -197,6 +197,7 @@ pub(crate) struct CommandIds {
     post_status: CommandId,
     pronoun_roles: CommandId,
     racing_role: CommandId,
+    reset_draft: Option<CommandId>,
     reset_race: CommandId,
     pub(crate) schedule: CommandId,
     pub(crate) schedule_async: CommandId,
@@ -817,6 +818,26 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 commands.push(command);
                 idx
             };
+            let reset_draft = if draft_kind.is_some() {
+                let idx = commands.len();
+                commands.push(CreateCommand::new("reset-draft")
+                    .kind(CommandType::ChatInput)
+                    .add_context(InteractionContext::Guild)
+                    .description("Resets the draft for this race. Staff only.")
+                    .add_option(CreateCommandOption::new(
+                        CommandOptionType::Integer,
+                        "game",
+                        "The game number within the match.",
+                    )
+                        .min_int_value(1)
+                        .max_int_value(255)
+                        .required(false)
+                    )
+                );
+                Some(idx)
+            } else {
+                None
+            };
             let schedule = {
                 let idx = commands.len();
                 commands.push(CreateCommand::new("schedule")
@@ -1074,6 +1095,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 post_status: commands[post_status].id,
                 pronoun_roles: commands[pronoun_roles].id,
                 racing_role: commands[racing_role].id,
+                reset_draft: reset_draft.map(|idx| commands[idx].id),
                 reset_race: commands[reset_race].id,
                 schedule: commands[schedule].id,
                 schedule_async: commands[schedule_async].id,
@@ -1454,6 +1476,116 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                             .ephemeral(false)
                                             .content(response_content)
+                                        )).await?;
+                                    }
+                                    Err(_) => {
+                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                            .ephemeral(true)
+                                            .content("Sorry, this thread is associated with multiple races. Please specify the game number.")
+                                        )).await?;
+                                        transaction.rollback().await?;
+                                    }
+                                }
+                            } else {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content("Sorry, this thread is not associated with an ongoing Hyrule Town Hall event.")
+                                )).await?;
+                            }
+                        } else if Some(interaction.data.id) == command_ids.reset_draft {
+                            let Some(parent_channel) = interaction.channel.as_ref().and_then(|thread| thread.parent_id) else {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content("Sorry, this command can only be used inside threads and forum posts.")
+                                )).await?;
+                                return Ok(())
+                            };
+                            let mut transaction = ctx.data.read().await.get::<DbPool>().as_ref().expect("database connection pool missing from Discord context").begin().await?;
+                            if let Some(event_row) = sqlx::query!(r#"SELECT series AS "series: Series", event FROM events WHERE discord_scheduling_channel = $1 AND end_time IS NULL"#, PgSnowflake(parent_channel) as _).fetch_optional(&mut *transaction).await? {
+                                let event = event::Data::new(&mut transaction, event_row.series, event_row.event).await?.expect("just received from database");
+                                if !event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id)) {
+                                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("Sorry, only event organizers can use this command.")
+                                    )).await?;
+                                    return Ok(())
+                                }
+                                let game = interaction.data.options.first().and_then(|option| match option.value {
+                                    CommandDataOptionValue::Integer(value) => Some(i16::try_from(value).expect("game number out of range")),
+                                    _ => None,
+                                });
+                                let http_client = {
+                                    let data = ctx.data.read().await;
+                                    data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone()
+                                };
+                                match Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), game, true).await?.into_iter().at_most_one() {
+                                    Ok(None) => {
+                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                            .ephemeral(true)
+                                            .content(if game.is_some() {
+                                                "Sorry, there don't seem to be any races with that game number associated with this thread."
+                                            } else {
+                                                "Sorry, this thread is not associated with any races."
+                                            })
+                                        )).await?;
+                                        transaction.rollback().await?;
+                                    }
+                                    Ok(Some(mut race)) => {
+                                        let (new_draft, teams) = if_chain! {
+                                            if let Some(draft_kind) = event.draft_kind();
+                                            if let Some(draft) = race.draft;
+                                            if let Entrants::Two(ref entrants) = race.entrants;
+                                            if let Ok(teams) = entrants.iter()
+                                                .filter_map(as_variant!(Entrant::MidosHouseTeam))
+                                                .collect::<Vec<_>>()
+                                                .try_into();
+                                            then {
+                                                let [team1, team2]: [&Team; 2] = teams;
+                                                let low_seed = if team1.id != draft.high_seed { team1 } else { team2 };
+                                                (Some(Draft::for_next_game(&mut transaction, draft_kind, draft.high_seed, low_seed.id).await?), Some(teams))
+                                            } else {
+                                                (None, None)
+                                            }
+                                        };
+
+                                        if new_draft.is_none() {
+                                            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                                .ephemeral(true)
+                                                .content("Sorry, unable to reset draft for this race.")
+                                            )).await?;
+                                            transaction.rollback().await?;
+                                            return Ok(())
+                                        }
+
+                                        race.draft = new_draft;
+
+                                        // Build message mentioning the teams
+                                        let mut content = MessageBuilder::default();
+                                        if let Some([team1, team2]) = teams {
+                                            content.mention_team(&mut transaction, Some(guild_id), team1).await?;
+                                            content.push(" ");
+                                            content.mention_team(&mut transaction, Some(guild_id), team2).await?;
+                                            content.push(": The draft has been reset. ");
+                                        } else {
+                                            content.push("The draft has been reset. ");
+                                        }
+
+                                        if let Some(ref draft) = race.draft {
+                                            if let Some([team1, team2]) = teams {
+                                                let low_seed = if team1.id != draft.high_seed { team1 } else { team2 };
+                                                content.mention_team(&mut transaction, Some(guild_id), low_seed).await?;
+                                                content.push(", you are the lower seed. Please use ");
+                                                content.mention_command(command_ids.ban.unwrap(), "ban");
+                                                content.push(" to start the draft.");
+                                            }
+                                        }
+
+                                        race.save(&mut transaction).await?;
+                                        transaction.commit().await?;
+
+                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                            .ephemeral(false)
+                                            .content(content.build())
                                         )).await?;
                                     }
                                     Err(_) => {

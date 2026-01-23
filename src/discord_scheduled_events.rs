@@ -136,10 +136,33 @@ fn generate_event_description(
                 German => "DE",
                 Portuguese => "PT",
             };
-            let restreamer = race.restreamers.get(lang)
-                .map(|r| format!(" ({})", r))
-                .unwrap_or_default();
-            format!("[{} Restream{}]({})", lang_str, restreamer, url)
+
+            // Detect platform from URL
+            let platform = if let Some(host) = url.host_str() {
+                if host.contains("twitch.tv") {
+                    " on Twitch"
+                } else if host.contains("youtube.com") || host.contains("youtu.be") {
+                    " on YouTube"
+                } else {
+                    ""
+                }
+            } else {
+                ""
+            };
+
+            // Extract channel name from URL if restreamer is set
+            let channel_info = if race.restreamers.get(lang).is_some() {
+                url.path()
+                    .trim_end_matches('/')
+                    .rsplit('/')
+                    .next()
+                    .map(|channel| format!(" ({})", channel))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+
+            format!("[{} Restream{}{}]({})", lang_str, platform, channel_info, url)
         })
         .collect();
 
