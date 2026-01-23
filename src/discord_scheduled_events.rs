@@ -190,6 +190,12 @@ pub(crate) async fn create_discord_scheduled_event(
         return Ok(());
     }
 
+    // Don't create events that start in less than 5 minutes
+    // Discord will immediately transition them to ACTIVE, causing issues
+    if start < Utc::now() + TimeDelta::minutes(5) {
+        return Ok(());
+    }
+
     // If event already exists, update it instead
     if race.discord_scheduled_event_id.is_some() {
         return update_discord_scheduled_event(ctx, transaction, race, event_config).await;
@@ -256,16 +262,22 @@ pub(crate) async fn update_discord_scheduled_event(
     };
 
     if needs_recreate {
-        // Event has started, completed, been cancelled, or doesn't exist - delete and recreate
+        // Event has started, completed, been cancelled, or doesn't exist
         // Delete the old event (if it still exists)
         let _ = guild_id.delete_scheduled_event(&ctx.http, event_id).await;
 
-        // Clear our stored ID
+        // Clear our stored ID from database
         sqlx::query!("UPDATE races SET discord_scheduled_event_id = NULL WHERE id = $1", race.id as _)
             .execute(&mut **transaction)
             .await?;
 
-        // Create a new event (inline to avoid recursion)
+        // Only recreate if the new start time is at least 5 minutes in the future
+        // Otherwise Discord will immediately transition it to ACTIVE, causing the same issue
+        if start < Utc::now() + TimeDelta::minutes(5) {
+            return Ok(());
+        }
+
+        // Create a new event
         let title = generate_event_title(race, event_config, transaction, ctx).await?;
         let description = generate_event_description(race, event_config);
         let end_time = start + TimeDelta::hours(3);

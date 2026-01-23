@@ -5495,10 +5495,6 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
         ("ootr".to_string(), client_id.to_string(), client_secret.to_string())
     };
     
-    // Debug logging to show which credentials are being used
-    println!("DEBUG: Creating room for category '{}' with client_id '{}' and client_secret '{}'", 
-             category_slug, client_id, client_secret);
-    
     let room_url = match cal_event.should_create_room(&mut *transaction, event).await.to_racetime()? {
         RaceHandleMode::None => return Ok(None),
         RaceHandleMode::Notify => Err("please get your equipment and report to the tournament room"),

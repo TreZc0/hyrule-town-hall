@@ -1657,6 +1657,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             }
                                             let mut cal_event = cal::Event { kind: cal::EventKind::Normal, race };
                                             if start - Utc::now() < TimeDelta::minutes(30) {
+                                                // Commit transaction BEFORE creating room so race handler can find it in database
+                                                transaction.commit().await?;
+
                                                 let (http_client, new_room_lock, racetime_host, racetime_config, clean_shutdown) = {
                                                     let data = ctx.data.read().await;
                                                     (
@@ -1667,6 +1670,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         data.get::<CleanShutdown>().expect("clean shutdown state missing from Discord context").clone(),
                                                     )
                                                 };
+
+                                                // Start a new transaction for room creation
+                                                let mut transaction = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?;
                                                 lock!(new_room_lock = new_room_lock; {
                                                     if let Some((_, msg)) = racetime_bot::create_room(&mut transaction, ctx, &racetime_host, &racetime_config.client_id, &racetime_config.client_secret, &http_client, clean_shutdown, &cal_event, &event).await? {
                                                         if let Some(channel) = event.discord_race_room_channel {
