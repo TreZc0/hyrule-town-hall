@@ -10,7 +10,7 @@ use crate::{
 /// The 5 available modes for the German ALTTPR tournament season 9.
 /// Each mode corresponds to a different PHP file on boothisman.de.
 pub(crate) const MODES: [Mode; 5] = [
-    Mode { name: "ambrozia", display: "Ambroz1a" },
+    Mode { name: "ambroz1a", display: "Ambroz1a" },
     Mode { name: "crosskeys", display: "Crosskeys" },
     Mode { name: "enemizer", display: "Enemizer" },
     Mode { name: "inverted", display: "Inverted" },
