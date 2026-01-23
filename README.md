@@ -22,5 +22,5 @@ The Hyrule Town Hall codebase is currently a side project, but it doesn't have t
 
 Discord invite link with appropriate permissions (only useable by members of the Hyrule Town Hall Discord developer team):
 
-* Dev: <https://discord.com/api/oauth2/authorize?client_id=1375404830037639189&scope=bot&permissions=318096427008>
-* Production: <https://discord.com/api/oauth2/authorize?client_id=1375404601016324226&scope=bot&permissions=318096427008>
+* Dev: <https://discord.com/api/oauth2/authorize?client_id=1375404830037639189&scope=bot&permissions=2269795995502592>
+* Production: <https://discord.com/api/oauth2/authorize?client_id=1375404601016324226&scope=bot&permissions=2269795995502592>

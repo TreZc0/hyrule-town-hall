@@ -1082,6 +1082,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 });
                 Some(idx)
             });
+            eprintln!("DEBUG: Registering {} commands for guild {}", commands.len(), guild.id);
+            eprintln!("  reset_draft index: {:?}", reset_draft);
             let commands = guild.set_commands(ctx, commands).await?;
             ctx.data.write().await.entry::<CommandIds>().or_default().insert(guild.id, Some(CommandIds {
                 ban: ban.map(|idx| commands[idx].id),
