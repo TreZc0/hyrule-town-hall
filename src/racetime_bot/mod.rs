@@ -1657,10 +1657,27 @@ impl GlobalState {
             let uuid = Uuid::new_v4();
             eprintln!("[AlttprDe9] Generated UUID: {}", uuid);
 
+            // Parse the YAML and add meta settings
+            let mut yaml_value: serde_yml::Value = serde_yml::from_str(&yaml_content)?;
+            let meta = AlttprDoorRandoMeta {
+                bps: true,
+                name: uuid.to_string(),
+                race: true,
+                skip_playthrough: true,
+                spoiler: "full",
+                suppress_rom: true,
+            };
+            if let serde_yml::Value::Mapping(ref mut map) = yaml_value {
+                map.insert(serde_yml::Value::String("meta".to_string()), serde_yml::to_value(&meta)?);
+            }
+            let updated_yaml_content = serde_yml::to_string(&yaml_value)?;
+
+            eprintln!("[AlttprDe9] Added meta settings to YAML");
+
             // Save YAML to temp file
             let yaml_file = tempfile::Builder::new().prefix("alttprde_").suffix(".yml").tempfile().at_unknown()?;
             let yaml_path = yaml_file.path();
-            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(yaml_content.as_bytes()).await.at(&yaml_file)?;
+            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(updated_yaml_content.as_bytes()).await.at(&yaml_file)?;
             eprintln!("[AlttprDe9] Saved YAML to temp file: {}", yaml_path.display());
 
             // Run DungeonRandomizer.py with the YAML (same as Crosskeys)
@@ -4616,7 +4633,16 @@ impl RaceHandler<GlobalState> for Handler {
                             },
                             Goal::TriforceBlitz => this.roll_tfb_dev_seed(ctx, true, goal.unlock_spoiler_log(true, false), English, "a", format!("Triforce Blitz S4 co-op seed")).await,
                         },
-                        RaceState::Draft { .. } => this.advance_draft(ctx, &state).await?,
+                        RaceState::Draft { state: ref draft_state, .. } => {
+                            this.advance_draft(ctx, &state).await?;
+                            // Warn if draft is incomplete for alttprde9bracket
+                            if matches!(goal, Goal::AlttprDe9Bracket) {
+                                let step = draft_state.next_step(draft::Kind::AlttprDe9, cal_event.race.game, &mut draft::MessageContext::None).await.to_racetime()?;
+                                if !matches!(step.kind, draft::StepKind::Done(_)) {
+                                    ctx.say("@entrants WARNING: The mode draft for this match is not complete! Please complete the draft as soon as possible. The seed cannot be rolled until the draft is finished.").await.to_racetime()?;
+                                }
+                            }
+                        },
                         RaceState::Rolling | RaceState::Rolled(_) | RaceState::SpoilerSent => {}
                     }
                 }
@@ -6024,7 +6050,17 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                     for cal_event in rooms_to_open {
                         let mut transaction = global_state.db_pool.begin().await?;
                         let event = cal_event.race.event(&mut transaction).await?;
-                        if let Some((is_room_url, msg)) = create_room(&mut transaction, &*global_state.discord_ctx.read().await, &global_state.host_info, &global_state.racetime_config.client_id, &global_state.racetime_config.client_secret, &global_state.http_client, global_state.clean_shutdown.clone(), &cal_event, &event).await? {
+                        if let Some((is_room_url, mut msg)) = create_room(&mut transaction, &*global_state.discord_ctx.read().await, &global_state.host_info, &global_state.racetime_config.client_id, &global_state.racetime_config.client_secret, &global_state.http_client, global_state.clean_shutdown.clone(), &cal_event, &event).await? {
+                            // Add warning if this is an alttprde9bracket race with incomplete draft
+                            if event.series == Series::AlttprDe && event.event == "9bracket" {
+                                if let Some(draft) = &cal_event.race.draft {
+                                    if let Ok(step) = draft.next_step(draft::Kind::AlttprDe9, cal_event.race.game, &mut draft::MessageContext::None).await {
+                                        if !matches!(step.kind, draft::StepKind::Done(_)) {
+                                            msg.push_str("\n\n⚠️ **WARNING**: The mode draft for this match is not complete! Please complete the draft as soon as possible. The seed cannot be rolled until the draft is finished.");
+                                        }
+                                    }
+                                }
+                            }
                             let ctx = global_state.discord_ctx.read().await;
                             if is_room_url && cal_event.is_private_async_part() {
                                 let msg = match cal_event.race.entrants {
