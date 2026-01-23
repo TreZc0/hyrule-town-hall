@@ -747,6 +747,24 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 });
                 idx
             });
+            let reset_draft = draft_kind.map(|_| {
+                let idx = commands.len();
+                commands.push(CreateCommand::new("reset-draft")
+                    .kind(CommandType::ChatInput)
+                    .add_context(InteractionContext::Guild)
+                    .description("Resets the draft for this race. Staff only.")
+                    .add_option(CreateCommandOption::new(
+                        CommandOptionType::Integer,
+                        "game",
+                        "The game number within the match.",
+                    )
+                        .min_int_value(1)
+                        .max_int_value(255)
+                        .required(false)
+                    )
+                );
+                idx
+            });
             let post_status = {
                 let idx = commands.len();
                 commands.push(CreateCommand::new("post-status")
@@ -817,26 +835,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 );
                 commands.push(command);
                 idx
-            };
-            let reset_draft = if draft_kind.is_some() {
-                let idx = commands.len();
-                commands.push(CreateCommand::new("reset-draft")
-                    .kind(CommandType::ChatInput)
-                    .add_context(InteractionContext::Guild)
-                    .description("Resets the draft for this race. Staff only.")
-                    .add_option(CreateCommandOption::new(
-                        CommandOptionType::Integer,
-                        "game",
-                        "The game number within the match.",
-                    )
-                        .min_int_value(1)
-                        .max_int_value(255)
-                        .required(false)
-                    )
-                );
-                Some(idx)
-            } else {
-                None
             };
             let schedule = {
                 let idx = commands.len();
