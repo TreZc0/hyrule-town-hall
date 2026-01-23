@@ -1,0 +1,10 @@
+query SetQuery($setID: ID!) {
+  set(id: $setID) {
+    id
+    games {
+      id
+      orderNum
+      winnerId
+    }
+  }
+}

@@ -1,4 +1,5 @@
 use {
+    std::collections::HashMap,
     tokio::sync::RwLockReadGuard,
     crate::{
         prelude::*,
@@ -71,6 +72,76 @@ impl Score for tfb::Score {
     fn as_duration(&self) -> Option<Option<Duration>> {
         None
     }
+}
+
+/// Queries start.gg for current set state and builds complete game results including the new game
+async fn collect_completed_game_results(
+    http_client: &reqwest::Client,
+    startgg_token: &str,
+    set_id: &startgg::ID,
+    current_game: i16,
+    current_winner_id: &startgg::ID,
+) -> Result<Vec<startgg::GameResult>, Error> {
+    let set_data = startgg::query_uncached::<startgg::SetQuery>(
+        http_client,
+        startgg_token,
+        startgg::set_query::Variables {
+            set_id: set_id.clone(),
+        }
+    ).await.to_racetime()?;
+
+    let mut results = Vec::new();
+
+    if let Some(set) = set_data.set {
+        if let Some(games) = set.games {
+            for game in games.into_iter().flatten() {
+                if let (Some(order_num), Some(winner_id)) = (game.order_num, game.winner_id) {
+                    results.push(startgg::GameResult {
+                        game_num: order_num,
+                        winner_entrant_id: startgg::ID(winner_id.to_string()),
+                    });
+                }
+            }
+        }
+    }
+
+    let current_game_num = current_game as i64;
+    if let Some(existing) = results.iter_mut().find(|r| r.game_num == current_game_num) {
+        // Update existing game (shouldn't normally happen, but handle it)
+        existing.winner_entrant_id = current_winner_id.clone();
+    } else {
+        results.push(startgg::GameResult {
+            game_num: current_game_num,
+            winner_entrant_id: current_winner_id.clone(),
+        });
+    }
+
+    results.sort_by_key(|r| r.game_num);
+
+    Ok(results)
+}
+
+fn is_match_decided(game_results: &[startgg::GameResult], total_games: i16) -> bool {
+    let games_to_win = (total_games / 2) + 1;
+
+    let mut win_counts: HashMap<&startgg::ID, i16> = HashMap::new();
+    for result in game_results {
+        *win_counts.entry(&result.winner_entrant_id).or_insert(0) += 1;
+    }
+
+    win_counts.values().any(|&wins| wins >= games_to_win)
+}
+
+fn determine_overall_winner(game_results: &[startgg::GameResult]) -> startgg::ID {
+    let mut win_counts: HashMap<startgg::ID, i16> = HashMap::new();
+    for result in game_results {
+        *win_counts.entry(result.winner_entrant_id.clone()).or_insert(0) += 1;
+    }
+
+    win_counts.into_iter()
+        .max_by_key(|(_, wins)| *wins)
+        .map(|(id, _)| id)
+        .expect("No games completed")
 }
 
 async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ctx: &RaceContext<GlobalState>, cal_event: &cal::Event, event: &event::Data<'_>, mut entrants: [(Entrant, S, Url); 2]) -> Result<Transaction<'a, Postgres>, Error> {
@@ -312,14 +383,61 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                 println!("reporting result to League website: {:?}", serde_urlencoded::to_string(&form));
                 request.send().await?.detailed_error_for_status().await.to_racetime()?;
             },
-            cal::Source::StartGG { ref set, .. } => if cal_event.race.game.is_none() { //TODO also auto-report multi-game matches (report all games but the last as match progress)
+            cal::Source::StartGG { ref set, .. } => {
                 if let Entrant::MidosHouseTeam(Team { startgg_id: Some(winner_entrant_id), .. }) = &winner {
-                    // The set ID from the database should already be just the numeric ID, not the full URL
-                    startgg::query_uncached::<startgg::ReportOneGameResultMutation>(&ctx.global_state.http_client, &ctx.global_state.startgg_token, startgg::report_one_game_result_mutation::Variables {
-                        set_id: set.clone(),
-                        winner_entrant_id: winner_entrant_id.clone(),
-                    }).await.to_racetime()?;
+                    if let Some(game) = cal_event.race.game {
+                        // This is a multi-game match (best of 3, best of 5, etc.)
+                        let total_games = cal_event.race.game_count(&mut transaction).await.to_racetime()?;
+
+                        let completed_game_results = collect_completed_game_results(
+                            &ctx.global_state.http_client,
+                            &ctx.global_state.startgg_token,
+                            set,
+                            game,
+                            winner_entrant_id
+                        ).await.to_racetime()?;
+
+                        let match_decided = is_match_decided(&completed_game_results, total_games);
+
+                        if match_decided {
+                            let overall_winner = determine_overall_winner(&completed_game_results);
+
+                            startgg::query_uncached::<startgg::ReportBracketSetMutation>(
+                                &ctx.global_state.http_client,
+                                &ctx.global_state.startgg_token,
+                                startgg::report_bracket_set_mutation::Variables {
+                                    set_id: set.clone(),
+                                    winner_id: Some(overall_winner),
+                                    game_data: Some(completed_game_results.iter()
+                                        .map(|gr| Some(gr.to_game_data_input()))
+                                        .collect()),
+                                }
+                            ).await.to_racetime()?;
+                        } else {
+                            startgg::query_uncached::<startgg::ReportBracketSetMutation>(
+                                &ctx.global_state.http_client,
+                                &ctx.global_state.startgg_token,
+                                startgg::report_bracket_set_mutation::Variables {
+                                    set_id: set.clone(),
+                                    winner_id: None, // Don't mark as complete yet
+                                    game_data: Some(completed_game_results.iter()
+                                        .map(|gr| Some(gr.to_game_data_input()))
+                                        .collect()),
+                                }
+                            ).await.to_racetime()?;
+                        }
+                    } else {
+                        startgg::query_uncached::<startgg::ReportOneGameResultMutation>(
+                            &ctx.global_state.http_client,
+                            &ctx.global_state.startgg_token,
+                            startgg::report_one_game_result_mutation::Variables {
+                                set_id: set.clone(),
+                                winner_entrant_id: winner_entrant_id.clone(),
+                            }
+                        ).await.to_racetime()?;
+                    }
                 } else {
+                    // Winner has no start.gg entrant ID - report error to organizers
                     if let Some(organizer_channel) = event.discord_organizer_channel {
                         let mut msg = MessageBuilder::default();
                         msg.push("failed to report race result to start.gg: <https://");

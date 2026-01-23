@@ -114,6 +114,26 @@ pub(crate) struct ReportOneGameResultMutation;
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "assets/graphql/startgg-schema.json",
+    query_path = "assets/graphql/startgg-set-query.graphql",
+    skip_default_scalars, // workaround for https://github.com/smashgg/developer-portal/issues/171
+    variables_derives = "Clone, PartialEq, Eq, Hash",
+    response_derives = "Debug, Clone",
+)]
+pub(crate) struct SetQuery;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "assets/graphql/startgg-schema.json",
+    query_path = "assets/graphql/startgg-report-bracket-set-mutation.graphql",
+    skip_default_scalars, // workaround for https://github.com/smashgg/developer-portal/issues/171
+    variables_derives = "Clone, PartialEq, Eq, Hash",
+    response_derives = "Debug, Clone",
+)]
+pub(crate) struct ReportBracketSetMutation;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "assets/graphql/startgg-schema.json",
     query_path = "assets/graphql/startgg-user-slug-query.graphql",
     skip_default_scalars, // workaround for https://github.com/smashgg/developer-portal/issues/171
     variables_derives = "Clone, PartialEq, Eq, Hash",
@@ -130,6 +150,26 @@ pub(crate) struct UserSlugQuery;
     response_derives = "Debug, Clone",
 )]
 pub(crate) struct EntrantsQuery;
+
+/// Helper type for building game data when reporting multi-game sets
+#[derive(Clone, Debug)]
+pub(crate) struct GameResult {
+    pub game_num: i64,
+    pub winner_entrant_id: ID,
+}
+
+impl GameResult {
+    pub fn to_game_data_input(&self) -> report_bracket_set_mutation::BracketSetGameDataInput {
+        report_bracket_set_mutation::BracketSetGameDataInput {
+            game_num: self.game_num,
+            winner_id: Some(self.winner_entrant_id.clone()),
+            entrant1_score: None,
+            entrant2_score: None,
+            stage_id: None,
+            selections: None,
+        }
+    }
+}
 
 async fn query_inner<T: GraphQLQuery + 'static>(http_client: &reqwest::Client, auth_token: &str, variables: T::Variables, next_request: &mut Instant) -> Result<T::ResponseData, Error>
 where T::Variables: Clone + Eq + Hash + Send + Sync, T::ResponseData: Clone + Send + Sync {
