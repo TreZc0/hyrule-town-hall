@@ -1675,6 +1675,8 @@ impl GlobalState {
                     .arg(yaml_path)
                     .arg("--outputpath")
                     .arg("/var/www/midos.house/seed")
+                    .arg("--outputname")
+                    .arg(uuid.to_string())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .spawn()
