@@ -3130,6 +3130,7 @@ struct Handler {
     race_state: ArcRwLock<RaceState>,
     cleaned_up: Arc<AtomicBool>,
     cleanup_timeout: Option<tokio::task::JoinHandle<()>>,
+    finish_timeout: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Handler {
@@ -4499,6 +4500,7 @@ impl RaceHandler<GlobalState> for Handler {
             race_state: ArcRwLock::new(race_state),
             cleaned_up: Arc::default(),
             cleanup_timeout: None,
+            finish_timeout: None,
             official_data, high_seed_name, low_seed_name, fpa_enabled,
         };
         if let Some(OfficialRaceData { ref event, ref restreams, ref cal_event, .. }) = this.official_data {
@@ -5382,6 +5384,9 @@ impl RaceHandler<GlobalState> for Handler {
                 if let Goal::TriforceBlitz | Goal::TriforceBlitzProgressionSpoiler = goal {
                     if self.check_tfb_finish(ctx).await? {
                         self.cleaned_up.store(true, atomic::Ordering::SeqCst);
+                        if let Some(task) = self.finish_timeout.take() {
+                            task.abort();
+                        }
                     } else {
                         let cleaned_up = self.cleaned_up.clone();
                         let official_data = self.official_data.as_ref().map(|OfficialRaceData { event, cal_event, .. }| (event.clone(), cal_event.clone()));
@@ -5426,10 +5431,55 @@ impl RaceHandler<GlobalState> for Handler {
                         }));
                     }
                 } else {
-                    self.cleaned_up.store(true, atomic::Ordering::SeqCst);
-                    if let Some(OfficialRaceData { ref cal_event, ref event, fpa_invoked, breaks_used, .. }) = self.official_data {
-                        self.official_race_finished(ctx, data, cal_event, event, fpa_invoked, breaks_used || self.breaks.is_some(), None).await?;
+                    // Cancel any existing finish timeout if race finishes again
+                    if let Some(task) = self.finish_timeout.take() {
+                        task.abort();
                     }
+                    ctx.say("Race finished! Results will be confirmed in 30 seconds. Runners can still undo their finish if needed.").await?;
+                    let cleaned_up = self.cleaned_up.clone();
+                    let official_data = self.official_data.clone();
+                    let breaks_used = self.breaks.is_some();
+                    let ctx_clone = ctx.clone();
+                    self.finish_timeout = Some(tokio::spawn(async move {
+                        sleep(Duration::from_secs(30)).await;
+                        if !cleaned_up.load(atomic::Ordering::SeqCst) {
+                            if let Some(OfficialRaceData { ref cal_event, ref event, fpa_invoked, breaks_used: official_breaks_used, .. }) = official_data {
+                                let data = ctx_clone.data().await;
+                                // Re-check that race is still finished after the 30 second delay
+                                if let RaceStatusValue::Finished = data.status.value {
+                                    // Use a dummy handler to call official_race_finished
+                                    // We can't call self.official_race_finished directly because we've moved into the closure
+                                    let dummy_handler = Handler {
+                                        official_data: Some(OfficialRaceData {
+                                            cal_event: cal_event.clone(),
+                                            event: event.clone(),
+                                            goal: Goal::from_race_data(&*data).unwrap_or(Goal::StandardRuleset),
+                                            restreams: HashMap::new(),
+                                            entrants: Vec::new(),
+                                            fpa_invoked,
+                                            breaks_used: official_breaks_used,
+                                            scores: HashMap::new(),
+                                        }),
+                                        high_seed_name: String::new(),
+                                        low_seed_name: String::new(),
+                                        breaks: None,
+                                        break_notifications: None,
+                                        goal_notifications: None,
+                                        start_saved: false,
+                                        fpa_enabled: false,
+                                        locked: false,
+                                        password_sent: false,
+                                        race_state: ArcRwLock::new(RaceState::Init),
+                                        cleaned_up: cleaned_up.clone(),
+                                        cleanup_timeout: None,
+                                        finish_timeout: None,
+                                    };
+                                    let _ = dummy_handler.official_race_finished(&ctx_clone, data, cal_event, event, fpa_invoked, official_breaks_used || breaks_used, None).await;
+                                    cleaned_up.store(true, atomic::Ordering::SeqCst);
+                                }
+                            }
+                        }
+                    }));
                 }
             },
             RaceStatusValue::Cancelled => {
