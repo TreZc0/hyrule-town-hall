@@ -3247,8 +3247,25 @@ impl Handler {
                 } else {
                     ("a", format!("seed with {}", step.message))
                 };
-                let event = self.official_data.as_ref().map(|OfficialRaceData { event, .. }| event);
-                self.roll_seed(ctx, goal.preroll_seeds(event.map(|event| (event.series, &*event.event))), goal.rando_version(event), settings, unlock_spoiler_log, goal.language(), article, description).await;
+                // Special handling for goals that use custom seed rolling
+                match goal {
+                    Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB => {
+                        let cal_event = self.official_data.as_ref().expect("AlttprDe9 goal must have official_data").cal_event.clone();
+                        self.roll_alttprde9_seed(ctx, cal_event, goal.language(), article).await;
+                    }
+                    Goal::Crosskeys2025 => {
+                        let cal_event = self.official_data.as_ref().expect("Crosskeys2025 goal must have official_data").cal_event.clone();
+                        self.roll_crosskeys2025_seed(ctx, cal_event, goal.language(), article).await;
+                    }
+                    Goal::MysteryD20 => {
+                        let cal_event = self.official_data.as_ref().expect("MysteryD20 goal must have official_data").cal_event.clone();
+                        self.roll_mysteryd20_seed(ctx, cal_event, goal.language(), article).await;
+                    }
+                    _ => {
+                        let event = self.official_data.as_ref().map(|OfficialRaceData { event, .. }| event);
+                        self.roll_seed(ctx, goal.preroll_seeds(event.map(|event| (event.series, &*event.event))), goal.rando_version(event), settings, unlock_spoiler_log, goal.language(), article, description).await;
+                    }
+                }
             }
             draft::StepKind::DoneRsl { preset, world_count } => {
                 let (article, description) = if let French = goal.language() {
