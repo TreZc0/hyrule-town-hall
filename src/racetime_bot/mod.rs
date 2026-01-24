@@ -6050,82 +6050,101 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
         select! {
             () = &mut shutdown => break,
             _ = sleep(Duration::from_secs(30)) => { //TODO exact timing (coordinate with everything that can change the schedule)
-                lock!(new_room_lock = global_state.new_room_lock; { // make sure a new room isn't handled before it's added to the database
+                // Query for rooms to open while holding the lock
+                let rooms_to_open = lock!(new_room_lock = global_state.new_room_lock; {
                     let mut transaction = global_state.db_pool.begin().await?;
-                    let rooms_to_open = cal::Event::rooms_to_open(&mut transaction, &global_state.http_client).await?;
+                    let rooms = cal::Event::rooms_to_open(&mut transaction, &global_state.http_client).await?;
                     transaction.commit().await?;
-                    
-                    for cal_event in rooms_to_open {
-                        let mut transaction = global_state.db_pool.begin().await?;
-                        let event = cal_event.race.event(&mut transaction).await?;
-                        if let Some((is_room_url, mut msg)) = create_room(&mut transaction, &*global_state.discord_ctx.read().await, &global_state.host_info, &global_state.racetime_config.client_id, &global_state.racetime_config.client_secret, &global_state.http_client, global_state.clean_shutdown.clone(), &cal_event, &event).await? {
-                            // Add warning if this is an alttprde9bracket race with incomplete draft
-                            if event.series == Series::AlttprDe && event.event == "9bracket" {
-                                if let Some(draft) = &cal_event.race.draft {
-                                    if let Ok(step) = draft.next_step(draft::Kind::AlttprDe9, cal_event.race.game, &mut draft::MessageContext::None).await {
-                                        if !matches!(step.kind, draft::StepKind::Done(_)) {
-                                            msg.push_str("\n\n⚠️ **WARNING**: The mode draft for this match is not complete! Please complete the draft as soon as possible. The seed cannot be rolled until the draft is finished.");
+                    rooms
+                });
+
+                for cal_event in rooms_to_open {
+                    // Create and commit each room while holding the lock, then release it before sending Discord messages
+                    let (is_room_url, msg, event) = {
+                        let result = lock!(new_room_lock = global_state.new_room_lock; {
+                            let mut transaction = global_state.db_pool.begin().await?;
+                            let event = cal_event.race.event(&mut transaction).await?;
+                            let result = create_room(&mut transaction, &*global_state.discord_ctx.read().await, &global_state.host_info, &global_state.racetime_config.client_id, &global_state.racetime_config.client_secret, &global_state.http_client, global_state.clean_shutdown.clone(), &cal_event, &event).await?;
+
+                            if let Some((is_room_url, mut msg)) = result {
+                                // Add warning if this is an alttprde9bracket race with incomplete draft
+                                if event.series == Series::AlttprDe && event.event == "9bracket" {
+                                    if let Some(draft) = &cal_event.race.draft {
+                                        if let Ok(step) = draft.next_step(draft::Kind::AlttprDe9, cal_event.race.game, &mut draft::MessageContext::None).await {
+                                            if !matches!(step.kind, draft::StepKind::Done(_)) {
+                                                msg.push_str("\n\n⚠️ **WARNING**: The mode draft for this match is not complete! Please complete the draft as soon as possible. The seed cannot be rolled until the draft is finished.");
+                                            }
                                         }
                                     }
+                                }
+                                // Commit the transaction to save the room URL to the database before the bot handler queries for it
+                                transaction.commit().await?;
+                                Ok::<_, CreateRoomsError>(Some((is_room_url, msg, event)))
+                            } else {
+                                Ok(None)  // No room was created
+                            }
+                        })?;
+
+                        match result {
+                            Some(tuple) => tuple,
+                            None => continue,  // No room was created, skip to next iteration
+                        }
+                    };
+
+                    // Lock released here - handler can now start while we send Discord messages
+                    let ctx = global_state.discord_ctx.read().await;
+                    if is_room_url && cal_event.is_private_async_part() {
+                        let msg = match cal_event.race.entrants {
+                            Entrants::Two(_) => format!("unlisted room for first async half: {msg}"),
+                            Entrants::Three(_) => format!("unlisted room for first/second async part: {msg}"),
+                            _ => format!("unlisted room for async part: {msg}"),
+                        };
+                        if let Some(channel) = event.discord_organizer_channel {
+                            channel.say(&*ctx, &msg).await?;
+                        } else {
+                            // DM Admin
+                            ADMIN_USER.create_dm_channel(&*ctx).await?.say(&*ctx, &msg).await?;
+                        }
+                        // Start a new transaction for querying team members
+                        let mut transaction = global_state.db_pool.begin().await?;
+                        for team in cal_event.active_teams() {
+                            for member in team.members(&mut transaction).await? {
+                                if let Some(discord) = member.discord {
+                                    discord.id.create_dm_channel(&*ctx).await?.say(&*ctx, &msg).await?;
                                 }
                             }
-                            // Commit the transaction to save the room URL to the database before the bot handler queries for it
-                            transaction.commit().await?;
-                            let ctx = global_state.discord_ctx.read().await;
-                            if is_room_url && cal_event.is_private_async_part() {
-                                let msg = match cal_event.race.entrants {
-                                    Entrants::Two(_) => format!("unlisted room for first async half: {msg}"),
-                                    Entrants::Three(_) => format!("unlisted room for first/second async part: {msg}"),
-                                    _ => format!("unlisted room for async part: {msg}"),
-                                };
-                                if let Some(channel) = event.discord_organizer_channel {
-                                    channel.say(&*ctx, &msg).await?;
+                        }
+                        transaction.commit().await?;
+                    } else {
+                        if_chain! {
+                            if !cal_event.is_private_async_part();
+                            if let Some(channel) = event.discord_race_room_channel;
+                            then {
+                                if let Some(thread) = cal_event.race.scheduling_thread {
+                                    if let Err(e) = thread.say(&*ctx, &msg).await {
+                                        eprintln!("Failed to post race message to scheduling thread: {}", e);
+                                    }
+                                    if let Err(e) = channel.send_message(&*ctx, CreateMessage::default().content(msg).allowed_mentions(CreateAllowedMentions::default())).await {
+                                        eprintln!("Failed to post race message to Discord race room channel: {}", e);
+                                    }
+                                } else {
+                                    if let Err(e) = channel.say(&*ctx, msg).await {
+                                        eprintln!("Failed to post race message to Discord race room channel: {}", e);
+                                    }
+                                }
+                            } else {
+                                if let Some(thread) = cal_event.race.scheduling_thread {
+                                    thread.say(&*ctx, msg).await?;
+                                } else if let Some(channel) = event.discord_organizer_channel {
+                                    channel.say(&*ctx, msg).await?;
                                 } else {
                                     // DM Admin
-                                    ADMIN_USER.create_dm_channel(&*ctx).await?.say(&*ctx, &msg).await?;
-                                }
-                                // Start a new transaction for querying team members
-                                let mut transaction = global_state.db_pool.begin().await?;
-                                for team in cal_event.active_teams() {
-                                    for member in team.members(&mut transaction).await? {
-                                        if let Some(discord) = member.discord {
-                                            discord.id.create_dm_channel(&*ctx).await?.say(&*ctx, &msg).await?;
-                                        }
-                                    }
-                                }
-                                transaction.commit().await?;
-                            } else {
-                                if_chain! {
-                                    if !cal_event.is_private_async_part();
-                                    if let Some(channel) = event.discord_race_room_channel;
-                                    then {
-                                        if let Some(thread) = cal_event.race.scheduling_thread {
-                                            if let Err(e) = thread.say(&*ctx, &msg).await {
-                                                eprintln!("Failed to post race message to scheduling thread: {}", e);
-                                            }
-                                            if let Err(e) = channel.send_message(&*ctx, CreateMessage::default().content(msg).allowed_mentions(CreateAllowedMentions::default())).await {
-                                                eprintln!("Failed to post race message to Discord race room channel: {}", e);
-                                            }
-                                        } else {
-                                            if let Err(e) = channel.say(&*ctx, msg).await {
-                                                eprintln!("Failed to post race message to Discord race room channel: {}", e);
-                                            }
-                                        }
-                                    } else {
-                                        if let Some(thread) = cal_event.race.scheduling_thread {
-                                            thread.say(&*ctx, msg).await?;
-                                        } else if let Some(channel) = event.discord_organizer_channel {
-                                            channel.say(&*ctx, msg).await?;
-                                        } else {
-                                            // DM Admin
-                                            ADMIN_USER.create_dm_channel(&*ctx).await?.say(&*ctx, msg).await?;
-                                        }
-                                    }
+                                    ADMIN_USER.create_dm_channel(&*ctx).await?.say(&*ctx, msg).await?;
                                 }
                             }
                         }
                     }
-                });
+                }
             }
         }
     }

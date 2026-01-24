@@ -457,7 +457,12 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
             if let Some(next_game) = cal_event.race.next_game(&mut transaction, &ctx.global_state.http_client).await.to_racetime()?;
             then {
                 //TODO if this game decides the match, delete next game instead of initializing draft
-                let draft = Draft::for_next_game(&mut transaction, draft_kind, loser.id, winner.id).await.to_racetime()?;
+                let draft = match draft_kind {
+                    draft::Kind::AlttprDe9 => {
+                        cal_event.race.draft.clone().expect("AlttprDe9 race should have draft state")
+                    },
+                    _ => Draft::for_next_game(&mut transaction, draft_kind, loser.id, winner.id).await.to_racetime()?,
+                };
                 sqlx::query!("UPDATE races SET draft_state = $1 WHERE id = $2", sqlx::types::Json(&draft) as _, next_game.id as _).execute(&mut *transaction).await.to_racetime()?;
                 if_chain! {
                     if let Some(guild_id) = event.discord_guild;
