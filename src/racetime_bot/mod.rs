@@ -6069,6 +6069,8 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                                     }
                                 }
                             }
+                            // Commit the transaction to save the room URL to the database before the bot handler queries for it
+                            transaction.commit().await?;
                             let ctx = global_state.discord_ctx.read().await;
                             if is_room_url && cal_event.is_private_async_part() {
                                 let msg = match cal_event.race.entrants {
@@ -6082,6 +6084,8 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                                     // DM Admin
                                     ADMIN_USER.create_dm_channel(&*ctx).await?.say(&*ctx, &msg).await?;
                                 }
+                                // Start a new transaction for querying team members
+                                let mut transaction = global_state.db_pool.begin().await?;
                                 for team in cal_event.active_teams() {
                                     for member in team.members(&mut transaction).await? {
                                         if let Some(discord) = member.discord {
@@ -6089,6 +6093,7 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                                         }
                                     }
                                 }
+                                transaction.commit().await?;
                             } else {
                                 if_chain! {
                                     if !cal_event.is_private_async_part();
