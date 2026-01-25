@@ -6107,11 +6107,11 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                 });
 
                 for cal_event in rooms_to_open {
-                    // Create and commit each room while holding the lock, then release it before sending Discord messages
+                    // Create room while holding lock, commit transaction, then release lock immediately so handler can start
                     let (is_room_url, msg, event) = {
+                        let mut transaction = global_state.db_pool.begin().await?;
+                        let event = cal_event.race.event(&mut transaction).await?;
                         let result = lock!(new_room_lock = global_state.new_room_lock; {
-                            let mut transaction = global_state.db_pool.begin().await?;
-                            let event = cal_event.race.event(&mut transaction).await?;
                             let result = create_room(&mut transaction, &*global_state.discord_ctx.read().await, &global_state.host_info, &global_state.racetime_config.client_id, &global_state.racetime_config.client_secret, &global_state.http_client, global_state.clean_shutdown.clone(), &cal_event, &event).await?;
 
                             if let Some((is_room_url, mut msg)) = result {
@@ -6127,6 +6127,7 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                                 }
                                 // Commit the transaction to save the room URL to the database before the bot handler queries for it
                                 transaction.commit().await?;
+                                // Lock is released here, allowing the handler to start immediately
                                 Ok::<_, CreateRoomsError>(Some((is_room_url, msg, event)))
                             } else {
                                 Ok(None)  // No room was created
