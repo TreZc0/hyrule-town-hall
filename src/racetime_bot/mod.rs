@@ -3614,6 +3614,18 @@ impl RaceHandler<GlobalState> for Handler {
                         }
                     }
                 }, !matches!(goal, Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::Crosskeys2025), Vec::default()).await?;
+                // Announce mode for events with round_modes set
+                match goal {
+                    Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB => {
+                        if event.round_modes.is_some() {
+                            let alttprde_options = AlttprDeRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race, event.round_modes.as_ref()).await;
+                            if let Some(mode_display) = alttprde_options.mode_display() {
+                                ctx.say(format!("This race will be played in {} mode.", mode_display)).await?;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
                 let (race_state, high_seed_name, low_seed_name) = if let Some(draft_kind) = event.draft_kind() {
                     let state = cal_event.race.draft.clone().expect("missing draft state");
                     let [high_seed_name, low_seed_name] = if let draft::StepKind::Done(_) | draft::StepKind::DoneRsl { .. } = state.next_step(draft_kind, cal_event.race.game, &mut draft::MessageContext::None).await.to_racetime()?.kind {
