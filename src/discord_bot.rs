@@ -196,7 +196,6 @@ pub(crate) struct CommandIds {
     post_status: CommandId,
     pronoun_roles: CommandId,
     racing_role: CommandId,
-    reset_draft: Option<CommandId>,
     reset_race: CommandId,
     pub(crate) schedule: CommandId,
     pub(crate) schedule_async: CommandId,
@@ -744,15 +743,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 });
                 idx
             });
-            let reset_draft = draft_kind.map(|_| {
-                let idx = commands.len();
-                commands.push(CreateCommand::new("reset-draft")
-                    .kind(CommandType::ChatInput)
-                    .add_context(InteractionContext::Guild)
-                    .description("Resets the draft for this race. Staff only.")
-                );
-                idx
-            });
             let post_status = {
                 let idx = commands.len();
                 commands.push(CreateCommand::new("post-status")
@@ -1081,7 +1071,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 post_status: commands[post_status].id,
                 pronoun_roles: commands[pronoun_roles].id,
                 racing_role: commands[racing_role].id,
-                reset_draft: reset_draft.map(|idx| commands[idx].id),
                 reset_race: commands[reset_race].id,
                 schedule: commands[schedule].id,
                 schedule_async: commands[schedule_async].id,
@@ -1331,7 +1320,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 .button(CreateButton::new("racingrole").label("racing"))
                             )).await?;
                         } else if interaction.data.id == command_ids.reset_race {
-                            let Some(parent_channel) = interaction.channel.as_ref().and_then(|thread| thread.parent_id) else {
+                            let Some(_parent_channel) = interaction.channel.as_ref().and_then(|thread| thread.parent_id) else {
                                 interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                     .ephemeral(true)
                                     .content("Sorry, this command can only be used inside threads and forum posts.")
@@ -1339,8 +1328,44 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 return Ok(())
                             };
                             let mut transaction = ctx.data.read().await.get::<DbPool>().as_ref().expect("database connection pool missing from Discord context").begin().await?;
-                            if let Some(event_row) = sqlx::query!(r#"SELECT series AS "series: Series", event FROM events WHERE discord_scheduling_channel = $1 AND end_time IS NULL"#, PgSnowflake(parent_channel) as _).fetch_optional(&mut *transaction).await? {
-                                let event = event::Data::new(&mut transaction, event_row.series, event_row.event).await?.expect("just received from database");
+
+                            // Parse options first
+                            let mut game = None;
+                            let mut reset_draft = false;
+                            let mut reset_schedule = false;
+                            for option in &interaction.data.options {
+                                match &*option.name {
+                                    "draft" => match option.value {
+                                        CommandDataOptionValue::Boolean(value) => reset_draft = value,
+                                        _ => panic!("unexpected slash command option type"),
+                                    },
+                                    "game" => match option.value {
+                                        CommandDataOptionValue::Integer(value) => game = Some(i16::try_from(value).expect("game number out of range")),
+                                        _ => panic!("unexpected slash command option type"),
+                                    },
+                                    "schedule" => match option.value {
+                                        CommandDataOptionValue::Boolean(value) => reset_schedule = value,
+                                        _ => panic!("unexpected slash command option type"),
+                                    },
+                                    name => panic!("unexpected option for /reset-race: {name}"),
+                                }
+                            }
+                            let Some(aspects_reset) = NEVec::try_from_vec(reset_draft.then_some("draft").into_iter().chain(reset_schedule.then_some("schedule")).collect_vec()) else {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content("Please specify at least one thing to delete using the slash command's options.")
+                                )).await?;
+                                return Ok(())
+                            };
+
+                            let http_client = {
+                                let data = ctx.data.read().await;
+                                data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone()
+                            };
+                            let mut races = Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), game, true).await?;
+
+                            if let Some(first_race) = races.first() {
+                                let event = first_race.event(&mut transaction).await?;
                                 if !event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id)) {
                                     interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                         .ephemeral(true)
@@ -1348,50 +1373,60 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     )).await?;
                                     return Ok(())
                                 }
-                                let mut game = None;
-                                let mut reset_draft = false;
-                                let mut reset_schedule = false;
-                                for option in &interaction.data.options {
-                                    match &*option.name {
-                                        "draft" => match option.value {
-                                            CommandDataOptionValue::Boolean(value) => reset_draft = value,
-                                            _ => panic!("unexpected slash command option type"),
-                                        },
-                                        "game" => match option.value {
-                                            CommandDataOptionValue::Integer(value) => game = Some(i16::try_from(value).expect("game number out of range")),
-                                            _ => panic!("unexpected slash command option type"),
-                                        },
-                                        "schedule" => match option.value {
-                                            CommandDataOptionValue::Boolean(value) => reset_schedule = value,
-                                            _ => panic!("unexpected slash command option type"),
-                                        },
-                                        name => panic!("unexpected option for /reset-race: {name}"),
-                                    }
-                                }
-                                let Some(aspects_reset) = NEVec::try_from_vec(reset_draft.then_some("draft").into_iter().chain(reset_schedule.then_some("schedule")).collect_vec()) else {
-                                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Please specify at least one thing to delete using the slash command's options.")
-                                    )).await?;
-                                    return Ok(())
-                                };
-                                let http_client = {
-                                    let data = ctx.data.read().await;
-                                    data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone()
-                                };
-                                match Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), game, true).await?.into_iter().at_most_one() {
-                                    Ok(None) => {
+
+                                // For AlttprDe9 events, allow resetting draft across all games without specifying game number
+                                let is_alttprde9_draft_reset = game.is_none() && reset_draft && event.draft_kind() == Some(draft::Kind::AlttprDe9);
+
+                                if races.len() > 1 && is_alttprde9_draft_reset {
+                                    // Reset draft for all races in AlttprDe9 BO3
+                                    let new_draft = if_chain! {
+                                        if let Some(draft_kind) = event.draft_kind();
+                                        if let Some(draft) = races[0].draft.clone();
+                                        if let Entrants::Two(entrants) = &races[0].entrants;
+                                        if let Ok(low_seed) = entrants.iter()
+                                            .filter_map(as_variant!(Entrant::MidosHouseTeam))
+                                            .filter(|team| team.id != draft.high_seed)
+                                            .exactly_one();
+                                        then {
+                                            Some(Draft::for_next_game(&mut transaction, draft_kind, draft.high_seed, low_seed.id).await?)
+                                        } else {
+                                            None
+                                        }
+                                    };
+
+                                    if new_draft.is_some() {
+                                        // Apply the reset draft to all races
+                                        for race in &mut races {
+                                            race.draft = new_draft.clone();
+                                            race.save(&mut transaction).await?;
+                                        }
+
+                                        transaction.commit().await?;
+                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                            .ephemeral(false)
+                                            .content("Draft has been reset.")
+                                        )).await?;
+                                    } else {
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                             .ephemeral(true)
-                                            .content(if game.is_some() {
-                                                "Sorry, there don't seem to be any races with that game number associated with this thread."
-                                            } else {
-                                                "Sorry, this thread is not associated with any races."
-                                            })
+                                            .content("Sorry, unable to reset draft for this race.")
                                         )).await?;
                                         transaction.rollback().await?;
                                     }
-                                    Ok(Some(race)) => {
+                                } else {
+                                    match races.into_iter().at_most_one() {
+                                        Ok(None) => {
+                                            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                                .ephemeral(true)
+                                                .content(if game.is_some() {
+                                                    "Sorry, there don't seem to be any races with that game number associated with this thread."
+                                                } else {
+                                                    "Sorry, this thread is not associated with any races."
+                                                })
+                                            )).await?;
+                                            transaction.rollback().await?;
+                                        }
+                                        Ok(Some(race)) => {
                                         let race = Race {
                                             schedule: if reset_schedule { RaceSchedule::Unscheduled } else { race.schedule },
                                             schedule_updated_at: if reset_schedule { Some(Utc::now()) } else { race.schedule_updated_at },
@@ -1464,130 +1499,21 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             .content(response_content)
                                         )).await?;
                                     }
-                                    Err(_) => {
-                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                            .ephemeral(true)
-                                            .content("Sorry, this thread is associated with multiple races. Please specify the game number.")
-                                        )).await?;
-                                        transaction.rollback().await?;
-                                    }
-                                }
-                            } else {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content("Sorry, this thread is not associated with an ongoing Hyrule Town Hall event.")
-                                )).await?;
-                            }
-                        } else if Some(interaction.data.id) == command_ids.reset_draft {
-                            let Some(parent_channel) = interaction.channel.as_ref().and_then(|thread| thread.parent_id) else {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content("Sorry, this command can only be used inside threads and forum posts.")
-                                )).await?;
-                                return Ok(())
-                            };
-                            let mut transaction = ctx.data.read().await.get::<DbPool>().as_ref().expect("database connection pool missing from Discord context").begin().await?;
-                            if let Some(event_row) = sqlx::query!(r#"SELECT series AS "series: Series", event FROM events WHERE discord_scheduling_channel = $1 AND end_time IS NULL"#, PgSnowflake(parent_channel) as _).fetch_optional(&mut *transaction).await? {
-                                let event = event::Data::new(&mut transaction, event_row.series, event_row.event).await?.expect("just received from database");
-                                if !event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id)) {
-                                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Sorry, only event organizers can use this command.")
-                                    )).await?;
-                                    return Ok(())
-                                }
-                                let http_client = {
-                                    let data = ctx.data.read().await;
-                                    data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone()
-                                };
-                                let mut races = Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), None, true).await?;
-
-                                if races.is_empty() {
-                                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Sorry, this thread is not associated with any races.")
-                                    )).await?;
-                                    transaction.rollback().await?;
-                                } else if races.len() == 1 || event.draft_kind() == Some(draft::Kind::AlttprDe9) {
-                                    // For single race or AlttprDe9 (which shares draft across all games), reset the draft
-                                    // Reset the draft
-                                    let new_draft = if_chain! {
-                                        if let Some(draft_kind) = event.draft_kind();
-                                        if let Some(draft) = races[0].draft.clone();
-                                        if let Entrants::Two(entrants) = &races[0].entrants;
-                                        if let Ok(low_seed) = entrants.iter()
-                                            .filter_map(as_variant!(Entrant::MidosHouseTeam))
-                                            .filter(|team| team.id != draft.high_seed)
-                                            .exactly_one();
-                                        then {
-                                            Some(Draft::for_next_game(&mut transaction, draft_kind, draft.high_seed, low_seed.id).await?)
-                                        } else {
+                                        Err(_) => {
                                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                                 .ephemeral(true)
-                                                .content("Sorry, unable to reset draft for this race.")
+                                                .content("Sorry, this thread is associated with multiple races. Please specify the game number.")
                                             )).await?;
                                             transaction.rollback().await?;
-                                            return Ok(())
-                                        }
-                                    };
-
-                                    // Store the entrants before we borrow races mutably
-                                    let first_race_entrants = races[0].entrants.clone();
-
-                                    // Apply the reset draft to all races (for AlttprDe9, this updates all games)
-                                    for race in &mut races {
-                                        race.draft = new_draft.clone();
-                                        race.save(&mut transaction).await?;
-                                    }
-
-                                    // Get teams for notification
-                                    let teams = if let Entrants::Two(entrants) = &first_race_entrants {
-                                        entrants.iter()
-                                            .filter_map(as_variant!(Entrant::MidosHouseTeam))
-                                            .collect::<Vec<_>>()
-                                    } else {
-                                        vec![]
-                                    };
-
-                                    // Build message mentioning the teams
-                                    let mut content = MessageBuilder::default();
-                                    if teams.len() == 2 {
-                                        content.mention_team(&mut transaction, Some(guild_id), teams[0]).await?;
-                                        content.push(" ");
-                                        content.mention_team(&mut transaction, Some(guild_id), teams[1]).await?;
-                                        content.push(": The draft has been reset. ");
-                                    } else {
-                                        content.push("The draft has been reset. ");
-                                    }
-
-                                    if let Some(ref draft) = new_draft {
-                                        if teams.len() == 2 {
-                                            let low_seed = if teams[0].id != draft.high_seed { teams[0] } else { teams[1] };
-                                            content.mention_team(&mut transaction, Some(guild_id), low_seed).await?;
-                                            content.push(", you are the lower seed. Please use ");
-                                            content.mention_command(command_ids.ban.unwrap(), "ban");
-                                            content.push(" to start the draft.");
                                         }
                                     }
-
-                                    transaction.commit().await?;
-
-                                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                        .ephemeral(false)
-                                        .content(content.build())
-                                    )).await?;
-                                } else {
-                                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Sorry, this thread is associated with multiple races. Please specify the game number.")
-                                    )).await?;
-                                    transaction.rollback().await?;
                                 }
                             } else {
                                 interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                     .ephemeral(true)
-                                    .content("Sorry, this thread is not associated with an ongoing Hyrule Town Hall event.")
+                                    .content("Sorry, this thread is not associated with any races.")
                                 )).await?;
+                                transaction.rollback().await?;
                             }
                         } else if interaction.data.id == command_ids.schedule {
                             let game = interaction.data.options.get(1).map(|option| match option.value {

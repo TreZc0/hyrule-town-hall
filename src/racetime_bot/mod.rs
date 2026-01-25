@@ -2902,10 +2902,8 @@ impl CrosskeysRaceOptions {
 
 #[derive(Clone)]
 pub(crate) struct AlttprDeRaceOptions {
-    /// The mode for this race (e.g., "ambrozia", "crosskeys", "enemizer", "inverted", "open")
     pub(crate) mode: Option<String>,
     /// Custom choices from player signups, merged together.
-    /// These become URL query parameters for boothisman.de.
     pub(crate) custom_choices: HashMap<String, String>,
 }
 
