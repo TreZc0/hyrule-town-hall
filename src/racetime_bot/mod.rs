@@ -4501,61 +4501,71 @@ impl RaceHandler<GlobalState> for Handler {
             finish_timeout: None,
             official_data, high_seed_name, low_seed_name, fpa_enabled,
         };
+        // Defer restreamer setup to background task to allow handler to start immediately
         if let Some(OfficialRaceData { ref event, ref restreams, ref cal_event, .. }) = this.official_data {
             if !restreams.is_empty() {
-                let restreams_text = restreams.iter().map(|(video_url, state)| format!("in {} at {video_url}", state.language.expect("preset restreams should have languages assigned"))).join(" and "); // don't use English.join_str since racetime.gg parses the comma as part of the URL
-                for restreamer in restreams.values().flat_map(|RestreamState { restreamer_racetime_id, .. }| restreamer_racetime_id) {
-                    let data = ctx.data().await;
-                    if data.monitors.iter().find(|monitor| monitor.id == *restreamer).is_some() { continue }
-                    if let Some(entrant) = data.entrants.iter().find(|entrant| entrant.user.as_ref().unwrap().id == *restreamer) { //TODO keep track of pending changes to the entrant list made in this method and match accordingly, e.g. players who are also monitoring should not be uninvited
-                        match entrant.status.value {
-                            EntrantStatusValue::Requested => {
-                                ctx.accept_request(restreamer).await?;
-                                ctx.add_monitor(restreamer).await?;
-                                ctx.remove_entrant(restreamer).await?;
+                let ctx_clone = ctx.clone();
+                let restreams_clone = restreams.clone();
+                let goal_clone = goal;
+                tokio::spawn(async move {
+                    // Small delay to allow handler to fully initialize
+                    sleep(Duration::from_millis(100)).await;
+                    if !Self::should_handle_inner(&*ctx_clone.data().await, ctx_clone.global_state.clone(), Some(None)).await { return }
+
+                    let restreams_text = restreams_clone.iter().map(|(video_url, state)| format!("in {} at {video_url}", state.language.expect("preset restreams should have languages assigned"))).join(" and "); // don't use English.join_str since racetime.gg parses the comma as part of the URL
+                    for restreamer in restreams_clone.values().flat_map(|RestreamState { restreamer_racetime_id, .. }| restreamer_racetime_id) {
+                        let data = ctx_clone.data().await;
+                        if data.monitors.iter().find(|monitor| monitor.id == *restreamer).is_some() { continue }
+                        if let Some(entrant) = data.entrants.iter().find(|entrant| entrant.user.as_ref().unwrap().id == *restreamer) { //TODO keep track of pending changes to the entrant list made in this method and match accordingly, e.g. players who are also monitoring should not be uninvited
+                            match entrant.status.value {
+                                EntrantStatusValue::Requested => {
+                                    let _ = ctx_clone.accept_request(restreamer).await;
+                                    let _ = ctx_clone.add_monitor(restreamer).await;
+                                    let _ = ctx_clone.remove_entrant(restreamer).await;
+                                }
+                                EntrantStatusValue::Invited |
+                                EntrantStatusValue::Declined |
+                                EntrantStatusValue::Ready |
+                                EntrantStatusValue::NotReady |
+                                EntrantStatusValue::InProgress |
+                                EntrantStatusValue::Done |
+                                EntrantStatusValue::Dnf |
+                                EntrantStatusValue::Dq => {
+                                    let _ = ctx_clone.add_monitor(restreamer).await;
+                                }
                             }
-                            EntrantStatusValue::Invited |
-                            EntrantStatusValue::Declined |
-                            EntrantStatusValue::Ready |
-                            EntrantStatusValue::NotReady |
-                            EntrantStatusValue::InProgress |
-                            EntrantStatusValue::Done |
-                            EntrantStatusValue::Dnf |
-                            EntrantStatusValue::Dq => {
-                                ctx.add_monitor(restreamer).await?;
+                        } else {
+                            let _ = ctx_clone.invite_user(restreamer).await;
+                            let _ = ctx_clone.add_monitor(restreamer).await;
+                            let _ = ctx_clone.remove_entrant(restreamer).await;
+                        }
+                    }
+                    let text = if restreams_clone.values().any(|state| state.restreamer_racetime_id.is_none()) {
+                        if_chain! {
+                            if let French = goal_clone.language();
+                            if let Ok((video_url, state)) = restreams_clone.iter().exactly_one();
+                            if let Some(French) = state.language;
+                            then {
+                                format!("Cette race est restreamée en français chez {video_url} — l'auto-start est désactivé. Les organisateurs du tournoi peuvent utiliser '!monitor' pour devenir race monitor, puis pour inviter les restreamers en tant que race monitor et leur autoriser le force start.")
+                            } else {
+                                format!("This race is being restreamed {restreams_text} — auto-start is disabled. Tournament organizers can use '!monitor' to become race monitors, then invite the restreamer{0} as race monitor{0} to allow them to force-start.", if restreams_clone.len() == 1 { "" } else { "s" })
+                            }
+                        }
+                    } else if let Ok((video_url, state)) = restreams_clone.iter().exactly_one() {
+                        if_chain! {
+                            if let French = goal_clone.language();
+                            if let Some(French) = state.language;
+                            then {
+                                format!("Cette race est restreamée en français chez {video_url} — l'auto start est désactivé. Le restreamer peut utiliser '!ready' pour débloquer l'auto-start.")
+                            } else {
+                                format!("This race is being restreamed {restreams_text} — auto-start is disabled. The restreamer can use '!ready' to unlock auto-start.")
                             }
                         }
                     } else {
-                        ctx.invite_user(restreamer).await?;
-                        ctx.add_monitor(restreamer).await?;
-                        ctx.remove_entrant(restreamer).await?;
-                    }
-                }
-                let text = if restreams.values().any(|state| state.restreamer_racetime_id.is_none()) {
-                    if_chain! {
-                        if let French = goal.language();
-                        if let Ok((video_url, state)) = restreams.iter().exactly_one();
-                        if let Some(French) = state.language;
-                        then {
-                            format!("Cette race est restreamée en français chez {video_url} — l'auto-start est désactivé. Les organisateurs du tournoi peuvent utiliser “!monitor” pour devenir race monitor, puis pour inviter les restreamers en tant que race monitor et leur autoriser le force start.")
-                        } else {
-                            format!("This race is being restreamed {restreams_text} — auto-start is disabled. Tournament organizers can use “!monitor” to become race monitors, then invite the restreamer{0} as race monitor{0} to allow them to force-start.", if restreams.len() == 1 { "" } else { "s" })
-                        }
-                    }
-                } else if let Ok((video_url, state)) = restreams.iter().exactly_one() {
-                    if_chain! {
-                        if let French = goal.language();
-                        if let Some(French) = state.language;
-                        then {
-                            format!("Cette race est restreamée en français chez {video_url} — l'auto start est désactivé. Le restreamer peut utiliser “!ready” pour débloquer l'auto-start.")
-                        } else {
-                            format!("This race is being restreamed {restreams_text} — auto-start is disabled. The restreamer can use “!ready” to unlock auto-start.")
-                        }
-                    }
-                } else {
-                    format!("This race is being restreamed {restreams_text} — auto-start is disabled. Restreamers can use “!ready” once the restream is ready. Auto-start will be unlocked once all restreams are ready.")
-                };
-                ctx.send_message(&text, true, Vec::default()).await?;
+                        format!("This race is being restreamed {restreams_text} — auto-start is disabled. Restreamers can use '!ready' once the restream is ready. Auto-start will be unlocked once all restreams are ready.")
+                    };
+                    let _ = ctx_clone.send_message(&text, true, Vec::default()).await;
+                });
             }
             lock!(@read state = this.race_state; {
                 if existing_seed.files.is_some() {
