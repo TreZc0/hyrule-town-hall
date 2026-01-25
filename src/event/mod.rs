@@ -22,6 +22,7 @@ pub(crate) mod enter;
 pub(crate) mod setup;
 pub(crate) mod teams;
 pub(crate) mod roles;
+pub(crate) mod asyncs;
 
 #[derive(Debug, Clone, Copy, sqlx::Type)]
 #[sqlx(type_name = "signup_status", rename_all = "snake_case")]
@@ -799,6 +800,11 @@ impl<'a> Data<'a> {
                         } else {
                             a(class = "button", href = uri!(roles::get(self.series, &*self.event))) : "Roles";
                         }
+                        @if let Tab::Asyncs = tab {
+                            a(class = "button selected", href? = is_subpage.then(|| uri!(asyncs::get(self.series, &*self.event)))) : "Asyncs";
+                        } else {
+                            a(class = "button", href = uri!(asyncs::get(self.series, &*self.event))) : "Asyncs";
+                        }
                         @if let Tab::Setup = tab {
                             a(class = "button selected", href? = is_subpage.then(|| uri!(setup::get(self.series, &*self.event)))) : "Setup";
                         } else {
@@ -833,6 +839,7 @@ pub(crate) enum Tab {
     Roles,
     SwissStandings,
     Setup,
+    Asyncs,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -2090,7 +2097,7 @@ pub(crate) async fn opt_out_post(pool: &State<PgPool>, discord_ctx: &State<RwFut
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, sqlx::Type)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, sqlx::Type, FromFormField, Sequence)]
 #[sqlx(type_name = "async_kind", rename_all = "lowercase")]
 pub(crate) enum AsyncKind {
     #[sqlx(rename = "qualifier")]
