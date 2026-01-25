@@ -388,10 +388,15 @@ impl Draft {
                     kind: StepKind::Done(collect![format!("mode") => json!(mode.name)]),
                     message: match msg_ctx {
                         MessageContext::None => String::default(),
-                        MessageContext::Discord { .. } => format!(
-                            "Mode draft completed.\nGame 1: {}\nGame 2: {}\nGame 3 (if necessary): {}",
-                            mode1.display, mode2.display, mode3.display
-                        ),
+                        MessageContext::Discord { .. } => if game.unwrap_or(1) == 1 {
+                            format!(
+                                "Mode draft completed.\nGame 1: {}\nGame 2: {}\nGame 3 (if necessary): {}",
+                                mode1.display, mode2.display, mode3.display
+                            )
+                        } else {
+                            // Draft was already completed before game 1, don't show the message again for subsequent games
+                            String::default()
+                        },
                         MessageContext::RaceTime { .. } => format!(
                             "Playing {} mode",
                             mode.display
