@@ -149,6 +149,11 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                                 label(for = "discord_events_require_restream") : "Only create Discord events for races with restreams";
                                 label(class = "help") : "(If enabled, Discord scheduled events will only be created for races that have at least one restream URL set)";
                             });
+                            : form_field("automated_asyncs", &mut errors, html! {
+                                input(type = "checkbox", id = "automated_asyncs", name = "automated_asyncs", checked? = ctx.field_value("automated_asyncs").map_or(event.automated_asyncs, |value| value == "on"));
+                                label(for = "automated_asyncs") : "Use automated Discord threads for qualifier asyncs";
+                                label(class = "help") : "(When enabled, qualifier requests create private Discord threads with READY/countdown/FINISH buttons. Staff validate results via /result-async command.)";
+                            });
                         }
                     }, errors, "Save");
                 }
@@ -204,6 +209,7 @@ pub(crate) struct ConfigureForm {
     swiss_standings: bool,
     discord_events_enabled: bool,
     discord_events_require_restream: bool,
+    automated_asyncs: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/configure", data = "<form>")]
@@ -291,6 +297,9 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             }
             if value.discord_events_require_restream != data.discord_events_require_restream {
                 sqlx::query!("UPDATE events SET discord_events_require_restream = $1 WHERE series = $2 AND event = $3", value.discord_events_require_restream, data.series as _, &data.event).execute(&mut *transaction).await?;
+            }
+            if value.automated_asyncs != data.automated_asyncs {
+                sqlx::query!("UPDATE events SET automated_asyncs = $1 WHERE series = $2 AND event = $3", value.automated_asyncs, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))

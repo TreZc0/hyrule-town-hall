@@ -8,6 +8,7 @@ use {
         CacheHttp,
         CommandDataOptionValue,
         Content,
+        CreateActionRow,
         CreateAllowedMentions,
         CreateButton,
         CreateCommand,
@@ -2712,6 +2713,281 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         restream.update_race(&mut race, speedgaming_id)?;
                         race.save(&mut transaction).await?;
                         transaction.commit().await?;
+                    } else if let Some(params) = custom_id.strip_prefix("async_ready_qualifier_") {
+                        // Handle qualifier READY button: format is "async_ready_qualifier_{team_id}_{async_kind}"
+                        if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
+                            if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
+                                let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+                                let mut transaction = pool.begin().await?;
+                                
+                                // Verify user is a member of the team
+                                let is_team_member = sqlx::query_scalar!(
+                                    r#"SELECT EXISTS (
+                                        SELECT 1 FROM team_members tm
+                                        JOIN users u ON tm.member = u.id
+                                        WHERE tm.team = $1 AND u.discord_id = $2
+                                    ) AS "exists!""#,
+                                    team_id as i64,
+                                    interaction.user.id.get() as i64
+                                ).fetch_one(&mut *transaction).await?;
+                                
+                                if !is_team_member {
+                                    interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                        CreateInteractionResponseMessage::new()
+                                            .ephemeral(true)
+                                            .content("You are not authorized to click this button.")
+                                    )).await?;
+                                } else {
+                                    // Get seed info and distribute it
+                                    let seed_info = sqlx::query!(
+                                        r#"
+                                        SELECT a.web_id, a.tfb_uuid, a.xkeys_uuid, a.file_stem, 
+                                               a.hash1, a.hash2, a.hash3, a.hash4, a.hash5, a.seed_password,
+                                               t.series AS "series: Series", t.event
+                                        FROM async_teams at
+                                        JOIN teams t ON at.team = t.id
+                                        JOIN asyncs a ON t.series = a.series AND t.event = a.event AND at.kind = a.kind
+                                        WHERE at.team = $1 AND at.kind = $2
+                                        "#,
+                                        team_id as i64,
+                                        async_kind_int as i16
+                                    ).fetch_optional(&mut *transaction).await?;
+                                    
+                                    if let Some(seed) = seed_info {
+                                        // Build seed message
+                                        let mut seed_msg = MessageBuilder::default();
+                                        seed_msg.push("**Your seed is ready!**\n\n");
+                                        
+                                        if let Some(web_id) = seed.web_id {
+                                            seed_msg.push(format!("Seed URL: https://ootrandomizer.com/seed/get?id={}\n", web_id));
+                                        }
+                                        if let Some(tfb_uuid) = seed.tfb_uuid {
+                                            seed_msg.push(format!("Triforce Blitz Seed: https://tfb.midos.house/seed/{}\n", tfb_uuid));
+                                        }
+                                        if let Some(xkeys_uuid) = seed.xkeys_uuid {
+                                            let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").unwrap();
+                                            patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{xkeys_uuid}.bps"));
+                                            seed_msg.push(format!("Door Rando Seed: {}\n", patcher_url));
+                                        }
+                                        if let Some(file_stem) = &seed.file_stem {
+                                            seed_msg.push(format!("Seed file: https://hth.zeldaspeedruns.com/seed/{}.zpfz\n", file_stem));
+                                        }
+                                        
+                                        // Add hash if available
+                                        if seed.hash1.is_some() {
+                                            seed_msg.push("\nHash: ");
+                                            if let (Some(h1), Some(h2), Some(h3), Some(h4), Some(h5)) = (&seed.hash1, &seed.hash2, &seed.hash3, &seed.hash4, &seed.hash5) {
+                                                seed_msg.push(format!("{}, {}, {}, {}, {}\n", h1, h2, h3, h4, h5));
+                                            }
+                                        }
+                                        
+                                        if let Some(password) = &seed.seed_password {
+                                            seed_msg.push(format!("\nPassword: {}\n", password));
+                                        }
+                                        
+                                        // Send seed message and START button
+                                        let start_button = CreateActionRow::Buttons(vec![
+                                            CreateButton::new(format!("async_start_qualifier_{}_{}", team_id, async_kind_int))
+                                                .label("START COUNTDOWN")
+                                                .style(ButtonStyle::Success)
+                                        ]);
+                                        
+                                        interaction.channel_id.send_message(ctx, CreateMessage::new()
+                                            .content(seed_msg.build())
+                                            .components(vec![start_button])
+                                        ).await?;
+                                        
+                                        // Remove the READY button
+                                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                            CreateInteractionResponseMessage::new()
+                                                .components(vec![])
+                                        )).await?;
+                                    } else {
+                                        interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                            CreateInteractionResponseMessage::new()
+                                                .ephemeral(true)
+                                                .content("Could not find seed information for this qualifier.")
+                                        )).await?;
+                                    }
+                                }
+                                transaction.commit().await?;
+                            }
+                        }
+                    } else if let Some(params) = custom_id.strip_prefix("async_start_qualifier_") {
+                        // Handle qualifier START COUNTDOWN button
+                        if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
+                            if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
+                                let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+                                let mut transaction = pool.begin().await?;
+                                
+                                // Verify user is a member of the team
+                                let is_team_member = sqlx::query_scalar!(
+                                    r#"SELECT EXISTS (
+                                        SELECT 1 FROM team_members tm
+                                        JOIN users u ON tm.member = u.id
+                                        WHERE tm.team = $1 AND u.discord_id = $2
+                                    ) AS "exists!""#,
+                                    team_id as i64,
+                                    interaction.user.id.get() as i64
+                                ).fetch_one(&mut *transaction).await?;
+                                
+                                if !is_team_member {
+                                    interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                        CreateInteractionResponseMessage::new()
+                                            .ephemeral(true)
+                                            .content("You are not authorized to click this button.")
+                                    )).await?;
+                                    transaction.rollback().await?;
+                                } else {
+                                    // Check if already started
+                                    let already_started = sqlx::query_scalar!(
+                                        r#"SELECT start_time IS NOT NULL AS "started!" FROM async_teams WHERE team = $1 AND kind = $2"#,
+                                        team_id as i64,
+                                        async_kind_int as i16
+                                    ).fetch_optional(&mut *transaction).await?.unwrap_or(false);
+                                    
+                                    if already_started {
+                                        interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                            CreateInteractionResponseMessage::new()
+                                                .ephemeral(true)
+                                                .content("The countdown has already been started.")
+                                        )).await?;
+                                        transaction.rollback().await?;
+                                    } else {
+                                        // Defer interaction for countdown
+                                        interaction.defer(&ctx.http).await?;
+                                        
+                                        // Send countdown messages
+                                        interaction.channel_id.say(ctx, "**Your async is about to start!**").await?;
+                                        sleep(Duration::from_secs(1)).await;
+                                        
+                                        for i in (1..=5).rev() {
+                                            interaction.channel_id.say(ctx, format!("**{}**", i)).await?;
+                                            sleep(Duration::from_secs(1)).await;
+                                        }
+                                        
+                                        interaction.channel_id.say(ctx, "**GO!** 🏃‍♂️").await?;
+                                        
+                                        // Record start time
+                                        let now = Utc::now();
+                                        sqlx::query!(
+                                            "UPDATE async_teams SET start_time = $1 WHERE team = $2 AND kind = $3",
+                                            now,
+                                            team_id as i64,
+                                            async_kind_int as i16
+                                        ).execute(&mut *transaction).await?;
+                                        
+                                        // Send FINISH button
+                                        let finish_button = CreateActionRow::Buttons(vec![
+                                            CreateButton::new(format!("async_finish_qualifier_{}_{}", team_id, async_kind_int))
+                                                .label("FINISH")
+                                                .style(ButtonStyle::Danger)
+                                        ]);
+                                        
+                                        interaction.channel_id.send_message(ctx, CreateMessage::new()
+                                            .content("**Good luck!** Click the FINISH button once you have completed your run.")
+                                            .components(vec![finish_button])
+                                        ).await?;
+                                        
+                                        // Remove the START button
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                                            .components(vec![])
+                                        ).await?;
+                                        
+                                        transaction.commit().await?;
+                                    }
+                                }
+                            }
+                        }
+                    } else if let Some(params) = custom_id.strip_prefix("async_finish_qualifier_") {
+                        // Handle qualifier FINISH button
+                        if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
+                            if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
+                                let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+                                let mut transaction = pool.begin().await?;
+                                
+                                // Verify user is a member of the team
+                                let is_team_member = sqlx::query_scalar!(
+                                    r#"SELECT EXISTS (
+                                        SELECT 1 FROM team_members tm
+                                        JOIN users u ON tm.member = u.id
+                                        WHERE tm.team = $1 AND u.discord_id = $2
+                                    ) AS "exists!""#,
+                                    team_id as i64,
+                                    interaction.user.id.get() as i64
+                                ).fetch_one(&mut *transaction).await?;
+                                
+                                if !is_team_member {
+                                    interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                        CreateInteractionResponseMessage::new()
+                                            .ephemeral(true)
+                                            .content("You are not authorized to click this button.")
+                                    )).await?;
+                                    transaction.rollback().await?;
+                                } else {
+                                    // Get start time and check state
+                                    let async_team = sqlx::query!(
+                                        r#"SELECT start_time, finish_time FROM async_teams WHERE team = $1 AND kind = $2"#,
+                                        team_id as i64,
+                                        async_kind_int as i16
+                                    ).fetch_optional(&mut *transaction).await?;
+                                    
+                                    if let Some(record) = async_team {
+                                        if record.start_time.is_none() {
+                                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                                CreateInteractionResponseMessage::new()
+                                                    .ephemeral(true)
+                                                    .content("You must start the countdown before finishing.")
+                                            )).await?;
+                                            transaction.rollback().await?;
+                                        } else if record.finish_time.is_some() {
+                                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                                CreateInteractionResponseMessage::new()
+                                                    .ephemeral(true)
+                                                    .content("You have already clicked finish.")
+                                            )).await?;
+                                            transaction.rollback().await?;
+                                        } else {
+                                            // Calculate estimated finish time
+                                            let now = Utc::now();
+                                            let start_time = record.start_time.unwrap();
+                                            let duration = now.signed_duration_since(start_time);
+                                            
+                                            let total_seconds = duration.num_seconds();
+                                            let hours = total_seconds / 3600;
+                                            let minutes = (total_seconds % 3600) / 60;
+                                            let seconds = total_seconds % 60;
+                                            let formatted_time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
+                                            
+                                            // Remove button and send completion message
+                                            interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                                CreateInteractionResponseMessage::new()
+                                                    .components(vec![])
+                                            )).await?;
+                                            
+                                            let mut msg = MessageBuilder::default();
+                                            msg.push("@here - **Qualifier run complete!**\n\n");
+                                            msg.push(format!("**Estimated finish time:** {}\n\n", formatted_time));
+                                            msg.push("Please provide:\n");
+                                            msg.push("• A link to your VOD/recording\n");
+                                            msg.push("• A screenshot of your final time/collection rate\n\n");
+                                            msg.push("Staff will verify and record your official time using `/result-async`.");
+                                            
+                                            interaction.channel_id.say(ctx, msg.build()).await?;
+                                            
+                                            transaction.commit().await?;
+                                        }
+                                    } else {
+                                        interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                            CreateInteractionResponseMessage::new()
+                                                .ephemeral(true)
+                                                .content("Could not find your qualifier submission.")
+                                        )).await?;
+                                        transaction.rollback().await?;
+                                    }
+                                }
+                            }
+                        }
                     } else {
                         panic!("received message component interaction with unknown custom ID {custom_id:?}")
                     },
@@ -3042,6 +3318,20 @@ async fn find_race_from_thread(
     Ok(race_row.map(|row| (row.id, row.async_part.unwrap_or(0))))
 }
 
+/// Helper function to find qualifier team and kind from thread ID
+async fn find_qualifier_from_thread(
+    transaction: &mut Transaction<'_, Postgres>,
+    thread_id: i64,
+) -> Result<Option<(Id<Teams>, AsyncKind)>, sqlx::Error> {
+    sqlx::query!(
+        r#"SELECT team AS "team: Id<Teams>", kind AS "kind: event::AsyncKind"
+           FROM async_teams 
+           WHERE discord_thread = $1"#,
+        thread_id
+    ).fetch_optional(&mut **transaction).await
+        .map(|row| row.map(|r| (r.team, r.kind)))
+}
+
 pub(crate) async fn result_async_command(
     ctx: &DiscordCtx,
     interaction: &CommandInteraction,
@@ -3254,6 +3544,74 @@ async fn handle_async_command(
         match find_race_from_thread(&mut transaction, thread_id).await? {
             Some((race_id, async_part)) => (race_id, async_part as i64),
             None => {
+                // Check if it's a qualifier thread
+                if let Some((team_id, async_kind)) = find_qualifier_from_thread(&mut transaction, thread_id).await? {
+                    // Check if request has link parameter
+                    let link: Option<String> = interaction.data.options.iter()
+                        .find(|opt| opt.name == "link")
+                        .and_then(|opt| opt.value.as_str())
+                        .map(|s| s.to_string());
+
+                    let team = Team::from_id(&mut transaction, team_id).await?.ok_or(sqlx::Error::RowNotFound)?;
+                    let team_name = team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into());
+
+                    if is_forfeit {
+                        sqlx::query!("UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND kind = $2", team_id as _, async_kind as _).execute(&mut *transaction).await?;
+                        
+                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                            .content(format!("Forfeit recorded for {}.", team_name))
+                        ).await?;
+                    } else {
+                        let time_str = interaction.data.options.iter()
+                            .find(|opt| opt.name == "time")
+                            .and_then(|opt| opt.value.as_str())
+                            .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
+
+                        let time_parts: Vec<&str> = time_str.split(':').collect();
+                        if time_parts.len() != 3 {
+                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                .content("Time must be in format hh:mm:ss")
+                            ).await?;
+                            transaction.rollback().await?;
+                            return Ok(());
+                        }
+
+                        let hours: i32 = time_parts[0].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+                        let minutes: i32 = time_parts[1].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+                        let seconds: i32 = time_parts[2].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+
+                        let total_seconds = hours * 3600 + minutes * 60 + seconds;
+                        let milliseconds = (total_seconds as i64) * 1_000;
+                        let pg_interval = PgInterval {
+                            months: 0,
+                            days: 0,
+                            microseconds: milliseconds * 1_000,
+                        };
+
+                        sqlx::query!("UPDATE async_teams SET submitted = NOW(), finish_time = $1 WHERE team = $2 AND kind = $3", pg_interval, team_id as _, async_kind as _).execute(&mut *transaction).await?;
+                        
+                        let members = team.members(&mut transaction).await?;
+                        for member in members {
+                             sqlx::query!(
+                                "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = EXCLUDED.vod",
+                                team.series as _,
+                                team.event,
+                                member.id as _,
+                                async_kind as _,
+                                milliseconds as _, 
+                                link
+                            ).execute(&mut *transaction).await?;
+                        }
+
+                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                            .content(format!("Time recorded for {}: {}", team_name, time_str))
+                        ).await?;
+                    }
+                    
+                    transaction.commit().await?;
+                    return Ok(());
+                }
+
                 interaction.edit_response(ctx, EditInteractionResponse::new()
                     .content("This command must be used in an async race thread, or you must provide race_id and async_part parameters.")
                 ).await?;

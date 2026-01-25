@@ -196,6 +196,9 @@ pub(crate) struct Data<'a> {
     /// Maps round names to mode names for swiss events where mode is fixed per round.
     /// Example: {"Round 1": "ambrozia", "Round 2": "crosskeys"}
     pub(crate) round_modes: Option<HashMap<String, String>>,
+    /// When true, qualifier requests create Discord threads with READY/countdown/FINISH buttons
+    /// instead of using web forms for submission.
+    pub(crate) automated_asyncs: bool,
 }
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
@@ -255,7 +258,8 @@ impl<'a> Data<'a> {
             discord_events_enabled,
             discord_events_require_restream,
             listed,
-            round_modes AS "round_modes: Json<HashMap<String, String>>"
+            round_modes AS "round_modes: Json<HashMap<String, String>>",
+            automated_asyncs
         FROM events WHERE series = $1 AND event = $2"#, series as _, &event).fetch_optional(&mut **transaction).await?
             .map(|row| Ok::<_, DataError>(Self {
                 display_name: row.display_name,
@@ -305,6 +309,7 @@ impl<'a> Data<'a> {
                 series, event,
                 listed: row.listed,
                 round_modes: row.round_modes.map(|Json(round_modes)| round_modes),
+                automated_asyncs: row.automated_asyncs,
             }))
             .transpose()
     }
@@ -1124,9 +1129,31 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                 } else {
                     @let async_info = if let Some(async_kind) = data.active_async(&mut transaction, Some(row.id)).await? {
                         let async_row = sqlx::query!(r#"SELECT is_tfb_dev, tfb_uuid, xkeys_uuid, web_id, web_gen_time, file_stem, hash1, hash2, hash3, hash4, hash5, seed_password FROM asyncs WHERE series = $1 AND event = $2 AND kind = $3"#, data.series as _, &data.event, async_kind as _).fetch_one(&mut *transaction).await?;
-                        if let Some(team_row) = sqlx::query!(r#"SELECT requested AS "requested!", submitted FROM async_teams WHERE team = $1 AND KIND = $2 AND requested IS NOT NULL"#, row.id as _, async_kind as _).fetch_optional(&mut *transaction).await? {
+                        if let Some(team_row) = sqlx::query!(r#"SELECT requested AS "requested!", submitted, discord_thread FROM async_teams WHERE team = $1 AND KIND = $2 AND requested IS NOT NULL"#, row.id as _, async_kind as _).fetch_optional(&mut *transaction).await? {
                             if team_row.submitted.is_some() {
                                 None
+                            } else if let Some(thread_id) = team_row.discord_thread {
+                                Some(html! {
+                                    div(class = "info") {
+                                        p {
+                                            : "You requested an async on ";
+                                            : format_datetime(team_row.requested, DateTimeFormat { long: true, running_text: true });
+                                            : ".";
+                                        }
+                                        p {
+                                            : "Your async qualifier is being handled via Discord. ";
+                                            a(href = format!("https://discord.com/channels/{}/{}",
+                                                data.discord_guild.map(|g| g.get()).unwrap_or(0),
+                                                thread_id)) : "Open Thread";
+                                        }
+                                    }
+                                })
+                            } else if data.automated_asyncs {
+                                Some(html! {
+                                    div(class = "info") {
+                                        p : "Your async request has been received. A Discord thread will be created for you shortly.";
+                                    }
+                                })
                             } else {
                                 let seed = seed::Data::from_db(
                                     None,
@@ -2063,7 +2090,7 @@ pub(crate) async fn opt_out_post(pool: &State<PgPool>, discord_ctx: &State<RwFut
     }
 }
 
-#[derive(Debug, sqlx::Type)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, sqlx::Type)]
 #[sqlx(type_name = "async_kind", rename_all = "lowercase")]
 pub(crate) enum AsyncKind {
     #[sqlx(rename = "qualifier")]

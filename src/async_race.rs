@@ -28,7 +28,7 @@ impl AsyncRaceManager {
     ) -> Result<(), Error> {
         let mut transaction = pool.begin().await?;
         
-        // Find races that need async threads created
+        // Find races that need async threads created (bracket races)
         let races = Self::get_races_needing_threads(&mut transaction).await?;
         
         for race in races {
@@ -66,6 +66,9 @@ impl AsyncRaceManager {
                 }
             }
         }
+        
+        // Also create threads for qualifier asyncs (automated_asyncs = true)
+        Self::create_qualifier_threads(&mut transaction, discord_ctx, pool).await?;
         
         transaction.commit().await?;
         Ok(())
@@ -497,6 +500,218 @@ impl AsyncRaceManager {
             races.push(race);
         }
         Ok(races)
+    }
+
+    /// Creates threads for qualifier teams that have requested but not yet received a thread
+    async fn create_qualifier_threads(
+        transaction: &mut Transaction<'_, Postgres>,
+        discord_ctx: &DiscordCtx,
+        _pool: &PgPool,
+    ) -> Result<(), Error> {
+        // Query teams that need qualifier threads:
+        // - requested IS NOT NULL (team has requested the qualifier)
+        // - submitted IS NULL (team hasn't submitted yet)
+        // - discord_thread IS NULL (no thread created yet)
+        // - event has automated_asyncs = true
+        // - event has discord_async_channel configured
+        // - async has a seed available (web_id, tfb_uuid, xkeys_uuid, or file_stem)
+        let teams_needing_threads = sqlx::query!(
+            r#"
+            SELECT 
+                at.team AS "team_id: Id<Teams>",
+                at.kind AS "async_kind: event::AsyncKind",
+                t.series AS "series: Series",
+                t.event
+            FROM async_teams at
+            JOIN teams t ON at.team = t.id
+            JOIN events e ON t.series = e.series AND t.event = e.event
+            JOIN asyncs a ON t.series = a.series AND t.event = a.event AND at.kind = a.kind
+            WHERE at.requested IS NOT NULL
+              AND at.submitted IS NULL
+              AND at.discord_thread IS NULL
+              AND e.automated_asyncs = true
+              AND e.discord_async_channel IS NOT NULL
+              AND (a.web_id IS NOT NULL OR a.tfb_uuid IS NOT NULL OR a.xkeys_uuid IS NOT NULL OR a.file_stem IS NOT NULL)
+            "#
+        ).fetch_all(&mut **transaction).await?;
+
+        for row in teams_needing_threads {
+            // Load event data
+            let event = EventData::new(transaction, row.series, &row.event)
+                .await
+                .map_err(|e| Error::Event(event::Error::Data(e)))?
+                .ok_or(Error::EventNotFound)?;
+
+            // Load team
+            let team = Team::from_id(transaction, row.team_id).await?
+                .ok_or(Error::NoTeamFound)?;
+
+            if let Some(async_channel) = event.discord_async_channel {
+                if let Err(e) = Self::create_qualifier_thread(
+                    transaction,
+                    discord_ctx,
+                    &event,
+                    &team,
+                    row.async_kind,
+                    async_channel,
+                ).await {
+                    // Log error but continue processing other teams
+                    log::error!("Failed to create qualifier thread for team {}: {:?}", row.team_id, e);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Creates a private thread for a qualifier async
+    async fn create_qualifier_thread(
+        transaction: &mut Transaction<'_, Postgres>,
+        discord_ctx: &DiscordCtx,
+        event: &EventData<'_>,
+        team: &Team,
+        async_kind: AsyncKind,
+        async_channel: ChannelId,
+    ) -> Result<(), Error> {
+        // Get team name
+        let team_name = team.name(transaction).await?
+            .unwrap_or_else(|| "Unknown Team".to_string().into());
+
+        // Build thread name
+        let kind_str = match async_kind {
+            AsyncKind::Qualifier1 => "Qualifier",
+            AsyncKind::Qualifier2 => "Qualifier 2",
+            AsyncKind::Qualifier3 => "Qualifier 3",
+            AsyncKind::Seeding => "Seeding",
+            AsyncKind::Tiebreaker1 => "Tiebreaker",
+            AsyncKind::Tiebreaker2 => "Tiebreaker 2",
+        };
+        let thread_name = format!("{}: {}", kind_str, team_name);
+
+        // Build thread content
+        let mut content = Self::build_qualifier_thread_content(
+            transaction,
+            event,
+            team,
+            async_kind,
+        ).await?;
+
+        // Create the thread
+        let thread = async_channel.create_thread(discord_ctx, CreateThread::new(&thread_name)
+            .kind(ChannelType::PrivateThread)
+            .auto_archive_duration(AutoArchiveDuration::OneWeek)
+        ).await?;
+
+        // Store thread ID in async_teams
+        let thread_id = thread.id.get() as i64;
+        sqlx::query!(
+            "UPDATE async_teams SET discord_thread = $1 WHERE team = $2 AND kind = $3",
+            thread_id,
+            team.id as _,
+            async_kind as _
+        ).execute(&mut **transaction).await?;
+
+        // Create the READY button
+        let ready_button = CreateActionRow::Buttons(vec![
+            CreateButton::new(format!("async_ready_qualifier_{}_{}", team.id, async_kind as i32))
+                .label("READY!")
+                .style(ButtonStyle::Primary)
+        ]);
+
+        // Send the initial message with the READY button
+        thread.send_message(discord_ctx, CreateMessage::new()
+            .content(content.build())
+            .components(vec![ready_button])
+        ).await?;
+
+        // Add team members to thread
+        let members = team.members(transaction).await?;
+        for member in &members {
+            if let Some(discord) = &member.discord {
+                if let Ok(guild_member) = thread.guild_id.member(discord_ctx, discord.id).await {
+                    let _ = thread.id.add_thread_member(discord_ctx, guild_member.user.id).await;
+                }
+            }
+        }
+
+        // Add organizers to thread
+        let organizers = event.organizers(transaction).await.map_err(Error::Event)?;
+        for organizer in organizers {
+            if let Some(discord) = &organizer.discord {
+                if let Ok(guild_member) = thread.guild_id.member(discord_ctx, discord.id).await {
+                    let _ = thread.id.add_thread_member(discord_ctx, guild_member.user.id).await;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Builds the content for a qualifier async thread
+    async fn build_qualifier_thread_content(
+        transaction: &mut Transaction<'_, Postgres>,
+        event: &EventData<'_>,
+        team: &Team,
+        async_kind: AsyncKind,
+    ) -> Result<MessageBuilder, Error> {
+        let mut content = MessageBuilder::default();
+
+        // Get team members for mention
+        let members = team.members(transaction).await?;
+
+        // Header
+        content.push("Welcome ");
+        for (i, member) in members.iter().enumerate() {
+            content.mention_user(member);
+            if i < members.len() - 1 {
+                content.push(", ");
+            }
+        }
+        content.push("!");
+        content.push_line("");
+        content.push_line("");
+
+        content.push("This thread is for your **");
+        content.push(match async_kind {
+            AsyncKind::Qualifier1 => "Qualifier",
+            AsyncKind::Qualifier2 => "Qualifier 2",
+            AsyncKind::Qualifier3 => "Qualifier 3",
+            AsyncKind::Seeding => "Seeding Async",
+            AsyncKind::Tiebreaker1 => "Tiebreaker",
+            AsyncKind::Tiebreaker2 => "Tiebreaker 2",
+        });
+        content.push("** submission for ");
+        content.push_safe(event.display_name.clone());
+        content.push(".");
+        content.push_line("");
+        content.push_line("");
+
+        content.push("**Instructions:**");
+        content.push_line("");
+        content.push("1. When you're ready to receive the seed, click the **READY!** button below.");
+        content.push_line("");
+        content.push("2. The seed will be posted immediately after clicking READY.");
+        content.push_line("");
+        content.push("3. Click **START COUNTDOWN** when ready to begin your run.");
+        content.push_line("");
+        content.push("4. After the countdown, your timer begins.");
+        content.push_line("");
+        content.push("5. Click **FINISH** when you complete the seed.");
+        content.push_line("");
+        content.push("6. Post your VOD/recording link and any required screenshots.");
+        content.push_line("");
+        content.push("7. Staff will verify and record your official time using `/result-async`.");
+        content.push_line("");
+        content.push_line("");
+
+        content.push("**Recording Requirements:**");
+        content.push_line("");
+        content.push("• Upload your recording to YouTube (unlisted is fine).");
+        content.push_line("");
+        content.push("• Provide a screenshot of your final time/collection rate.");
+        content.push_line("");
+
+        Ok(content)
     }
 
     /// Handles the READY button click for async races
