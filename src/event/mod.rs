@@ -174,6 +174,7 @@ pub(crate) struct Data<'a> {
     pub(crate) discord_volunteer_info_channel: Option<ChannelId>,
     pub(crate) discord_async_channel: Option<ChannelId>,
     pub(crate) rando_version: Option<VersionedBranch>,
+    pub(crate) settings_string: Option<String>,
     pub(crate) single_settings: Option<seed::Settings>,
     pub(crate) team_config: TeamConfig,
     enter_flow: Option<enter::Flow>,
@@ -239,6 +240,7 @@ impl<'a> Data<'a> {
             discord_volunteer_info_channel AS "discord_volunteer_info_channel: PgSnowflake<ChannelId>",
             discord_async_channel AS "discord_async_channel: PgSnowflake<ChannelId>",
             rando_version AS "rando_version: Json<VersionedBranch>",
+            settings_string,
             single_settings AS "single_settings: Json<seed::Settings>",
             team_config AS "team_config: TeamConfig",
             enter_flow AS "enter_flow: Json<enter::Flow>",
@@ -284,6 +286,7 @@ impl<'a> Data<'a> {
                 discord_volunteer_info_channel: row.discord_volunteer_info_channel.map(|PgSnowflake(id)| id),
                 discord_async_channel: row.discord_async_channel.map(|PgSnowflake(id)| id),
                 rando_version: row.rando_version.map(|Json(rando_version)| rando_version),
+                settings_string: row.settings_string,
                 single_settings: if series == Series::CopaDoBrasil && event == "1" {
                     Some(br::s1_settings()) // support for randomized starting song
                 } else {
@@ -416,6 +419,7 @@ impl<'a> Data<'a> {
             Series::TournoiFrancophone => false,
             Series::TriforceBlitz => false,
             Series::WeTryToBeBetter => false,
+            Series::TwwrMain => false,
         }
     }
 
@@ -948,6 +952,7 @@ pub(crate) async fn info(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
         Series::Standard => s::info(&mut transaction, &data).await?,
         Series::TournoiFrancophone => fr::info(&mut transaction, &data).await?,
         Series::TriforceBlitz => tfb::info(&mut transaction, &data).await?,
+        Series::TwwrMain => twwrmain::info(&mut transaction, &data).await?,
         Series::WeTryToBeBetter => wttbb::info(&mut transaction, &data).await?,
     };
     let content = html! {
@@ -1135,7 +1140,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                     p : "You have resigned from this event.";
                 } else {
                     @let async_info = if let Some(async_kind) = data.active_async(&mut transaction, Some(row.id)).await? {
-                        let async_row = sqlx::query!(r#"SELECT is_tfb_dev, tfb_uuid, xkeys_uuid, web_id, web_gen_time, file_stem, hash1, hash2, hash3, hash4, hash5, seed_password FROM asyncs WHERE series = $1 AND event = $2 AND kind = $3"#, data.series as _, &data.event, async_kind as _).fetch_one(&mut *transaction).await?;
+                        let async_row = sqlx::query!(r#"SELECT is_tfb_dev, tfb_uuid, xkeys_uuid, web_id, web_gen_time, file_stem, hash1, hash2, hash3, hash4, hash5, seed_password, seed_data FROM asyncs WHERE series = $1 AND event = $2 AND kind = $3"#, data.series as _, &data.event, async_kind as _).fetch_one(&mut *transaction).await?;
                         if let Some(team_row) = sqlx::query!(r#"SELECT requested AS "requested!", submitted, discord_thread FROM async_teams WHERE team = $1 AND KIND = $2 AND requested IS NOT NULL"#, row.id as _, async_kind as _).fetch_optional(&mut *transaction).await? {
                             if team_row.submitted.is_some() {
                                 None
@@ -1174,6 +1179,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                     async_row.is_tfb_dev,
                                     async_row.tfb_uuid,
                                     async_row.xkeys_uuid,
+                                    async_row.seed_data,
                                                         async_row.hash1,
                     async_row.hash2,
                     async_row.hash3,
@@ -1386,6 +1392,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             | Series::Standard
                             | Series::TournoiFrancophone
                             | Series::WeTryToBeBetter
+                            | Series::TwwrMain
                                 => @if let French = data.language {
                                     p : "Planifiez vos matches dans les fils du canal dédié.";
                                 } else {

@@ -430,6 +430,7 @@ impl Race {
             schedule_updated_at,
             fpa_invoked,
             breaks_used,
+            seed_data,
             file_stem,
             locked_spoiler_log_path,
             web_id,
@@ -584,6 +585,7 @@ impl Race {
                 row.is_tfb_dev,
                 row.tfb_uuid,
                 row.xkeys_uuid,
+                row.seed_data,
                 row.hash1,
                 row.hash2,
                 row.hash3,
@@ -746,6 +748,7 @@ impl Race {
             | Series::SpeedGaming
             | Series::TournoiFrancophone
             | Series::TriforceBlitz
+            | Series::TwwrMain
             | Series::WeTryToBeBetter
                 => {} // these series are now scheduled via Mido's House
         }
@@ -1116,6 +1119,7 @@ impl Race {
             Some(seed::Files::OotrWeb { id, gen_time, ref file_stem }) => (Some(id), Some(gen_time), Some(file_stem), None, false, None, None),
             Some(seed::Files::TriforceBlitz { is_dev, uuid }) => (None, None, None, None, is_dev, Some(uuid), None),
             Some(seed::Files::TfbSotd { .. }) => unimplemented!("Triforce Blitz seed of the day not supported for official races"),
+            Some(seed::Files::TwwrPermalink { .. }) => (None, None, None, None, false, None, None),
             None => (None, None, None, None, false, None, None),
         };
         sqlx::query!("

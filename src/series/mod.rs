@@ -43,6 +43,7 @@ pub(crate) mod soh;
 pub(crate) mod tfb;
 pub(crate) mod wttbb;
 pub(crate) mod xkeys;
+pub(crate) mod twwrmain;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Sequence)]
 pub(crate) enum Series {
@@ -65,6 +66,7 @@ pub(crate) enum Series {
     Standard,
     TournoiFrancophone,
     TriforceBlitz,
+    TwwrMain,
     WeTryToBeBetter,
 }
 
@@ -90,6 +92,7 @@ impl Series {
             Self::Standard => "s",
             Self::TournoiFrancophone => "fr",
             Self::TriforceBlitz => "tfb",
+            Self::TwwrMain => "twwrmain",
             Self::WeTryToBeBetter => "wttbb",
         }
     }
@@ -115,6 +118,7 @@ impl Series {
             Self::Standard => "Standard Tournaments",
             Self::TournoiFrancophone => "Tournois Francophones",
             Self::TriforceBlitz => "Triforce Blitz",
+            Self::TwwrMain => "TWWR Racing Community",
             Self::WeTryToBeBetter => "WeTryToBeBetter",
         }
     }
@@ -124,7 +128,7 @@ impl Series {
             Self::TriforceBlitz => TimeDelta::hours(2),
             Self::AlttprDe | Self::BattleRoyale | Self::Crosskeys | Self::MysteryD => TimeDelta::hours(2) + TimeDelta::minutes(30),
             Self::CoOp | Self::MixedPools | Self::Scrubs | Self::SpeedGaming | Self::WeTryToBeBetter => TimeDelta::hours(3),
-            Self::CopaDoBrasil | Self::League | Self::NineDaysOfSaws | Self::SongsOfHope | Self::Standard | Self::TournoiFrancophone => TimeDelta::hours(3) + TimeDelta::minutes(30),
+            Self::CopaDoBrasil | Self::League | Self::NineDaysOfSaws | Self::SongsOfHope | Self::Standard | Self::TournoiFrancophone | Self::TwwrMain => TimeDelta::hours(3) + TimeDelta::minutes(30),
             Self::Mq | Self::Multiworld | Self::Pictionary => TimeDelta::hours(4),
             Self::Rsl => TimeDelta::hours(4) + TimeDelta::minutes(30),
         }

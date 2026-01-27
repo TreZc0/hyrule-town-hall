@@ -230,6 +230,8 @@ pub(crate) enum Goal {
     TournoiFrancoS5,
     TriforceBlitz,
     TriforceBlitzProgressionSpoiler,
+    TwwrMainWeekly,
+    TwwrMainMiniblins26,
     WeTryToBeBetterS1,
     WeTryToBeBetterS2,
 }
@@ -281,6 +283,8 @@ impl Goal {
             Self::TournoiFrancoS5 => series == Series::TournoiFrancophone && event == "5",
             Self::TriforceBlitz => series == Series::TriforceBlitz,
             Self::TriforceBlitzProgressionSpoiler => false, // possible future tournament but no concrete plans
+            Self::TwwrMainWeekly => series == Series::TwwrMain && event == "w",
+            Self::TwwrMainMiniblins26 => series == Series::TwwrMain && event == "miniblins26",
             Self::WeTryToBeBetterS1 => series == Series::WeTryToBeBetter && event == "1",
             Self::WeTryToBeBetterS2 => series == Series::WeTryToBeBetter && event == "2",
         }
@@ -320,6 +324,8 @@ impl Goal {
             | Self::TriforceBlitzProgressionSpoiler
             | Self::WeTryToBeBetterS1
             | Self::WeTryToBeBetterS2
+            | Self::TwwrMainWeekly
+            | Self::TwwrMainMiniblins26
                 => true,
         }
     }
@@ -353,6 +359,8 @@ impl Goal {
             Self::TournoiFrancoS5 => "Tournoi Francophone Saison 5",
             Self::TriforceBlitz => "Triforce Blitz",
             Self::TriforceBlitzProgressionSpoiler => "Triforce Blitz Progression Spoiler",
+            Self::TwwrMainWeekly => "Weekly",
+            Self::TwwrMainMiniblins26 => "Miniblins 2026",
             Self::WeTryToBeBetterS1 => "WeTryToBeBetter",
             Self::WeTryToBeBetterS2 => "WeTryToBeBetter Season 2",
         }
@@ -385,6 +393,8 @@ impl Goal {
             | Self::StandardRuleset
             | Self::TriforceBlitz
             | Self::TriforceBlitzProgressionSpoiler
+            | Self::TwwrMainWeekly
+            | Self::TwwrMainMiniblins26
                 => English,
             | Self::TournoiFrancoS4
             | Self::TournoiFrancoS5
@@ -427,6 +437,8 @@ impl Goal {
             | Self::StandardRuleset
             | Self::TriforceBlitz
             | Self::TriforceBlitzProgressionSpoiler
+            | Self::TwwrMainWeekly
+            | Self::TwwrMainMiniblins26
             | Self::WeTryToBeBetterS1
             | Self::WeTryToBeBetterS2
                 => None,
@@ -465,6 +477,8 @@ impl Goal {
             | Self::TriforceBlitzProgressionSpoiler
             | Self::WeTryToBeBetterS1
             | Self::WeTryToBeBetterS2
+            | Self::TwwrMainWeekly
+            | Self::TwwrMainMiniblins26
                 => PrerollMode::Medium,
             | Self::MixedPoolsS2
             | Self::MixedPoolsS3
@@ -506,6 +520,8 @@ impl Goal {
                 | Self::TournoiFrancoS4
                 | Self::TournoiFrancoS5
                 | Self::TriforceBlitz
+                | Self::TwwrMainWeekly
+                | Self::TwwrMainMiniblins26
                 | Self::WeTryToBeBetterS1
                 | Self::WeTryToBeBetterS2
                     => UnlockSpoilerLog::After,
@@ -564,6 +580,7 @@ impl Goal {
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => panic!("randomizer version for this goal is unused"),
             Self::Crosskeys2025 => panic!("randomizer version for this goal is unused"),
             Self::MysteryD20 => panic!("randomizer version for this goal is unused"),
+            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => panic!("randomizer version for this goal is unused"),
             Self::PicRs2 | Self::Rsl => panic!("randomizer version for this goal must be parsed from RSL script"),
         }
     }
@@ -598,6 +615,7 @@ impl Goal {
             Self::TournoiFrancoS5 => None, // settings draft
             Self::TriforceBlitz => None, // per-event settings
             Self::TriforceBlitzProgressionSpoiler => Some(tfb::progression_spoiler_settings()),
+            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => None, // handled via settings_string
             Self::WeTryToBeBetterS1 => Some(wttbb::s1_settings()),
             Self::WeTryToBeBetterS2 => Some(wttbb::s2_settings()),
         }
@@ -706,6 +724,7 @@ impl Goal {
                 ctx.say("!seed daily: Triforce Blitz Seed of the Day").await?;
             }
             Self::TriforceBlitzProgressionSpoiler => ctx.say("!seed: The current settings for the mode").await?,
+            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => ctx.say("!seed: The permalink validation hash for the race.").await?,
         }
         Ok(())
     }
@@ -799,7 +818,8 @@ impl Goal {
                         hash4,
                         hash5,
                         seed_password,
-                        progression_spoiler
+                        progression_spoiler,
+                        seed_data
                     "#, self.as_str(), no_password).fetch_optional(&mut **transaction).await.to_racetime()? {
                         let _ = global_state.seed_cache_tx.send(());
                         SeedCommandParseResult::QueueExisting {
@@ -815,6 +835,7 @@ impl Goal {
                                 false,
                                 None,
                                 None,
+                                row.seed_data,
                                 row.hash1,
                                 row.hash2,
                                 row.hash3,
@@ -1249,6 +1270,17 @@ impl Goal {
                 [arg] if arg == "s4coop" => SeedCommandParseResult::TfbDev { coop: true, unlock_spoiler_log, language: English, article: "a", description: format!("Triforce Blitz S4 co-op seed") },
                 [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn't quite understand that" },
             },
+            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => match args {
+                [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the permalink is required" }),
+                [permalink] => SeedCommandParseResult::Twwr {
+                    permalink: permalink.clone(),
+                    unlock_spoiler_log,
+                    language: English,
+                    article: "the",
+                    description: format!("seed for race"),
+                },
+                [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn't quite understand that" },
+            },
         })
     }
 }
@@ -1284,6 +1316,13 @@ pub(crate) enum SeedCommandParseResult {
     },
     Tfb {
         version: &'static str,
+        unlock_spoiler_log: UnlockSpoilerLog,
+        language: Language,
+        article: &'static str,
+        description: String,
+    },
+    Twwr {
+        permalink: String,
         unlock_spoiler_log: UnlockSpoilerLog,
         language: Language,
         article: &'static str,
@@ -1361,6 +1400,12 @@ pub(crate) struct SeedMetadata {
     pub(crate) progression_spoiler: bool,
 }
 
+#[derive(Deserialize)]
+struct TwwrGenerateResponse {
+    permalink: String,
+    seed_hash: String,
+}
+
 pub(crate) struct GlobalState {
     /// Locked while event rooms are being created. Wait with handling new rooms while it's held.
     new_room_lock: Arc<Mutex<()>>,
@@ -1404,6 +1449,50 @@ impl GlobalState {
             },
             new_room_lock, racetime_config, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, discord_ctx, clean_shutdown, seed_cache_tx, seed_metadata,
         }
+    }
+
+    pub(crate) fn roll_twwr_seed(self: Arc<Self>, settings_string: String, unlock_spoiler_log: UnlockSpoilerLog) -> mpsc::Receiver<SeedRollUpdate> {
+        let (update_tx, update_rx) = mpsc::channel(128);
+        tokio::spawn(async move {
+            update_tx.send(SeedRollUpdate::Started).await.allow_unreceived();
+            match self.http_client.post("https://twwrando.xyz/api/v1/generate") //TODO use correct API host
+                .json(&json!({
+                    "username": "HTH",
+                    "settings_string": settings_string,
+                    "generate_spoiler_log": match unlock_spoiler_log {
+                        UnlockSpoilerLog::Now | UnlockSpoilerLog::Progression | UnlockSpoilerLog::After => true,
+                        UnlockSpoilerLog::Never => false,
+                    },
+                }))
+                .send().await {
+                Ok(response) => match response.detailed_error_for_status().await {
+                    Ok(response) => match response.json::<TwwrGenerateResponse>().await {
+                        Ok(TwwrGenerateResponse { permalink, seed_hash }) => {
+                            update_tx.send(SeedRollUpdate::Done {
+                                seed: seed::Data {
+                                    file_hash: None,
+                                    password: None,
+                                    files: Some(seed::Files::TwwrPermalink { permalink, seed_hash }),
+                                    progression_spoiler: false,
+                                },
+                                rsl_preset: None,
+                                unlock_spoiler_log,
+                            }).await.allow_unreceived();
+                        }
+                        Err(e) => {
+                            update_tx.send(SeedRollUpdate::Error(RollError::Twwr(format!("failed to parse TWWR API response: {e}")))).await.allow_unreceived();
+                        }
+                    },
+                    Err(e) => {
+                        update_tx.send(SeedRollUpdate::Error(RollError::Twwr(format!("TWWR API returned error: {e}")))).await.allow_unreceived();
+                    }
+                },
+                Err(e) => {
+                    update_tx.send(SeedRollUpdate::Error(RollError::Twwr(format!("failed to connect to TWWR API: {e}")))).await.allow_unreceived();
+                }
+            }
+        });
+        update_rx
     }
 
     pub(crate) fn roll_seed(self: Arc<Self>, preroll: PrerollMode, allow_web: bool, delay_until: Option<DateTime<Utc>>, version: VersionedBranch, mut settings: seed::Settings, unlock_spoiler_log: UnlockSpoilerLog) -> mpsc::Receiver<SeedRollUpdate> {
@@ -1489,6 +1578,26 @@ impl GlobalState {
                 }
             }
             Ok::<_, mpsc::error::SendError<_>>(())
+        });
+        update_rx
+    }
+
+    pub(crate) fn record_twwr_permalink(self: Arc<Self>, permalink: String, unlock_spoiler_log: UnlockSpoilerLog) -> mpsc::Receiver<SeedRollUpdate> {
+        let (update_tx, update_rx) = mpsc::channel(128);
+        tokio::spawn(async move {
+            update_tx.send(SeedRollUpdate::Done {
+                seed: seed::Data {
+                    file_hash: None,
+                    password: None,
+                    files: Some(seed::Files::TwwrPermalink {
+                        permalink,
+                        seed_hash: String::new(),
+                    }),
+                    progression_spoiler: false,
+                },
+                rsl_preset: None,
+                unlock_spoiler_log,
+            }).await.allow_unreceived();
         });
         update_rx
     }
@@ -2356,6 +2465,8 @@ pub(crate) enum RollError {
     TfbHtml,
     #[error("Triforce Blitz website returned unexpected URL: {0}")]
     TfbUrl(Url),
+    #[error("failed to generate TWWR seed: {0}")]
+    Twwr(String),
     #[cfg(windows)]
     #[error("failed to access user directories")]
     UserDirs,
@@ -2462,6 +2573,12 @@ impl SeedRollUpdate {
                             ).execute(db_pool).await.to_racetime()?;
                         }
                         seed::Files::TfbSotd { .. } => unimplemented!("Triforce Blitz seed of the day not supported for official races"),
+                        seed::Files::TwwrPermalink { permalink, seed_hash } => {
+                            sqlx::query!(
+                                "UPDATE races SET seed_data = $1 WHERE id = $2",
+                                json!({ "permalink": permalink, "seed_hash": seed_hash }), cal_event.race.id as _,
+                            ).execute(db_pool).await.to_racetime()?;
+                        }
                     }
                     if let Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) = extra.file_hash {
                         sqlx::query!(
@@ -2484,6 +2601,7 @@ impl SeedRollUpdate {
                                     ).execute(db_pool).await.to_racetime()?;
                                 }
                                 seed::Files::TriforceBlitz { .. } | seed::Files::TfbSotd { .. } => unreachable!(), // no such thing as random settings Triforce Blitz
+                                seed::Files::TwwrPermalink { .. } => unreachable!(),
                             }
                         }
                     }
@@ -2503,6 +2621,7 @@ impl SeedRollUpdate {
                     seed::Files::TriforceBlitz { is_dev: false, uuid } => format!("https://www.triforceblitz.com/seed/{uuid}"),
                     seed::Files::TriforceBlitz { is_dev: true, uuid } => format!("https://dev.triforceblitz.com/seeds/{uuid}"),
                     seed::Files::TfbSotd { ordinal, .. } => format!("https://www.triforceblitz.com/seed/daily/{ordinal}"),
+                    seed::Files::TwwrPermalink { permalink, .. } => format!("{permalink}"),
                 };
                 ctx.say(if let French = language {
                     format!("@entrants Voici votre seed : {seed_url}")
@@ -2785,6 +2904,7 @@ async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl
             seed::Files::TriforceBlitz { is_dev: false, uuid } => format!("https://www.triforceblitz.com/seed/{uuid}"),
             seed::Files::TriforceBlitz { is_dev: true, uuid } => format!("https://dev.triforceblitz.com/seeds/{uuid}"),
             seed::Files::TfbSotd { ordinal, .. } => format!("https://www.triforceblitz.com/seed/daily/{ordinal}"),
+            seed::Files::TwwrPermalink { permalink, .. } => permalink.clone(),
         },
     )).await
 }
@@ -3443,6 +3563,19 @@ impl Handler {
         self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_mysteryd20_seed(), language, article, "Mystery seed".to_string()).await;
     }
 
+    async fn roll_twwr_seed(&self, ctx: &RaceContext<GlobalState>, permalink: String, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
+        let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
+        let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
+        self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().record_twwr_permalink(permalink, unlock_spoiler_log), language, article, description).await;
+    }
+
+    async fn roll_twwr_seed_official(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
+        let official_start = cal_event.start().expect("handling room for official race without start time");
+        let delay_until = official_start - TimeDelta::minutes(15);
+        let settings_string = self.official_data.as_ref().and_then(|data| data.event.settings_string.clone()).expect("TWWR event missing settings string");
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_twwr_seed(settings_string, UnlockSpoilerLog::Never), language, article, "seed".to_string()).await;
+    }
+
     async fn roll_rsl_seed(&self, ctx: &RaceContext<GlobalState>, preset: rsl::VersionedPreset, world_count: u8, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
         let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
@@ -3491,6 +3624,7 @@ impl Handler {
                                 fs::write(Path::new(seed::DIR).join(format!("{file_stem}_Spoiler.json")), &spoiler_log).await.to_racetime()?;
                             }
                             seed::Files::TriforceBlitz { .. } | seed::Files::TfbSotd { .. } => {} // automatically unlocked by triforceblitz.com
+                            seed::Files::TwwrPermalink { .. } => {} // already handled by triforceblitz.com
                         }
                     }
                 },
@@ -4447,6 +4581,28 @@ impl RaceHandler<GlobalState> for Handler {
                                     }),
                                 ],
                             ).await?,
+                            Goal::TwwrMainWeekly | Goal::TwwrMainMiniblins26 => ctx.send_message(
+                                "Welcome! This is a practice room for The Wind Waker Randomizer. Learn more at https://twwrando.xyz/",
+                                true,
+                                vec![
+                                    ("Record seed", ActionButton::Message {
+                                        message: format!("!seed ${{permalink}}"),
+                                        help_text: Some(format!("Record a permalink for this race.")),
+                                        survey: Some(vec![
+                                            SurveyQuestion {
+                                                name: format!("permalink"),
+                                                label: format!("Permalink"),
+                                                default: None,
+                                                help_text: Some(format!("The last part of the permalink URL")),
+                                                kind: SurveyQuestionKind::Input,
+                                                placeholder: Some(format!("e.g. 12345678-90ab-cdef-1234-567890abcdef")),
+                                                options: Vec::default(),
+                                            },
+                                        ]),
+                                        submit: Some(format!("Record")),
+                                    }),
+                                ],
+                            ).await?,
                             Goal::TriforceBlitzProgressionSpoiler => ctx.send_message(
                                 "Welcome to Triforce Blitz Progression Spoiler!",
                                 true,
@@ -4617,6 +4773,9 @@ impl RaceHandler<GlobalState> for Handler {
                                 => this.roll_alttprde9_seed(ctx, cal_event.clone(), English, "a").await,
                             | Goal::Crosskeys2025
                                 => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await,
+                            Goal::TwwrMainWeekly
+                            | Goal::TwwrMainMiniblins26
+                                => this.roll_twwr_seed_official(ctx, cal_event.clone(), English, "a").await,
                             Goal::MysteryD20 => this.roll_mysteryd20_seed(ctx, cal_event.clone(), English, "a").await,
                             Goal::NineDaysOfSaws => unreachable!("9dos series has concluded"),
                             Goal::PicRs2 => this.roll_rsl_seed(ctx, rsl::VersionedPreset::Fenhl {
@@ -5080,6 +5239,7 @@ impl RaceHandler<GlobalState> for Handler {
                             SeedCommandParseResult::Rsl { preset, world_count, unlock_spoiler_log, language, article, description } => self.roll_rsl_seed(ctx, preset, world_count, unlock_spoiler_log, language, article, description).await,
                             SeedCommandParseResult::Tfb { version, unlock_spoiler_log, language, article, description } => self.roll_tfb_seed(ctx, version, unlock_spoiler_log, language, article, description).await,
                             SeedCommandParseResult::TfbDev { coop, unlock_spoiler_log, language, article, description } => self.roll_tfb_dev_seed(ctx, coop, unlock_spoiler_log, language, article, description).await,
+                            SeedCommandParseResult::Twwr { permalink, unlock_spoiler_log, language, article, description } => self.roll_twwr_seed(ctx, permalink, unlock_spoiler_log, language, article, description).await,
                             SeedCommandParseResult::QueueExisting { data, language, article, description } => self.queue_existing_seed(ctx, data, language, article, description).await,
                             SeedCommandParseResult::SendPresets { language, msg } => {
                                 ctx.say(if let French = language {
@@ -5397,6 +5557,8 @@ impl RaceHandler<GlobalState> for Handler {
                     | Goal::TournoiFrancoS5
                     | Goal::WeTryToBeBetterS1
                     | Goal::WeTryToBeBetterS2
+                    | Goal::TwwrMainWeekly
+                    | Goal::TwwrMainMiniblins26
                         => {}
                 }
             }

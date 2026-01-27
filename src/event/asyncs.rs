@@ -10,9 +10,10 @@ async fn asyncs_form(mut transaction: Transaction<'_, Postgres>, me: User, uri: 
         kind: AsyncKind,
         file_stem: Option<String>,
         web_id: Option<i64>,
+        seed_data: Option<serde_json::Value>,
     }
     let asyncs = sqlx::query_as!(AsyncRow,
-        r#"SELECT kind AS "kind: AsyncKind", file_stem, web_id FROM asyncs WHERE series = $1 AND event = $2 ORDER BY kind"#,
+        r#"SELECT kind AS "kind: AsyncKind", file_stem, web_id, seed_data FROM asyncs WHERE series = $1 AND event = $2 ORDER BY kind"#,
         event.series as _, &event.event
     )
     .fetch_all(&mut *transaction)
@@ -33,6 +34,7 @@ async fn asyncs_form(mut transaction: Transaction<'_, Postgres>, me: User, uri: 
                             th : "Kind";
                             th : "File Stem";
                             th : "Web ID";
+                            th : "Seed Data";
                         }
                     }
                     tbody {
@@ -41,6 +43,7 @@ async fn asyncs_form(mut transaction: Transaction<'_, Postgres>, me: User, uri: 
                                 td : format!("{:?}", row.kind);
                                 td : row.file_stem.unwrap_or_default();
                                 td : row.web_id.map(|id| id.to_string()).unwrap_or_default();
+                                td : row.seed_data.as_ref().map(|data| data.to_string()).unwrap_or_default();
                             }
                         }
                     }

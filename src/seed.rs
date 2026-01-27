@@ -69,6 +69,10 @@ pub(crate) enum Files {
         date: NaiveDate,
         ordinal: u64,
     },
+    TwwrPermalink {
+        permalink: String,
+        seed_hash: String,
+    },
 }
 
 impl Data {
@@ -84,6 +88,7 @@ impl Data {
         is_tfb_dev: bool,
         tfb_uuid: Option<Uuid>,
         xkeys_uuid: Option<Uuid>,
+        seed_data: Option<serde_json::Value>,
         hash1: Option<String>,
         hash2: Option<String>,
         hash3: Option<String>,
@@ -99,17 +104,22 @@ impl Data {
                 _ => unreachable!("only some hash icons present, should be prevented by SQL constraint"),
             },
             password: password.map(|pw| pw.chars().map(|note| OcarinaNote::try_from(note).expect("invalid ocarina note in password, should be prevented by SQL constraint")).collect_vec().try_into().expect("invalid password length, should be prevented by SQL constraint")),
-            files: match (file_stem, locked_spoiler_log_path, web_id, web_gen_time, tfb_uuid, xkeys_uuid) {
-                (_, _, _, _, Some(uuid), None) => Some(Files::TriforceBlitz { is_dev: is_tfb_dev, uuid }),
-                (Some(file_stem), _, Some(id), Some(gen_time), None, None) => Some(Files::OotrWeb { id, gen_time, file_stem: Cow::Owned(file_stem) }),
-                (Some(file_stem), locked_spoiler_log_path, Some(id), None, None, None) => Some(if let Some(first_start) = [start, async_start1, async_start2, async_start3].into_iter().filter_map(identity).min() {
+            files: match (file_stem, locked_spoiler_log_path, web_id, web_gen_time, tfb_uuid, xkeys_uuid, seed_data) {
+                (_, _, _, _, Some(uuid), None, None) => Some(Files::TriforceBlitz { is_dev: is_tfb_dev, uuid }),
+                (Some(file_stem), _, Some(id), Some(gen_time), None, None, None) => Some(Files::OotrWeb { id, gen_time, file_stem: Cow::Owned(file_stem) }),
+                (Some(file_stem), locked_spoiler_log_path, Some(id), None, None, None, None) => Some(if let Some(first_start) = [start, async_start1, async_start2, async_start3].into_iter().filter_map(identity).min() {
                     Files::OotrWeb { id, gen_time: first_start - TimeDelta::days(1), file_stem: Cow::Owned(file_stem) }
                 } else {
                     Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }
                 }),
-                (Some(file_stem), locked_spoiler_log_path, None, _, None, None) => Some(Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }),
-                (_, _, _, _, _, Some(uuid)) => Some(Files::AlttprDoorRando { uuid: uuid }),
-                (None, _, _, _, None, None) => None,
+                (Some(file_stem), locked_spoiler_log_path, None, _, None, None, None) => Some(Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }),
+                (_, _, _, _, _, Some(uuid), None) => Some(Files::AlttprDoorRando { uuid }),
+                (_, _, _, _, _, _, Some(ref seed_data)) => (|| {
+                    let permalink = seed_data.get("permalink")?.as_str()?.to_owned();
+                    let seed_hash = seed_data.get("seed_hash")?.as_str()?.to_owned();
+                    Some(Files::TwwrPermalink { permalink, seed_hash })
+                })(),
+                (None, _, _, _, None, None, None) => None,
             },
             progression_spoiler,
         }
@@ -130,6 +140,7 @@ impl Data {
                 Some(Files::OotrWeb { gen_time, .. }) => gen_time <= now - WEB_TIMEOUT,
                 Some(Files::TriforceBlitz { .. }) => false,
                 Some(Files::TfbSotd { .. }) => false,
+                Some(Files::TwwrPermalink { .. }) => false,
                 None => false,
             };
             if let Some((spoiler_path, spoiler_file_name)) = match self.files {
@@ -263,6 +274,18 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
         }),
         Some(Files::TfbSotd { ordinal, .. }) => Some(html! {
             a(href = format!("https://www.triforceblitz.com/seed/daily/{ordinal}"), target = "_blank") : "View";
+        }),
+        Some(Files::TwwrPermalink { ref permalink, ref seed_hash }) => Some(html! {
+            div(class = "twwr-seed") {
+                div {
+                    strong : "Permalink: ";
+                    code(style = "user-select: all") : permalink;
+                }
+                div {
+                    strong : "Seed Hash: ";
+                    : seed_hash;
+                }
+            }
         }),
         None => None,
     };
