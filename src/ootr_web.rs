@@ -257,7 +257,7 @@ impl ApiClient {
                     .then(|| version.clone())
             }
             VersionedBranch::Latest { branch } => self.get_versions(Some(*branch), rsl_preset.is_some()).await.ok().and_then(|response| response.currently_active_version),
-            VersionedBranch::Custom { .. } => None,
+            VersionedBranch::Custom { .. } | VersionedBranch::Tww { .. } => None,
         }
     }
 

@@ -80,6 +80,13 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                                 : branch;
                                 : ")";
                             }
+                            VersionedBranch::Tww { identifier, github_url } => {
+                                : "The Wind Waker Randomizer (build ";
+                                : identifier;
+                                : ", download: ";
+                                : github_url;
+                                : ")";
+                            }
                         }
                     }
                     p : "Settings:";

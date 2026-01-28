@@ -155,6 +155,11 @@ pub(crate) enum VersionedBranch {
         github_username: Cow<'static, str>,
         branch: Cow<'static, str>,
     },
+    #[serde(rename_all = "camelCase")]
+    Tww {
+        identifier: Cow<'static, str>,
+        github_url: Cow<'static, str>,
+    },
 }
 
 impl VersionedBranch {
@@ -162,7 +167,7 @@ impl VersionedBranch {
         match self {
             Self::Pinned { version } => Some(version.branch()),
             Self::Latest { branch } => Some(*branch),
-            Self::Custom { .. } => None,
+            Self::Custom { .. } | Self::Tww { .. } => None,
         }
     }
 }
@@ -520,8 +525,6 @@ impl Goal {
                 | Self::TournoiFrancoS4
                 | Self::TournoiFrancoS5
                 | Self::TriforceBlitz
-                | Self::TwwrMainWeekly
-                | Self::TwwrMainMiniblins26
                 | Self::WeTryToBeBetterS1
                 | Self::WeTryToBeBetterS2
                     => UnlockSpoilerLog::After,
@@ -534,6 +537,8 @@ impl Goal {
                 | Self::AlttprDe9SwissB
                 | Self::Crosskeys2025
                 | Self::MysteryD20
+                | Self::TwwrMainWeekly
+                | Self::TwwrMainMiniblins26
                     => UnlockSpoilerLog::Never
             }
         }
@@ -580,7 +585,10 @@ impl Goal {
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => panic!("randomizer version for this goal is unused"),
             Self::Crosskeys2025 => panic!("randomizer version for this goal is unused"),
             Self::MysteryD20 => panic!("randomizer version for this goal is unused"),
-            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => panic!("randomizer version for this goal is unused"),
+            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => VersionedBranch::Tww {
+                identifier: Cow::Borrowed("wwrando-dev-tanjo3"),
+                github_url: Cow::Borrowed("https://github.com/tanjo3/wwrando/releases"),
+            },
             Self::PicRs2 | Self::Rsl => panic!("randomizer version for this goal must be parsed from RSL script"),
         }
     }
@@ -1451,7 +1459,7 @@ impl GlobalState {
         }
     }
 
-    pub(crate) fn roll_twwr_seed(self: Arc<Self>, settings_string: String, unlock_spoiler_log: UnlockSpoilerLog) -> mpsc::Receiver<SeedRollUpdate> {
+    pub(crate) fn roll_twwr_seed(self: Arc<Self>, version: Option<VersionedBranch>, settings_string: String, unlock_spoiler_log: UnlockSpoilerLog) -> mpsc::Receiver<SeedRollUpdate> {
         let (update_tx, update_rx) = mpsc::channel(128);
         tokio::spawn(async move {
             update_tx.send(SeedRollUpdate::Started).await.allow_unreceived();
@@ -1459,6 +1467,7 @@ impl GlobalState {
                 .json(&json!({
                     "username": "HTH",
                     "settings_string": settings_string,
+                    "randomizer_path": if let Some(VersionedBranch::Tww { ref identifier, .. }) = version { Some(&**identifier) } else { None },
                     "generate_spoiler_log": match unlock_spoiler_log {
                         UnlockSpoilerLog::Now | UnlockSpoilerLog::Progression | UnlockSpoilerLog::After => true,
                         UnlockSpoilerLog::Never => false,
@@ -1476,6 +1485,7 @@ impl GlobalState {
                                     progression_spoiler: false,
                                 },
                                 rsl_preset: None,
+                                version: version.clone(),
                                 unlock_spoiler_log,
                             }).await.allow_unreceived();
                         }
@@ -1545,13 +1555,14 @@ impl GlobalState {
                                 password,
                             },
                             rsl_preset: None,
+                            version: Some(version),
                             unlock_spoiler_log,
                         }).await?,
                         Err(e) => update_tx.send(SeedRollUpdate::Error(e.into())).await?, //TODO fall back to rolling locally for network errors
                     }
                 } else {
                     update_tx.send(SeedRollUpdate::Started).await?;
-                    match roll_seed_locally(delay_until, version, match unlock_spoiler_log {
+                    match roll_seed_locally(delay_until, version.clone(), match unlock_spoiler_log {
                         UnlockSpoilerLog::Now | UnlockSpoilerLog::Progression | UnlockSpoilerLog::After => true,
                         UnlockSpoilerLog::Never => password_lock, // spoiler log needs to be generated so the backend can read the password
                     }, settings).await {
@@ -1567,6 +1578,7 @@ impl GlobalState {
                                         progression_spoiler: unlock_spoiler_log == UnlockSpoilerLog::Progression,
                                     },
                                     rsl_preset: None,
+                                    version: Some(version),
                                     unlock_spoiler_log,
                                 },
                                 None => SeedRollUpdate::Error(RollError::PatchPath),
@@ -1596,6 +1608,7 @@ impl GlobalState {
                     progression_spoiler: false,
                 },
                 rsl_preset: None,
+                version: None,
                 unlock_spoiler_log,
             }).await.allow_unreceived();
         });
@@ -1730,6 +1743,7 @@ impl GlobalState {
                     password: None,
                 },
                 rsl_preset: None,
+                version: None,
                 unlock_spoiler_log: UnlockSpoilerLog::Never
             }).await.allow_unreceived();
             Ok(())
@@ -1839,6 +1853,7 @@ impl GlobalState {
                     password: None,
                 },
                 rsl_preset: None,
+                version: None,
                 unlock_spoiler_log: UnlockSpoilerLog::Never,
             }).await.allow_unreceived();
             Ok(())
@@ -1949,6 +1964,7 @@ impl GlobalState {
                     password: None,
                 },
                 rsl_preset: None,
+                version: None,
                 unlock_spoiler_log: UnlockSpoilerLog::Never
             }).await.allow_unreceived();
             Ok(())
@@ -2098,6 +2114,7 @@ impl GlobalState {
                             password,
                         },
                         rsl_preset: if let rsl::VersionedPreset::Xopar { preset, .. } = preset { Some(preset) } else { None },
+                        version: None,
                         unlock_spoiler_log,
                     }).await.allow_unreceived();
                     return Ok(())
@@ -2126,6 +2143,7 @@ impl GlobalState {
                                 progression_spoiler: unlock_spoiler_log == UnlockSpoilerLog::Progression,
                             },
                             rsl_preset: if let rsl::VersionedPreset::Xopar { preset, .. } = preset { Some(preset) } else { None },
+                            version: None,
                             unlock_spoiler_log,
                         },
                         None => SeedRollUpdate::Error(RollError::PatchPath),
@@ -2208,6 +2226,7 @@ impl GlobalState {
                     progression_spoiler: unlock_spoiler_log == UnlockSpoilerLog::Progression,
                 },
                 rsl_preset: None,
+                version: None,
                 unlock_spoiler_log,
             }).await.allow_unreceived();
             Ok(())
@@ -2289,6 +2308,7 @@ impl GlobalState {
                     progression_spoiler: unlock_spoiler_log == UnlockSpoilerLog::Progression,
                 },
                 rsl_preset: None,
+                version: None,
                 unlock_spoiler_log,
             }).await.allow_unreceived();
             Ok(())
@@ -2307,6 +2327,7 @@ async fn roll_seed_locally(delay_until: Option<DateTime<Utc>>, version: Versione
         VersionedBranch::Pinned { ref version } => version.branch() == rando::Branch::DevFenhl && (version.base(), version.supplementary()) >= (&Version::new(8, 3, 16), Some(1)), // some versions older than this generate corrupted patch files
         VersionedBranch::Latest { branch } => branch == rando::Branch::DevFenhl,
         VersionedBranch::Custom { .. } => false,
+        VersionedBranch::Tww { .. } => unreachable!(),
     };
     let rando_path = match version {
         VersionedBranch::Pinned { version } => {
@@ -2339,6 +2360,7 @@ async fn roll_seed_locally(delay_until: Option<DateTime<Utc>>, version: Versione
             }
             dir
         }
+        VersionedBranch::Tww { .. } => unreachable!(),
     };
     #[cfg(unix)] {
         settings.insert(format!("rom"), json!(BaseDirectories::new().find_data_file(Path::new("midos-house").join("oot-ntscu-1.0.z64")).ok_or(RollError::RomPath)?));
@@ -2511,6 +2533,7 @@ pub(crate) enum SeedRollUpdate {
     Done {
         seed: seed::Data,
         rsl_preset: Option<rsl::Preset>,
+        version: Option<VersionedBranch>,
         unlock_spoiler_log: UnlockSpoilerLog,
     },
     /// Seed rolling failed.
@@ -2534,7 +2557,7 @@ impl SeedRollUpdate {
             } else {
                 format!("Rolling {article} {description}…")
             }).await?,
-            Self::Done { mut seed, rsl_preset, unlock_spoiler_log } => {
+            Self::Done { mut seed, rsl_preset, version, unlock_spoiler_log } => {
                 if let Some(seed::Files::MidosHouse { ref file_stem, ref mut locked_spoiler_log_path }) = seed.files {
                     lock!(@write seed_metadata = ctx.global_state.seed_metadata; seed_metadata.insert(file_stem.to_string(), SeedMetadata {
                         locked_spoiler_log_path: locked_spoiler_log_path.clone(),
@@ -2623,11 +2646,19 @@ impl SeedRollUpdate {
                     seed::Files::TfbSotd { ordinal, .. } => format!("https://www.triforceblitz.com/seed/daily/{ordinal}"),
                     seed::Files::TwwrPermalink { permalink, .. } => format!("{permalink}"),
                 };
-                ctx.say(if let French = language {
+                let mut message = if let French = language {
                     format!("@entrants Voici votre seed : {seed_url}")
                 } else {
                     format!("@entrants Here is your seed: {seed_url}")
-                }).await?;
+                };
+                if let Some(VersionedBranch::Tww { identifier, github_url }) = version {
+                    if let French = language {
+                        message.push_str(&format!(" Cette course utilise la version '{identifier}' du randomizer TWW (téléchargement : {github_url})."));
+                    } else {
+                        message.push_str(&format!(" This race uses TWW randomizer build '{identifier}' (download: {github_url})."));
+                    }
+                }
+                ctx.say(message).await?;
                 match unlock_spoiler_log {
                     UnlockSpoilerLog::Now => ctx.say("The spoiler log is also available on the seed page.").await?,
                     UnlockSpoilerLog::Progression => ctx.say("The progression spoiler is also available on the seed page. The full spoiler will be available there after the race.").await?,
@@ -3573,7 +3604,9 @@ impl Handler {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(15);
         let settings_string = self.official_data.as_ref().and_then(|data| data.event.settings_string.clone()).expect("TWWR event missing settings string");
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_twwr_seed(settings_string, UnlockSpoilerLog::Never), language, article, "seed".to_string()).await;
+        let goal = self.goal(ctx).await.to_racetime().expect("failed to convert goal to racetime");
+        let version = goal.rando_version(self.official_data.as_ref().map(|data| &data.event));
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_twwr_seed(Some(version), settings_string, UnlockSpoilerLog::Never), language, article, "seed".to_string()).await;
     }
 
     async fn roll_rsl_seed(&self, ctx: &RaceContext<GlobalState>, preset: rsl::VersionedPreset, world_count: u8, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
@@ -3602,7 +3635,7 @@ impl Handler {
         let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
         let (tx, rx) = mpsc::channel(1);
-        tx.send(SeedRollUpdate::Done { rsl_preset: None, unlock_spoiler_log: UnlockSpoilerLog::After, seed }).await.unwrap();
+        tx.send(SeedRollUpdate::Done { rsl_preset: None, version: None, unlock_spoiler_log: UnlockSpoilerLog::After, seed }).await.unwrap();
         self.roll_seed_inner(ctx, delay_until, rx, language, article, description).await;
     }
 
@@ -6158,7 +6191,7 @@ async fn prepare_seeds(global_state: Arc<GlobalState>, mut seed_cache_rx: watch:
                                             SeedRollUpdate::Queued(_) |
                                             SeedRollUpdate::MovedForward(_) |
                                             SeedRollUpdate::Started => {}
-                                            SeedRollUpdate::Done { mut seed, rsl_preset: _, unlock_spoiler_log: _ } => {
+                                            SeedRollUpdate::Done { mut seed, .. } => {
                                                 let extra = seed.extra(Utc::now()).await?;
                                                 seed.file_hash = extra.file_hash;
                                                 seed.password = extra.password;
@@ -6212,7 +6245,7 @@ async fn prepare_seeds(global_state: Arc<GlobalState>, mut seed_cache_rx: watch:
                                     SeedRollUpdate::Queued(_) |
                                     SeedRollUpdate::MovedForward(_) |
                                     SeedRollUpdate::Started => {}
-                                    SeedRollUpdate::Done { seed, rsl_preset: _, unlock_spoiler_log: _ } => {
+                                    SeedRollUpdate::Done { seed, .. } => {
                                         let extra = seed.extra(Utc::now()).await?;
                                         let [hash1, hash2, hash3, hash4, hash5] = match extra.file_hash {
                                             Some(hash) => hash.map(Some),
