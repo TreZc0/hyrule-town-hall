@@ -327,7 +327,7 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
                     } else {
                         @for game in &games {
                             li {
-                                a(href = uri!(games::get(&game.name))) : &game.display_name;
+                                a(href = uri!(games::get(&game.name, _))) : &game.display_name;
                             }
                         }
                     }

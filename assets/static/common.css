@@ -565,3 +565,42 @@ p.error {
   margin-left: 5px;
   font-style: oblique
 }
+
+/* Language tabs */
+.language-tabs {
+  display: flex;
+  gap: 0;
+  margin: 1rem 0 0 0;
+  padding-left: 0.5rem;
+}
+
+.language-tabs a {
+  padding: 0.6rem 1.2rem;
+  text-decoration: none;
+  border: 2px solid #90c8e8;
+  border-radius: 6px 6px 0 0;
+  margin-right: 2px;
+}
+
+.language-tabs a.active {
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-primary);
+  font-weight: bold;
+  margin-bottom: -2px;
+  position: relative;
+  z-index: 1;
+}
+
+.language-tabs a:not(.active) {
+  border-bottom: 2px solid #90c8e8;
+  background: #4a7da8;
+  color: var(--text-muted);
+}
+
+.language-tab-content {
+  border: 2px solid #90c8e8;
+  border-radius: 0 6px 6px 6px;
+  padding: 1rem;
+  margin-top: -2px;
+}

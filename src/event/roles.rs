@@ -952,7 +952,7 @@ async fn roles_page(
                     : render_language_content_box_start();
                 }
 
-                h3 : "Current Volunteer Roles";
+                h3 : format!("Current Volunteer Roles ({})", current_language);
                 @if filtered_bindings.is_empty() {
                     p : "No volunteer roles configured for this language.";
                 } else {
@@ -3693,44 +3693,13 @@ pub(crate) fn render_language_tabs(
     }
 
     html! {
-        nav(class = "language-tabs", style = "\
-            display: flex; \
-            gap: 0; \
-            margin: 1rem 0 0 0; \
-            padding-left: 0.5rem; \
-        ") {
+        nav(class = "language-tabs") {
             @for lang in active_languages {
                 @let is_active = *lang == selected_language;
-                @let style = if is_active {
-                    "\
-                    padding: 0.6rem 1.2rem; \
-                    text-decoration: none; \
-                    border: 2px solid #ccc; \
-                    border-bottom: 2px solid white; \
-                    background: white; \
-                    color: #333; \
-                    font-weight: bold; \
-                    border-radius: 6px 6px 0 0; \
-                    margin-right: 2px; \
-                    margin-bottom: -2px; \
-                    position: relative; \
-                    z-index: 1; \
-                    "
-                } else {
-                    "\
-                    padding: 0.6rem 1.2rem; \
-                    text-decoration: none; \
-                    border: 2px solid #ccc; \
-                    border-bottom: 2px solid #ccc; \
-                    background: #f0f0f0; \
-                    color: #666; \
-                    border-radius: 6px 6px 0 0; \
-                    margin-right: 2px; \
-                    "
-                };
+                @let class = if is_active { "active" } else { "" };
                 a(
                     href = format!("{}?lang={}", base_url, lang.short_code()),
-                    style = style
+                    class = class
                 ) {
                     : lang.to_string();
                 }
@@ -3741,7 +3710,7 @@ pub(crate) fn render_language_tabs(
 
 /// Render the start of a content box that sits below the tabs
 pub(crate) fn render_language_content_box_start() -> RawHtml<String> {
-    RawHtml(r#"<div class="language-tab-content" style="border: 2px solid #ccc; border-radius: 0 6px 6px 6px; padding: 1rem; background: white; margin-top: -2px;">"#.to_string())
+    RawHtml(r#"<div class="language-tab-content">"#.to_string())
 }
 
 /// Render the end of the content box

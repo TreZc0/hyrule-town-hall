@@ -65,7 +65,7 @@ pub(crate) async fn list(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
             h1 : "Games";
             ul {
                 @for game in &games {
-                    li { a(href = uri!(get(&game.name))) : &game.display_name; }
+                    li { a(href = uri!(get(&game.name, _))) : &game.display_name; }
                 }
             }
         },
@@ -73,13 +73,14 @@ pub(crate) async fn list(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
 }
 
 #[allow(dead_code)]
-#[rocket::get("/games/<game_name>")]
+#[rocket::get("/games/<game_name>?<lang>")]
 pub(crate) async fn get(
     pool: &State<PgPool>,
     me: Option<User>,
     uri: Origin<'_>,
     csrf: Option<CsrfToken>,
     game_name: &str,
+    lang: Option<Language>,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await.map_err(Error::from)?;
     
@@ -97,7 +98,20 @@ pub(crate) async fn get(
     
     // Get role bindings for this game
     let role_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
-    
+
+    // Get active languages and filter bindings
+    let active_languages: Vec<Language> = {
+        let mut langs: Vec<Language> = role_bindings.iter().map(|b| b.language).collect();
+        langs.sort_by_key(|l| l.short_code());
+        langs.dedup();
+        langs
+    };
+    let current_language = lang
+        .filter(|l| active_languages.contains(l))
+        .or_else(|| active_languages.first().copied())
+        .unwrap_or(English);
+    let filtered_bindings: Vec<&GameRoleBinding> = role_bindings.iter().filter(|b| b.language == current_language).collect();
+
     // Get user's role requests if logged in
     let my_requests = if let Some(ref me) = me {
         RoleRequest::for_user(&mut transaction, me.id).await.map_err(Error::from)?
@@ -156,11 +170,21 @@ pub(crate) async fn get(
             
             h2 : "Game Volunteer Roles";
             p : "The coverage through restreams of matches and events requires volunteers. We are very grateful for anyone stepping up to help!";
-            
-            @if role_bindings.is_empty() {
-                p : "No game-level roles available.";
+
+            @let base_url = format!("/games/{}", game_name);
+
+            // Language tabs (only shown if multiple languages)
+            : render_language_tabs(&active_languages, current_language, &base_url);
+
+            // Start content box if we have tabs
+            @if active_languages.len() > 1 {
+                : render_language_content_box_start();
+            }
+
+            @if filtered_bindings.is_empty() {
+                p : "No game-level roles available for this language.";
             } else {
-                @for binding in &role_bindings {
+                @for binding in &filtered_bindings {
                     @let my_request = my_requests.iter()
                         .filter(|req| req.role_binding_id == binding.id && !matches!(req.status, RoleRequestStatus::Aborted))
                         .max_by_key(|req| req.created_at);
@@ -242,7 +266,12 @@ pub(crate) async fn get(
                     }
                 }
             }
-            
+
+            // Close content box if we have tabs
+            @if active_languages.len() > 1 {
+                : render_language_content_box_end();
+            }
+
             @if is_admin || me.as_ref().map_or(false, |me| u64::from(me.id) == 16287394041462225947_u64) {
                 h2 : "Admin Actions";
                 p {
@@ -343,7 +372,7 @@ pub(crate) async fn manage_admins(
             script(src = static_url!("user-search.js")) {}
             
             p {
-                a(href = uri!(get(&game_name))) : "← Back to Game";
+                a(href = uri!(get(&game_name, _))) : "← Back to Game";
             }
         }
     };
@@ -416,7 +445,7 @@ pub(crate) async fn manage_roles(
                 : render_language_content_box_start();
             }
 
-            h2 : "Current Role Bindings";
+            h2 : format!("Current Role Bindings ({})", current_language);
             @if filtered_bindings.is_empty() {
                 p : "No role bindings configured for this language.";
             } else {
@@ -653,7 +682,7 @@ pub(crate) async fn apply_for_game_role(
         
         // Check if user already has an active request for this role binding
         if RoleRequest::active_for_user(&mut transaction, value.role_binding_id, me.id).await.map_err(Error::from)? {
-            return Ok(Redirect::to(uri!(get(game_name))));
+            return Ok(Redirect::to(uri!(get(game_name, _))));
         }
         
         // Create the role request
@@ -673,7 +702,7 @@ pub(crate) async fn apply_for_game_role(
         transaction.commit().await.map_err(Error::from)?;
     }
     
-    Ok(Redirect::to(uri!(get(game_name))))
+    Ok(Redirect::to(uri!(get(game_name, _))))
 }
 
 #[rocket::post("/games/<game_name>/forfeit", data = "<form>")]
@@ -728,7 +757,7 @@ pub(crate) async fn forfeit_game_role(
         }
     }
     
-    Ok(Redirect::to(uri!(get(game_name))))
+    Ok(Redirect::to(uri!(get(game_name, _))))
 }
 
 #[derive(FromForm, CsrfForm)]
