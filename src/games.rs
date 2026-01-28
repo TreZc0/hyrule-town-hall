@@ -2,7 +2,7 @@ use crate::{
     game::{Game, GameError},
     prelude::*,
     user::User,
-    event::roles::{GameRoleBinding, RoleType, RoleRequest, RoleRequestStatus},
+    event::roles::{GameRoleBinding, RoleType, RoleRequest, RoleRequestStatus, render_language_tabs, render_language_content_box_start, render_language_content_box_end},
     http::{PageError, StatusOrError},
     form::{form_field, full_form, button_form},
     id::{RoleBindings, RoleRequests, RoleTypes},
@@ -249,7 +249,7 @@ pub(crate) async fn get(
                     a(href = uri!(manage_admins(&game.name))) : "Manage Game Admins";
                 }
                 p {
-                    a(href = uri!(manage_roles(&game.name))) : "Manage Game Roles";
+                    a(href = uri!(manage_roles(&game.name, _))) : "Manage Game Roles";
                 }
             }
         }
@@ -360,42 +360,65 @@ pub(crate) async fn manage_admins(
 }
 
 #[allow(dead_code)]
-#[rocket::get("/games/<game_name>/roles")]
+#[rocket::get("/games/<game_name>/roles?<lang>")]
 pub(crate) async fn manage_roles(
     pool: &State<PgPool>,
     me: Option<User>,
     uri: Origin<'_>,
     csrf: Option<CsrfToken>,
     game_name: &str,
+    lang: Option<Language>,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await.map_err(Error::from)?;
-    
+
     let game = Game::from_name(&mut transaction, game_name)
         .await.map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
-    
+
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
-    
+
     let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
     let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
-    
+
     if !is_game_admin && !is_global_admin {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
-    
+
     let role_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
     let all_role_types = RoleType::all(&mut transaction).await.map_err(Error::from)?;
     let all_role_requests = RoleRequest::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
     let pending_requests = all_role_requests.iter().filter(|req| matches!(req.status, RoleRequestStatus::Pending)).collect::<Vec<_>>();
     let approved_requests = all_role_requests.iter().filter(|req| matches!(req.status, RoleRequestStatus::Approved)).collect::<Vec<_>>();
-    
+
+    // Get active languages and filter bindings
+    let active_languages: Vec<Language> = {
+        let mut langs: Vec<Language> = role_bindings.iter().map(|b| b.language).collect();
+        langs.sort_by_key(|l| l.short_code());
+        langs.dedup();
+        langs
+    };
+    let current_language = lang
+        .filter(|l| active_languages.contains(l))
+        .or_else(|| active_languages.first().copied())
+        .unwrap_or(English);
+    let filtered_bindings: Vec<&GameRoleBinding> = role_bindings.iter().filter(|b| b.language == current_language).collect();
+    let base_url = format!("/games/{}/roles", game_name);
+
     let content = html! {
         article {
             h1 : format!("Manage Roles — {}", game.display_name);
-            
+
+            // Language tabs
+            : render_language_tabs(&active_languages, current_language, &base_url);
+
+            // Start content box if we have tabs
+            @if active_languages.len() > 1 {
+                : render_language_content_box_start();
+            }
+
             h2 : "Current Role Bindings";
-            @if role_bindings.is_empty() {
-                p : "No role bindings configured for this game.";
+            @if filtered_bindings.is_empty() {
+                p : "No role bindings configured for this language.";
             } else {
                 table {
                     thead {
@@ -408,7 +431,7 @@ pub(crate) async fn manage_roles(
                         }
                     }
                     tbody {
-                        @for binding in &role_bindings {
+                        @for binding in &filtered_bindings {
                             tr {
                                 td : binding.role_type_name;
                                 td : binding.min_count;
@@ -435,7 +458,12 @@ pub(crate) async fn manage_roles(
                     }
                 }
             }
-            
+
+            // Close content box if we have tabs
+            @if active_languages.len() > 1 {
+                : render_language_content_box_end();
+            }
+
             h3 : "Add Role Binding";
             @let mut errors = Vec::new();
             : full_form(uri!(add_game_role_binding(&game_name)), csrf.as_ref(), html! {
@@ -528,44 +556,49 @@ pub(crate) async fn manage_roles(
             @if approved_requests.is_empty() {
                 p : "No approved role requests.";
             } else {
+                // Group by role_binding_id to get per-language grouping
                 @let grouped = {
                     let mut map = std::collections::BTreeMap::new();
                     for request in &approved_requests {
-                        map.entry(&request.role_type_name).or_insert_with(Vec::new).push(request);
+                        map.entry(request.role_binding_id).or_insert_with(Vec::new).push(request);
                     }
                     map
                 };
-                @for (role_type_name, requests) in grouped.iter() {
-                    details {
-                        summary {
-                            : format!("{} ({})", role_type_name, requests.len());
-                        }
-                        table {
-                            thead {
-                                tr {
-                                    th : "User";
-                                    th : "Notes";
-                                    th : "Approved";
-                                }
+                @for (binding_id, requests) in grouped.iter() {
+                    // Look up the binding to get role type name and language
+                    @let binding = role_bindings.iter().find(|b| b.id == *binding_id);
+                    @if let Some(binding) = binding {
+                        details {
+                            summary {
+                                : format!("{} ({}) ({})", binding.role_type_name, binding.language, requests.len());
                             }
-                            tbody {
-                                @for request in requests.iter().sorted_by_key(|r| r.updated_at) {
+                            table {
+                                thead {
                                     tr {
-                                        td {
-                                            @if let Some(user) = User::from_id(&mut *transaction, request.user_id).await.map_err(Error::from)? {
-                                                : user.display_name();
-                                            } else {
-                                                : "Unknown User";
+                                        th : "User";
+                                        th : "Notes";
+                                        th : "Approved";
+                                    }
+                                }
+                                tbody {
+                                    @for request in requests.iter().sorted_by_key(|r| r.updated_at) {
+                                        tr {
+                                            td {
+                                                @if let Some(user) = User::from_id(&mut *transaction, request.user_id).await.map_err(Error::from)? {
+                                                    : user.display_name();
+                                                } else {
+                                                    : "Unknown User";
+                                                }
                                             }
-                                        }
-                                        td {
-                                            @if let Some(ref notes) = request.notes {
-                                                : notes;
-                                            } else {
-                                                : "None";
+                                            td {
+                                                @if let Some(ref notes) = request.notes {
+                                                    : notes;
+                                                } else {
+                                                    : "None";
+                                                }
                                             }
+                                            td : format_datetime(request.updated_at, DateTimeFormat { long: false, running_text: false });
                                         }
-                                        td : format_datetime(request.updated_at, DateTimeFormat { long: false, running_text: false });
                                     }
                                 }
                             }
@@ -765,7 +798,7 @@ pub(crate) async fn add_game_role_binding(
         
         // Check if role binding already exists
         if GameRoleBinding::exists_for_role_type(&mut transaction, game.id, value.role_type_id, value.language).await.map_err(Error::from)? {
-            return Ok(Redirect::to(uri!(manage_roles(game_name))));
+            return Ok(Redirect::to(uri!(manage_roles(game_name, _))));
         }
 
         // Add role binding
@@ -783,7 +816,7 @@ pub(crate) async fn add_game_role_binding(
         transaction.commit().await.map_err(Error::from)?;
     }
     
-    Ok(Redirect::to(uri!(manage_roles(game_name))))
+    Ok(Redirect::to(uri!(manage_roles(game_name, _))))
 }
 
 #[rocket::post("/games/<game_name>/role-bindings/<binding_id>/remove", data = "<form>")]
@@ -818,7 +851,7 @@ pub(crate) async fn remove_game_role_binding(
         transaction.commit().await.map_err(Error::from)?;
     }
     
-    Ok(Redirect::to(uri!(manage_roles(game_name))))
+    Ok(Redirect::to(uri!(manage_roles(game_name, _))))
 }
 
 #[rocket::post("/games/<game_name>/roles/<request>/approve", data = "<form>")]
@@ -853,7 +886,7 @@ pub(crate) async fn approve_game_role_request(
         transaction.commit().await.map_err(Error::from)?;
     }
     
-    Ok(Redirect::to(uri!(manage_roles(game_name))))
+    Ok(Redirect::to(uri!(manage_roles(game_name, _))))
 }
 
 #[rocket::post("/games/<game_name>/roles/<request>/reject", data = "<form>")]
@@ -888,7 +921,7 @@ pub(crate) async fn reject_game_role_request(
         transaction.commit().await.map_err(Error::from)?;
     }
     
-    Ok(Redirect::to(uri!(manage_roles(game_name))))
+    Ok(Redirect::to(uri!(manage_roles(game_name, _))))
 }
 
 #[derive(FromForm, CsrfForm)]

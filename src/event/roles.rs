@@ -432,7 +432,7 @@ impl RoleRequest {
         sqlx::query_as!(
             Self,
             r#"
-                SELECT 
+                SELECT
                     rr.id AS "id: Id<RoleRequests>",
                     rr.role_binding_id AS "role_binding_id: Id<RoleBindings>",
                     rr.user_id AS "user_id: Id<Users>",
@@ -929,9 +929,6 @@ async fn roles_page(
                 h2 : "Role Management";
                 p : "Manage volunteer roles for this event.";
 
-                // Language tabs (only shown if multiple languages)
-                : render_language_tabs(&active_languages, current_language, &base_url);
-
                 @if !uses_custom_bindings {
                     div(class = "info-box") {
                         h3 : "Using Game Volunteer roles";
@@ -947,14 +944,15 @@ async fn roles_page(
                     }
                 }
 
-                h3 {
-                    : "Current Volunteer Roles";
-                    @if active_languages.len() > 1 {
-                        : " (";
-                        : current_language.to_string();
-                        : ")";
-                    }
+                // Language tabs (only shown if multiple languages) - placed after info box
+                : render_language_tabs(&active_languages, current_language, &base_url);
+
+                // Start content box if we have tabs
+                @if active_languages.len() > 1 {
+                    : render_language_content_box_start();
                 }
+
+                h3 : "Current Volunteer Roles";
                 @if filtered_bindings.is_empty() {
                     p : "No volunteer roles configured for this language.";
                 } else {
@@ -1058,7 +1056,12 @@ async fn roles_page(
                     }
                 }
 
-                
+                // Close content box if we have tabs
+                @if active_languages.len() > 1 {
+                    : render_language_content_box_end();
+                }
+
+
                 @if uses_custom_bindings {
                     h3 : "Add Volunteer Role";
                     @let mut errors = ctx.errors().collect_vec();
@@ -2144,16 +2147,13 @@ async fn volunteer_page(
             html! {
                 h2 : "Volunteer for Roles";
 
-                // Language tabs (only shown if multiple languages)
-                : render_language_tabs(&active_languages, current_language, &base_url);
-
                 @if !uses_custom_bindings {
                     div(class = "game-binding-notice") {
                         h3 : "Game Role Bindings";
                         p : "This event uses game-level role bindings. To volunteer for roles, you need to apply for game roles instead of event-specific roles.";
                         p {
                             : "Please visit the ";
-                            a(href = uri!(crate::games::manage_roles(data.series.slug()))) : "game role management page";
+                            a(href = uri!(crate::games::manage_roles(data.series.slug(), _))) : "game role management page";
                             : " to apply for roles that will be available across all events for this game.";
                         }
                     }
@@ -2161,17 +2161,18 @@ async fn volunteer_page(
                     p : "Apply to volunteer for roles in this event.";
                 }
 
+                // Language tabs (only shown if multiple languages)
+                : render_language_tabs(&active_languages, current_language, &base_url);
+
+                // Start content box if we have tabs
+                @if active_languages.len() > 1 {
+                    : render_language_content_box_start();
+                }
+
                 @if filtered_bindings.is_empty() {
                     p : "No volunteer roles are currently available for this language.";
                 } else {
-                    h3 {
-                        : "Available Roles";
-                        @if active_languages.len() > 1 {
-                            : " (";
-                            : current_language.to_string();
-                            : ")";
-                        }
-                    }
+                    h3 : "Available Roles";
                     @for binding in &filtered_bindings {
                         @let my_request = my_requests.iter()
                             .filter(|req| req.role_binding_id == binding.id && !matches!(req.status, RoleRequestStatus::Aborted))
@@ -2263,6 +2264,11 @@ async fn volunteer_page(
                             }
                         }
                     }
+                }
+
+                // Close content box if we have tabs
+                @if active_languages.len() > 1 {
+                    : render_language_content_box_end();
                 }
 
                 @if !my_approved_roles.is_empty() && !upcoming_races.is_empty() {
@@ -2736,9 +2742,6 @@ async fn match_signup_page(
 
         html! {
             h2 : "Match Volunteer Signups";
-
-            // Language tabs (only shown if multiple languages)
-            : render_language_tabs(&active_languages, current_language, &base_url);
             h3 {
                 : format!("{} {} {}",
                     race.phase.as_deref().unwrap_or(""),
@@ -2789,6 +2792,14 @@ async fn match_signup_page(
             }
             p {
                 : timezone_info_html();
+            }
+
+            // Language tabs (only shown if multiple languages)
+            : render_language_tabs(&active_languages, current_language, &base_url);
+
+            // Start content box if we have tabs
+            @if active_languages.len() > 1 {
+                : render_language_content_box_start();
             }
 
             @if can_manage {
@@ -2973,6 +2984,11 @@ async fn match_signup_page(
                         }
                     }
                 }
+            }
+
+            // Close content box if we have tabs
+            @if active_languages.len() > 1 {
+                : render_language_content_box_end();
             }
         }
     } else {
@@ -3665,30 +3681,72 @@ impl EffectiveRoleBinding {
     }
 }
 
-/// Render language tabs for volunteer pages
-fn render_language_tabs(
+/// Render language tabs with binder-register visual style
+/// Returns (tabs_html, content_box_start, content_box_end) for wrapping content
+pub(crate) fn render_language_tabs(
     active_languages: &[Language],
     selected_language: Language,
     base_url: &str,
 ) -> RawHtml<String> {
     if active_languages.len() <= 1 {
-        // Don't show tabs if there's only one language
         return html! {};
     }
 
     html! {
-        nav(class = "language-tabs") {
+        nav(class = "language-tabs", style = "\
+            display: flex; \
+            gap: 0; \
+            margin: 1rem 0 0 0; \
+            padding-left: 0.5rem; \
+        ") {
             @for lang in active_languages {
                 @let is_active = *lang == selected_language;
+                @let style = if is_active {
+                    "\
+                    padding: 0.6rem 1.2rem; \
+                    text-decoration: none; \
+                    border: 2px solid #ccc; \
+                    border-bottom: 2px solid white; \
+                    background: white; \
+                    color: #333; \
+                    font-weight: bold; \
+                    border-radius: 6px 6px 0 0; \
+                    margin-right: 2px; \
+                    margin-bottom: -2px; \
+                    position: relative; \
+                    z-index: 1; \
+                    "
+                } else {
+                    "\
+                    padding: 0.6rem 1.2rem; \
+                    text-decoration: none; \
+                    border: 2px solid #ccc; \
+                    border-bottom: 2px solid #ccc; \
+                    background: #f0f0f0; \
+                    color: #666; \
+                    border-radius: 6px 6px 0 0; \
+                    margin-right: 2px; \
+                    "
+                };
                 a(
                     href = format!("{}?lang={}", base_url, lang.short_code()),
-                    class? = is_active.then_some("active")
+                    style = style
                 ) {
                     : lang.to_string();
                 }
             }
         }
     }
+}
+
+/// Render the start of a content box that sits below the tabs
+pub(crate) fn render_language_content_box_start() -> RawHtml<String> {
+    RawHtml(r#"<div class="language-tab-content" style="border: 2px solid #ccc; border-radius: 0 6px 6px 6px; padding: 1rem; background: white; margin-top: -2px;">"#.to_string())
+}
+
+/// Render the end of the content box
+pub(crate) fn render_language_content_box_end() -> RawHtml<String> {
+    RawHtml("</div>".to_string())
 }
 
 #[rocket::post("/event/<series>/<event>/role-types/<role_type_id>/disable-binding")]
