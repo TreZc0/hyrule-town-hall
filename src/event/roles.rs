@@ -1173,6 +1173,44 @@ async fn roles_page(
 
                 @if !approved_requests.is_empty() {
                     h3 : "Volunteer Pool";
+
+                    @if uses_custom_bindings {
+                        // Show copy volunteers form
+                        details {
+                            summary : "Copy Volunteers from Another Event";
+                            p : "Import all approved volunteers from another event in this series. Only volunteers for matching role types will be copied, and users who already have approved roles in this event will be skipped.";
+
+                            @let all_events_in_series = sqlx::query!(
+                                r#"
+                                SELECT event FROM events
+                                WHERE series = $1 AND event != $2
+                                ORDER BY start DESC
+                                "#,
+                                data.series as _,
+                                &data.event
+                            )
+                            .fetch_all(&mut *transaction)
+                            .await?;
+
+                            @if !all_events_in_series.is_empty() {
+                                @let mut errors = ctx.errors().collect_vec();
+                                : full_form(uri!(copy_volunteers_from_event(data.series, &*data.event)), csrf.as_ref(), html! {
+                                    : form_field("source_event", &mut errors, html! {
+                                        label(for = "source_event") : "Source Event:";
+                                        select(name = "source_event", id = "source_event", required) {
+                                            option(value = "", disabled, selected) : "-- Select an event --";
+                                            @for evt in all_events_in_series {
+                                                option(value = evt.event) : evt.event;
+                                            }
+                                        }
+                                    });
+                                }, errors, "Copy All Approved Volunteers");
+                            } else {
+                                p : "No other events found in this series to copy from.";
+                            }
+                        }
+                    }
+
                     @let approved_by_role_type = approved_requests.iter()
                         .filter(|request| {
                             // For game bindings, only show if the role type is not disabled
@@ -3366,6 +3404,17 @@ impl EffectiveRoleBinding {
         series: Series,
         event: &str,
     ) -> sqlx::Result<Vec<Self>> {
+        // Check if event uses custom role bindings
+        let uses_custom_bindings = sqlx::query_scalar!(
+            r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,
+            series as _,
+            event
+        )
+        .fetch_optional(&mut **pool)
+        .await?
+        .unwrap_or(Some(true))
+        .unwrap_or(true);
+
         // Get event-specific role bindings
         let event_bindings = sqlx::query_as!(
             Self,
@@ -3392,35 +3441,39 @@ impl EffectiveRoleBinding {
         .fetch_all(&mut **pool)
         .await?;
 
-        // Get game role bindings
-        let game = match game::Game::from_series(&mut *pool, series).await {
-            Ok(game) => game,
-            Err(_) => None, // If we can't get the game, just continue without game bindings
-        };
-        let game_bindings = if let Some(game) = game {
-            sqlx::query_as!(
-                Self,
-                r#"
-                    SELECT
-                        rb.id AS "id: Id<RoleBindings>",
-                        rb.role_type_id AS "role_type_id: Id<RoleTypes>",
-                        rb.min_count,
-                        rb.max_count,
-                        rt.name AS "role_type_name",
-                        rb.discord_role_id,
-                        rb.auto_approve,
-                        true AS "is_game_binding!: bool",
-                        false AS "has_event_override!: bool",
-                        false AS "is_disabled!: bool"
-                    FROM role_bindings rb
-                    JOIN role_types rt ON rb.role_type_id = rt.id
-                    WHERE rb.game_id = $1
-                    ORDER BY rt.name
-                "#,
-                game.id
-            )
-            .fetch_all(&mut **pool)
-            .await?
+        // Get game role bindings only if not using custom bindings
+        let game_bindings = if !uses_custom_bindings {
+            let game = match game::Game::from_series(&mut *pool, series).await {
+                Ok(game) => game,
+                Err(_) => None, // If we can't get the game, just continue without game bindings
+            };
+            if let Some(game) = game {
+                sqlx::query_as!(
+                    Self,
+                    r#"
+                        SELECT
+                            rb.id AS "id: Id<RoleBindings>",
+                            rb.role_type_id AS "role_type_id: Id<RoleTypes>",
+                            rb.min_count,
+                            rb.max_count,
+                            rt.name AS "role_type_name",
+                            rb.discord_role_id,
+                            rb.auto_approve,
+                            true AS "is_game_binding!: bool",
+                            false AS "has_event_override!: bool",
+                            false AS "is_disabled!: bool"
+                        FROM role_bindings rb
+                        JOIN role_types rt ON rb.role_type_id = rt.id
+                        WHERE rb.game_id = $1
+                        ORDER BY rt.name
+                    "#,
+                    game.id
+                )
+                .fetch_all(&mut **pool)
+                .await?
+            } else {
+                Vec::new()
+            }
         } else {
             Vec::new()
         };
@@ -3879,4 +3932,149 @@ pub(crate) async fn delete_discord_override(
 
     transaction.commit().await?;
     Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event)))))
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct CopyVolunteersForm {
+    #[field(default = String::new())]
+    csrf: String,
+    source_event: String,
+}
+
+#[rocket::post("/event/<series>/<event>/roles/copy-volunteers", data = "<form>")]
+pub(crate) async fn copy_volunteers_from_event(
+    pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
+    me: User,
+    series: Series,
+    event: &str,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, CopyVolunteersForm>>,
+) -> Result<RedirectOrContent, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    Ok(if let Some(ref form_data) = form.value {
+        if data.is_ended() {
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be configured",
+            ));
+        }
+        if !data.organizers(&mut transaction).await?.contains(&me) {
+            form.context.push_error(form::Error::validation(
+                "You must be an organizer to manage roles for this event.",
+            ));
+        }
+
+        if form.context.errors().next().is_some() {
+            RedirectOrContent::Content(
+                roles_page(
+                    transaction,
+                    Some(me),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                    data,
+                    form.context,
+                    csrf,
+                )
+                .await?,
+            )
+        } else {
+            let source_event = &form_data.source_event;
+
+            // Get all approved role requests from the source event
+            let source_requests = RoleRequest::for_event(&mut transaction, series, source_event).await?
+                .into_iter()
+                .filter(|req| matches!(req.status, RoleRequestStatus::Approved))
+                .collect::<Vec<_>>();
+
+            // Get all existing approved role requests for the target event to avoid duplicates
+            let existing_requests = RoleRequest::for_event(&mut transaction, series, event).await?
+                .into_iter()
+                .filter(|req| matches!(req.status, RoleRequestStatus::Approved))
+                .collect::<Vec<_>>();
+
+            // Create a set of (user_id, role_type_name) pairs that already exist
+            let existing_pairs: HashSet<(Id<Users>, String)> = existing_requests
+                .iter()
+                .map(|req| (req.user_id, req.role_type_name.clone()))
+                .collect();
+
+            // Get role bindings for the target event to map role type names to binding IDs
+            let target_bindings = RoleBinding::for_event(&mut transaction, series, event).await?;
+            let role_name_to_binding: HashMap<String, &RoleBinding> = target_bindings
+                .iter()
+                .map(|binding| (binding.role_type_name.clone(), binding))
+                .collect();
+
+            let mut copied_count = 0;
+            let mut skipped_count = 0;
+
+            for source_req in source_requests {
+                // Check if this role type exists in the target event (by name)
+                if let Some(&target_binding) = role_name_to_binding.get(&source_req.role_type_name) {
+                    // Check if user already has this role in the target event
+                    let already_exists = existing_pairs.contains(&(source_req.user_id, source_req.role_type_name.clone()));
+
+                    if !already_exists {
+                        // Create new approved role request in target event
+                        sqlx::query!(
+                            r#"
+                            INSERT INTO role_requests (role_binding_id, user_id, status, notes)
+                            VALUES ($1, $2, 'approved', $3)
+                            "#,
+                            i64::from(target_binding.id) as i32,
+                            i64::from(source_req.user_id),
+                            source_req.notes
+                        )
+                        .execute(&mut *transaction)
+                        .await?;
+
+                        // Assign Discord role if configured
+                        if let Some(discord_role_id) = target_binding.discord_role_id {
+                            let user = User::from_id(&mut *transaction, source_req.user_id).await?;
+                            if let Some(user) = user {
+                                if let Some(discord_user) = user.discord {
+                                    let discord_ctx = discord_ctx.read().await;
+                                    if let Some(discord_guild) = data.discord_guild {
+                                        if let Ok(member) = discord_guild.member(&*discord_ctx, discord_user.id).await {
+                                            if let Err(e) = member.add_role(&*discord_ctx, RoleId::new(discord_role_id.try_into().unwrap())).await {
+                                                eprintln!("Failed to assign Discord role {} to user {}: {}", discord_role_id, discord_user.id, e);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        copied_count += 1;
+                    } else {
+                        skipped_count += 1;
+                    }
+                }
+            }
+
+            transaction.commit().await?;
+
+            eprintln!("Copied {} volunteers from {} to {}. Skipped {} duplicates.",
+                     copied_count, source_event, event, skipped_count);
+
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+        }
+    } else {
+        RedirectOrContent::Content(
+            roles_page(
+                transaction,
+                Some(me),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                data,
+                form.context,
+                csrf,
+            )
+            .await?,
+        )
+    })
 }

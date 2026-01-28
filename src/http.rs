@@ -648,6 +648,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::roles::delete_discord_override,
         event::roles::disable_role_binding,
         event::roles::enable_role_binding,
+        event::roles::copy_volunteers_from_event,
         event::setup::get,
         event::setup::post,
         event::setup::add_organizer,

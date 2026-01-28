@@ -805,6 +805,8 @@ impl<'a> Data<'a> {
                         } else {
                             a(class = "button", href = uri!(asyncs::get(self.series, &*self.event))) : "Asyncs";
                         }
+                    }
+                    @if !self.is_ended() && me.is_global_admin() {
                         @if let Tab::Setup = tab {
                             a(class = "button selected", href? = is_subpage.then(|| uri!(setup::get(self.series, &*self.event)))) : "Setup";
                         } else {
