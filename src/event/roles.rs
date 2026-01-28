@@ -125,6 +125,7 @@ pub(crate) struct RoleBinding {
     pub(crate) role_type_name: String,
     pub(crate) discord_role_id: Option<i64>,
     pub(crate) auto_approve: bool,
+    pub(crate) language: Language,
 }
 
 #[allow(unused)]
@@ -136,6 +137,7 @@ pub(crate) struct GameRoleBinding {
     pub(crate) role_type_name: String,
     pub(crate) discord_role_id: Option<i64>,
     pub(crate) auto_approve: bool,
+    pub(crate) language: Language,
 }
 
 #[allow(unused)]
@@ -184,6 +186,7 @@ pub(crate) struct EffectiveRoleBinding {
     pub(crate) is_game_binding: bool,
     pub(crate) has_event_override: bool,
     pub(crate) is_disabled: bool,
+    pub(crate) language: Language,
 }
 
 #[derive(Debug, Clone)]
@@ -264,11 +267,12 @@ impl RoleBinding {
                     rb.max_count,
                     rt.name AS "role_type_name",
                     rb.discord_role_id,
-                    rb.auto_approve
+                    rb.auto_approve,
+                    rb.language AS "language: Language"
                 FROM role_bindings rb
                 JOIN role_types rt ON rb.role_type_id = rt.id
                 WHERE rb.series = $1 AND rb.event = $2
-                ORDER BY rt.name
+                ORDER BY rt.name, rb.language
             "#,
             series as _,
             event
@@ -286,17 +290,19 @@ impl RoleBinding {
         max_count: i32,
         discord_role_id: Option<i64>,
         auto_approve: bool,
+        language: Language,
     ) -> sqlx::Result<Id<RoleBindings>> {
         let id = sqlx::query_scalar!(
-            r#"INSERT INTO role_bindings (series, event, role_type_id, min_count, max_count, discord_role_id, game_id, auto_approve) 
-               VALUES ($1, $2, $3, $4, $5, $6, NULL, $7) RETURNING id"#,
+            r#"INSERT INTO role_bindings (series, event, role_type_id, min_count, max_count, discord_role_id, game_id, auto_approve, language)
+               VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8) RETURNING id"#,
             series as _,
             event,
             role_type_id as _,
             min_count,
             max_count,
             discord_role_id,
-            auto_approve
+            auto_approve,
+            language as _
         )
         .fetch_one(&mut **pool)
         .await?;
@@ -318,13 +324,15 @@ impl RoleBinding {
         series: Series,
         event: &str,
         role_type_id: Id<RoleTypes>,
+        language: Language,
     ) -> sqlx::Result<bool> {
         Ok(sqlx::query_scalar!(
             r#"SELECT EXISTS (SELECT 1 FROM role_bindings
-                   WHERE series = $1 AND event = $2 AND role_type_id = $3 AND game_id IS NULL)"#,
+                   WHERE series = $1 AND event = $2 AND role_type_id = $3 AND language = $4 AND game_id IS NULL)"#,
             series as _,
             event,
-            role_type_id as _
+            role_type_id as _,
+            language as _
         )
         .fetch_one(&mut **pool)
         .await?
@@ -347,11 +355,12 @@ impl GameRoleBinding {
                     rb.max_count,
                     rt.name AS "role_type_name",
                     rb.discord_role_id,
-                    rb.auto_approve
+                    rb.auto_approve,
+                    rb.language AS "language: Language"
                 FROM role_bindings rb
                 JOIN role_types rt ON rb.role_type_id = rt.id
                 WHERE rb.game_id = $1 AND rb.series IS NULL AND rb.event IS NULL
-                ORDER BY rt.name
+                ORDER BY rt.name, rb.language
             "#,
             game_id
         )
@@ -367,16 +376,18 @@ impl GameRoleBinding {
         max_count: i32,
         discord_role_id: Option<i64>,
         auto_approve: bool,
+        language: Language,
     ) -> sqlx::Result<Id<RoleBindings>> {
         let id = sqlx::query_scalar!(
-            r#"INSERT INTO role_bindings (game_id, role_type_id, min_count, max_count, discord_role_id, series, event, auto_approve) 
-               VALUES ($1, $2, $3, $4, $5, NULL, NULL, $6) RETURNING id"#,
+            r#"INSERT INTO role_bindings (game_id, role_type_id, min_count, max_count, discord_role_id, series, event, auto_approve, language)
+               VALUES ($1, $2, $3, $4, $5, NULL, NULL, $6, $7) RETURNING id"#,
             game_id,
             role_type_id as _,
             min_count,
             max_count,
             discord_role_id,
-            auto_approve
+            auto_approve,
+            language as _
         )
         .fetch_one(&mut **pool)
         .await?;
@@ -397,12 +408,14 @@ impl GameRoleBinding {
         pool: &mut Transaction<'_, Postgres>,
         game_id: i32,
         role_type_id: Id<RoleTypes>,
+        language: Language,
     ) -> sqlx::Result<bool> {
         Ok(sqlx::query_scalar!(
             r#"SELECT EXISTS (SELECT 1 FROM role_bindings
-                   WHERE game_id = $1 AND role_type_id = $2 AND series IS NULL AND event IS NULL)"#,
+                   WHERE game_id = $1 AND role_type_id = $2 AND language = $3 AND series IS NULL AND event IS NULL)"#,
             game_id,
-            role_type_id as _
+            role_type_id as _,
+            language as _
         )
         .fetch_one(&mut **pool)
         .await?
@@ -851,6 +864,7 @@ async fn roles_page(
     data: Data<'_>,
     ctx: Context<'_>,
     csrf: Option<CsrfToken>,
+    selected_lang: Option<Language>,
 ) -> Result<RawHtml<String>, Error> {
     let header = data
         .header(&mut transaction, me.as_ref(), Tab::Roles, false)
@@ -899,9 +913,24 @@ async fn roles_page(
 
             let effective_role_bindings = EffectiveRoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
 
+            // Get active languages and determine selected language
+            let active_languages = EffectiveRoleBinding::active_languages(&effective_role_bindings);
+            let current_language = selected_lang
+                .filter(|l| active_languages.contains(l))
+                .or_else(|| active_languages.iter().find(|&&l| l == data.default_volunteer_language).copied())
+                .or_else(|| active_languages.first().copied())
+                .unwrap_or(English);
+
+            // Filter bindings by selected language
+            let filtered_bindings: Vec<&EffectiveRoleBinding> = EffectiveRoleBinding::filter_by_language(&effective_role_bindings, current_language);
+            let base_url = format!("/event/{}/{}/roles", data.series.slug(), &data.event);
+
             html! {
                 h2 : "Role Management";
                 p : "Manage volunteer roles for this event.";
+
+                // Language tabs (only shown if multiple languages)
+                : render_language_tabs(&active_languages, current_language, &base_url);
 
                 @if !uses_custom_bindings {
                     div(class = "info-box") {
@@ -918,9 +947,16 @@ async fn roles_page(
                     }
                 }
 
-                h3 : "Current Volunteer Roles";
-                @if effective_role_bindings.is_empty() {
-                    p : "No volunteer roles configured yet.";
+                h3 {
+                    : "Current Volunteer Roles";
+                    @if active_languages.len() > 1 {
+                        : " (";
+                        : current_language.to_string();
+                        : ")";
+                    }
+                }
+                @if filtered_bindings.is_empty() {
+                    p : "No volunteer roles configured for this language.";
                 } else {
                     table {
                         thead {
@@ -934,7 +970,7 @@ async fn roles_page(
                             }
                         }
                         tbody {
-                            @for binding in &effective_role_bindings {
+                            @for binding in &filtered_bindings {
                                 tr(data_binding_id = binding.id.to_string()) {
                                     td(class = "role-type") : binding.role_type_name;
                                     td(class = "min-count", data_value = binding.min_count.to_string()) : binding.min_count;
@@ -1052,6 +1088,15 @@ async fn roles_page(
                             input(type = "checkbox", name = "auto_approve", id = "auto_approve");
                             span(class = "help-text") : "When enabled, role requests for this binding will be automatically approved without manual review.";
                         });
+                        : form_field("language", &mut errors, html! {
+                            label(for = "language") : "Language:";
+                            select(name = "language", id = "language") {
+                                option(value = "en", selected? = current_language == English) : "English";
+                                option(value = "fr", selected? = current_language == French) : "French";
+                                option(value = "de", selected? = current_language == German) : "German";
+                                option(value = "pt", selected? = current_language == Portuguese) : "Portuguese";
+                            }
+                        });
                     }, errors, "Add Role Binding");
                 } else {
                     h3 : "Discord Role Overrides";
@@ -1059,7 +1104,7 @@ async fn roles_page(
                     
                     h4 : "Add Discord Role Override";
                     @let mut errors = ctx.errors().collect_vec();
-                    @let available_role_types = effective_role_bindings.iter()
+                    @let available_role_types = filtered_bindings.iter()
                         .filter(|binding| binding.is_game_binding && !binding.has_event_override)
                         .map(|binding| RoleType { id: binding.role_type_id, name: binding.role_type_name.clone() })
                         .collect::<Vec<_>>();
@@ -1316,7 +1361,7 @@ async fn roles_page(
     .await?)
 }
 
-#[rocket::get("/event/<series>/<event>/roles")]
+#[rocket::get("/event/<series>/<event>/roles?<lang>")]
 pub(crate) async fn get(
     pool: &State<PgPool>,
     me: Option<User>,
@@ -1324,13 +1369,14 @@ pub(crate) async fn get(
     csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
+    lang: Option<Language>,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let ctx = Context::default();
-    Ok(roles_page(transaction, me, &uri, data, ctx, csrf).await?)
+    Ok(roles_page(transaction, me, &uri, data, ctx, csrf, lang).await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -1343,8 +1389,13 @@ pub(crate) struct AddRoleBindingForm {
     #[field(default = String::new())]
     discord_role_id: String,
     auto_approve: bool,
+    language: Language,
 }
 
+/// Form for editing an existing role binding.
+/// Note: language is intentionally not editable after creation - to change the language,
+/// delete the binding and create a new one. This prevents volunteers from being silently
+/// moved between language tabs.
 #[derive(FromForm, CsrfForm)]
 pub(crate) struct EditRoleBindingForm {
     #[field(default = String::new())]
@@ -1394,9 +1445,9 @@ pub(crate) async fn add_role_binding(
                 .push_error(form::Error::validation("Minimum count must be at least 1."));
         }
 
-        if RoleBinding::exists_for_role_type(&mut transaction, data.series, &data.event, value.role_type_id).await? {
+        if RoleBinding::exists_for_role_type(&mut transaction, data.series, &data.event, value.role_type_id, value.language).await? {
             form.context.push_error(form::Error::validation(
-                "A role binding for this role type already exists.",
+                "A role binding for this role type and language already exists.",
             ));
         }
 
@@ -1405,10 +1456,11 @@ pub(crate) async fn add_role_binding(
                 roles_page(
                     transaction,
                     Some(me),
-                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                     data,
                     form.context,
                     csrf,
+                    None,
                 )
                 .await?,
             )
@@ -1426,10 +1478,11 @@ pub(crate) async fn add_role_binding(
                             roles_page(
                                 transaction,
                                 Some(me),
-                                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                                 data,
                                 form.context,
                                 csrf,
+                                None,
                             )
                             .await?,
                         ));
@@ -1446,20 +1499,22 @@ pub(crate) async fn add_role_binding(
                 value.max_count,
                 discord_role_id,
                 value.auto_approve,
+                value.language,
             )
             .await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
         }
     } else {
         RedirectOrContent::Content(
             roles_page(
                 transaction,
                 Some(me),
-                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                 data,
                 form.context,
                 csrf,
+                None,
             )
             .await?,
         )
@@ -1500,27 +1555,29 @@ pub(crate) async fn delete_role_binding(
                 roles_page(
                     transaction,
                     Some(me),
-                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                     data,
                     form.context,
                     csrf,
+                    None,
                 )
                 .await?,
             )
         } else {
             RoleBinding::delete(&mut transaction, binding).await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
         }
     } else {
         RedirectOrContent::Content(
             roles_page(
                 transaction,
                 Some(me),
-                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                 data,
                 form.context,
                 csrf,
+                None,
             )
             .await?,
         )
@@ -1582,7 +1639,7 @@ pub(crate) async fn edit_role_binding(
     .await?;
 
     transaction.commit().await?;
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _)))))
 }
 
 #[rocket::post("/event/<series>/<event>/roles/<request>/approve", data = "<form>")]
@@ -1620,10 +1677,11 @@ pub(crate) async fn approve_role_request(
                 roles_page(
                     transaction,
                     Some(me),
-                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                     data,
                     form.context,
                     csrf,
+                    None,
                 )
                 .await?,
             )
@@ -1635,7 +1693,7 @@ pub(crate) async fn approve_role_request(
             // Get the role binding to check for Discord role ID
             let role_binding = sqlx::query_as!(
                 RoleBinding,
-                r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event, rb.game_id, rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count, rb.max_count, rt.name as role_type_name, rb.discord_role_id, rb.auto_approve FROM role_bindings rb JOIN role_types rt ON rb.role_type_id = rt.id WHERE rb.id = $1"#,
+                r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event, rb.game_id, rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count, rb.max_count, rt.name as role_type_name, rb.discord_role_id, rb.auto_approve, rb.language AS "language: Language" FROM role_bindings rb JOIN role_types rt ON rb.role_type_id = rt.id WHERE rb.id = $1"#,
                 i64::from(role_request.role_binding_id) as i32
             )
             .fetch_optional(&mut *transaction)
@@ -1665,17 +1723,18 @@ pub(crate) async fn approve_role_request(
             }
 
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
         }
     } else {
         RedirectOrContent::Content(
             roles_page(
                 transaction,
                 Some(me),
-                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                 data,
                 form.context,
                 csrf,
+                None,
             )
             .await?,
         )
@@ -1716,10 +1775,11 @@ pub(crate) async fn reject_role_request(
                 roles_page(
                     transaction,
                     Some(me),
-                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                     data,
                     form.context,
                     csrf,
+                    None,
                 )
                 .await?,
             )
@@ -1727,17 +1787,18 @@ pub(crate) async fn reject_role_request(
             RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Rejected)
                 .await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
         }
     } else {
         RedirectOrContent::Content(
             roles_page(
                 transaction,
                 Some(me),
-                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                 data,
                 form.context,
                 csrf,
+                None,
             )
             .await?,
         )
@@ -1789,10 +1850,11 @@ pub(crate) async fn apply_for_role(
                 volunteer_page(
                     transaction,
                     Some(me),
-                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/volunteer-roles", series.slug(), event)).unwrap()),
                     data,
                     form.context,
                     csrf,
+                    None,
                 )
                 .await?,
             )
@@ -1807,8 +1869,9 @@ pub(crate) async fn apply_for_role(
             let role_binding = sqlx::query_as!(
                 RoleBinding,
                 r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event as "event!", rb.game_id,
-                          rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count as "min_count!", 
-                          rb.max_count as "max_count!", rt.name as "role_type_name!", rb.discord_role_id, rb.auto_approve
+                          rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count as "min_count!",
+                          rb.max_count as "max_count!", rt.name as "role_type_name!", rb.discord_role_id, rb.auto_approve,
+                          rb.language AS "language: Language"
                        FROM role_bindings rb
                        JOIN role_types rt ON rb.role_type_id = rt.id
                        WHERE rb.id = $1"#,
@@ -1826,10 +1889,11 @@ pub(crate) async fn apply_for_role(
                     volunteer_page(
                         transaction,
                         Some(me),
-                        &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                        &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/volunteer-roles", series.slug(), event)).unwrap()),
                         data,
                         form.context,
                         csrf,
+                        None,
                     )
                     .await?,
                 ));
@@ -1876,17 +1940,18 @@ pub(crate) async fn apply_for_role(
             }
 
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(volunteer_page_get(series, event))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(volunteer_page_get(series, event, _))))
         }
     } else {
         RedirectOrContent::Content(
             volunteer_page(
                 transaction,
                 Some(me),
-                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/volunteer-roles", series.slug(), event)).unwrap()),
                 data,
                 form.context,
                 csrf,
+                None,
             )
             .await?,
         )
@@ -1944,7 +2009,7 @@ pub(crate) async fn forfeit_role(
             // Update the status to aborted
             RoleRequest::update_status(&mut transaction, request.id, RoleRequestStatus::Aborted).await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(volunteer_page_get(series, event))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(volunteer_page_get(series, event, _))))
         } else {
             form.context.push_error(form::Error::validation(
                 "No active role request found to forfeit",
@@ -1953,10 +2018,11 @@ pub(crate) async fn forfeit_role(
                 volunteer_page(
                     transaction,
                     Some(me),
-                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/volunteer-roles", series.slug(), event)).unwrap()),
                     data,
                     form.context,
                     csrf,
+                    None,
                 )
                 .await?,
             )
@@ -1966,10 +2032,11 @@ pub(crate) async fn forfeit_role(
             volunteer_page(
                 transaction,
                 Some(me),
-                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/volunteer-roles", series.slug(), event)).unwrap()),
                 data,
                 form.context,
                 csrf,
+                None,
             )
             .await?,
         )
@@ -1983,6 +2050,7 @@ async fn volunteer_page(
     data: Data<'_>,
     _ctx: Context<'_>,
     csrf: Option<CsrfToken>,
+    selected_lang: Option<Language>,
 ) -> Result<RawHtml<String>, Error> {
     let header = data
         .header(&mut transaction, me.as_ref(), Tab::Volunteer, false)
@@ -2031,7 +2099,7 @@ async fn volunteer_page(
                     h2 : "Volunteer Signups";
                     p : "You need to be an organizer, restreamer, or have confirmed roles for this event to view volunteer signups.";
                     p {
-                        a(href = uri!(volunteer_page_get(data.series, &*data.event))) : "Apply for volunteer roles";
+                        a(href = uri!(volunteer_page_get(data.series, &*data.event, _))) : "Apply for volunteer roles";
                     }
                 }
             }
@@ -2061,9 +2129,24 @@ async fn volunteer_page(
 
             let upcoming_races = Race::for_event(&mut transaction, &reqwest::Client::new(), &data).await?;
 
+            // Get active languages and determine selected language
+            let active_languages = EffectiveRoleBinding::active_languages(&effective_role_bindings);
+            let current_language = selected_lang
+                .filter(|l| active_languages.contains(l))
+                .or_else(|| active_languages.iter().find(|&&l| l == data.default_volunteer_language).copied())
+                .or_else(|| active_languages.first().copied())
+                .unwrap_or(English);
+
+            // Filter bindings by selected language
+            let filtered_bindings: Vec<&EffectiveRoleBinding> = EffectiveRoleBinding::filter_by_language(&effective_role_bindings, current_language);
+            let base_url = format!("/event/{}/{}/volunteer-roles", data.series.slug(), &data.event);
+
             html! {
                 h2 : "Volunteer for Roles";
-                
+
+                // Language tabs (only shown if multiple languages)
+                : render_language_tabs(&active_languages, current_language, &base_url);
+
                 @if !uses_custom_bindings {
                     div(class = "game-binding-notice") {
                         h3 : "Game Role Bindings";
@@ -2078,11 +2161,18 @@ async fn volunteer_page(
                     p : "Apply to volunteer for roles in this event.";
                 }
 
-                @if effective_role_bindings.is_empty() {
-                    p : "No volunteer roles are currently available for this event.";
+                @if filtered_bindings.is_empty() {
+                    p : "No volunteer roles are currently available for this language.";
                 } else {
-                    h3 : "Available Roles";
-                    @for binding in &effective_role_bindings {
+                    h3 {
+                        : "Available Roles";
+                        @if active_languages.len() > 1 {
+                            : " (";
+                            : current_language.to_string();
+                            : ")";
+                        }
+                    }
+                    @for binding in &filtered_bindings {
                         @let my_request = my_requests.iter()
                             .filter(|req| req.role_binding_id == binding.id && !matches!(req.status, RoleRequestStatus::Aborted))
                             .max_by_key(|req| req.created_at);
@@ -2195,7 +2285,7 @@ async fn volunteer_page(
                                 ul {
                                     @for race in available_races {
                                         li {
-                                            a(href = uri!(match_signup_page_get(data.series, &*data.event, race.id))) : match &race.entrants {
+                                            a(href = uri!(match_signup_page_get(data.series, &*data.event, race.id, _))) : match &race.entrants {
                                                 Entrants::Two([team1, team2]) => format!("{} vs {}",
                                                     match team1 {
                                                         Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
@@ -2245,20 +2335,21 @@ async fn volunteer_page(
 }
 
 
-#[rocket::get("/event/<series>/<event>/volunteer-roles")]
+#[rocket::get("/event/<series>/<event>/volunteer-roles?<lang>")]
 pub(crate) async fn volunteer_page_get(
     pool: &State<PgPool>,
     me: Option<User>,
     series: Series,
     event: &str,
+    lang: Option<Language>,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let ctx = Context::default();
-    let uri = HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap();
-    Ok(volunteer_page(transaction, me, &Origin(uri.clone()), data, ctx, None).await?)
+    let uri = HttpOrigin::parse_owned(format!("/event/{}/{}/volunteer-roles", series.slug(), event)).unwrap();
+    Ok(volunteer_page(transaction, me, &Origin(uri.clone()), data, ctx, None, lang).await?)
 }
 
 // Match signup functionality
@@ -2317,6 +2408,7 @@ pub(crate) async fn signup_for_match(
                     race_id,
                     form.context,
                     csrf,
+                    None,
                 )
                 .await?,
             )
@@ -2329,7 +2421,7 @@ pub(crate) async fn signup_for_match(
             Signup::create(&mut transaction, race_id, value.role_binding_id, me.id, notes).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(
-                series, &*event, race_id
+                series, &*event, race_id, _
             ))))
         }
     } else {
@@ -2342,6 +2434,7 @@ pub(crate) async fn signup_for_match(
                 race_id,
                 form.context,
                 csrf,
+                None,
             )
             .await?,
         )
@@ -2404,6 +2497,7 @@ pub(crate) async fn manage_roster(
                     race_id,
                     form.context,
                     csrf,
+                    None,
                 )
                 .await?,
             )
@@ -2423,6 +2517,7 @@ pub(crate) async fn manage_roster(
                             race_id,
                             form.context,
                             csrf,
+                            None,
                         )
                         .await?,
                     ));
@@ -2583,7 +2678,7 @@ pub(crate) async fn manage_roster(
             
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(
-                series, &*event, race_id
+                series, &*event, race_id, _
             ))))
         }
     } else {
@@ -2596,6 +2691,7 @@ pub(crate) async fn manage_roster(
                 race_id,
                 form.context,
                 csrf,
+                None,
             )
             .await?,
         )
@@ -2610,6 +2706,7 @@ async fn match_signup_page(
     race_id: Id<Races>,
     _ctx: Context<'_>,
     csrf: Option<CsrfToken>,
+    selected_lang: Option<Language>,
 ) -> Result<RawHtml<String>, Error> {
     let header = data
         .header(&mut transaction, me.as_ref(), Tab::Races, true)
@@ -2620,6 +2717,18 @@ async fn match_signup_page(
     let signups = Signup::for_race(&mut transaction, race_id).await?;
     let effective_role_bindings = EffectiveRoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
 
+    // Get active languages and determine selected language
+    let active_languages = EffectiveRoleBinding::active_languages(&effective_role_bindings);
+    let current_language = selected_lang
+        .filter(|l| active_languages.contains(l))
+        .or_else(|| active_languages.iter().find(|&&l| l == data.default_volunteer_language).copied())
+        .or_else(|| active_languages.first().copied())
+        .unwrap_or(English);
+
+    // Filter bindings by selected language
+    let filtered_bindings: Vec<&EffectiveRoleBinding> = EffectiveRoleBinding::filter_by_language(&effective_role_bindings, current_language);
+    let base_url = format!("/event/{}/{}/races/{}/signups", data.series.slug(), &data.event, race_id);
+
     let content = if let Some(ref me) = me {
         let is_organizer = data.organizers(&mut transaction).await?.contains(me);
         let is_restreamer = data.restreamers(&mut transaction).await?.contains(me);
@@ -2627,6 +2736,9 @@ async fn match_signup_page(
 
         html! {
             h2 : "Match Volunteer Signups";
+
+            // Language tabs (only shown if multiple languages)
+            : render_language_tabs(&active_languages, current_language, &base_url);
             h3 {
                 : format!("{} {} {}",
                     race.phase.as_deref().unwrap_or(""),
@@ -2733,8 +2845,15 @@ async fn match_signup_page(
                 }
             }
 
-            h3 : "Role Signups";
-            @for binding in &effective_role_bindings {
+            h3 {
+                : "Role Signups";
+                @if active_languages.len() > 1 {
+                    : " (";
+                    : current_language.to_string();
+                    : ")";
+                }
+            }
+            @for binding in &filtered_bindings {
                 div(class = "role-binding") {
                     h4 : binding.role_type_name;
                     p {
@@ -2881,13 +3000,14 @@ async fn match_signup_page(
     .await?)
 }
 
-#[rocket::get("/event/<series>/<event>/races/<race_id>/signups")]
+#[rocket::get("/event/<series>/<event>/races/<race_id>/signups?<lang>")]
 pub(crate) async fn match_signup_page_get(
     pool: &State<PgPool>,
     me: Option<User>,
     series: Series,
     event: &str,
     race_id: Id<Races>,
+    lang: Option<Language>,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event)
@@ -2895,7 +3015,7 @@ pub(crate) async fn match_signup_page_get(
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let ctx = Context::default();
     let uri = HttpOrigin::parse_owned(format!("/event/{}/{}/races/{}", series.slug(), event, race_id)).unwrap();
-    Ok(match_signup_page(transaction, me, &Origin(uri.clone()), data, race_id, ctx, None).await?)
+    Ok(match_signup_page(transaction, me, &Origin(uri.clone()), data, race_id, ctx, None, lang).await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -2963,6 +3083,7 @@ pub(crate) async fn withdraw_signup(
                     race_id,
                     form.context,
                     csrf,
+                    None,
                 )
                 .await?,
             )
@@ -2970,7 +3091,7 @@ pub(crate) async fn withdraw_signup(
             // Update the signup status to Aborted
             Signup::update_status(&mut transaction, value.signup_id, VolunteerSignupStatus::Aborted).await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(series, event, race_id))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(series, event, race_id, _))))
         }
     } else {
         RedirectOrContent::Content(
@@ -2982,6 +3103,7 @@ pub(crate) async fn withdraw_signup(
                 race_id,
                 form.context,
                 csrf,
+                None,
             )
             .await?,
         )
@@ -3048,6 +3170,7 @@ pub(crate) async fn revoke_signup(
                     race_id,
                     form.context,
                     csrf,
+                    None,
                 )
                 .await?,
             )
@@ -3055,7 +3178,7 @@ pub(crate) async fn revoke_signup(
             // Update the signup status back to Pending
             Signup::update_status(&mut transaction, value.signup_id, VolunteerSignupStatus::Pending).await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(series, event, race_id))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(series, event, race_id, _))))
         }
     } else {
         RedirectOrContent::Content(
@@ -3067,6 +3190,7 @@ pub(crate) async fn revoke_signup(
                 race_id,
                 form.context,
                 csrf,
+                None,
             )
             .await?,
         )
@@ -3121,10 +3245,11 @@ pub(crate) async fn withdraw_role_request(
                 roles_page(
                     transaction,
                     Some(me),
-                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                     data,
                     form.context,
                     csrf,
+                    None,
                 )
                 .await?,
             )
@@ -3132,17 +3257,18 @@ pub(crate) async fn withdraw_role_request(
             // Update the role request status to Aborted
             RoleRequest::update_status(&mut transaction, value.request_id, RoleRequestStatus::Aborted).await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
         }
     } else {
         RedirectOrContent::Content(
             roles_page(
                 transaction,
                 Some(me),
-                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                 data,
                 form.context,
                 csrf,
+                None,
             )
             .await?,
         )
@@ -3207,10 +3333,11 @@ pub(crate) async fn revoke_role_request(
             roles_page(
                 transaction,
                 Some(me),
-                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                 data,
                 form.context,
                 csrf,
+                None,
             )
             .await?,
         )
@@ -3218,7 +3345,7 @@ pub(crate) async fn revoke_role_request(
         // Update the role request status back to Pending
         RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Pending).await?;
         transaction.commit().await?;
-        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
     })
 }
 
@@ -3427,13 +3554,14 @@ impl EffectiveRoleBinding {
                     rt.name AS "role_type_name",
                     rb.discord_role_id,
                     rb.auto_approve,
+                    rb.language AS "language: Language",
                     false AS "is_game_binding!: bool",
                     false AS "has_event_override!: bool",
                     false AS "is_disabled!: bool"
                 FROM role_bindings rb
                 JOIN role_types rt ON rb.role_type_id = rt.id
                 WHERE rb.series = $1 AND rb.event = $2
-                ORDER BY rt.name
+                ORDER BY rb.language, rt.name
             "#,
             series as _,
             event
@@ -3459,13 +3587,14 @@ impl EffectiveRoleBinding {
                             rt.name AS "role_type_name",
                             rb.discord_role_id,
                             rb.auto_approve,
+                            rb.language AS "language: Language",
                             true AS "is_game_binding!: bool",
                             false AS "has_event_override!: bool",
                             false AS "is_disabled!: bool"
                         FROM role_bindings rb
                         JOIN role_types rt ON rb.role_type_id = rt.id
                         WHERE rb.game_id = $1
-                        ORDER BY rt.name
+                        ORDER BY rb.language, rt.name
                     "#,
                     game.id
                 )
@@ -3517,6 +3646,49 @@ impl EffectiveRoleBinding {
 
         Ok(all_bindings)
     }
+
+    /// Get unique languages from a list of effective role bindings, sorted
+    pub(crate) fn active_languages(bindings: &[Self]) -> Vec<Language> {
+        let mut languages: Vec<Language> = bindings
+            .iter()
+            .map(|b| b.language)
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        languages.sort_by_key(|l| l.short_code().to_string());
+        languages
+    }
+
+    /// Filter bindings by language
+    pub(crate) fn filter_by_language(bindings: &[Self], language: Language) -> Vec<&Self> {
+        bindings.iter().filter(|b| b.language == language).collect()
+    }
+}
+
+/// Render language tabs for volunteer pages
+fn render_language_tabs(
+    active_languages: &[Language],
+    selected_language: Language,
+    base_url: &str,
+) -> RawHtml<String> {
+    if active_languages.len() <= 1 {
+        // Don't show tabs if there's only one language
+        return html! {};
+    }
+
+    html! {
+        nav(class = "language-tabs") {
+            @for lang in active_languages {
+                @let is_active = *lang == selected_language;
+                a(
+                    href = format!("{}?lang={}", base_url, lang.short_code()),
+                    class? = is_active.then_some("active")
+                ) {
+                    : lang.to_string();
+                }
+            }
+        }
+    }
 }
 
 #[rocket::post("/event/<series>/<event>/role-types/<role_type_id>/disable-binding")]
@@ -3558,7 +3730,7 @@ pub(crate) async fn disable_role_binding(
     }
 
     transaction.commit().await?;
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _)))))
 }
 
 #[rocket::post("/event/<series>/<event>/role-types/<role_type_id>/enable-binding")]
@@ -3588,7 +3760,7 @@ pub(crate) async fn enable_role_binding(
     EventDisabledRoleBinding::delete(&mut transaction, series, event, role_type_id).await?;
 
     transaction.commit().await?;
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _)))))
 }
 
 
@@ -3659,10 +3831,11 @@ pub(crate) async fn add_discord_override(
                 roles_page(
                     transaction,
                     Some(me),
-                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                     data,
                     form.context,
                     csrf,
+                    None,
                 )
                 .await?,
             )
@@ -3678,10 +3851,11 @@ pub(crate) async fn add_discord_override(
                         roles_page(
                             transaction,
                             Some(me),
-                            &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                            &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                             data,
                             form.context,
                             csrf,
+                            None,
                         )
                         .await?,
                     ));
@@ -3752,10 +3926,10 @@ pub(crate) async fn add_discord_override(
             }
 
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
         }
     } else {
-        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
     })
 }
 
@@ -3809,10 +3983,11 @@ pub(crate) async fn add_discord_override_from_form_data(
                 roles_page(
                     transaction,
                     Some(me),
-                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                     data,
                     form.context,
                     csrf,
+                    None,
                 )
                 .await?,
             )
@@ -3828,10 +4003,11 @@ pub(crate) async fn add_discord_override_from_form_data(
                         roles_page(
                             transaction,
                             Some(me),
-                            &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                            &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                             data,
                             form.context,
                             csrf,
+                            None,
                         )
                         .await?,
                     ));
@@ -3902,10 +4078,10 @@ pub(crate) async fn add_discord_override_from_form_data(
             }
 
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
         }
     } else {
-        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
     })
 }
 
@@ -3931,7 +4107,7 @@ pub(crate) async fn delete_discord_override(
     EventDiscordRoleOverride::delete_for_role_type(&mut transaction, series, event, role_type_id).await?;
 
     transaction.commit().await?;
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _)))))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -3975,10 +4151,11 @@ pub(crate) async fn copy_volunteers_from_event(
                 roles_page(
                     transaction,
                     Some(me),
-                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                     data,
                     form.context,
                     csrf,
+                    None,
                 )
                 .await?,
             )
@@ -4062,17 +4239,18 @@ pub(crate) async fn copy_volunteers_from_event(
             eprintln!("Copied {} volunteers from {} to {}. Skipped {} duplicates.",
                      copied_count, source_event, event, skipped_count);
 
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
         }
     } else {
         RedirectOrContent::Content(
             roles_page(
                 transaction,
                 Some(me),
-                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}", series.slug(), event)).unwrap()),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
                 data,
                 form.context,
                 csrf,
+                None,
             )
             .await?,
         )
