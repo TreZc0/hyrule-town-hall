@@ -71,6 +71,7 @@ rocket = { git = "https://github.com/fenhl/Rocket", branch = "forms", features =
 rocket-util = { git = "https://github.com/fenhl/rocket-util", branch = "forms", features = ["ics", "image", "rocket_csrf"] }
 rocket_csrf = { git = "https://github.com/fenhl/rocket_csrf", branch = "forms" }
 rocket_oauth2 = { git = "https://github.com/fenhl/rocket_oauth2", branch = "forms" }
+rustls = { version = "0.23.36", default-features = false, features = ["ring"] }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { package = "serde_json_path_to_error", version = "0.1" }
