@@ -66,7 +66,7 @@ nonempty-collections = "1"
 ootr-utils = { git = "https://github.com/midoshouse/rust-ootr-utils", features = ["sqlx"] }
 racetime = "0.32"
 rand = "0.9"
-reqwest = { version = "0.13", default-features = false, features = ["charset", "form", "gzip", "hickory-dns", "http2", "json", "query", "rustls-tls-ring", "stream", "system-proxy", "zstd"] }
+reqwest = { version = "0.13", default-features = false, features = ["charset", "form", "gzip", "hickory-dns", "http2", "json", "query", "rustls-no-provider", "stream", "system-proxy", "zstd"] }
 rocket = { git = "https://github.com/fenhl/Rocket", branch = "forms", features = ["json"] }
 rocket-util = { git = "https://github.com/fenhl/rocket-util", branch = "forms", features = ["ics", "image", "rocket_csrf"] }
 rocket_csrf = { git = "https://github.com/fenhl/rocket_csrf", branch = "forms" }
