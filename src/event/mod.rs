@@ -153,7 +153,7 @@ pub(crate) struct Data<'a> {
     pub(crate) series: Series,
     pub(crate) event: Cow<'a, str>,
     pub(crate) display_name: String,
-    short_name: Option<String>,
+    pub(crate) short_name: Option<String>,
     /// The event's originally scheduled starting time, not accounting for the 24-hour deadline extension in the event of an odd number of teams for events with qualifier asyncs.
     pub(crate) base_start: Option<DateTime<Utc>>,
     pub(crate) end: Option<DateTime<Utc>>,
@@ -166,7 +166,7 @@ pub(crate) struct Data<'a> {
     enter_url: Option<Url>,
     pub(crate) video_url: Option<Url>,
     pub(crate) discord_guild: Option<GuildId>,
-    discord_invite_url: Option<Url>,
+    pub(crate) discord_invite_url: Option<Url>,
     pub(crate) discord_race_room_channel: Option<ChannelId>,
     pub(crate) discord_race_results_channel: Option<ChannelId>,
     pub(crate) discord_organizer_channel: Option<ChannelId>,

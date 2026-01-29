@@ -91,9 +91,45 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                                 &event.discord_volunteer_info_channel.map(|c| c.get().to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
-                        
+
+                        : form_field("discord_organizer_channel", &mut errors, html! {
+                            label(for = "discord_organizer_channel") : "Discord Organizer Channel ID";
+                            input(type = "text", id = "discord_organizer_channel", name = "discord_organizer_channel", value = ctx.field_value("discord_organizer_channel").unwrap_or(
+                                &event.discord_organizer_channel.map(|c| c.get().to_string()).unwrap_or_default()
+                            ), style = "width: 100%; max-width: 600px;");
+                        });
+
+                        : form_field("discord_scheduling_channel", &mut errors, html! {
+                            label(for = "discord_scheduling_channel") : "Discord Scheduling Channel ID";
+                            input(type = "text", id = "discord_scheduling_channel", name = "discord_scheduling_channel", value = ctx.field_value("discord_scheduling_channel").unwrap_or(
+                                &event.discord_scheduling_channel.map(|c| c.get().to_string()).unwrap_or_default()
+                            ), style = "width: 100%; max-width: 600px;");
+                        });
+
+                        : form_field("discord_async_channel", &mut errors, html! {
+                            label(for = "discord_async_channel") : "Discord Async Channel ID";
+                            input(type = "text", id = "discord_async_channel", name = "discord_async_channel", value = ctx.field_value("discord_async_channel").unwrap_or(
+                                &event.discord_async_channel.map(|c| c.get().to_string()).unwrap_or_default()
+                            ), style = "width: 100%; max-width: 600px;");
+                        });
+
+                        : form_field("speedgaming_slug", &mut errors, html! {
+                            label(for = "speedgaming_slug") : "SpeedGaming Slug";
+                            input(type = "text", id = "speedgaming_slug", name = "speedgaming_slug", value = ctx.field_value("speedgaming_slug").unwrap_or(
+                                &event.speedgaming_slug.clone().unwrap_or_default()
+                            ), style = "width: 100%; max-width: 600px;");
+                        });
+
+                        : form_field("short_name", &mut errors, html! {
+                            label(for = "short_name") : "Short Name";
+                            input(type = "text", id = "short_name", name = "short_name", value = ctx.field_value("short_name").unwrap_or(
+                                &event.short_name.clone().unwrap_or_default()
+                            ), style = "width: 100%; max-width: 600px;");
+                            label(class = "help") : " (Used in compact displays)";
+                        });
+
                         : form_field("listed", &mut errors, html! {
-                            input(type = "checkbox", id = "listed", name = "listed", checked? = ctx.field_value("listed").map_or(true, |value| value == "on"));
+                            input(type = "checkbox", id = "listed", name = "listed", checked? = ctx.field_value("listed").map_or(event.listed, |value| value == "on"));
                             label(for = "listed") : "Listed";
                             label(class = "help") : " (Show this event on the main page)";
                         });
@@ -101,6 +137,47 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                         : form_field("manual_reporting_with_breaks", &mut errors, html! {
                             input(type = "checkbox", id = "manual_reporting_with_breaks", name = "manual_reporting_with_breaks", checked? = ctx.field_value("manual_reporting_with_breaks").map_or(event.manual_reporting_with_breaks, |value| value == "on"));
                             label(for = "manual_reporting_with_breaks") : "Manual Reporting with Breaks";
+                        });
+
+                        : form_field("asyncs_active", &mut errors, html! {
+                            input(type = "checkbox", id = "asyncs_active", name = "asyncs_active", checked? = ctx.field_value("asyncs_active").map_or(event.asyncs_active, |value| value == "on"));
+                            label(for = "asyncs_active") : "Asyncs Active";
+                            label(class = "help") : " (Enable async qualifier system)";
+                        });
+
+                        : form_field("automated_asyncs", &mut errors, html! {
+                            input(type = "checkbox", id = "automated_asyncs", name = "automated_asyncs", checked? = ctx.field_value("automated_asyncs").map_or(event.automated_asyncs, |value| value == "on"));
+                            label(for = "automated_asyncs") : "Automated Asyncs";
+                            label(class = "help") : " (Discord thread-based async workflow)";
+                        });
+
+                        : form_field("swiss_standings", &mut errors, html! {
+                            input(type = "checkbox", id = "swiss_standings", name = "swiss_standings", checked? = ctx.field_value("swiss_standings").map_or(event.swiss_standings, |value| value == "on"));
+                            label(for = "swiss_standings") : "Swiss Standings";
+                            label(class = "help") : " (Use Swiss-style standings)";
+                        });
+
+                        : form_field("discord_events_enabled", &mut errors, html! {
+                            input(type = "checkbox", id = "discord_events_enabled", name = "discord_events_enabled", checked? = ctx.field_value("discord_events_enabled").map_or(event.discord_events_enabled, |value| value == "on"));
+                            label(for = "discord_events_enabled") : "Discord Events Enabled";
+                            label(class = "help") : " (Create Discord scheduled events for races)";
+                        });
+
+                        : form_field("discord_events_require_restream", &mut errors, html! {
+                            input(type = "checkbox", id = "discord_events_require_restream", name = "discord_events_require_restream", checked? = ctx.field_value("discord_events_require_restream").map_or(event.discord_events_require_restream, |value| value == "on"));
+                            label(for = "discord_events_require_restream") : "Discord Events Require Restream";
+                            label(class = "help") : " (Only create Discord events for restreamed races)";
+                        });
+
+                        : form_field("emulator_settings_reminder", &mut errors, html! {
+                            input(type = "checkbox", id = "emulator_settings_reminder", name = "emulator_settings_reminder", checked? = ctx.field_value("emulator_settings_reminder").map_or(event.emulator_settings_reminder, |value| value == "on"));
+                            label(for = "emulator_settings_reminder") : "Emulator Settings Reminder";
+                        });
+
+                        : form_field("prevent_late_joins", &mut errors, html! {
+                            input(type = "checkbox", id = "prevent_late_joins", name = "prevent_late_joins", checked? = ctx.field_value("prevent_late_joins").map_or(event.prevent_late_joins, |value| value == "on"));
+                            label(for = "prevent_late_joins") : "Prevent Late Joins";
+                            label(class = "help") : " (Block joining races after they start)";
                         });
                     }, errors.clone(), "Save Basic Info");
                     
@@ -239,6 +316,7 @@ pub(crate) struct SetupForm {
     #[field(default = String::new())]
     csrf: String,
     display_name: String,
+    short_name: Option<String>,
     start: Option<String>,
     end: Option<String>,
     url: Option<String>,
@@ -248,8 +326,19 @@ pub(crate) struct SetupForm {
     discord_race_room_channel: Option<String>,
     discord_race_results_channel: Option<String>,
     discord_volunteer_info_channel: Option<String>,
+    discord_organizer_channel: Option<String>,
+    discord_scheduling_channel: Option<String>,
+    discord_async_channel: Option<String>,
+    speedgaming_slug: Option<String>,
     listed: bool,
     manual_reporting_with_breaks: bool,
+    asyncs_active: bool,
+    automated_asyncs: bool,
+    swiss_standings: bool,
+    discord_events_enabled: bool,
+    discord_events_require_restream: bool,
+    emulator_settings_reminder: bool,
+    prevent_late_joins: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/setup", data = "<form>")]
@@ -270,11 +359,11 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?)
         } else {
-            // Parse start time
+            // Parse start time (datetime-local sends YYYY-MM-DDTHH:MM format)
             let start = if let Some(start_str) = &value.start {
                 if !start_str.is_empty() {
-                    match DateTime::parse_from_rfc3339(start_str) {
-                        Ok(dt) => Some(dt.with_timezone(&Utc)),
+                    match NaiveDateTime::parse_from_str(start_str, "%Y-%m-%dT%H:%M") {
+                        Ok(naive_dt) => Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_dt, Utc)),
                         Err(_) => {
                             form.context.push_error(form::Error::validation("Invalid start time format"));
                             None
@@ -286,12 +375,12 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             } else {
                 None
             };
-            
-            // Parse end time
+
+            // Parse end time (datetime-local sends YYYY-MM-DDTHH:MM format)
             let end = if let Some(end_str) = &value.end {
                 if !end_str.is_empty() {
-                    match DateTime::parse_from_rfc3339(end_str) {
-                        Ok(dt) => Some(dt.with_timezone(&Utc)),
+                    match NaiveDateTime::parse_from_str(end_str, "%Y-%m-%dT%H:%M") {
+                        Ok(naive_dt) => Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_dt, Utc)),
                         Err(_) => {
                             form.context.push_error(form::Error::validation("Invalid end time format"));
                             None
@@ -417,15 +506,72 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             } else {
                 None
             };
-            
+
+            let discord_organizer_channel = if let Some(channel_str) = &value.discord_organizer_channel {
+                if !channel_str.is_empty() {
+                    match channel_str.parse::<u64>() {
+                        Ok(id) => Some(ChannelId::new(id)),
+                        Err(_) => {
+                            form.context.push_error(form::Error::validation("Invalid Discord organizer channel ID"));
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let discord_scheduling_channel = if let Some(channel_str) = &value.discord_scheduling_channel {
+                if !channel_str.is_empty() {
+                    match channel_str.parse::<u64>() {
+                        Ok(id) => Some(ChannelId::new(id)),
+                        Err(_) => {
+                            form.context.push_error(form::Error::validation("Invalid Discord scheduling channel ID"));
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let discord_async_channel = if let Some(channel_str) = &value.discord_async_channel {
+                if !channel_str.is_empty() {
+                    match channel_str.parse::<u64>() {
+                        Ok(id) => Some(ChannelId::new(id)),
+                        Err(_) => {
+                            form.context.push_error(form::Error::validation("Invalid Discord async channel ID"));
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Handle optional string fields (empty string -> None)
+            let short_name = value.short_name.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+            let speedgaming_slug = value.speedgaming_slug.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+
             // Update database
             sqlx::query!(r#"
-                UPDATE events 
-                SET display_name = $1, start = $2, end_time = $3, url = $4, video_url = $5, 
+                UPDATE events
+                SET display_name = $1, start = $2, end_time = $3, url = $4, video_url = $5,
                     discord_invite_url = $6, discord_guild = $7, discord_race_room_channel = $8,
                     discord_race_results_channel = $9, discord_volunteer_info_channel = $10,
-                    listed = $11, manual_reporting_with_breaks = $12
-                WHERE series = $13 AND event = $14
+                    discord_organizer_channel = $11, discord_scheduling_channel = $12,
+                    discord_async_channel = $13, short_name = $14, speedgaming_slug = $15,
+                    listed = $16, manual_reporting_with_breaks = $17, asyncs_active = $18,
+                    automated_asyncs = $19, swiss_standings = $20, discord_events_enabled = $21,
+                    discord_events_require_restream = $22, emulator_settings_reminder = $23,
+                    prevent_late_joins = $24
+                WHERE series = $25 AND event = $26
             "#,
                 value.display_name,
                 start,
@@ -437,8 +583,20 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 discord_race_room_channel.map(|c| c.get() as i64),
                 discord_race_results_channel.map(|c| c.get() as i64),
                 discord_volunteer_info_channel.map(|c| c.get() as i64),
+                discord_organizer_channel.map(|c| c.get() as i64),
+                discord_scheduling_channel.map(|c| c.get() as i64),
+                discord_async_channel.map(|c| c.get() as i64),
+                short_name,
+                speedgaming_slug,
                 value.listed,
                 value.manual_reporting_with_breaks,
+                value.asyncs_active,
+                value.automated_asyncs,
+                value.swiss_standings,
+                value.discord_events_enabled,
+                value.discord_events_require_restream,
+                value.emulator_settings_reminder,
+                value.prevent_late_joins,
                 event_data.series as _,
                 &event_data.event
             ).execute(&mut *transaction).await?;
