@@ -193,11 +193,21 @@ pub(crate) async fn get(
                     div(class = "role-binding") {
                         h4 : binding.role_type_name;
                         p {
-                            : "Required: ";
-                            : binding.min_count;
-                            : " - ";
-                            : binding.max_count;
-                            : " volunteers";
+                            @if binding.min_count == binding.max_count {
+                                : "Required: ";
+                                : binding.min_count;
+                                @if binding.min_count == 1 {
+                                    : " volunteer";
+                                } else {
+                                    : " volunteers";
+                                }
+                            } else {
+                                : "Required: ";
+                                : binding.min_count;
+                                : " - ";
+                                : binding.max_count;
+                                : " volunteers";
+                            }
                         }
                         @if let Some(discord_role_id) = binding.discord_role_id {
                             p {
