@@ -455,32 +455,44 @@ pub(crate) async fn manage_roles(
                             th : "Role Type";
                             th : "Min Count";
                             th : "Max Count";
+                            th : "Auto-approve";
                             th : "Discord Role";
                             th : "Actions";
                         }
                     }
                     tbody {
                         @for binding in &filtered_bindings {
-                            tr {
-                                td : binding.role_type_name;
-                                td : binding.min_count;
-                                td : binding.max_count;
-                                td {
+                            tr(data_binding_id = binding.id.to_string()) {
+                                td(class = "role-type") : binding.role_type_name;
+                                td(class = "min-count", data_value = binding.min_count.to_string()) : binding.min_count;
+                                td(class = "max-count", data_value = binding.max_count.to_string()) : binding.max_count;
+                                td(class = "auto-approve", data_value = binding.auto_approve.to_string()) {
+                                    @if binding.auto_approve {
+                                        span(style = "color: green;") : "✓ Yes";
+                                    } else {
+                                        span(style = "color: red;") : "✗ No";
+                                    }
+                                }
+                                td(class = "discord-role", data_value = binding.discord_role_id.map(|id| id.to_string()).unwrap_or_default()) {
                                     @if let Some(discord_role_id) = binding.discord_role_id {
                                         : format!("{}", discord_role_id);
                                     } else {
                                         : "None";
                                     }
                                 }
-                                td {
-                                    @let (errors, delete_button) = button_form(
-                                        uri!(remove_game_role_binding(&game_name, binding.id)),
-                                        csrf.as_ref(),
-                                        Vec::new(),
-                                        "Delete"
-                                    );
-                                    : errors;
-                                    div(class = "button-row") : delete_button;
+                                td(style = "text-align: center;") {
+                                    div(class = "actions", style = "display: flex; justify-content: center; gap: 8px; flex-wrap: wrap;") {
+                                        button(class = "button edit-btn", onclick = format!("startEdit({})", binding.id)) : "Edit";
+
+                                        @let (errors, delete_button) = button_form(
+                                            uri!(remove_game_role_binding(&game_name, binding.id)),
+                                            csrf.as_ref(),
+                                            Vec::new(),
+                                            "Delete"
+                                        );
+                                        : errors;
+                                        : delete_button;
+                                    }
                                 }
                             }
                         }
@@ -511,6 +523,11 @@ pub(crate) async fn manage_roles(
                 : form_field("max_count", &mut errors, html! {
                     label(for = "max_count") : "Maximum Count:";
                     input(type = "number", name = "max_count", id = "max_count", value = "1", min = "1");
+                });
+                : form_field("auto_approve", &mut errors, html! {
+                    label(for = "auto_approve") : "Auto-approve:";
+                    input(type = "checkbox", name = "auto_approve", id = "auto_approve");
+                    label(class = "help") : "(If checked, role requests will be automatically approved without manual review)";
                 });
                 : form_field("discord_role_id", &mut errors, html! {
                     label(for = "discord_role_id") : "Discord Role ID (optional):";
@@ -635,6 +652,8 @@ pub(crate) async fn manage_roles(
                     }
                 }
             }
+
+            script(src = static_url!("game-role-binding-edit.js")) {}
         }
     };
 
@@ -767,6 +786,7 @@ pub(crate) struct AddGameRoleBindingForm {
     role_type_id: Id<RoleTypes>,
     min_count: i32,
     max_count: i32,
+    auto_approve: bool,
     #[field(default = String::new())]
     discord_role_id: String,
     language: Language,
@@ -788,6 +808,17 @@ pub(crate) struct ApproveGameRoleRequestForm {
 pub(crate) struct RejectGameRoleRequestForm {
     #[field(default = String::new())]
     csrf: String,
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct EditGameRoleBindingForm {
+    #[field(default = String::new())]
+    csrf: String,
+    min_count: i32,
+    max_count: i32,
+    #[field(default = String::new())]
+    discord_role_id: String,
+    auto_approve: bool,
 }
 
 #[rocket::post("/games/<game_name>/role-bindings", data = "<form>")]
@@ -838,7 +869,7 @@ pub(crate) async fn add_game_role_binding(
             value.min_count,
             value.max_count,
             discord_role_id,
-            false, // auto_approve - default to false for game role bindings
+            value.auto_approve,
             value.language,
         ).await.map_err(Error::from)?;
         
@@ -950,6 +981,66 @@ pub(crate) async fn reject_game_role_request(
         transaction.commit().await.map_err(Error::from)?;
     }
     
+    Ok(Redirect::to(uri!(manage_roles(game_name, _))))
+}
+
+#[rocket::post("/games/<game_name>/roles/binding/<binding_id>/edit", data = "<form>")]
+pub(crate) async fn edit_game_role_binding(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    game_name: &str,
+    binding_id: Id<RoleBindings>,
+    _csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, EditGameRoleBindingForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
+    let form = form.into_inner();
+
+    let value = form.value.as_ref().ok_or(StatusOrError::Status(Status::BadRequest))?;
+
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
+    let game = Game::from_name(&mut transaction, game_name)
+        .await.map_err(Error::from)?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+    let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+
+    if !is_game_admin && !is_global_admin {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+
+    // Validate form data
+    if value.min_count < 1 {
+        return Err(StatusOrError::Status(Status::BadRequest));
+    }
+    if value.max_count < value.min_count {
+        return Err(StatusOrError::Status(Status::BadRequest));
+    }
+
+    // Parse Discord role ID
+    let discord_role_id = if value.discord_role_id.trim().is_empty() {
+        None
+    } else {
+        Some(value.discord_role_id.parse::<i64>().map_err(|_| StatusOrError::Status(Status::BadRequest))?)
+    };
+
+    // Update the role binding
+    sqlx::query!(
+        r#"UPDATE role_bindings
+           SET min_count = $1, max_count = $2, discord_role_id = $3, auto_approve = $4
+           WHERE id = $5 AND game_id = $6"#,
+        value.min_count,
+        value.max_count,
+        discord_role_id,
+        value.auto_approve,
+        binding_id as _,
+        game.id
+    )
+    .execute(&mut *transaction)
+    .await.map_err(Error::from)?;
+
+    transaction.commit().await.map_err(Error::from)?;
     Ok(Redirect::to(uri!(manage_roles(game_name, _))))
 }
 

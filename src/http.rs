@@ -686,6 +686,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         games::apply_for_game_role,
         games::forfeit_game_role,
         games::add_game_role_binding,
+        games::edit_game_role_binding,
         games::remove_game_role_binding,
         games::approve_game_role_request,
         games::reject_game_role_request,
