@@ -155,6 +155,7 @@ pub(crate) struct RoleRequest {
     pub(crate) min_count: i32,
     pub(crate) max_count: i32,
     pub(crate) role_type_name: String,
+    pub(crate) language: Language,
 }
 
 #[allow(unused)]
@@ -444,7 +445,8 @@ impl RoleRequest {
                     rb.event,
                     rb.min_count,
                     rb.max_count,
-                    rt.name AS "role_type_name"
+                    rt.name AS "role_type_name",
+                    rb.language AS "language: Language"
                 FROM role_requests rr
                 JOIN role_bindings rb ON rr.role_binding_id = rb.id
                 JOIN role_types rt ON rb.role_type_id = rt.id
@@ -465,7 +467,7 @@ impl RoleRequest {
         sqlx::query_as!(
             Self,
             r#"
-                SELECT 
+                SELECT
                     rr.id AS "id: Id<RoleRequests>",
                     rr.role_binding_id AS "role_binding_id: Id<RoleBindings>",
                     rr.user_id AS "user_id: Id<Users>",
@@ -477,7 +479,8 @@ impl RoleRequest {
                     rb.event,
                     rb.min_count,
                     rb.max_count,
-                    rt.name AS "role_type_name"
+                    rt.name AS "role_type_name",
+                    rb.language AS "language: Language"
                 FROM role_requests rr
                 JOIN role_bindings rb ON rr.role_binding_id = rb.id
                 JOIN role_types rt ON rb.role_type_id = rt.id
@@ -497,7 +500,7 @@ impl RoleRequest {
         sqlx::query_as!(
             Self,
             r#"
-                SELECT 
+                SELECT
                     rr.id AS "id: Id<RoleRequests>",
                     rr.role_binding_id AS "role_binding_id: Id<RoleBindings>",
                     rr.user_id AS "user_id: Id<Users>",
@@ -509,7 +512,8 @@ impl RoleRequest {
                     rb.event,
                     rb.min_count,
                     rb.max_count,
-                    rt.name AS "role_type_name"
+                    rt.name AS "role_type_name",
+                    rb.language AS "language: Language"
                 FROM role_requests rr
                 JOIN role_bindings rb ON rr.role_binding_id = rb.id
                 JOIN role_types rt ON rb.role_type_id = rt.id
@@ -610,10 +614,11 @@ impl RoleRequest {
     ) -> sqlx::Result<Vec<Self>> {
         Ok(sqlx::query_as!(
             Self,
-            r#"SELECT rr.id as "id!: Id<RoleRequests>", rr.role_binding_id as "role_binding_id!: Id<RoleBindings>", rr.user_id as "user_id!: Id<Users>", 
+            r#"SELECT rr.id as "id!: Id<RoleRequests>", rr.role_binding_id as "role_binding_id!: Id<RoleBindings>", rr.user_id as "user_id!: Id<Users>",
                       rr.status as "status!: RoleRequestStatus", rr.notes, rr.created_at as "created_at!", rr.updated_at as "updated_at!",
-                      rb.series as "series!: Series", rb.event as "event!", rb.min_count as "min_count!", rb.max_count as "max_count!", 
-                      rt.name as "role_type_name!"
+                      rb.series as "series!: Series", rb.event as "event!", rb.min_count as "min_count!", rb.max_count as "max_count!",
+                      rt.name as "role_type_name!",
+                      rb.language as "language!: Language"
                FROM role_requests rr
                JOIN role_bindings rb ON rr.role_binding_id = rb.id
                JOIN role_types rt ON rb.role_type_id = rt.id
@@ -634,10 +639,11 @@ impl RoleRequest {
     ) -> sqlx::Result<Vec<Self>> {
         Ok(sqlx::query_as!(
             Self,
-            r#"SELECT rr.id as "id!: Id<RoleRequests>", rr.role_binding_id as "role_binding_id!: Id<RoleBindings>", rr.user_id as "user_id!: Id<Users>", 
+            r#"SELECT rr.id as "id!: Id<RoleRequests>", rr.role_binding_id as "role_binding_id!: Id<RoleBindings>", rr.user_id as "user_id!: Id<Users>",
                       rr.status as "status!: RoleRequestStatus", rr.notes, rr.created_at as "created_at!", rr.updated_at as "updated_at!",
-                      rb.series as "series!: Series", rb.event as "event!", rb.min_count as "min_count!", rb.max_count as "max_count!", 
-                      rt.name as "role_type_name!"
+                      rb.series as "series!: Series", rb.event as "event!", rb.min_count as "min_count!", rb.max_count as "max_count!",
+                      rt.name as "role_type_name!",
+                      rb.language as "language!: Language"
                FROM role_requests rr
                JOIN role_bindings rb ON rr.role_binding_id = rb.id
                JOIN role_types rt ON rb.role_type_id = rt.id
@@ -657,7 +663,7 @@ impl RoleRequest {
         sqlx::query_as!(
             Self,
             r#"
-                SELECT 
+                SELECT
                     rr.id AS "id: Id<RoleRequests>",
                     rr.role_binding_id AS "role_binding_id: Id<RoleBindings>",
                     rr.user_id AS "user_id: Id<Users>",
@@ -669,7 +675,8 @@ impl RoleRequest {
                     rb.event,
                     rb.min_count,
                     rb.max_count,
-                    rt.name AS "role_type_name"
+                    rt.name AS "role_type_name",
+                    rb.language AS "language: Language"
                 FROM role_requests rr
                 JOIN role_bindings rb ON rr.role_binding_id = rb.id
                 JOIN role_types rt ON rb.role_type_id = rt.id
@@ -1261,19 +1268,14 @@ async fn roles_page(
 
                     @let approved_by_role_type = approved_requests.iter()
                         .filter(|request| {
-                            // For game bindings, only show if the role type is not disabled
-                            if request.series.is_none() && request.event.is_none() {
-                                // We'll check this separately in the template
-                                true
-                            } else {
-                                true // Always show event-specific requests
-                            }
+                            // Filter by current language and check if disabled
+                            request.language == current_language
                         })
-                        .fold(HashMap::<String, Vec<_>>::new(), |mut acc, request| {
-                            acc.entry(request.role_type_name.clone()).or_insert_with(Vec::new).push(request);
+                        .fold(HashMap::<(String, Language), Vec<_>>::new(), |mut acc, request| {
+                            acc.entry((request.role_type_name.clone(), request.language)).or_insert_with(Vec::new).push(request);
                             acc
                         });
-                    @for (role_type_name, requests) in approved_by_role_type {
+                    @for ((role_type_name, language), requests) in approved_by_role_type {
                         @let role_type = RoleType::from_name(&mut transaction, &requests[0].role_type_name).await?;
                         @let is_disabled = if let Some(role_type) = role_type {
                             EventDisabledRoleBinding::exists_for_role_type(&mut transaction, data.series, &data.event, role_type.id).await?
@@ -1282,7 +1284,7 @@ async fn roles_page(
                         };
                         @if !is_disabled {
                             details {
-                                summary : format!("{} ({})", role_type_name, requests.len());
+                                summary : format!("{} [{}] ({})", role_type_name, language.short_code().to_uppercase(), requests.len());
                                 table {
                                     thead {
                                         tr {
@@ -1982,7 +1984,7 @@ pub(crate) async fn forfeit_role(
         let role_request = sqlx::query_as!(
             RoleRequest,
             r#"
-                SELECT 
+                SELECT
                     rr.id AS "id: Id<RoleRequests>",
                     rr.role_binding_id AS "role_binding_id: Id<RoleBindings>",
                     rr.user_id AS "user_id: Id<Users>",
@@ -1994,7 +1996,8 @@ pub(crate) async fn forfeit_role(
                     rb.event,
                     rb.min_count,
                     rb.max_count,
-                    rt.name AS "role_type_name"
+                    rt.name AS "role_type_name",
+                    rb.language AS "language: Language"
                 FROM role_requests rr
                 JOIN role_bindings rb ON rr.role_binding_id = rb.id
                 JOIN role_types rt ON rb.role_type_id = rt.id

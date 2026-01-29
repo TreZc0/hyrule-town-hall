@@ -4038,6 +4038,7 @@ dependencies = [
  "rocket-util 0.2.15 (git+https://github.com/fenhl/rocket-util?branch=forms)",
  "rocket_csrf",
  "rocket_oauth2",
+ "rustls 0.23.36",
  "semver",
  "serde",
  "serde_json",

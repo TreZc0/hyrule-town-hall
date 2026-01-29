@@ -753,7 +753,7 @@ pub(crate) async fn forfeit_game_role(
         let role_request = sqlx::query_as!(
             RoleRequest,
             r#"
-                SELECT 
+                SELECT
                     rr.id AS "id: Id<RoleRequests>",
                     rr.role_binding_id AS "role_binding_id: Id<RoleBindings>",
                     rr.user_id AS "user_id: Id<Users>",
@@ -765,7 +765,8 @@ pub(crate) async fn forfeit_game_role(
                     rb.event,
                     rb.min_count,
                     rb.max_count,
-                    rt.name AS "role_type_name"
+                    rt.name AS "role_type_name",
+                    rb.language AS "language: Language"
                 FROM role_requests rr
                 JOIN role_bindings rb ON rr.role_binding_id = rb.id
                 JOIN role_types rt ON rb.role_type_id = rt.id
