@@ -327,7 +327,7 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
                     } else {
                         @for game in &games {
                             li {
-                                a(href = uri!(games::get(&game.name))) : &game.display_name;
+                                a(href = uri!(games::get(&game.name, _))) : &game.display_name;
                             }
                         }
                     }
@@ -648,6 +648,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::roles::delete_discord_override,
         event::roles::disable_role_binding,
         event::roles::enable_role_binding,
+        event::roles::copy_volunteers_from_event,
         event::setup::get,
         event::setup::post,
         event::setup::add_organizer,
@@ -685,6 +686,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         games::apply_for_game_role,
         games::forfeit_game_role,
         games::add_game_role_binding,
+        games::edit_game_role_binding,
         games::remove_game_role_binding,
         games::approve_game_role_request,
         games::reject_game_role_request,

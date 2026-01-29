@@ -1,9 +1,4 @@
 use {
-    git2::{
-        BranchType,
-        Repository,
-        ResetType,
-    },
     semver::Version,
     serde_json::Value as Json,
     crate::{
@@ -115,7 +110,11 @@ pub(crate) enum VersionedPreset {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ScriptPathError {
-    #[error(transparent)] Git(#[from] git2::Error),
+    #[error(transparent)] GitConnect(#[from] gix::remote::connect::Error),
+    #[error(transparent)] GitFetch(#[from] gix::remote::fetch::Error),
+    #[error(transparent)] GitFindRemote(#[from] gix::remote::find::for_fetch::Error),
+    #[error(transparent)] GitOpen(#[from] gix::open::Error),
+    #[error(transparent)] GitPrepareFetch(#[from] gix::remote::fetch::prepare::Error),
     #[error(transparent)] Wheel(#[from] wheel::Error),
     #[cfg(unix)]
     #[error("RSL script not found")]
@@ -185,14 +184,17 @@ impl VersionedPreset {
             if !self.is_version_locked() {
                 // update the RSL script
                 lock!(rsl_repo_lock = REPO_LOCK; { // git is not reentrant
-                    let repo = Repository::open(&path)?; //TODO migrate to gix
-                    let mut origin = repo.find_remote("origin")?;
+                    let repo = gix::open(path.to_owned())?;
                     let branch_name = match self {
                         Self::Xopar { .. } | Self::XoparCustom { .. } => "release",
                         Self::Fenhl { .. } => "dev-fenhl",
                     };
-                    origin.fetch(&[branch_name], None, None)?;
-                    repo.reset(&repo.find_branch(&format!("origin/{branch_name}"), BranchType::Remote)?.into_reference().peel_to_commit()?.into_object(), ResetType::Hard, None)?;
+                    repo.find_fetch_remote(Some("origin".into()))?
+                        .connect(gix::remote::Direction::Fetch)?
+                        .prepare_fetch(gix::progress::Discard, Default::default())?
+                        .with_shallow(gix::remote::fetch::Shallow::DepthAtRemote(NonZero::<u32>::MIN))
+                        .receive(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)?;
+                    Command::new("git").arg("reset").arg("--hard").arg(format!("origin/{branch_name}")).current_dir(&path).check("git reset").await?; //TODO use gix, blocked on https://github.com/GitoxideLabs/gitoxide/issues/301
                 });
             }
         } else {

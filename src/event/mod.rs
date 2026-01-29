@@ -153,20 +153,20 @@ pub(crate) struct Data<'a> {
     pub(crate) series: Series,
     pub(crate) event: Cow<'a, str>,
     pub(crate) display_name: String,
-    short_name: Option<String>,
+    pub(crate) short_name: Option<String>,
     /// The event's originally scheduled starting time, not accounting for the 24-hour deadline extension in the event of an odd number of teams for events with qualifier asyncs.
     pub(crate) base_start: Option<DateTime<Utc>>,
     pub(crate) end: Option<DateTime<Utc>>,
     pub(crate) url: Option<Url>,
-    challonge_community: Option<String>,
+    pub(crate) challonge_community: Option<String>,
     pub(crate) speedgaming_slug: Option<String>,
-    hide_races_tab: bool,
-    hide_teams_tab: bool,
-    teams_url: Option<Url>,
-    enter_url: Option<Url>,
+    pub(crate) hide_races_tab: bool,
+    pub(crate) hide_teams_tab: bool,
+    pub(crate) teams_url: Option<Url>,
+    pub(crate) enter_url: Option<Url>,
     pub(crate) video_url: Option<Url>,
     pub(crate) discord_guild: Option<GuildId>,
-    discord_invite_url: Option<Url>,
+    pub(crate) discord_invite_url: Option<Url>,
     pub(crate) discord_race_room_channel: Option<ChannelId>,
     pub(crate) discord_race_results_channel: Option<ChannelId>,
     pub(crate) discord_organizer_channel: Option<ChannelId>,
@@ -178,7 +178,7 @@ pub(crate) struct Data<'a> {
     pub(crate) single_settings: Option<seed::Settings>,
     pub(crate) team_config: TeamConfig,
     enter_flow: Option<enter::Flow>,
-    show_opt_out: bool,
+    pub(crate) show_opt_out: bool,
     pub(crate) show_qualifier_times: bool,
     pub(crate) default_game_count: i16,
     pub(crate) min_schedule_notice: Duration,
@@ -190,6 +190,8 @@ pub(crate) struct Data<'a> {
     pub(crate) prevent_late_joins: bool,
     pub(crate) manual_reporting_with_breaks: bool,
     pub(crate) language: Language,
+    #[allow(dead_code)] // Will be used for tabbed UI
+    pub(crate) default_volunteer_language: Language,
     pub(crate) asyncs_active: bool,
     pub(crate) swiss_standings: bool,
     pub(crate) discord_events_enabled: bool,
@@ -256,6 +258,7 @@ impl<'a> Data<'a> {
             prevent_late_joins,
             manual_reporting_with_breaks,
             language AS "language: Language",
+            default_volunteer_language AS "default_volunteer_language: Language",
             asyncs_active,
             swiss_standings,
             discord_events_enabled,
@@ -306,6 +309,7 @@ impl<'a> Data<'a> {
                 prevent_late_joins: row.prevent_late_joins,
                 manual_reporting_with_breaks: row.manual_reporting_with_breaks,
                 language: row.language,
+                default_volunteer_language: row.default_volunteer_language,
                 asyncs_active: row.asyncs_active,
                 swiss_standings: row.swiss_standings,
                 discord_events_enabled: row.discord_events_enabled,
@@ -765,9 +769,9 @@ impl<'a> Data<'a> {
                 }
                 @if self.has_role_bindings(transaction).await? && !self.is_ended() {
                     @if let Tab::Volunteer = tab {
-                        a(class = "button selected", href? = is_subpage.then(|| uri!(roles::volunteer_page_get(self.series, &*self.event)))) : "Volunteer";
+                        a(class = "button selected", href? = is_subpage.then(|| uri!(roles::volunteer_page_get(self.series, &*self.event, _)))) : "Volunteer";
                     } else {
-                        a(class = "button", href = uri!(roles::volunteer_page_get(self.series, &*self.event))) : "Volunteer";
+                        a(class = "button", href = uri!(roles::volunteer_page_get(self.series, &*self.event, _))) : "Volunteer";
                     }
                 }
                 @if let Some(ref video_url) = self.video_url {
@@ -800,15 +804,17 @@ impl<'a> Data<'a> {
                             a(class = "button", href = uri!(configure::get(self.series, &*self.event))) : "Configure";
                         }
                         @if let Tab::Roles = tab {
-                            a(class = "button selected", href? = is_subpage.then(|| uri!(roles::get(self.series, &*self.event)))) : "Roles";
+                            a(class = "button selected", href? = is_subpage.then(|| uri!(roles::get(self.series, &*self.event, _)))) : "Roles";
                         } else {
-                            a(class = "button", href = uri!(roles::get(self.series, &*self.event))) : "Roles";
+                            a(class = "button", href = uri!(roles::get(self.series, &*self.event, _))) : "Roles";
                         }
                         @if let Tab::Asyncs = tab {
                             a(class = "button selected", href? = is_subpage.then(|| uri!(asyncs::get(self.series, &*self.event)))) : "Asyncs";
                         } else {
                             a(class = "button", href = uri!(asyncs::get(self.series, &*self.event))) : "Asyncs";
                         }
+                    }
+                    @if !self.is_ended() && me.is_global_admin() {
                         @if let Tab::Setup = tab {
                             a(class = "button selected", href? = is_subpage.then(|| uri!(setup::get(self.series, &*self.event)))) : "Setup";
                         } else {

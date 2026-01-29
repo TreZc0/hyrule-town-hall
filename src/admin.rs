@@ -787,7 +787,7 @@ pub(crate) async fn game_management(
                                 li {
                                     a(href = uri!(event::info(*series_item, &*event_name))) : display_name;
                                     : " - ";
-                                    a(href = uri!(event::roles::get(*series_item, &*event_name))) : "Manage Roles";
+                                    a(href = uri!(event::roles::get(*series_item, &*event_name, _))) : "Manage Roles";
                                 }
                             }
                         }
@@ -863,6 +863,15 @@ pub(crate) async fn game_management(
                     label(for = "discord_role_id") : "Discord Role ID (optional):";
                     input(type = "text", name = "discord_role_id", id = "discord_role_id", placeholder = "e.g. 123456789012345678");
                 });
+                : form_field("language", &mut errors, html! {
+                    label(for = "language") : "Language:";
+                    select(name = "language", id = "language") {
+                        option(value = "en") : "English";
+                        option(value = "fr") : "French";
+                        option(value = "de") : "German";
+                        option(value = "pt") : "Portuguese";
+                    }
+                });
             }, errors, "Add Game Role Binding");
             
             p {
@@ -897,6 +906,7 @@ pub(crate) struct AddGameRoleBindingForm {
     max_count: i32,
     #[field(default = String::new())]
     discord_role_id: String,
+    language: Language,
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -947,10 +957,10 @@ pub(crate) async fn add_game_role_binding(
         };
         
         // Check if role binding already exists
-        if GameRoleBinding::exists_for_role_type(&mut transaction, game.id, value.role_type_id).await.map_err(Error::from)? {
+        if GameRoleBinding::exists_for_role_type(&mut transaction, game.id, value.role_type_id, value.language).await.map_err(Error::from)? {
             return Ok(Redirect::to(uri!(game_management(game_name))));
         }
-        
+
         // Add role binding
         GameRoleBinding::create(
             &mut transaction,
@@ -960,6 +970,7 @@ pub(crate) async fn add_game_role_binding(
             value.max_count,
             discord_role_id,
             false, // auto_approve - default to false for game role bindings
+            value.language,
         ).await.map_err(Error::from)?;
         
         transaction.commit().await.map_err(Error::from)?;

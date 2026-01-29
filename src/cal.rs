@@ -2273,10 +2273,10 @@ pub(crate) async fn race_table(
                                             @let is_organizer = event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(user));
                                             @let is_restreamer = event.restreamers(&mut *transaction).await.ok().map_or(false, |rest| rest.contains(user));
                                             @if is_organizer || is_restreamer {
-                                                a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id))) : "Manage Volunteers";
+                                                a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id, _))) : "Manage Volunteers";
                                             } else if let Some(approved_roles) = approved_role_binding_ids {
                                                 @if !approved_roles.is_empty() {
-                                                    a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id))) : "Volunteer";
+                                                    a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id, _))) : "Volunteer";
                                                 }
                                             }
                                         }

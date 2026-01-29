@@ -2346,17 +2346,14 @@ async fn roll_seed_locally(delay_until: Option<DateTime<Utc>>, version: Versione
             let dir = parent.join(&*branch);
             if dir.exists() {
                 //TODO hard reset to remote instead?
-                //TODO use git2 or gix instead?
+                //TODO use gix instead?
                 Command::new("git").arg("pull").current_dir(&dir).check("git").await?;
             } else {
                 fs::create_dir_all(&parent).await?;
-                let mut command = Command::new("git"); //TODO use git2 or gix instead? (git2 doesn't support shallow clones, gix is very low level)
-                command.arg("clone");
-                command.arg(format!("https://github.com/{github_username}/OoT-Randomizer.git"));
-                command.arg(format!("--branch={branch}"));
-                command.arg(&*branch);
-                command.current_dir(parent);
-                command.check("git").await?;
+                gix::prepare_clone(format!("https://github.com/{github_username}/OoT-Randomizer.git"), &dir)?
+                    .with_ref_name(Some(&*branch))?
+                    .fetch_then_checkout(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)?.0
+                    .main_worktree(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)?;
             }
             dir
         }
@@ -2433,6 +2430,10 @@ async fn roll_seed_locally(delay_until: Option<DateTime<Utc>>, version: Versione
 pub(crate) enum RollError {
     #[error(transparent)] Clone(#[from] rando::CloneError),
     #[error(transparent)] Dir(#[from] rando::DirError),
+    #[error(transparent)] GitCheckout(#[from] gix::clone::checkout::main_worktree::Error),
+    #[error(transparent)] GitClone(#[from] gix::clone::Error),
+    #[error(transparent)] GitCloneFetch(#[from] gix::clone::fetch::Error),
+    #[error(transparent)] GitValidateRefName(#[from] gix::validate::reference::name::Error),
     #[error(transparent)] Json(#[from] serde_json::Error),
     #[error(transparent)] OotrWeb(#[from] ootr_web::Error),
     #[error(transparent)] ParseInt(#[from] std::num::ParseIntError),
