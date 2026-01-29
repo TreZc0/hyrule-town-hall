@@ -133,41 +133,6 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             label(for = "listed") : "Listed";
                             label(class = "help") : " (Show this event on the main page)";
                         });
-                        
-                        : form_field("manual_reporting_with_breaks", &mut errors, html! {
-                            input(type = "checkbox", id = "manual_reporting_with_breaks", name = "manual_reporting_with_breaks", checked? = ctx.field_value("manual_reporting_with_breaks").map_or(event.manual_reporting_with_breaks, |value| value == "on"));
-                            label(for = "manual_reporting_with_breaks") : "Manual Reporting with Breaks";
-                        });
-
-                        : form_field("asyncs_active", &mut errors, html! {
-                            input(type = "checkbox", id = "asyncs_active", name = "asyncs_active", checked? = ctx.field_value("asyncs_active").map_or(event.asyncs_active, |value| value == "on"));
-                            label(for = "asyncs_active") : "Asyncs Active";
-                            label(class = "help") : " (Enable async qualifier system)";
-                        });
-
-                        : form_field("automated_asyncs", &mut errors, html! {
-                            input(type = "checkbox", id = "automated_asyncs", name = "automated_asyncs", checked? = ctx.field_value("automated_asyncs").map_or(event.automated_asyncs, |value| value == "on"));
-                            label(for = "automated_asyncs") : "Automated Asyncs";
-                            label(class = "help") : " (Discord thread-based async workflow)";
-                        });
-
-                        : form_field("swiss_standings", &mut errors, html! {
-                            input(type = "checkbox", id = "swiss_standings", name = "swiss_standings", checked? = ctx.field_value("swiss_standings").map_or(event.swiss_standings, |value| value == "on"));
-                            label(for = "swiss_standings") : "Swiss Standings";
-                            label(class = "help") : " (Use Swiss-style standings)";
-                        });
-
-                        : form_field("discord_events_enabled", &mut errors, html! {
-                            input(type = "checkbox", id = "discord_events_enabled", name = "discord_events_enabled", checked? = ctx.field_value("discord_events_enabled").map_or(event.discord_events_enabled, |value| value == "on"));
-                            label(for = "discord_events_enabled") : "Discord Events Enabled";
-                            label(class = "help") : " (Create Discord scheduled events for races)";
-                        });
-
-                        : form_field("discord_events_require_restream", &mut errors, html! {
-                            input(type = "checkbox", id = "discord_events_require_restream", name = "discord_events_require_restream", checked? = ctx.field_value("discord_events_require_restream").map_or(event.discord_events_require_restream, |value| value == "on"));
-                            label(for = "discord_events_require_restream") : "Discord Events Require Restream";
-                            label(class = "help") : " (Only create Discord events for restreamed races)";
-                        });
 
                         : form_field("emulator_settings_reminder", &mut errors, html! {
                             input(type = "checkbox", id = "emulator_settings_reminder", name = "emulator_settings_reminder", checked? = ctx.field_value("emulator_settings_reminder").map_or(event.emulator_settings_reminder, |value| value == "on"));
@@ -178,6 +143,89 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             input(type = "checkbox", id = "prevent_late_joins", name = "prevent_late_joins", checked? = ctx.field_value("prevent_late_joins").map_or(event.prevent_late_joins, |value| value == "on"));
                             label(for = "prevent_late_joins") : "Prevent Late Joins";
                             label(class = "help") : " (Block joining races after they start)";
+                        });
+
+                        h3 : "Additional Settings";
+
+                        : form_field("enter_url", &mut errors, html! {
+                            label(for = "enter_url") : "Enter URL";
+                            input(type = "url", id = "enter_url", name = "enter_url", value = ctx.field_value("enter_url").unwrap_or(
+                                &event.enter_url.as_ref().map(|u| u.to_string()).unwrap_or_default()
+                            ), style = "width: 100%; max-width: 600px;");
+                            label(class = "help") : " (URL for signing up/entering the event)";
+                        });
+
+                        : form_field("teams_url", &mut errors, html! {
+                            label(for = "teams_url") : "Teams URL";
+                            input(type = "url", id = "teams_url", name = "teams_url", value = ctx.field_value("teams_url").unwrap_or(
+                                &event.teams_url.as_ref().map(|u| u.to_string()).unwrap_or_default()
+                            ), style = "width: 100%; max-width: 600px;");
+                            label(class = "help") : " (External URL for teams information)";
+                        });
+
+                        : form_field("challonge_community", &mut errors, html! {
+                            label(for = "challonge_community") : "Challonge Community";
+                            input(type = "text", id = "challonge_community", name = "challonge_community", value = ctx.field_value("challonge_community").unwrap_or(
+                                &event.challonge_community.clone().unwrap_or_default()
+                            ), style = "width: 100%; max-width: 600px;");
+                        });
+
+                        : form_field("team_config", &mut errors, html! {
+                            label(for = "team_config") : "Team Configuration";
+                            select(id = "team_config", name = "team_config", style = "width: 100%; max-width: 600px;") {
+                                option(value = "solo", selected? = ctx.field_value("team_config").map_or(matches!(event.team_config, TeamConfig::Solo), |v| v == "solo")) : "Solo";
+                                option(value = "coop", selected? = ctx.field_value("team_config").map_or(matches!(event.team_config, TeamConfig::CoOp), |v| v == "coop")) : "Co-op";
+                                option(value = "tfbcoop", selected? = ctx.field_value("team_config").map_or(matches!(event.team_config, TeamConfig::TfbCoOp), |v| v == "tfbcoop")) : "TFB Co-op";
+                                option(value = "pictionary", selected? = ctx.field_value("team_config").map_or(matches!(event.team_config, TeamConfig::Pictionary), |v| v == "pictionary")) : "Pictionary";
+                                option(value = "multiworld", selected? = ctx.field_value("team_config").map_or(matches!(event.team_config, TeamConfig::Multiworld), |v| v == "multiworld")) : "Multiworld";
+                            }
+                        });
+
+                        : form_field("language", &mut errors, html! {
+                            label(for = "language") : "Language";
+                            select(id = "language", name = "language", style = "width: 100%; max-width: 600px;") {
+                                option(value = "en", selected? = ctx.field_value("language").map_or(event.language == English, |v| v == "en")) : "English";
+                                option(value = "fr", selected? = ctx.field_value("language").map_or(event.language == French, |v| v == "fr")) : "French";
+                                option(value = "de", selected? = ctx.field_value("language").map_or(event.language == German, |v| v == "de")) : "German";
+                                option(value = "pt", selected? = ctx.field_value("language").map_or(event.language == Portuguese, |v| v == "pt")) : "Portuguese";
+                            }
+                        });
+
+                        : form_field("default_game_count", &mut errors, html! {
+                            label(for = "default_game_count") : "Default Game Count";
+                            input(type = "number", id = "default_game_count", name = "default_game_count", min = "1", value = ctx.field_value("default_game_count").unwrap_or(&event.default_game_count.to_string()), style = "width: 100%; max-width: 600px;");
+                        });
+
+                        : form_field("open_stream_delay", &mut errors, html! {
+                            label(for = "open_stream_delay") : "Open Stream Delay";
+                            input(type = "text", id = "open_stream_delay", name = "open_stream_delay", value = ctx.field_value("open_stream_delay").unwrap_or(&unparse_duration(event.open_stream_delay)), style = "width: 100%; max-width: 600px;");
+                            label(class = "help") : " (Format: '1:23:45' or '1h 23m 45s')";
+                        });
+
+                        : form_field("invitational_stream_delay", &mut errors, html! {
+                            label(for = "invitational_stream_delay") : "Invitational Stream Delay";
+                            input(type = "text", id = "invitational_stream_delay", name = "invitational_stream_delay", value = ctx.field_value("invitational_stream_delay").unwrap_or(&unparse_duration(event.invitational_stream_delay)), style = "width: 100%; max-width: 600px;");
+                            label(class = "help") : " (Format: '1:23:45' or '1h 23m 45s')";
+                        });
+
+                        : form_field("hide_teams_tab", &mut errors, html! {
+                            input(type = "checkbox", id = "hide_teams_tab", name = "hide_teams_tab", checked? = ctx.field_value("hide_teams_tab").map_or(event.hide_teams_tab, |value| value == "on"));
+                            label(for = "hide_teams_tab") : "Hide Teams Tab";
+                        });
+
+                        : form_field("hide_races_tab", &mut errors, html! {
+                            input(type = "checkbox", id = "hide_races_tab", name = "hide_races_tab", checked? = ctx.field_value("hide_races_tab").map_or(event.hide_races_tab, |value| value == "on"));
+                            label(for = "hide_races_tab") : "Hide Races Tab";
+                        });
+
+                        : form_field("show_qualifier_times", &mut errors, html! {
+                            input(type = "checkbox", id = "show_qualifier_times", name = "show_qualifier_times", checked? = ctx.field_value("show_qualifier_times").map_or(event.show_qualifier_times, |value| value == "on"));
+                            label(for = "show_qualifier_times") : "Show Qualifier Times";
+                        });
+
+                        : form_field("show_opt_out", &mut errors, html! {
+                            input(type = "checkbox", id = "show_opt_out", name = "show_opt_out", checked? = ctx.field_value("show_opt_out").map_or(event.show_opt_out, |value| value == "on"));
+                            label(for = "show_opt_out") : "Show Opt-Out";
                         });
                     }, errors.clone(), "Save Basic Info");
                     
@@ -331,14 +379,20 @@ pub(crate) struct SetupForm {
     discord_async_channel: Option<String>,
     speedgaming_slug: Option<String>,
     listed: bool,
-    manual_reporting_with_breaks: bool,
-    asyncs_active: bool,
-    automated_asyncs: bool,
-    swiss_standings: bool,
-    discord_events_enabled: bool,
-    discord_events_require_restream: bool,
     emulator_settings_reminder: bool,
     prevent_late_joins: bool,
+    enter_url: Option<String>,
+    teams_url: Option<String>,
+    challonge_community: Option<String>,
+    team_config: String,
+    language: String,
+    default_game_count: i16,
+    open_stream_delay: String,
+    invitational_stream_delay: String,
+    hide_teams_tab: bool,
+    hide_races_tab: bool,
+    show_qualifier_times: bool,
+    show_opt_out: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/setup", data = "<form>")]
@@ -558,6 +612,84 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             // Handle optional string fields (empty string -> None)
             let short_name = value.short_name.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
             let speedgaming_slug = value.speedgaming_slug.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+            let challonge_community = value.challonge_community.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+
+            // Parse additional URLs
+            let enter_url = if let Some(enter_url_str) = &value.enter_url {
+                if !enter_url_str.is_empty() {
+                    match enter_url_str.parse::<Url>() {
+                        Ok(u) => Some(u),
+                        Err(_) => {
+                            form.context.push_error(form::Error::validation("Invalid enter URL format"));
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let teams_url = if let Some(teams_url_str) = &value.teams_url {
+                if !teams_url_str.is_empty() {
+                    match teams_url_str.parse::<Url>() {
+                        Ok(u) => Some(u),
+                        Err(_) => {
+                            form.context.push_error(form::Error::validation("Invalid teams URL format"));
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Parse team_config enum
+            let team_config = match value.team_config.as_str() {
+                "solo" => TeamConfig::Solo,
+                "coop" => TeamConfig::CoOp,
+                "tfbcoop" => TeamConfig::TfbCoOp,
+                "pictionary" => TeamConfig::Pictionary,
+                "multiworld" => TeamConfig::Multiworld,
+                _ => {
+                    form.context.push_error(form::Error::validation("Invalid team configuration"));
+                    TeamConfig::Solo // default fallback
+                }
+            };
+
+            // Parse language enum
+            let language = match value.language.as_str() {
+                "en" => English,
+                "fr" => French,
+                "de" => German,
+                "pt" => Portuguese,
+                _ => {
+                    form.context.push_error(form::Error::validation("Invalid language"));
+                    English // default fallback
+                }
+            };
+
+            // Parse durations
+            let open_stream_delay = if let Some(time) = parse_duration(&value.open_stream_delay, None) {
+                Some(time)
+            } else {
+                form.context.push_error(form::Error::validation("Duration must be formatted like '1:23:45' or '1h 23m 45s'.").with_name("open_stream_delay"));
+                None
+            };
+
+            let invitational_stream_delay = if let Some(time) = parse_duration(&value.invitational_stream_delay, None) {
+                Some(time)
+            } else {
+                form.context.push_error(form::Error::validation("Duration must be formatted like '1:23:45' or '1h 23m 45s'.").with_name("invitational_stream_delay"));
+                None
+            };
+
+            if form.context.errors().next().is_some() {
+                return Ok(RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?));
+            }
 
             // Update database
             sqlx::query!(r#"
@@ -567,11 +699,13 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                     discord_race_results_channel = $9, discord_volunteer_info_channel = $10,
                     discord_organizer_channel = $11, discord_scheduling_channel = $12,
                     discord_async_channel = $13, short_name = $14, speedgaming_slug = $15,
-                    listed = $16, manual_reporting_with_breaks = $17, asyncs_active = $18,
-                    automated_asyncs = $19, swiss_standings = $20, discord_events_enabled = $21,
-                    discord_events_require_restream = $22, emulator_settings_reminder = $23,
-                    prevent_late_joins = $24
-                WHERE series = $25 AND event = $26
+                    listed = $16, emulator_settings_reminder = $17,
+                    prevent_late_joins = $18, enter_url = $19, teams_url = $20,
+                    challonge_community = $21, team_config = $22, language = $23,
+                    default_game_count = $24, open_stream_delay = $25, invitational_stream_delay = $26,
+                    hide_teams_tab = $27, hide_races_tab = $28, show_qualifier_times = $29,
+                    show_opt_out = $30
+                WHERE series = $31 AND event = $32
             "#,
                 value.display_name,
                 start,
@@ -589,14 +723,20 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 short_name,
                 speedgaming_slug,
                 value.listed,
-                value.manual_reporting_with_breaks,
-                value.asyncs_active,
-                value.automated_asyncs,
-                value.swiss_standings,
-                value.discord_events_enabled,
-                value.discord_events_require_restream,
                 value.emulator_settings_reminder,
                 value.prevent_late_joins,
+                enter_url.map(|u| u.to_string()),
+                teams_url.map(|u| u.to_string()),
+                challonge_community,
+                team_config as _,
+                language as _,
+                value.default_game_count,
+                open_stream_delay.unwrap() as _,
+                invitational_stream_delay.unwrap() as _,
+                value.hide_teams_tab,
+                value.hide_races_tab,
+                value.show_qualifier_times,
+                value.show_opt_out,
                 event_data.series as _,
                 &event_data.event
             ).execute(&mut *transaction).await?;
