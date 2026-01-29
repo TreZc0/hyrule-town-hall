@@ -1573,7 +1573,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                     msg.push(" with unknown start.gg user ID ");
                                     msg.push_mono_safe(&startgg_id.0);
                                     msg.push(". ");
-                                    msg.mention(&FENHL);
+                                    msg.mention(&ADMIN_USER);
                                     msg.push(" please investigate.");
                                 }
                                 if let Some(organizer_channel) = data.discord_organizer_channel {
@@ -1591,7 +1591,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                     .push_safe(&data.display_name)
                                     .push(" without start.gg account. Please go to the start.gg tournament settings › Attendees › Add Attendee, click the search field, then click “Or add someone without an account”, then enter ")
                                     .push_mono_safe(me.display_name())
-                                    .push(" as the gamertag. Please notify Fenhl once this is done so they can connect the attendee to the Mido's House account.")
+                                    .push(" as the gamertag. Please notify TreZ once this is done so they can connect the attendee to the HTH account.")
                                     .build();
                                 if let Some(organizer_channel) = data.discord_organizer_channel {
                                     organizer_channel.say(&*discord_ctx, msg).await?;

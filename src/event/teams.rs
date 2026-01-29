@@ -344,32 +344,29 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 }
             }
             let teams = Team::for_event(&mut *transaction, data.series, &data.event).await?;
-            let scores = if data.is_started(&mut *transaction).await? {
-                let mut entrant_scores = Vec::with_capacity(teams.len());
-                for team in &teams {
-                    let user = team.members(&mut *transaction).await?.into_iter().exactly_one().expect("SGL-style qualifiers in team-based event");
-                    let racetime_id = user.racetime.as_ref().expect("SGL-style qualifiers with entrant without racetime.gg account").id.clone();
-                    let Some(score) = scores.remove(&MemberUser::RaceTime { id: racetime_id.clone(), url: String::default(), name: String::default() }) else {
-                        return Err(cal::Error::UnqualifiedEntrant {
-                            series: data.series,
-                            event: data.event.to_string(),
-                            racetime_id,
-                        })
-                    };
-                    entrant_scores.push((MemberUser::MidosHouse(user), score));
+            for team in &teams {
+                let user = team.members(&mut *transaction).await?.into_iter().exactly_one().expect("SGL-style qualifiers in team-based event");
+                let racetime_id = user.racetime.as_ref().expect("SGL-style qualifiers with entrant without racetime.gg account").id.clone();
+                if let Some(score) = scores.remove(&MemberUser::RaceTime { id: racetime_id.clone(), url: String::default(), name: String::default() }) {
+                    scores.insert(MemberUser::MidosHouse(user), score);
+                } else {
+                    return Err(cal::Error::UnqualifiedEntrant {
+                        series: data.series,
+                        event: data.event.to_string(),
+                        racetime_id,
+                    })
                 }
-                Either::Left(entrant_scores.into_iter())
+            }
+            if data.is_started(&mut *transaction).await? {
+                scores.retain(|user, _| matches!(user, MemberUser::MidosHouse(_)));
             } else {
                 let opt_outs = sqlx::query_scalar!("SELECT racetime_id FROM opt_outs WHERE series = $1 AND event = $2", data.series as _, &data.event).fetch_all(&mut **transaction).await?;
-                Either::Right(
-                    scores.into_iter()
-                        .filter(move |(user, _)| match user {
-                            MemberUser::RaceTime { id, .. } => !opt_outs.contains(id),
-                            MemberUser::MidosHouse(_) | MemberUser::Newcomer => true,
-                        })
-                )
-            };
-            let mut signups = Vec::with_capacity(scores.size_hint().0);
+                scores.retain(move |user, _| match user {
+                    MemberUser::RaceTime { id, .. } => !opt_outs.contains(id),
+                    MemberUser::MidosHouse(_) | MemberUser::Newcomer => true,
+                });
+            }
+            let mut signups = Vec::with_capacity(scores.len());
             for (user, mut scores) in scores {
                 signups.push(SignupsTeam {
                     team: None, //TODO
