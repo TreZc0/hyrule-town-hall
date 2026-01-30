@@ -143,6 +143,7 @@ pub(crate) async fn parse_user(transaction: &mut Transaction<'_, Postgres>, http
 
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(unix, derive(Protocol))]
+#[cfg_attr(unix, async_proto(via = String))]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub(crate) enum VersionedBranch {
     Pinned {
@@ -161,6 +162,66 @@ pub(crate) enum VersionedBranch {
         identifier: Cow<'static, str>,
         github_url: Cow<'static, str>,
     },
+}
+
+#[cfg(unix)]
+impl From<VersionedBranch> for String {
+    fn from(branch: VersionedBranch) -> Self {
+        use serde_json::json;
+        let value = match branch {
+            VersionedBranch::Pinned { version } => json!({
+                "type": "pinned",
+                "version": version.to_string()
+            }),
+            VersionedBranch::Latest { branch } => json!({
+                "type": "latest",
+                "branch": format!("{branch:?}")
+            }),
+            VersionedBranch::Custom { github_username, branch } => json!({
+                "type": "custom",
+                "githubUsername": github_username,
+                "branch": branch
+            }),
+            VersionedBranch::Tww { identifier, github_url } => json!({
+                "type": "tww",
+                "identifier": identifier,
+                "githubUrl": github_url
+            }),
+        };
+        serde_json::to_string(&value).expect("failed to serialize VersionedBranch")
+    }
+}
+
+#[cfg(unix)]
+impl From<String> for VersionedBranch {
+    fn from(s: String) -> Self {
+        use serde_json::Value;
+        let value: Value = serde_json::from_str(&s).expect("failed to parse JSON");
+        let type_str = value.get("type").and_then(|v| v.as_str()).expect("missing type field");
+        match type_str {
+            "pinned" => {
+                let version_str = value.get("version").and_then(|v| v.as_str()).expect("missing version field");
+                let version = version_str.parse().expect("failed to parse version");
+                VersionedBranch::Pinned { version }
+            }
+            "latest" => {
+                let branch_str = value.get("branch").and_then(|v| v.as_str()).expect("missing branch field");
+                let branch = branch_str.parse().expect("failed to parse branch");
+                VersionedBranch::Latest { branch }
+            }
+            "custom" => {
+                let github_username = value.get("githubUsername").and_then(|v| v.as_str()).expect("missing githubUsername field").to_owned().into();
+                let branch = value.get("branch").and_then(|v| v.as_str()).expect("missing branch field").to_owned().into();
+                VersionedBranch::Custom { github_username, branch }
+            }
+            "tww" => {
+                let identifier = value.get("identifier").and_then(|v| v.as_str()).expect("missing identifier field").to_owned().into();
+                let github_url = value.get("githubUrl").and_then(|v| v.as_str()).expect("missing githubUrl field").to_owned().into();
+                VersionedBranch::Tww { identifier, github_url }
+            }
+            _ => panic!("unknown VersionedBranch type: {}", type_str),
+        }
+    }
 }
 
 impl VersionedBranch {
