@@ -620,7 +620,7 @@ impl Race {
     }
 
     pub(crate) async fn for_event(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, event: &event::Data<'_>) -> Result<Vec<Self>, Error> {
-        //let now = Utc::now(); // regular weekly schedule suspended during s/9 qualifiers
+        let now = Utc::now();
         let mut races = Vec::default();
         for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE series = $1 AND event = $2"#, event.series as _, &event.event).fetch_all(&mut **transaction).await? {
             races.push(Self::from_id(&mut *transaction, http_client, id).await?);
@@ -737,6 +737,49 @@ impl Race {
                 //TODO add archives of old Standard tournaments and Challenge Cups?
                 _ => {} // new events are scheduled via Mido's House
             },
+            Series::TwwrMain => match &*event.event {
+                "w" => for kind in all::<twwrmain::WeeklyKind>() {
+                    // Create races for the next two upcoming weeklies (current + one week in advance)
+                    let next_weekly = kind.next_weekly_after(now);
+                    let weekly_after = kind.next_weekly_after(next_weekly);
+                    for weekly_time in [next_weekly, weekly_after] {
+                        let schedule = RaceSchedule::Live { start: weekly_time.to_utc(), end: None, room: None };
+                        if !races.iter().any(|race| race.series == event.series && race.event == event.event && race.schedule.start_matches(&schedule)) {
+                            let race = Race {
+                                id: Id::new(&mut *transaction).await?,
+                                series: event.series,
+                                event: event.event.to_string(),
+                                source: Source::Manual,
+                                entrants: Entrants::Open,
+                                phase: None,
+                                round: Some(format!("{kind} Weekly")),
+                                game: None,
+                                scheduling_thread: None,
+                                schedule_updated_at: None,
+                                fpa_invoked: false,
+                                breaks_used: false,
+                                draft: None,
+                                seed: seed::Data::default(),
+                                video_urls: HashMap::default(),
+                                restreamers: HashMap::default(),
+                                last_edited_by: None,
+                                last_edited_at: None,
+                                ignored: false,
+                                schedule_locked: false,
+                                notified: false,
+                                async_notified_1: false,
+                                async_notified_2: false,
+                                async_notified_3: false,
+                                discord_scheduled_event_id: None,
+                                schedule,
+                            };
+                            race.save(&mut *transaction).await?;
+                            races.push(race);
+                        }
+                    }
+                },
+                _ => {} // other TWWR events are scheduled via Mido's House
+            },
             | Series::AlttprDe
             | Series::CoOp //TODO add archives of seasons 1 and 2?
             | Series::CopaDoBrasil
@@ -748,7 +791,6 @@ impl Race {
             | Series::SpeedGaming
             | Series::TournoiFrancophone
             | Series::TriforceBlitz
-            | Series::TwwrMain
             | Series::WeTryToBeBetter
                 => {} // these series are now scheduled via Mido's House
         }

@@ -20,9 +20,13 @@ INSERT INTO game_racetime_connection (game_id, category_slug, client_id, client_
 -- Add events (settings_string to be populated with actual permalinks)
 INSERT INTO events (
     series, event, display_name, short_name, listed,
-    team_config, language, default_game_count, settings_string
+    team_config, language, default_game_count, settings_string, force_custom_role_binding
 ) VALUES
 ('twwrmain', 'w', 'TWWR Weeklies', 'TWWR Weekly', true,
- 'solo', 'en', 1, NULL),
+ 'solo', 'en', 1, 'MS4xMC4wAEEAFwMiAHPowgMMsACCcQ8AAMkHAAAA', false),
 ('twwrmain', 'miniblins26', 'Miniblins 2026', 'Miniblins 2026', true,
- 'solo', 'en', 1, NULL);
+ 'solo', 'en', 1, 'MS4xMC4wAEEAFwMiAHPowgMMsACCcQ8AAMkHAAAA', false);
+ 
+ UPDATE events
+    SET rando_version = '{"type": "tww", "identifier": "wwrando", "githubUrl": "https://github.com/LagoLunatic/wwrando"}'::jsonb
+    WHERE series = 'twwrmain';
