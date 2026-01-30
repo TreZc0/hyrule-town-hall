@@ -585,9 +585,17 @@ impl Goal {
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => panic!("randomizer version for this goal is unused"),
             Self::Crosskeys2025 => panic!("randomizer version for this goal is unused"),
             Self::MysteryD20 => panic!("randomizer version for this goal is unused"),
-            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => VersionedBranch::Tww {
-                identifier: Cow::Borrowed("wwrando-dev-tanjo3"),
-                github_url: Cow::Borrowed("https://github.com/tanjo3/wwrando/releases"),
+            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => if_chain! {
+                if let Some(event) = event;
+                if let Some(ref rando_version) = event.rando_version;
+                then {
+                    rando_version.clone()
+                } else {
+                    // Default fallback if not configured in database
+                    VersionedBranch::Tww {
+                        identifier: Cow::Borrowed("wwrando-dev-tanjo3"),                                                                                                                                                              github_url: Cow::Borrowed("https://github.com/tanjo3/wwrando/releases"),
+                    }
+                }
             },
             Self::PicRs2 | Self::Rsl => panic!("randomizer version for this goal must be parsed from RSL script"),
         }
@@ -1410,8 +1418,12 @@ pub(crate) struct SeedMetadata {
 
 #[derive(Deserialize)]
 struct TwwrGenerateResponse {
+    #[allow(dead_code)]
+    file_name: String,
     permalink: String,
     seed_hash: String,
+    #[allow(dead_code)]
+    spoiler_log_url: Option<String>,
 }
 
 pub(crate) struct GlobalState {
@@ -1463,20 +1475,25 @@ impl GlobalState {
         let (update_tx, update_rx) = mpsc::channel(128);
         tokio::spawn(async move {
             update_tx.send(SeedRollUpdate::Started).await.allow_unreceived();
-            match self.http_client.post("https://twwrando.xyz/api/v1/generate") //TODO use correct API host
-                .json(&json!({
-                    "username": "HTH",
-                    "settings_string": settings_string,
-                    "randomizer_path": if let Some(VersionedBranch::Tww { ref identifier, .. }) = version { Some(&**identifier) } else { None },
-                    "generate_spoiler_log": match unlock_spoiler_log {
-                        UnlockSpoilerLog::Now | UnlockSpoilerLog::Progression | UnlockSpoilerLog::After => true,
-                        UnlockSpoilerLog::Never => false,
-                    },
-                }))
+            let randomizer_path = if let Some(VersionedBranch::Tww { ref identifier, .. }) = version {
+                &**identifier
+            } else {
+                "wwrando"
+            };
+            let generate_spoiler_log = match unlock_spoiler_log {
+                UnlockSpoilerLog::Now | UnlockSpoilerLog::Progression | UnlockSpoilerLog::After => "true",
+                UnlockSpoilerLog::Never => "false",
+            };
+            let url = format!(
+                "https://seedbot.twwrando.com/generate?randomizer_path={}&permalink={}&prefix=HTH&generate_spoiler_log={}",
+                randomizer_path, settings_string, generate_spoiler_log
+            );
+            match self.http_client.post(&url)
+                .header("accept", "application/json")
                 .send().await {
                 Ok(response) => match response.detailed_error_for_status().await {
                     Ok(response) => match response.json::<TwwrGenerateResponse>().await {
-                        Ok(TwwrGenerateResponse { permalink, seed_hash }) => {
+                        Ok(TwwrGenerateResponse { permalink, seed_hash, .. }) => {
                             update_tx.send(SeedRollUpdate::Done {
                                 seed: seed::Data {
                                     file_hash: None,
