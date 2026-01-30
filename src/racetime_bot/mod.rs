@@ -167,6 +167,13 @@ pub(crate) enum VersionedBranch {
 #[cfg(unix)]
 impl From<VersionedBranch> for String {
     fn from(branch: VersionedBranch) -> Self {
+        String::from(&branch)
+    }
+}
+
+#[cfg(unix)]
+impl From<&VersionedBranch> for String {
+    fn from(branch: &VersionedBranch) -> Self {
         use serde_json::json;
         let value = match branch {
             VersionedBranch::Pinned { version } => json!({
@@ -175,7 +182,7 @@ impl From<VersionedBranch> for String {
             }),
             VersionedBranch::Latest { branch } => json!({
                 "type": "latest",
-                "branch": format!("{branch:?}")
+                "branch": branch
             }),
             VersionedBranch::Custom { github_username, branch } => json!({
                 "type": "custom",
@@ -205,8 +212,7 @@ impl From<String> for VersionedBranch {
                 VersionedBranch::Pinned { version }
             }
             "latest" => {
-                let branch_str = value.get("branch").and_then(|v| v.as_str()).expect("missing branch field");
-                let branch = branch_str.parse().expect("failed to parse branch");
+                let branch = serde_json::from_value(value.get("branch").cloned().expect("missing branch field")).expect("failed to parse branch");
                 VersionedBranch::Latest { branch }
             }
             "custom" => {

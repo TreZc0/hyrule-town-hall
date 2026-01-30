@@ -1568,7 +1568,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                 if let startgg::user_slug_query::ResponseData { user: Some(startgg::user_slug_query::UserSlugQueryUser { discriminator: Some(slug) }) } = response {
                                     msg.push(" with start.gg user slug ");
                                     msg.push_mono_safe(slug);
-                                    msg.push(". Please go to the start.gg tournament settings › Attendees › Add Attendee, paste the user slug into the search field, and select the first result.");
+                                    msg.push(". Unless they signed up themselves, please go to the start.gg tournament settings › Attendees › Add Attendee, paste the user slug into the search field, and select the first result.");
                                 } else {
                                     msg.push(" with unknown start.gg user ID ");
                                     msg.push_mono_safe(&startgg_id.0);
