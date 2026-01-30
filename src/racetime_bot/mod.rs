@@ -142,6 +142,7 @@ pub(crate) async fn parse_user(transaction: &mut Transaction<'_, Postgres>, http
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(unix, derive(Protocol))]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub(crate) enum VersionedBranch {
     Pinned {

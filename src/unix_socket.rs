@@ -209,7 +209,7 @@ pub(crate) async fn listen(mut shutdown: rocket::Shutdown, clean_shutdown: Arc<M
                                     }
                                     Ok(SeedCommandParseResult::QueueExisting { data, description, .. }) => {
                                         Some(SeedRollUpdate::Message(description)).write(&mut sock).await.expect("error writing to UNIX socket");
-                                        Some(SeedRollUpdate::Done { rsl_preset: None, unlock_spoiler_log: UnlockSpoilerLog::After, seed: data }).write(&mut sock).await.expect("error writing to UNIX socket");
+                                        Some(SeedRollUpdate::Done { rsl_preset: None, version: None, unlock_spoiler_log: UnlockSpoilerLog::After, seed: data }).write(&mut sock).await.expect("error writing to UNIX socket");
                                         None::<SeedRollUpdate>.write(&mut sock).await.expect("error writing to UNIX socket");
                                         match transaction.commit().await {
                                             Ok(()) => {}
