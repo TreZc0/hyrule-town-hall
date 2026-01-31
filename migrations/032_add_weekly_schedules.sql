@@ -9,6 +9,9 @@ CREATE TABLE public.weekly_schedules (
     timezone TEXT NOT NULL,
     anchor_date DATE NOT NULL,
     active BOOLEAN NOT NULL DEFAULT TRUE,
+    settings_description TEXT,
+    notification_channel_id BIGINT,
+    room_open_minutes_before SMALLINT NOT NULL DEFAULT 30,
     UNIQUE (series, event, name),
     FOREIGN KEY (series, event) REFERENCES public.events(series, event)
 );

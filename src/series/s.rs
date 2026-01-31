@@ -158,7 +158,7 @@ pub(crate) fn weekly_chest_appearances() -> ChestAppearances {
 
     WEIGHTS.choose_weighted(&mut rng(), |(_, weight)| *weight).expect("failed to choose random chest textures").0
 }
-pub(crate) const SHORT_WEEKLY_SETTINGS: &str = "variety";
+
 fn long_weekly_settings() -> RawHtml<String> {
     html! {
         p {

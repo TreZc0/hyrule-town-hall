@@ -1608,7 +1608,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                 // Start a new transaction for room creation
                                                 let mut transaction = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?;
                                                 lock!(new_room_lock = new_room_lock; {
-                                                    if let Some((_, msg)) = racetime_bot::create_room(&mut transaction, ctx, &racetime_host, &racetime_config.client_id, &racetime_config.client_secret, &http_client, clean_shutdown, &cal_event, &event).await? {
+                                                    if let Some((_, msg, _notification_channel)) = racetime_bot::create_room(&mut transaction, ctx, &racetime_host, &racetime_config.client_id, &racetime_config.client_secret, &http_client, clean_shutdown, &cal_event, &event).await? {
                                                         if let Some(channel) = event.discord_race_room_channel {
                                                             if let Err(e) = channel.say(ctx, &msg).await {
                                                                 eprintln!("Failed to post race message to Discord race room channel: {}", e);
@@ -1825,7 +1825,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     )
                                                 };
                                                 lock!(new_room_lock = new_room_lock; {
-                                                    let should_post_regular_response = if let Some((is_room_url, mut msg)) = racetime_bot::create_room(&mut transaction, ctx, &racetime_host, &racetime_config.client_id, &racetime_config.client_secret, &http_client, clean_shutdown, &cal_event, &event).await? {
+                                                    let should_post_regular_response = if let Some((is_room_url, mut msg, _notification_channel)) = racetime_bot::create_room(&mut transaction, ctx, &racetime_host, &racetime_config.client_id, &racetime_config.client_secret, &http_client, clean_shutdown, &cal_event, &event).await? {
                                                         if is_room_url && cal_event.is_private_async_part() {
                                                             msg = match cal_event.race.entrants {
                                                                 Entrants::Two(_) => format!("unlisted room for first async half: {msg}"),

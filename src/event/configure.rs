@@ -1,12 +1,16 @@
-use crate::{
-    event::{
-        Data,
-        Tab,
+use {
+    serenity::model::id::ChannelId,
+    crate::{
+        discord_bot::PgSnowflake,
+        event::{
+            Data,
+            Tab,
+        },
+        prelude::*,
+        racetime_bot::VersionedBranch,
+        startgg,
+        user::DisplaySource,
     },
-    prelude::*,
-    racetime_bot::VersionedBranch,
-    startgg,
-    user::DisplaySource,
 };
 use rocket::response::content::RawText;
 use serde::Serializer;
@@ -59,10 +63,6 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                     p {
                         : "Preroll mode: ";
                         : format!("{:?}", s::WEEKLY_PREROLL_MODE);
-                    }
-                    p {
-                        : "Short settings description (for race room welcome message): ";
-                        : s::SHORT_WEEKLY_SETTINGS;
                     }
                     p {
                         : "Randomizer version: ";
@@ -855,6 +855,30 @@ impl<'v> WeeklySchedulesFormDefaults<'v> {
             None
         }
     }
+
+    fn add_settings_description(&self) -> Option<&str> {
+        if let Self::AddContext(ctx) = self {
+            ctx.field_value("settings_description")
+        } else {
+            None
+        }
+    }
+
+    fn add_room_open_minutes(&self) -> Option<&str> {
+        if let Self::AddContext(ctx) = self {
+            ctx.field_value("room_open_minutes_before")
+        } else {
+            None
+        }
+    }
+
+    fn add_notification_channel(&self) -> Option<&str> {
+        if let Self::AddContext(ctx) = self {
+            ctx.field_value("notification_channel_id")
+        } else {
+            None
+        }
+    }
 }
 
 fn frequency_display(days: i16) -> &'static str {
@@ -968,6 +992,21 @@ async fn weekly_schedules_form(mut transaction: Transaction<'_, Postgres>, me: O
                         input(type = "date", id = "anchor_date", name = "anchor_date", value? = defaults.add_anchor_date());
                         label(class = "help") : "(The first occurrence date; future races are calculated from this)";
                     });
+                    : form_field("settings_description", &mut errors, html! {
+                        label(for = "settings_description") : "Settings Description:";
+                        input(type = "text", id = "settings_description", name = "settings_description", value? = defaults.add_settings_description(), placeholder = "e.g., variety, standard");
+                        label(class = "help") : "(Short description shown in race room welcome message)";
+                    });
+                    : form_field("notification_channel_id", &mut errors, html! {
+                        label(for = "notification_channel_id") : "Notification Channel ID:";
+                        input(type = "text", id = "notification_channel_id", name = "notification_channel_id", value? = defaults.add_notification_channel(), placeholder = "Discord channel ID (optional)");
+                        label(class = "help") : "(Discord channel to post race notifications when room opens; leave empty for default)";
+                    });
+                    : form_field("room_open_minutes_before", &mut errors, html! {
+                        label(for = "room_open_minutes_before") : "Open Room (minutes before):";
+                        input(type = "number", id = "room_open_minutes_before", name = "room_open_minutes_before", value = defaults.add_room_open_minutes().unwrap_or("30"), min = "1", max = "60");
+                        label(class = "help") : "(How many minutes before the race start time to open the room)";
+                    });
                     : form_field("active", &mut errors, html! {
                         input(type = "checkbox", id = "active", name = "active", checked? = defaults.add_active().unwrap_or(true));
                         label(for = "active") : "Active";
@@ -1015,6 +1054,12 @@ pub(crate) struct AddWeeklyScheduleForm {
     timezone: String,
     anchor_date: String,
     active: bool,
+    #[field(default = None)]
+    settings_description: Option<String>,
+    #[field(default = None)]
+    notification_channel_id: Option<String>,
+    #[field(default = Some(30))]
+    room_open_minutes_before: Option<i16>,
 }
 
 #[rocket::post("/event/<series>/<event>/configure/weekly-schedules", data = "<form>")]
@@ -1059,6 +1104,21 @@ pub(crate) async fn weekly_schedule_add(pool: &State<PgPool>, me: User, uri: Ori
                 None
             }
         };
+        let notification_channel_id = value.notification_channel_id.as_ref()
+            .and_then(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    match trimmed.parse::<u64>() {
+                        Ok(id) => Some(PgSnowflake(ChannelId::new(id))),
+                        Err(_) => {
+                            form.context.push_error(form::Error::validation("Invalid Discord channel ID. Must be a number.").with_name("notification_channel_id"));
+                            None
+                        }
+                    }
+                }
+            });
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::AddContext(form.context)).await?)
         } else {
@@ -1072,6 +1132,9 @@ pub(crate) async fn weekly_schedule_add(pool: &State<PgPool>, me: User, uri: Ori
                 timezone: timezone.unwrap(),
                 anchor_date: anchor_date.unwrap(),
                 active: value.active,
+                settings_description: value.settings_description.as_ref().and_then(|s| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) }),
+                notification_channel_id,
+                room_open_minutes_before: value.room_open_minutes_before.unwrap_or(30),
             };
             schedule.save(&mut transaction).await?;
             transaction.commit().await?;
@@ -1158,6 +1221,23 @@ async fn weekly_schedule_edit_form(mut transaction: Transaction<'_, Postgres>, m
                         label(for = "anchor_date") : "Anchor Date:";
                         input(type = "date", id = "anchor_date", name = "anchor_date", value = ctx.field_value("anchor_date").unwrap_or(&schedule.anchor_date.format("%Y-%m-%d").to_string()));
                     });
+                    : form_field("settings_description", &mut errors, html! {
+                        label(for = "settings_description") : "Settings Description:";
+                        input(type = "text", id = "settings_description", name = "settings_description", value = ctx.field_value("settings_description").unwrap_or(schedule.settings_description.as_deref().unwrap_or("")), placeholder = "e.g., variety, standard");
+                        label(class = "help") : "(Short description shown in race room welcome message)";
+                    });
+                    @let notification_channel_str = schedule.notification_channel_id.map(|PgSnowflake(id)| id.get().to_string()).unwrap_or_default();
+                    : form_field("notification_channel_id", &mut errors, html! {
+                        label(for = "notification_channel_id") : "Notification Channel ID:";
+                        input(type = "text", id = "notification_channel_id", name = "notification_channel_id", value = ctx.field_value("notification_channel_id").unwrap_or(&notification_channel_str), placeholder = "Discord channel ID (optional)");
+                        label(class = "help") : "(Discord channel to post race notifications when room opens; leave empty for default)";
+                    });
+                    : form_field("room_open_minutes_before", &mut errors, html! {
+                        label(for = "room_open_minutes_before") : "Open Room (minutes before):";
+                        @let current_minutes = ctx.field_value("room_open_minutes_before").and_then(|v| v.parse::<i16>().ok()).unwrap_or(schedule.room_open_minutes_before);
+                        input(type = "number", id = "room_open_minutes_before", name = "room_open_minutes_before", value = current_minutes.to_string(), min = "1", max = "60");
+                        label(class = "help") : "(How many minutes before the race start time to open the room)";
+                    });
                     : form_field("active", &mut errors, html! {
                         input(type = "checkbox", id = "active", name = "active", checked? = ctx.field_value("active").map_or(schedule.active, |v| v == "on"));
                         label(for = "active") : "Active";
@@ -1208,6 +1288,12 @@ pub(crate) struct EditWeeklyScheduleForm {
     timezone: String,
     anchor_date: String,
     active: bool,
+    #[field(default = None)]
+    settings_description: Option<String>,
+    #[field(default = None)]
+    notification_channel_id: Option<String>,
+    #[field(default = Some(30))]
+    room_open_minutes_before: Option<i16>,
 }
 
 #[rocket::post("/event/<series>/<event>/configure/weekly-schedules/<schedule_id>/edit", data = "<form>")]
@@ -1253,6 +1339,21 @@ pub(crate) async fn weekly_schedule_edit_post(pool: &State<PgPool>, me: User, ur
                 None
             }
         };
+        let notification_channel_id = value.notification_channel_id.as_ref()
+            .and_then(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    match trimmed.parse::<u64>() {
+                        Ok(id) => Some(PgSnowflake(ChannelId::new(id))),
+                        Err(_) => {
+                            form.context.push_error(form::Error::validation("Invalid Discord channel ID. Must be a number.").with_name("notification_channel_id"));
+                            None
+                        }
+                    }
+                }
+            });
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(weekly_schedule_edit_form(transaction, Some(me), uri, csrf.as_ref(), data, schedule, form.context).await?)
         } else {
@@ -1262,6 +1363,9 @@ pub(crate) async fn weekly_schedule_edit_post(pool: &State<PgPool>, me: User, ur
             schedule.timezone = timezone.unwrap();
             schedule.anchor_date = anchor_date.unwrap();
             schedule.active = value.active;
+            schedule.settings_description = value.settings_description.as_ref().and_then(|s| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) });
+            schedule.notification_channel_id = notification_channel_id;
+            schedule.room_open_minutes_before = value.room_open_minutes_before.unwrap_or(30);
             schedule.save(&mut transaction).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(weekly_schedules_get(series, event))))

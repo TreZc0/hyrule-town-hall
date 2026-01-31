@@ -51,10 +51,11 @@ use {
     crate::{
         cal::Entrant,
         config::{Config, ConfigRaceTime},
-        discord_bot::ADMIN_USER,
+        discord_bot::{ADMIN_USER, PgSnowflake},
         game::GameRacetimeConnection,
         hash_icon_db::HashIconData,
         prelude::*,
+        weekly::WeeklySchedule,
     },
 };
 #[cfg(unix)] use async_proto::Protocol;
@@ -3842,9 +3843,14 @@ impl RaceHandler<GlobalState> for Handler {
                         )
                     } else {
                         if let (true, Some(weekly_name)) = (cal_event.race.phase.is_none(), cal_event.race.round.as_deref().and_then(|round| round.strip_suffix(" Weekly"))) {
+                            let settings_desc = if let Ok(Some(schedule)) = WeeklySchedule::for_round(&mut transaction, event.series, &event.event, weekly_name).await {
+                                schedule.settings_description.unwrap_or_else(|| "standard".to_string())
+                            } else {
+                                "standard".to_string()
+                            };
                             format!(
                                 "Welcome to the {weekly_name} weekly! Current settings: {}. See {} for details.",
-                                s::SHORT_WEEKLY_SETTINGS,
+                                settings_desc,
                                 uri!(base_uri(), event::info(event.series, &*event.event)),
                             )
                         } else {
@@ -5854,7 +5860,7 @@ impl RaceHandler<GlobalState> for Handler {
     }
 }
 
-pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, discord_ctx: &DiscordCtx, host_info: &racetime::HostInfo, client_id: &str, client_secret: &str, http_client: &reqwest::Client, clean_shutdown: Arc<Mutex<CleanShutdown>>, cal_event: &cal::Event, event: &event::Data<'static>) -> Result<Option<(bool, String)>, Error> {
+pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, discord_ctx: &DiscordCtx, host_info: &racetime::HostInfo, client_id: &str, client_secret: &str, http_client: &reqwest::Client, clean_shutdown: Arc<Mutex<CleanShutdown>>, cal_event: &cal::Event, event: &event::Data<'static>) -> Result<Option<(bool, String, Option<PgSnowflake<ChannelId>>)>, Error> {
     // Get the game_id for the event's series
     let game_id = get_game_id_from_event(&mut *transaction, &event.series.to_string()).await.to_racetime()?;
     
@@ -6057,6 +6063,20 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
         return Ok(None);
     }
     
+    // Check if this is a weekly race and get its notification channel from the database
+    let weekly_notification_channel = if cal_event.race.phase.is_none() {
+        if let Some(round) = cal_event.race.round.as_deref().and_then(|r| r.strip_suffix(" Weekly")) {
+            WeeklySchedule::for_round(&mut *transaction, event.series, &event.event, round)
+                .await
+                .to_racetime()?
+                .and_then(|s| s.notification_channel_id)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let is_room_url = room_url.is_ok();
     let msg = if_chain! {
         if let French = event.language;
@@ -6102,7 +6122,6 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
             msg.push('>');
             msg.build()
         } else {
-            let ping_standard = event.series == Series::Standard && cal_event.race.entrants == Entrants::Open && event.discord_guild == Some(OOTR_DISCORD_GUILD);
             let info_prefix = match (&cal_event.race.phase, &cal_event.race.round) {
                 (Some(phase), Some(round)) => Some(format!("{phase} {round}")),
                 (Some(phase), None) => Some(phase.clone()),
@@ -6110,10 +6129,6 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                 (None, None) => None,
             };
             let mut msg = MessageBuilder::default();
-            if ping_standard {
-                msg.mention(&RoleId::new(640750480246571014)); // @Standard
-                msg.push(' ');
-            }
             msg.push("race starting ");
             msg.push_timestamp(cal_event.start().expect("opening room for official race without start time"), serenity_utils::message::TimestampStyle::Relative);
             msg.push(": ");
@@ -6212,14 +6227,9 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
             }
             match room_url {
                 Ok(room_url) => {
-                    msg.push(' ');
-                    if !ping_standard {
-                        msg.push('<');
-                    }
+                    msg.push(" <");
                     msg.push(room_url);
-                    if !ping_standard {
-                        msg.push('>');
-                    }
+                    msg.push('>');
                 }
                 Err(notification) => if cal_event.race.notified {
                     return Ok(None)
@@ -6232,7 +6242,7 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
             msg.build()
         }
     };
-    Ok(Some((is_room_url, msg)))
+    Ok(Some((is_room_url, msg, weekly_notification_channel)))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -6411,13 +6421,13 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
 
                 for cal_event in rooms_to_open {
                     // Create room while holding lock, commit transaction, then release lock immediately so handler can start
-                    let (is_room_url, msg, event) = {
+                    let (is_room_url, msg, notification_channel, event) = {
                         let mut transaction = global_state.db_pool.begin().await?;
                         let event = cal_event.race.event(&mut transaction).await?;
                         let result = lock!(new_room_lock = global_state.new_room_lock; {
                             let result = create_room(&mut transaction, &*global_state.discord_ctx.read().await, &global_state.host_info, &global_state.racetime_config.client_id, &global_state.racetime_config.client_secret, &global_state.http_client, global_state.clean_shutdown.clone(), &cal_event, &event).await?;
 
-                            if let Some((is_room_url, mut msg)) = result {
+                            if let Some((is_room_url, mut msg, notification_channel)) = result {
                                 // Add warning if this is an alttprde9bracket race with incomplete draft
                                 if event.series == Series::AlttprDe && event.event == "9bracket" {
                                     if let Some(draft) = &cal_event.race.draft {
@@ -6431,7 +6441,7 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                                 // Commit the transaction to save the room URL to the database before the bot handler queries for it
                                 transaction.commit().await?;
                                 // Lock is released here, allowing the handler to start immediately
-                                Ok::<_, CreateRoomsError>(Some((is_room_url, msg, event)))
+                                Ok::<_, CreateRoomsError>(Some((is_room_url, msg, notification_channel, event)))
                             } else {
                                 Ok(None)  // No room was created
                             }
@@ -6468,30 +6478,37 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                         }
                         transaction.commit().await?;
                     } else {
-                        if_chain! {
-                            if !cal_event.is_private_async_part();
-                            if let Some(channel) = event.discord_race_room_channel;
-                            then {
-                                if let Some(thread) = cal_event.race.scheduling_thread {
-                                    if let Err(e) = thread.say(&*ctx, &msg).await {
-                                        eprintln!("Failed to post race message to scheduling thread: {}", e);
-                                    }
-                                    if let Err(e) = channel.send_message(&*ctx, CreateMessage::default().content(msg).allowed_mentions(CreateAllowedMentions::default())).await {
-                                        eprintln!("Failed to post race message to Discord race room channel: {}", e);
+                        // For weekly races with a configured notification channel, use that instead
+                        if let Some(PgSnowflake(channel_id)) = notification_channel {
+                            if let Err(e) = channel_id.say(&*ctx, &msg).await {
+                                eprintln!("Failed to post race message to weekly notification channel: {}", e);
+                            }
+                        } else {
+                            if_chain! {
+                                if !cal_event.is_private_async_part();
+                                if let Some(channel) = event.discord_race_room_channel;
+                                then {
+                                    if let Some(thread) = cal_event.race.scheduling_thread {
+                                        if let Err(e) = thread.say(&*ctx, &msg).await {
+                                            eprintln!("Failed to post race message to scheduling thread: {}", e);
+                                        }
+                                        if let Err(e) = channel.send_message(&*ctx, CreateMessage::default().content(msg).allowed_mentions(CreateAllowedMentions::default())).await {
+                                            eprintln!("Failed to post race message to Discord race room channel: {}", e);
+                                        }
+                                    } else {
+                                        if let Err(e) = channel.say(&*ctx, msg).await {
+                                            eprintln!("Failed to post race message to Discord race room channel: {}", e);
+                                        }
                                     }
                                 } else {
-                                    if let Err(e) = channel.say(&*ctx, msg).await {
-                                        eprintln!("Failed to post race message to Discord race room channel: {}", e);
+                                    if let Some(thread) = cal_event.race.scheduling_thread {
+                                        thread.say(&*ctx, msg).await?;
+                                    } else if let Some(channel) = event.discord_organizer_channel {
+                                        channel.say(&*ctx, msg).await?;
+                                    } else {
+                                        // DM Admin
+                                        ADMIN_USER.create_dm_channel(&*ctx).await?.say(&*ctx, msg).await?;
                                     }
-                                }
-                            } else {
-                                if let Some(thread) = cal_event.race.scheduling_thread {
-                                    thread.say(&*ctx, msg).await?;
-                                } else if let Some(channel) = event.discord_organizer_channel {
-                                    channel.say(&*ctx, msg).await?;
-                                } else {
-                                    // DM Admin
-                                    ADMIN_USER.create_dm_channel(&*ctx).await?.say(&*ctx, msg).await?;
                                 }
                             }
                         }
