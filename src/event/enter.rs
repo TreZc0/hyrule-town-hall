@@ -1589,9 +1589,9 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                     .mention_user(&me)
                                     .push(" signed up for ")
                                     .push_safe(&data.display_name)
-                                    .push(" without start.gg account. Please go to the start.gg tournament settings › Attendees › Add Attendee, click the search field, then click “Or add someone without an account”, then enter ")
+                                    .push(" without start.gg account. Either tell them to update their signup, or go to the start.gg tournament settings › Attendees › Add Attendee, click the search field, then click “Or add someone without an account”, then enter ")
                                     .push_mono_safe(me.display_name())
-                                    .push(" as the gamertag. Please notify TreZ once this is done so they can connect the attendee to the HTH account.")
+                                    .push(" as the gamertag. Please use 'Sync StartGG Participant IDs' on the HTH Configure page to sync after - notify TreZ in case of errors.")
                                     .build();
                                 if let Some(organizer_channel) = data.discord_organizer_channel {
                                     organizer_channel.say(&*discord_ctx, msg).await?;
