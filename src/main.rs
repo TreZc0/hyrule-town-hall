@@ -68,6 +68,7 @@ mod team;
 mod time;
 #[cfg(unix)] mod unix_socket;
 mod user;
+mod weekly;
 
 include!(concat!(env!("OUT_DIR"), "/version.rs"));
 

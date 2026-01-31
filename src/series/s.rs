@@ -1,17 +1,10 @@
-use {
-    chrono::Days,
-    derive_more::{
-        Display,
-        FromStr,
+use crate::{
+    event::{
+        Data,
+        InfoError,
     },
-    crate::{
-        event::{
-            Data,
-            InfoError,
-        },
-        prelude::*,
-        racetime_bot::PrerollMode,
-    },
+    prelude::*,
+    racetime_bot::PrerollMode,
 };
 
 pub(crate) struct Setting {
@@ -155,44 +148,8 @@ pub(crate) fn resolve_s7_draft_settings(picks: &draft::Picks) -> seed::Settings 
     settings
 }
 
-#[derive(FromStr, Display, PartialEq, Eq, Hash, Sequence)]
-pub(crate) enum WeeklyKind {
-    Kokiri,
-    Goron,
-    Zora,
-    Gerudo,
-}
-
-impl WeeklyKind {
-    /*
-    pub(crate) fn cal_id_part(&self) -> &'static str {
-        match self {
-            Self::Kokiri => "kokiri",
-            Self::Goron => "goron",
-            Self::Zora => "zora",
-            Self::Gerudo => "gerudo",
-        }
-    }
-    */ // regular weekly schedule suspended during s/9 qualifiers
-
-    pub(crate) fn next_weekly_after(&self, min_time: DateTime<impl TimeZone>) -> DateTime<Tz> {
-        let mut time = match self {
-            Self::Kokiri => Utc.with_ymd_and_hms(2025, 1, 4, 23, 0, 0).single().expect("wrong hardcoded datetime"),
-            Self::Goron => Utc.with_ymd_and_hms(2025, 1, 5, 19, 0, 0).single().expect("wrong hardcoded datetime"),
-            Self::Zora => Utc.with_ymd_and_hms(2025, 1, 11, 19, 0, 0).single().expect("wrong hardcoded datetime"),
-            Self::Gerudo => Utc.with_ymd_and_hms(2025, 1, 12, 14, 0, 0).single().expect("wrong hardcoded datetime"),
-        }.with_timezone(&America::New_York);
-        while time <= min_time {
-            let date = time.date_naive().checked_add_days(Days::new(14)).unwrap();
-            time = date.and_hms_opt(match self {
-                Self::Kokiri => 18,
-                Self::Goron | Self::Zora => 14,
-                Self::Gerudo => 9,
-            }, 0, 0).unwrap().and_local_timezone(America::New_York).single_ok().expect("error determining weekly time");
-        }
-        time
-    }
-}
+// WeeklyKind enum removed - weekly schedules are now stored in the database
+// and managed via the Configure tab. See src/weekly.rs for the WeeklySchedule model.
 
 // Make sure to keep the following in sync with each other and the rando_version and single_settings database entries:
 pub(crate) const WEEKLY_PREROLL_MODE: PrerollMode = PrerollMode::Medium;
@@ -271,6 +228,8 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
             let main_tournament_organizers = main_tournament.organizers(transaction).await?;
             let (main_tournament_organizers, race_mods) = organizers.into_iter().partition::<Vec<_>, _>(|organizer| main_tournament_organizers.contains(organizer));
             let now = Utc::now();
+            let weekly_schedules = WeeklySchedule::for_event(transaction, Series::Standard, "w").await?;
+            let any_active = weekly_schedules.iter().any(|s| s.active);
             Some(html! {
                 article {
                     p {
@@ -280,35 +239,29 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                         : English.join_html_opt(main_tournament_organizers);
                         : ") in cooperation with ZeldaSpeedRuns. The races are open to all participants.";
                     }
-                    p : "Starting from January 4, 2025, there will be alternating schedules:";
-                    ol {
-                        li {
-                            : "The Kokiri weekly, Saturdays of week A at 6PM Eastern Time (next: ";
-                            : format_datetime(WeeklyKind::Kokiri.next_weekly_after(now), DateTimeFormat { long: true, running_text: false });
-                            : ")";
+                    @if any_active {
+                        p : "Current weekly schedule:";
+                        ol {
+                            @for schedule in weekly_schedules.iter().filter(|s| s.active) {
+                                li {
+                                    : format!("The {} weekly at {}:{:02} {} (next: ",
+                                        schedule.name,
+                                        schedule.time_of_day.format("%l").to_string().trim(),
+                                        schedule.time_of_day.minute(),
+                                        schedule.timezone.name().split('/').last().unwrap_or("Unknown"));
+                                    : format_datetime(schedule.next_after(now), DateTimeFormat { long: true, running_text: false });
+                                    : ")";
+                                }
+                            }
                         }
-                        li {
-                            : "The Goron weekly, Sundays of week A at 2PM Eastern Time (next: ";
-                            : format_datetime(WeeklyKind::Goron.next_weekly_after(now), DateTimeFormat { long: true, running_text: false });
-                            : ")";
-                        }
-                        li {
-                            : "The Zora weekly, Saturdays of week B at 2PM Eastern Time (next: ";
-                            : format_datetime(WeeklyKind::Zora.next_weekly_after(now), DateTimeFormat { long: true, running_text: false });
-                            : ")";
-                        }
-                        li {
-                            : "The Gerudo weekly, Sundays of week B at 9AM Eastern Time (next: ";
-                            : format_datetime(WeeklyKind::Gerudo.next_weekly_after(now), DateTimeFormat { long: true, running_text: false });
-                            : ")";
+                    } else {
+                        p {
+                            : "The Standard weeklies are currently on hiatus. During the qualifier phase of ";
+                            a(href = uri!(event::info(Series::Standard, "9"))) : "Standard Tournament Season 9";
+                            : ", you can join the qualifiers instead, even if you don't intend to participate in later phases of the tournament.";
                         }
                     }
                     : long_weekly_settings();
-                    p {
-                        : "During the qualifier phase of ";
-                        a(href = uri!(event::info(Series::Standard, "9"))) : "Standard Tournament Season 9";
-                        : ", the weeklies will be on hiatus — you can join the qualifiers instead, even if you don't intend to participate in later phases of the tournament.";
-                    }
                 }
             })
         }

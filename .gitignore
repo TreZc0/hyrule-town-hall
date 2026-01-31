@@ -2,6 +2,7 @@
 /assets/google-client-secret.json
 /target
 .vscode
+.claude
 /localdocs
 /cfg/hth.json
 /tmp

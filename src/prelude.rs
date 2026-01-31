@@ -43,6 +43,8 @@ pub(crate) use {
     },
     async_trait::async_trait,
     chrono::{
+        NaiveDate,
+        NaiveTime,
         TimeDelta,
         prelude::*,
     },
@@ -180,7 +182,6 @@ pub(crate) use {
             AsyncCommandOutputExt as _,
             IoResultExt as _,
             IsNetworkError,
-            LocalResultExt as _,
             ReqwestResponseExt as _,
             SendResultExt as _,
         },
@@ -238,6 +239,10 @@ pub(crate) use {
             Races,
             Teams,
             Users,
+        },
+        weekly::{
+            WeeklySchedule,
+            WeeklySchedules,
         },
         lang::{
             self,

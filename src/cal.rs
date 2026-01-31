@@ -698,83 +698,95 @@ impl Race {
                 _ => unimplemented!(),
             },
             Series::Standard => match &*event.event {
-                /*
-                "w" => for kind in all::<s::WeeklyKind>() {
-                    let schedule = RaceSchedule::Live { start: kind.next_weekly_after(now).to_utc(), end: None, room: None };
-                    if !races.iter().any(|race| race.series == event.series && race.event == event.event && race.schedule.start_matches(&schedule)) {
-                        let race = Race {
-                            id: Id::new(&mut *transaction).await?,
-                            series: event.series,
-                            event: event.event.to_string(),
-                            source: Source::Manual,
-                            entrants: Entrants::Open,
-                            phase: None,
-                            round: Some(format!("{kind} Weekly")),
-                            game: None,
-                            scheduling_thread: None,
-                            schedule_updated_at: None,
-                            fpa_invoked: false,
-                            breaks_used: false,
-                            draft: None,
-                            seed: seed::Data::default(),
-                            video_urls: HashMap::default(),
-                            restreamers: HashMap::default(),
-                            last_edited_by: None,
-                            last_edited_at: None,
-                            ignored: false,
-                            schedule_locked: false,
-                            notified: false,
-                            async_notified_1: false,
-                            async_notified_2: false,
-                            async_notified_3: false,
-                            schedule,
-                        };
-                        race.save(&mut *transaction).await?;
-                        races.push(race);
+                "w" => {
+                    // Use database-driven weekly schedules
+                    let weekly_schedules = WeeklySchedule::for_event(&mut *transaction, event.series, &event.event).await?;
+                    for ws in weekly_schedules.iter().filter(|s| s.active) {
+                        // Create races for the next two upcoming occurrences
+                        let next_weekly = ws.next_after(now);
+                        let weekly_after = ws.next_after(next_weekly);
+                        for weekly_time in [next_weekly, weekly_after] {
+                            let schedule = RaceSchedule::Live { start: weekly_time.to_utc(), end: None, room: None };
+                            if !races.iter().any(|race| race.series == event.series && race.event == event.event && race.schedule.start_matches(&schedule)) {
+                                let race = Race {
+                                    id: Id::new(&mut *transaction).await?,
+                                    series: event.series,
+                                    event: event.event.to_string(),
+                                    source: Source::Manual,
+                                    entrants: Entrants::Open,
+                                    phase: None,
+                                    round: Some(format!("{} Weekly", ws.name)),
+                                    game: None,
+                                    scheduling_thread: None,
+                                    schedule_updated_at: None,
+                                    fpa_invoked: false,
+                                    breaks_used: false,
+                                    draft: None,
+                                    seed: seed::Data::default(),
+                                    video_urls: HashMap::default(),
+                                    restreamers: HashMap::default(),
+                                    last_edited_by: None,
+                                    last_edited_at: None,
+                                    ignored: false,
+                                    schedule_locked: false,
+                                    notified: false,
+                                    async_notified_1: false,
+                                    async_notified_2: false,
+                                    async_notified_3: false,
+                                    discord_scheduled_event_id: None,
+                                    schedule,
+                                };
+                                race.save(&mut *transaction).await?;
+                                races.push(race);
+                            }
+                        }
                     }
                 },
-                */ // regular weekly schedule suspended during s/9 qualifiers
                 //TODO add archives of old Standard tournaments and Challenge Cups?
                 _ => {} // new events are scheduled via Mido's House
             },
             Series::TwwrMain => match &*event.event {
-                "w" => for kind in all::<twwrmain::WeeklyKind>() {
-                    // Create races for the next two upcoming weeklies (current + one week in advance)
-                    let next_weekly = kind.next_weekly_after(now);
-                    let weekly_after = kind.next_weekly_after(next_weekly);
-                    for weekly_time in [next_weekly, weekly_after] {
-                        let schedule = RaceSchedule::Live { start: weekly_time.to_utc(), end: None, room: None };
-                        if !races.iter().any(|race| race.series == event.series && race.event == event.event && race.schedule.start_matches(&schedule)) {
-                            let race = Race {
-                                id: Id::new(&mut *transaction).await?,
-                                series: event.series,
-                                event: event.event.to_string(),
-                                source: Source::Manual,
-                                entrants: Entrants::Open,
-                                phase: None,
-                                round: Some(format!("{kind} Weekly")),
-                                game: None,
-                                scheduling_thread: None,
-                                schedule_updated_at: None,
-                                fpa_invoked: false,
-                                breaks_used: false,
-                                draft: None,
-                                seed: seed::Data::default(),
-                                video_urls: HashMap::default(),
-                                restreamers: HashMap::default(),
-                                last_edited_by: None,
-                                last_edited_at: None,
-                                ignored: false,
-                                schedule_locked: false,
-                                notified: false,
-                                async_notified_1: false,
-                                async_notified_2: false,
-                                async_notified_3: false,
-                                discord_scheduled_event_id: None,
-                                schedule,
-                            };
-                            race.save(&mut *transaction).await?;
-                            races.push(race);
+                "w" => {
+                    // Use database-driven weekly schedules
+                    let weekly_schedules = WeeklySchedule::for_event(&mut *transaction, event.series, &event.event).await?;
+                    for ws in weekly_schedules.iter().filter(|s| s.active) {
+                        // Create races for the next two upcoming occurrences
+                        let next_weekly = ws.next_after(now);
+                        let weekly_after = ws.next_after(next_weekly);
+                        for weekly_time in [next_weekly, weekly_after] {
+                            let schedule = RaceSchedule::Live { start: weekly_time.to_utc(), end: None, room: None };
+                            if !races.iter().any(|race| race.series == event.series && race.event == event.event && race.schedule.start_matches(&schedule)) {
+                                let race = Race {
+                                    id: Id::new(&mut *transaction).await?,
+                                    series: event.series,
+                                    event: event.event.to_string(),
+                                    source: Source::Manual,
+                                    entrants: Entrants::Open,
+                                    phase: None,
+                                    round: Some(format!("{} Weekly", ws.name)),
+                                    game: None,
+                                    scheduling_thread: None,
+                                    schedule_updated_at: None,
+                                    fpa_invoked: false,
+                                    breaks_used: false,
+                                    draft: None,
+                                    seed: seed::Data::default(),
+                                    video_urls: HashMap::default(),
+                                    restreamers: HashMap::default(),
+                                    last_edited_by: None,
+                                    last_edited_at: None,
+                                    ignored: false,
+                                    schedule_locked: false,
+                                    notified: false,
+                                    async_notified_1: false,
+                                    async_notified_2: false,
+                                    async_notified_3: false,
+                                    discord_scheduled_event_id: None,
+                                    schedule,
+                                };
+                                race.save(&mut *transaction).await?;
+                                races.push(race);
+                            }
                         }
                     }
                 },
@@ -1694,29 +1706,10 @@ async fn add_event_races(transaction: &mut Transaction<'_, Postgres>, discord_ct
                     cal_event.push(URL::new(uri!(base_uri(), event::info(event.series, &*event.event)).to_string()));
                 }
                 cal.add_event(cal_event);
-                /*
-                if let (Series::Standard, "w", Some(round)) = (event.series, &*event.event, &race.round) {
-                    if let Some((_, kind)) = regex_captures!("^(.+) Weekly$", round) {
-                        if let Ok(kind) = kind.parse::<s::WeeklyKind>() {
-                            latest_instantiated_weeklies.insert(kind, start);
-                        }
-                    }
-                }
-                */
+                //TODO: Consider adding recurring calendar events for weekly schedules using the database-driven WeeklySchedule model
             }
         }
     }
-    /*
-    for (kind, start) in latest_instantiated_weeklies {
-        let mut cal_event = ics::Event::new(format!("weekly-{}@midos.house", kind.cal_id_part()), dtstamp(now));
-        cal_event.push(Summary::new(format!("{kind} Weekly")));
-        let start = kind.next_weekly_after(start);
-        cal_event.push(dtstart(start));
-        cal_event.push(dtend(start + Series::Standard.default_race_duration()));
-        cal_event.push(RRule::new("FREQ=WEEKLY;INTERVAL=2"));
-        cal.add_event(cal_event);
-    }
-    */
     Ok(())
 }
 

@@ -169,6 +169,9 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                     li {
                         a(href = uri!(restreamers_get(event.series, &*event.event))) : "Manage restream coordinators";
                     }
+                    li {
+                        a(href = uri!(weekly_schedules_get(event.series, &*event.event))) : "Manage weekly schedules";
+                    }
                 }
             }
         } else {
@@ -779,4 +782,491 @@ struct UserSearchRow {
     racetime_display_name: Option<String>,
     discord_display_name: Option<String>,
     discord_username: Option<String>,
+}
+
+// Weekly Schedules Management
+
+enum WeeklySchedulesFormDefaults<'v> {
+    None,
+    AddContext(Context<'v>),
+    DeleteContext(Id<WeeklySchedules>, Context<'v>),
+}
+
+impl<'v> WeeklySchedulesFormDefaults<'v> {
+    fn delete_errors(&self, for_schedule: Id<WeeklySchedules>) -> Vec<&form::Error<'v>> {
+        match self {
+            Self::DeleteContext(schedule_id, ctx) if *schedule_id == for_schedule => ctx.errors().collect(),
+            _ => Vec::default(),
+        }
+    }
+
+    fn add_errors(&self) -> Vec<&form::Error<'v>> {
+        if let Self::AddContext(ctx) = self {
+            ctx.errors().collect()
+        } else {
+            Vec::default()
+        }
+    }
+
+    fn add_name(&self) -> Option<&str> {
+        if let Self::AddContext(ctx) = self {
+            ctx.field_value("name")
+        } else {
+            None
+        }
+    }
+
+    fn add_frequency(&self) -> Option<&str> {
+        if let Self::AddContext(ctx) = self {
+            ctx.field_value("frequency_days")
+        } else {
+            None
+        }
+    }
+
+    fn add_time(&self) -> Option<&str> {
+        if let Self::AddContext(ctx) = self {
+            ctx.field_value("time_of_day")
+        } else {
+            None
+        }
+    }
+
+    fn add_timezone(&self) -> Option<&str> {
+        if let Self::AddContext(ctx) = self {
+            ctx.field_value("timezone")
+        } else {
+            None
+        }
+    }
+
+    fn add_anchor_date(&self) -> Option<&str> {
+        if let Self::AddContext(ctx) = self {
+            ctx.field_value("anchor_date")
+        } else {
+            None
+        }
+    }
+
+    fn add_active(&self) -> Option<bool> {
+        if let Self::AddContext(ctx) = self {
+            ctx.field_value("active").map(|v| v == "on")
+        } else {
+            None
+        }
+    }
+}
+
+fn frequency_display(days: i16) -> &'static str {
+    match days {
+        7 => "Weekly",
+        14 => "Biweekly",
+        28 | 30 => "Monthly",
+        _ => "Custom",
+    }
+}
+
+async fn weekly_schedules_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, defaults: WeeklySchedulesFormDefaults<'_>) -> Result<RawHtml<String>, event::Error> {
+    let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, true).await?;
+    let content = if event.is_ended() {
+        html! {
+            article {
+                p : "This event has ended and can no longer be configured.";
+            }
+        }
+    } else if let Some(ref me) = me {
+        if event.organizers(&mut transaction).await?.contains(me) || me.is_global_admin() {
+            let schedules = WeeklySchedule::for_event(&mut transaction, event.series, &event.event).await?;
+            let now = Utc::now();
+            html! {
+                h2 : "Manage Weekly Schedules";
+                p : "Weekly schedules define recurring race times for this event. Races are automatically created based on these schedules.";
+                @if schedules.is_empty() {
+                    p : "No weekly schedules configured for this event.";
+                } else {
+                    table {
+                        thead {
+                            tr {
+                                th : "Name";
+                                th : "Frequency";
+                                th : "Time";
+                                th : "Timezone";
+                                th : "Next Race";
+                                th : "Active";
+                                th;
+                            }
+                        }
+                        tbody {
+                            @for schedule in &schedules {
+                                tr {
+                                    td : &schedule.name;
+                                    td : format!("{} ({} days)", frequency_display(schedule.frequency_days), schedule.frequency_days);
+                                    td : schedule.time_of_day.format("%H:%M").to_string();
+                                    td : schedule.timezone.name();
+                                    td {
+                                        @if schedule.active {
+                                            : format_datetime(schedule.next_after(now), DateTimeFormat { long: false, running_text: false });
+                                        } else {
+                                            : "(inactive)";
+                                        }
+                                    }
+                                    td {
+                                        @if schedule.active {
+                                            : "Yes";
+                                        } else {
+                                            : "No";
+                                        }
+                                    }
+                                    td {
+                                        div(class = "button-row") {
+                                            a(class = "button", href = uri!(weekly_schedule_edit_get(event.series, &*event.event, schedule.id))) : "Edit";
+                                            @let errors = defaults.delete_errors(schedule.id);
+                                            @let (errors, button) = button_form(uri!(weekly_schedule_delete(event.series, &*event.event, schedule.id)), csrf, errors, "Delete");
+                                            : errors;
+                                            : button;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                h3 : "Add New Schedule";
+                @let mut errors = defaults.add_errors();
+                : full_form(uri!(weekly_schedule_add(event.series, &*event.event)), csrf, html! {
+                    : form_field("name", &mut errors, html! {
+                        label(for = "name") : "Schedule Name:";
+                        input(type = "text", id = "name", name = "name", value? = defaults.add_name(), placeholder = "e.g., Saturday, Kokiri");
+                        label(class = "help") : "(A unique name for this schedule)";
+                    });
+                    : form_field("frequency_days", &mut errors, html! {
+                        label(for = "frequency_days") : "Frequency:";
+                        select(id = "frequency_days", name = "frequency_days") {
+                            option(value = "7", selected? = defaults.add_frequency().map_or(true, |v| v == "7")) : "Weekly (7 days)";
+                            option(value = "14", selected? = defaults.add_frequency().map_or(false, |v| v == "14")) : "Biweekly (14 days)";
+                            option(value = "28", selected? = defaults.add_frequency().map_or(false, |v| v == "28")) : "Monthly (28 days)";
+                        }
+                    });
+                    : form_field("time_of_day", &mut errors, html! {
+                        label(for = "time_of_day") : "Time of Day:";
+                        input(type = "time", id = "time_of_day", name = "time_of_day", value = defaults.add_time().unwrap_or("18:00"));
+                    });
+                    : form_field("timezone", &mut errors, html! {
+                        label(for = "timezone") : "Timezone:";
+                        select(id = "timezone", name = "timezone") {
+                            option(value = "America/New_York", selected? = defaults.add_timezone().map_or(true, |v| v == "America/New_York")) : "America/New_York (Eastern)";
+                            option(value = "America/Chicago", selected? = defaults.add_timezone().map_or(false, |v| v == "America/Chicago")) : "America/Chicago (Central)";
+                            option(value = "America/Denver", selected? = defaults.add_timezone().map_or(false, |v| v == "America/Denver")) : "America/Denver (Mountain)";
+                            option(value = "America/Los_Angeles", selected? = defaults.add_timezone().map_or(false, |v| v == "America/Los_Angeles")) : "America/Los_Angeles (Pacific)";
+                            option(value = "Europe/London", selected? = defaults.add_timezone().map_or(false, |v| v == "Europe/London")) : "Europe/London (GMT/BST)";
+                            option(value = "Europe/Paris", selected? = defaults.add_timezone().map_or(false, |v| v == "Europe/Paris")) : "Europe/Paris (CET/CEST)";
+                            option(value = "Europe/Berlin", selected? = defaults.add_timezone().map_or(false, |v| v == "Europe/Berlin")) : "Europe/Berlin (CET/CEST)";
+                        }
+                    });
+                    : form_field("anchor_date", &mut errors, html! {
+                        label(for = "anchor_date") : "Anchor Date:";
+                        input(type = "date", id = "anchor_date", name = "anchor_date", value? = defaults.add_anchor_date());
+                        label(class = "help") : "(The first occurrence date; future races are calculated from this)";
+                    });
+                    : form_field("active", &mut errors, html! {
+                        input(type = "checkbox", id = "active", name = "active", checked? = defaults.add_active().unwrap_or(true));
+                        label(for = "active") : "Active";
+                        label(class = "help") : "(Inactive schedules do not generate races)";
+                    });
+                }, errors, "Add Schedule");
+            }
+        } else {
+            html! {
+                article {
+                    p : "This page is for organizers of this event only.";
+                }
+            }
+        }
+    } else {
+        html! {
+            article {
+                p {
+                    a(href = uri!(auth::login(Some(uri!(weekly_schedules_get(event.series, &*event.event)))))) : "Sign in or create a Hyrule Town Hall account";
+                    : " to configure this event.";
+                }
+            }
+        }
+    };
+    Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Manage Weekly Schedules — {}", event.display_name), html! {
+        : header;
+        : content;
+    }).await?)
+}
+
+#[rocket::get("/event/<series>/<event>/configure/weekly-schedules")]
+pub(crate) async fn weekly_schedules_get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    Ok(weekly_schedules_form(transaction, me, uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::None).await?)
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct AddWeeklyScheduleForm {
+    #[field(default = String::new())]
+    csrf: String,
+    name: String,
+    frequency_days: i16,
+    time_of_day: String,
+    timezone: String,
+    anchor_date: String,
+    active: bool,
+}
+
+#[rocket::post("/event/<series>/<event>/configure/weekly-schedules", data = "<form>")]
+pub(crate) async fn weekly_schedule_add(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, AddWeeklyScheduleForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    Ok(if let Some(ref value) = form.value {
+        if data.is_ended() {
+            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
+        }
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+        }
+        if value.name.trim().is_empty() {
+            form.context.push_error(form::Error::validation("Schedule name is required.").with_name("name"));
+        }
+        // Check for duplicate name
+        let existing = WeeklySchedule::for_event(&mut transaction, data.series, &data.event).await?;
+        if existing.iter().any(|s| s.name.eq_ignore_ascii_case(value.name.trim())) {
+            form.context.push_error(form::Error::validation("A schedule with this name already exists.").with_name("name"));
+        }
+        let time_of_day = match NaiveTime::parse_from_str(&value.time_of_day, "%H:%M") {
+            Ok(t) => Some(t),
+            Err(_) => {
+                form.context.push_error(form::Error::validation("Invalid time format. Use HH:MM.").with_name("time_of_day"));
+                None
+            }
+        };
+        let timezone: Option<Tz> = match value.timezone.parse() {
+            Ok(tz) => Some(tz),
+            Err(_) => {
+                form.context.push_error(form::Error::validation("Invalid timezone.").with_name("timezone"));
+                None
+            }
+        };
+        let anchor_date = match NaiveDate::parse_from_str(&value.anchor_date, "%Y-%m-%d") {
+            Ok(d) => Some(d),
+            Err(_) => {
+                form.context.push_error(form::Error::validation("Invalid date format. Use YYYY-MM-DD.").with_name("anchor_date"));
+                None
+            }
+        };
+        if form.context.errors().next().is_some() {
+            RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::AddContext(form.context)).await?)
+        } else {
+            let schedule = WeeklySchedule {
+                id: Id::new(&mut transaction).await?,
+                series: data.series,
+                event: data.event.to_string(),
+                name: value.name.trim().to_string(),
+                frequency_days: value.frequency_days,
+                time_of_day: time_of_day.unwrap(),
+                timezone: timezone.unwrap(),
+                anchor_date: anchor_date.unwrap(),
+                active: value.active,
+            };
+            schedule.save(&mut transaction).await?;
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(weekly_schedules_get(series, event))))
+        }
+    } else {
+        RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::AddContext(form.context)).await?)
+    })
+}
+
+#[rocket::post("/event/<series>/<event>/configure/weekly-schedules/<schedule_id>/delete", data = "<form>")]
+pub(crate) async fn weekly_schedule_delete(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, schedule_id: Id<WeeklySchedules>, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    Ok(if form.value.is_some() {
+        if data.is_ended() {
+            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
+        }
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+        }
+        if WeeklySchedule::from_id(&mut transaction, schedule_id).await?.is_none() {
+            form.context.push_error(form::Error::validation("Schedule not found."));
+        }
+        if form.context.errors().next().is_some() {
+            RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::DeleteContext(schedule_id, form.context)).await?)
+        } else {
+            WeeklySchedule::delete(&mut transaction, schedule_id).await?;
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(weekly_schedules_get(series, event))))
+        }
+    } else {
+        RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::DeleteContext(schedule_id, form.context)).await?)
+    })
+}
+
+async fn weekly_schedule_edit_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, schedule: WeeklySchedule, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
+    let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, true).await?;
+    let content = if event.is_ended() {
+        html! {
+            article {
+                p : "This event has ended and can no longer be configured.";
+            }
+        }
+    } else if let Some(ref me) = me {
+        if event.organizers(&mut transaction).await?.contains(me) || me.is_global_admin() {
+            let mut errors = ctx.errors().collect_vec();
+            html! {
+                h2 : format!("Edit Schedule: {}", schedule.name);
+                : full_form(uri!(weekly_schedule_edit_post(event.series, &*event.event, schedule.id)), csrf, html! {
+                    : form_field("name", &mut errors, html! {
+                        label(for = "name") : "Schedule Name:";
+                        input(type = "text", id = "name", name = "name", value = ctx.field_value("name").unwrap_or(&schedule.name));
+                    });
+                    : form_field("frequency_days", &mut errors, html! {
+                        label(for = "frequency_days") : "Frequency:";
+                        select(id = "frequency_days", name = "frequency_days") {
+                            @let current_freq = ctx.field_value("frequency_days").and_then(|v| v.parse::<i16>().ok()).unwrap_or(schedule.frequency_days);
+                            option(value = "7", selected? = current_freq == 7) : "Weekly (7 days)";
+                            option(value = "14", selected? = current_freq == 14) : "Biweekly (14 days)";
+                            option(value = "28", selected? = current_freq == 28) : "Monthly (28 days)";
+                        }
+                    });
+                    : form_field("time_of_day", &mut errors, html! {
+                        label(for = "time_of_day") : "Time of Day:";
+                        input(type = "time", id = "time_of_day", name = "time_of_day", value = ctx.field_value("time_of_day").unwrap_or(&schedule.time_of_day.format("%H:%M").to_string()));
+                    });
+                    : form_field("timezone", &mut errors, html! {
+                        label(for = "timezone") : "Timezone:";
+                        @let current_tz = ctx.field_value("timezone").unwrap_or(schedule.timezone.name());
+                        select(id = "timezone", name = "timezone") {
+                            option(value = "America/New_York", selected? = current_tz == "America/New_York") : "America/New_York (Eastern)";
+                            option(value = "America/Chicago", selected? = current_tz == "America/Chicago") : "America/Chicago (Central)";
+                            option(value = "America/Denver", selected? = current_tz == "America/Denver") : "America/Denver (Mountain)";
+                            option(value = "America/Los_Angeles", selected? = current_tz == "America/Los_Angeles") : "America/Los_Angeles (Pacific)";
+                            option(value = "Europe/London", selected? = current_tz == "Europe/London") : "Europe/London (GMT/BST)";
+                            option(value = "Europe/Paris", selected? = current_tz == "Europe/Paris") : "Europe/Paris (CET/CEST)";
+                            option(value = "Europe/Berlin", selected? = current_tz == "Europe/Berlin") : "Europe/Berlin (CET/CEST)";
+                        }
+                    });
+                    : form_field("anchor_date", &mut errors, html! {
+                        label(for = "anchor_date") : "Anchor Date:";
+                        input(type = "date", id = "anchor_date", name = "anchor_date", value = ctx.field_value("anchor_date").unwrap_or(&schedule.anchor_date.format("%Y-%m-%d").to_string()));
+                    });
+                    : form_field("active", &mut errors, html! {
+                        input(type = "checkbox", id = "active", name = "active", checked? = ctx.field_value("active").map_or(schedule.active, |v| v == "on"));
+                        label(for = "active") : "Active";
+                    });
+                }, errors, "Save");
+                p {
+                    a(href = uri!(weekly_schedules_get(event.series, &*event.event))) : "Back to schedule list";
+                }
+            }
+        } else {
+            html! {
+                article {
+                    p : "This page is for organizers of this event only.";
+                }
+            }
+        }
+    } else {
+        html! {
+            article {
+                p {
+                    a(href = uri!(auth::login(Some(uri!(weekly_schedule_edit_get(event.series, &*event.event, schedule.id)))))) : "Sign in or create a Hyrule Town Hall account";
+                    : " to configure this event.";
+                }
+            }
+        }
+    };
+    Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Edit Schedule — {}", event.display_name), html! {
+        : header;
+        : content;
+    }).await?)
+}
+
+#[rocket::get("/event/<series>/<event>/configure/weekly-schedules/<schedule_id>/edit")]
+pub(crate) async fn weekly_schedule_edit_get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String, schedule_id: Id<WeeklySchedules>) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let schedule = WeeklySchedule::from_id(&mut transaction, schedule_id).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    Ok(weekly_schedule_edit_form(transaction, me, uri, csrf.as_ref(), data, schedule, Context::default()).await?)
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct EditWeeklyScheduleForm {
+    #[field(default = String::new())]
+    csrf: String,
+    name: String,
+    frequency_days: i16,
+    time_of_day: String,
+    timezone: String,
+    anchor_date: String,
+    active: bool,
+}
+
+#[rocket::post("/event/<series>/<event>/configure/weekly-schedules/<schedule_id>/edit", data = "<form>")]
+pub(crate) async fn weekly_schedule_edit_post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, schedule_id: Id<WeeklySchedules>, form: Form<Contextual<'_, EditWeeklyScheduleForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut schedule = WeeklySchedule::from_id(&mut transaction, schedule_id).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    Ok(if let Some(ref value) = form.value {
+        if data.is_ended() {
+            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
+        }
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+        }
+        if value.name.trim().is_empty() {
+            form.context.push_error(form::Error::validation("Schedule name is required.").with_name("name"));
+        }
+        // Check for duplicate name (excluding current schedule)
+        let existing = WeeklySchedule::for_event(&mut transaction, data.series, &data.event).await?;
+        if existing.iter().any(|s| s.id != schedule_id && s.name.eq_ignore_ascii_case(value.name.trim())) {
+            form.context.push_error(form::Error::validation("A schedule with this name already exists.").with_name("name"));
+        }
+        let time_of_day = match NaiveTime::parse_from_str(&value.time_of_day, "%H:%M") {
+            Ok(t) => Some(t),
+            Err(_) => {
+                form.context.push_error(form::Error::validation("Invalid time format. Use HH:MM.").with_name("time_of_day"));
+                None
+            }
+        };
+        let timezone: Option<Tz> = match value.timezone.parse() {
+            Ok(tz) => Some(tz),
+            Err(_) => {
+                form.context.push_error(form::Error::validation("Invalid timezone.").with_name("timezone"));
+                None
+            }
+        };
+        let anchor_date = match NaiveDate::parse_from_str(&value.anchor_date, "%Y-%m-%d") {
+            Ok(d) => Some(d),
+            Err(_) => {
+                form.context.push_error(form::Error::validation("Invalid date format. Use YYYY-MM-DD.").with_name("anchor_date"));
+                None
+            }
+        };
+        if form.context.errors().next().is_some() {
+            RedirectOrContent::Content(weekly_schedule_edit_form(transaction, Some(me), uri, csrf.as_ref(), data, schedule, form.context).await?)
+        } else {
+            schedule.name = value.name.trim().to_string();
+            schedule.frequency_days = value.frequency_days;
+            schedule.time_of_day = time_of_day.unwrap();
+            schedule.timezone = timezone.unwrap();
+            schedule.anchor_date = anchor_date.unwrap();
+            schedule.active = value.active;
+            schedule.save(&mut transaction).await?;
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(weekly_schedules_get(series, event))))
+        }
+    } else {
+        RedirectOrContent::Content(weekly_schedule_edit_form(transaction, Some(me), uri, csrf.as_ref(), data, schedule, form.context).await?)
+    })
 }
