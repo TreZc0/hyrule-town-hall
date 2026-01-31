@@ -15,7 +15,7 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
             }
         }
     } else if let Some(ref me) = me {
-        if event.organizers(&mut transaction).await?.contains(me) {
+        if me.is_global_admin() {
             let mut errors = ctx.errors().collect_vec();
             html! {
                 article {
@@ -330,7 +330,7 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
         } else {
             html! {
                 article {
-                    p : "You must be an organizer to access this page.";
+                    p : "You must be a global admin to access this page.";
                 }
             }
         }
@@ -406,8 +406,8 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
         if event_data.is_ended() {
             form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
         }
-        if !event_data.organizers(&mut transaction).await?.contains(&me) {
-            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+        if !me.is_global_admin() {
+            form.context.push_error(form::Error::validation("You must be a global admin to configure this event."));
         }
         
         if form.context.errors().next().is_some() {
@@ -767,8 +767,8 @@ pub(crate) async fn add_organizer(pool: &State<PgPool>, me: User, uri: Origin<'_
         if event_data.is_ended() {
             form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
         }
-        if !event_data.organizers(&mut transaction).await?.contains(&me) {
-            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+        if !me.is_global_admin() {
+            form.context.push_error(form::Error::validation("You must be a global admin to configure this event."));
         }
         
         if form.context.errors().next().is_some() {
@@ -817,8 +817,8 @@ pub(crate) async fn remove_organizer(pool: &State<PgPool>, me: User, _uri: Origi
         if event_data.is_ended() {
             form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
         }
-        if !event_data.organizers(&mut transaction).await?.contains(&me) {
-            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+        if !me.is_global_admin() {
+            form.context.push_error(form::Error::validation("You must be a global admin to configure this event."));
         }
         
         if form.context.errors().next().is_some() {
@@ -857,8 +857,8 @@ pub(crate) async fn update_enter_flow(pool: &State<PgPool>, me: User, uri: Origi
         if event_data.is_ended() {
             form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
         }
-        if !event_data.organizers(&mut transaction).await?.contains(&me) {
-            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+        if !me.is_global_admin() {
+            form.context.push_error(form::Error::validation("You must be a global admin to configure this event."));
         }
         
         if form.context.errors().next().is_some() {

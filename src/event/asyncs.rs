@@ -77,7 +77,10 @@ async fn asyncs_form(mut transaction: Transaction<'_, Postgres>, me: User, uri: 
 pub(crate) async fn get(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let event_data = Data::new(&mut transaction, series, &event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    if !event_data.organizers(&mut transaction).await?.contains(&me) {
+    if !event_data.asyncs_active {
+        return Err(StatusOrError::Status(Status::NotFound));
+    }
+    if !me.is_global_admin() && !event_data.organizers(&mut transaction).await?.contains(&me) {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     Ok(asyncs_form(transaction, me, uri, csrf.as_ref(), event_data, Context::default()).await?)
@@ -99,7 +102,10 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
     let mut form = form.into_inner();
     form.verify(&csrf);
 
-    if !event_data.organizers(&mut transaction).await?.contains(&me) {
+    if !event_data.asyncs_active {
+        return Err(StatusOrError::Status(Status::NotFound));
+    }
+    if !me.is_global_admin() && !event_data.organizers(&mut transaction).await?.contains(&me) {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
 

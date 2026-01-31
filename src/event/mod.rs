@@ -808,10 +808,12 @@ impl<'a> Data<'a> {
                         } else {
                             a(class = "button", href = uri!(roles::get(self.series, &*self.event, _))) : "Roles";
                         }
-                        @if let Tab::Asyncs = tab {
-                            a(class = "button selected", href? = is_subpage.then(|| uri!(asyncs::get(self.series, &*self.event)))) : "Asyncs";
-                        } else {
-                            a(class = "button", href = uri!(asyncs::get(self.series, &*self.event))) : "Asyncs";
+                        @if self.asyncs_active {
+                            @if let Tab::Asyncs = tab {
+                                a(class = "button selected", href? = is_subpage.then(|| uri!(asyncs::get(self.series, &*self.event)))) : "Asyncs";
+                            } else {
+                                a(class = "button", href = uri!(asyncs::get(self.series, &*self.event))) : "Asyncs";
+                            }
                         }
                     }
                     @if !self.is_ended() && me.is_global_admin() {
