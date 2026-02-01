@@ -235,7 +235,7 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
     let mut seed_links = match seed.files {
         Some(Files::AlttprDoorRando { uuid }) => {
             let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
-            patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{uuid}.bps"));
+            patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{uuid}.bps", base_uri()));
             Some(html! {
                 a(href = patcher_url.to_string(), target = "_blank") : "View";
             })

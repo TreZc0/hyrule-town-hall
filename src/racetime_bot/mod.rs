@@ -2722,8 +2722,7 @@ impl SeedRollUpdate {
                 let seed_url = match seed.files.as_ref().expect("received seed with no files") {
                     seed::Files::AlttprDoorRando { uuid } => {
                         let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
-                        // TODO need to link to patch URL here
-                        patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{uuid}.bps"));
+                        patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{uuid}.bps", base_uri()));
                         patcher_url.to_string()
                     }  
                     seed::Files::MidosHouse { file_stem, .. } => format!("{}/seed/{file_stem}", base_uri()),
@@ -3013,8 +3012,7 @@ async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl
         seed_url = match seed.files.as_ref().expect("received seed with no files") {
                 seed::Files::AlttprDoorRando { uuid } => {
                 let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
-                // TODO need to link to patch URL here
-                patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{uuid}.bps"));
+                patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{uuid}.bps", base_uri()));
                 patcher_url.to_string()
             }
             seed::Files::MidosHouse { file_stem, .. } => format!("{}/seed/{file_stem}", base_uri()),

@@ -28,6 +28,7 @@ struct RoleNeed {
     role_name: String,
     discord_role_id: Option<i64>,
     confirmed_count: i32,
+    pending_count: i32,
     min_count: i32,
     max_count: i32,
     needs_ping: bool,
@@ -285,6 +286,11 @@ async fn get_races_needing_announcements(
                 .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Confirmed))
                 .count() as i32;
 
+            // Count pending volunteers for this role
+            let pending_count = signups.iter()
+                .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Pending))
+                .count() as i32;
+
             // Check if volunteers are needed
             if confirmed_count < binding.max_count {
                 let needs_ping = confirmed_count < binding.min_count;
@@ -292,6 +298,7 @@ async fn get_races_needing_announcements(
                     role_name: binding.role_type_name.clone(),
                     discord_role_id: binding.discord_role_id,
                     confirmed_count,
+                    pending_count,
                     min_count: binding.min_count,
                     max_count: binding.max_count,
                     needs_ping,
@@ -434,17 +441,18 @@ fn build_announcement_message(
             msg.push("/");
             msg.push(&role_need.max_count.to_string());
             msg.push(" confirmed");
+            if role_need.pending_count > 0 {
+                msg.push(" (");
+                msg.push(&role_need.pending_count.to_string());
+                msg.push(" pending)");
+            }
             msg.push("\n");
         }
         msg.push("\n");
     }
 
     // Add signup link
-    msg.push("Sign up: <https://hth.zeldaspeedruns.com/event/");
-    msg.push(event_data.series.slug());
-    msg.push("/");
-    msg.push(&*event_data.event);
-    msg.push("/volunteer-roles>");
+    msg.push(format!("Sign up: <{}/event/{}/{}/volunteer-roles>", base_uri(), event_data.series.slug(), &*event_data.event));
 
     // Build buttons for each race (max 5 buttons per row, max 5 rows = 25 buttons)
     let mut components = Vec::new();

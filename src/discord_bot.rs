@@ -2693,11 +2693,11 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         }
                                         if let Some(xkeys_uuid) = seed.xkeys_uuid {
                                             let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").unwrap();
-                                            patcher_url.query_pairs_mut().append_pair("patch", &format!("https://hth.zeldaspeedruns.com/seed/DR_{xkeys_uuid}.bps"));
+                                            patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{xkeys_uuid}.bps", base_uri()));
                                             seed_msg.push(format!("Door Rando Seed: {}\n", patcher_url));
                                         }
                                         if let Some(file_stem) = &seed.file_stem {
-                                            seed_msg.push(format!("Seed file: https://hth.zeldaspeedruns.com/seed/{}.zpfz\n", file_stem));
+                                            seed_msg.push(format!("Seed file: {}/seed/{}.zpfz\n", base_uri(), file_stem));
                                         }
                                         
                                         // Add hash if available
@@ -2945,7 +2945,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 interaction.create_response(ctx, CreateInteractionResponse::Message(
                                     CreateInteractionResponseMessage::new()
                                         .ephemeral(true)
-                                        .content("You need to link your Discord account on the website first.\nVisit: <https://hth.zeldaspeedruns.com>")
+                                        .content(format!("You need to link your Discord account on the website first.\nVisit: <{}>", base_uri()))
                                 )).await?;
                                 return Ok(());
                             }
@@ -2977,7 +2977,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 CreateInteractionResponseMessage::new()
                                     .ephemeral(true)
                                     .content(format!(
-                                        "You don't have any confirmed volunteer roles for this event.\nApply at: <https://hth.zeldaspeedruns.com/event/{}/{}/volunteer-roles>",
+                                        "You don't have any confirmed volunteer roles for this event.\nApply at: <{}/event/{}/{}/volunteer-roles>",
+                                        base_uri(),
                                         race.series.slug(),
                                         race.event
                                     ))
@@ -3170,16 +3171,17 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
 
                         transaction.commit().await?;
 
-                        // Confirm success
-                        interaction.create_response(ctx, CreateInteractionResponse::Message(
+                        // Confirm success - update the original message to remove buttons
+                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                             CreateInteractionResponseMessage::new()
-                                .ephemeral(true)
                                 .content(format!(
-                                    "You've signed up! Check the race details at: <https://hth.zeldaspeedruns.com/event/{}/{}/races/{}>",
+                                    "You've signed up! Check the race details at: <{}/event/{}/{}/races/{}>",
+                                    base_uri(),
                                     race.series.slug(),
                                     race.event,
                                     u64::from(race_id)
                                 ))
+                                .components(vec![])
                         )).await?;
                     } else {
                         panic!("received message component interaction with unknown custom ID {custom_id:?}")
