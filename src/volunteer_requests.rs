@@ -1,9 +1,10 @@
 use {
     chrono::{Duration, Utc},
+    serenity::all::{ButtonStyle, CreateActionRow, CreateButton, CreateMessage},
     serenity::model::id::{ChannelId, RoleId},
     serenity_utils::message::TimestampStyle,
     sqlx::{PgPool, Postgres, Transaction},
-    std::collections::HashMap,
+    std::{collections::HashMap, mem},
     crate::{
         cal::{Entrant, Entrants, Race, RaceSchedule},
         discord_bot::PgSnowflake,
@@ -194,7 +195,7 @@ async fn post_volunteer_requests_for_event(
     );
 
     // Post to Discord
-    if let Err(e) = channel_id.say(discord_ctx, &message).await {
+    if let Err(e) = channel_id.send_message(discord_ctx, message).await {
         eprintln!("Failed to post volunteer request to Discord: {}", e);
         return Err(e.into());
     }
@@ -365,12 +366,25 @@ async fn get_entrant_name(
     })
 }
 
-/// Builds the Discord announcement message.
+/// Truncates a string to the specified maximum length, adding "..." if truncated.
+fn truncate_string(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        let mut cutoff = max_len.saturating_sub(3);
+        while cutoff > 0 && !s.is_char_boundary(cutoff) {
+            cutoff -= 1;
+        }
+        format!("{}...", &s[..cutoff])
+    }
+}
+
+/// Builds the Discord announcement message with signup buttons.
 fn build_announcement_message(
     needs: &[RaceVolunteerNeed],
     event_data: &event::Data<'_>,
     ping_enabled: bool,
-) -> String {
+) -> CreateMessage {
     let mut msg = MessageBuilder::default();
 
     // Collect all roles that need pinging
@@ -432,5 +446,35 @@ fn build_announcement_message(
     msg.push(&*event_data.event);
     msg.push("/volunteer-roles>");
 
-    msg.build()
+    // Build buttons for each race (max 5 buttons per row, max 5 rows = 25 buttons)
+    let mut components = Vec::new();
+    let mut current_row = Vec::new();
+
+    for need in needs {
+        // Button label: truncate matchup to fit Discord's 80 char limit
+        let label = format!("Sign up: {}", truncate_string(&need.matchup, 60));
+        let button = CreateButton::new(format!("volunteer_signup_{}", u64::from(need.race.id)))
+            .label(label)
+            .style(ButtonStyle::Primary);
+
+        current_row.push(button);
+
+        // Discord allows max 5 buttons per row
+        if current_row.len() >= 5 {
+            components.push(CreateActionRow::Buttons(mem::take(&mut current_row)));
+            // Max 5 rows total
+            if components.len() >= 5 {
+                break;
+            }
+        }
+    }
+
+    // Add any remaining buttons
+    if !current_row.is_empty() && components.len() < 5 {
+        components.push(CreateActionRow::Buttons(current_row));
+    }
+
+    CreateMessage::new()
+        .content(msg.build())
+        .components(components)
 }

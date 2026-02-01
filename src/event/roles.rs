@@ -690,6 +690,48 @@ impl RoleRequest {
         .fetch_optional(&mut **pool)
         .await
     }
+
+    /// Get a user's approved role requests for a specific event.
+    /// This is used for Discord signup buttons to check if a user can sign up for races.
+    pub(crate) async fn for_user_and_event(
+        pool: &mut Transaction<'_, Postgres>,
+        user_id: Id<Users>,
+        series: Series,
+        event: &str,
+    ) -> sqlx::Result<Vec<Self>> {
+        sqlx::query_as!(
+            Self,
+            r#"
+                SELECT
+                    rr.id AS "id: Id<RoleRequests>",
+                    rr.role_binding_id AS "role_binding_id: Id<RoleBindings>",
+                    rr.user_id AS "user_id: Id<Users>",
+                    rr.status AS "status: RoleRequestStatus",
+                    rr.notes,
+                    rr.created_at,
+                    rr.updated_at,
+                    rb.series AS "series: Series",
+                    rb.event,
+                    rb.min_count,
+                    rb.max_count,
+                    rt.name AS "role_type_name",
+                    rb.language AS "language: Language"
+                FROM role_requests rr
+                JOIN role_bindings rb ON rr.role_binding_id = rb.id
+                JOIN role_types rt ON rb.role_type_id = rt.id
+                WHERE rr.user_id = $1
+                  AND rb.series = $2
+                  AND rb.event = $3
+                  AND rr.status = 'approved'
+                ORDER BY rt.name
+            "#,
+            user_id as _,
+            series as _,
+            event
+        )
+        .fetch_all(&mut **pool)
+        .await
+    }
 }
 
 impl Signup {
@@ -881,7 +923,7 @@ async fn roles_page(
         .await?;
 
     let content = if let Some(ref me) = me {
-        if data.organizers(&mut transaction).await?.contains(me) {
+        if data.organizers(&mut transaction).await?.contains(me) || me.is_global_admin() {
             // Check if event uses custom role bindings
             let uses_custom_bindings = sqlx::query_scalar!(
                 r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,

@@ -2832,7 +2832,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
                                 let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
                                 let mut transaction = pool.begin().await?;
-                                
+
                                 // Verify user is a member of the team
                                 let is_team_member = sqlx::query_scalar!(
                                     r#"SELECT EXISTS (
@@ -2843,7 +2843,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     team_id as i64,
                                     interaction.user.id.get() as i64
                                 ).fetch_one(&mut *transaction).await?;
-                                
+
                                 if !is_team_member {
                                     interaction.create_response(ctx, CreateInteractionResponse::Message(
                                         CreateInteractionResponseMessage::new()
@@ -2858,7 +2858,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         team_id as i64,
                                         async_kind_int as i16
                                     ).fetch_optional(&mut *transaction).await?;
-                                    
+
                                     if let Some(record) = async_team {
                                         if record.start_time.is_none() {
                                             interaction.create_response(ctx, CreateInteractionResponse::Message(
@@ -2879,19 +2879,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             let now = Utc::now();
                                             let start_time = record.start_time.unwrap();
                                             let duration = now.signed_duration_since(start_time);
-                                            
+
                                             let total_seconds = duration.num_seconds();
                                             let hours = total_seconds / 3600;
                                             let minutes = (total_seconds % 3600) / 60;
                                             let seconds = total_seconds % 60;
                                             let formatted_time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
-                                            
+
                                             // Remove button and send completion message
                                             interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                                 CreateInteractionResponseMessage::new()
                                                     .components(vec![])
                                             )).await?;
-                                            
+
                                             let mut msg = MessageBuilder::default();
                                             msg.push("@here - **Qualifier run complete!**\n\n");
                                             msg.push(format!("**Estimated finish time:** {}\n\n", formatted_time));
@@ -2899,9 +2899,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             msg.push("• A link to your VOD/recording\n");
                                             msg.push("• A screenshot of your final time/collection rate\n\n");
                                             msg.push("Staff will verify and record your official time using `/result-async`.");
-                                            
+
                                             interaction.channel_id.say(ctx, msg.build()).await?;
-                                            
+
                                             transaction.commit().await?;
                                         }
                                     } else {
@@ -2915,6 +2915,272 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 }
                             }
                         }
+                    } else if let Some(race_id_str) = custom_id.strip_prefix("volunteer_signup_") {
+                        // Handle volunteer signup button - shows available roles for the user
+                        let (pool, http_client) = {
+                            let data = ctx.data.read().await;
+                            (
+                                data.get::<DbPool>().expect("database connection pool missing from Discord context").clone(),
+                                data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
+                            )
+                        };
+                        let mut transaction = pool.begin().await?;
+
+                        let race_id: Id<Races> = match race_id_str.parse::<u64>() {
+                            Ok(id) => Id::from(id),
+                            Err(_) => {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("Invalid race ID.")
+                                )).await?;
+                                return Ok(());
+                            }
+                        };
+
+                        // Get the user from Discord ID
+                        let user = match User::from_discord(&mut *transaction, interaction.user.id).await? {
+                            Some(u) => u,
+                            None => {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("You need to link your Discord account on the website first.\nVisit: <https://hth.zeldaspeedruns.com>")
+                                )).await?;
+                                return Ok(());
+                            }
+                        };
+
+                        // Get the race
+                        let race = match Race::from_id(&mut transaction, &http_client, race_id).await {
+                            Ok(r) => r,
+                            Err(_) => {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("Could not find this race.")
+                                )).await?;
+                                return Ok(());
+                            }
+                        };
+
+                        // Get user's approved role requests for this event
+                        let approved_requests = event::roles::RoleRequest::for_user_and_event(
+                            &mut transaction,
+                            user.id,
+                            race.series,
+                            &race.event,
+                        ).await?;
+
+                        if approved_requests.is_empty() {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content(format!(
+                                        "You don't have any confirmed volunteer roles for this event.\nApply at: <https://hth.zeldaspeedruns.com/event/{}/{}/volunteer-roles>",
+                                        race.series.slug(),
+                                        race.event
+                                    ))
+                            )).await?;
+                            return Ok(());
+                        }
+
+                        // Get role bindings and current signups for this race
+                        let bindings = event::roles::EffectiveRoleBinding::for_event(&mut transaction, race.series, &race.event).await?;
+                        let signups = event::roles::Signup::for_race(&mut transaction, race_id).await?;
+
+                        // Build buttons for each approved role that's still available
+                        let mut buttons = Vec::new();
+                        for request in &approved_requests {
+                            // Find the matching binding
+                            let binding = bindings.iter().find(|b| b.id == request.role_binding_id);
+                            if let Some(binding) = binding {
+                                if binding.is_disabled {
+                                    continue;
+                                }
+
+                                // Check if already signed up for this role
+                                let already_signed = signups.iter().any(|s|
+                                    s.user_id == user.id && s.role_binding_id == binding.id
+                                );
+                                if already_signed {
+                                    continue;
+                                }
+
+                                // Check if role is full (confirmed count >= max)
+                                let confirmed_count = signups.iter()
+                                    .filter(|s| s.role_binding_id == binding.id && matches!(s.status, event::roles::VolunteerSignupStatus::Confirmed))
+                                    .count() as i32;
+                                if confirmed_count >= binding.max_count {
+                                    continue;
+                                }
+
+                                // Add button for this role
+                                let label = if binding.language == English {
+                                    binding.role_type_name.clone()
+                                } else {
+                                    format!("{} ({})", binding.role_type_name, binding.language.short_code())
+                                };
+                                buttons.push(
+                                    CreateButton::new(format!("volunteer_role_{}_{}", u64::from(race_id), u64::from(binding.id)))
+                                        .label(label)
+                                        .style(ButtonStyle::Success)
+                                );
+
+                                // Discord limit: max 5 buttons per row, we'll use one row
+                                if buttons.len() >= 5 {
+                                    break;
+                                }
+                            }
+                        }
+
+                        if buttons.is_empty() {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content("All roles you're qualified for are either full or you're already signed up.")
+                            )).await?;
+                            return Ok(());
+                        }
+
+                        // Show role selection
+                        interaction.create_response(ctx, CreateInteractionResponse::Message(
+                            CreateInteractionResponseMessage::new()
+                                .ephemeral(true)
+                                .content("Select the role you want to sign up for:")
+                                .components(vec![CreateActionRow::Buttons(buttons)])
+                        )).await?;
+
+                        transaction.commit().await?;
+                    } else if let Some(params) = custom_id.strip_prefix("volunteer_role_") {
+                        // Handle volunteer role selection - creates the signup
+                        let (pool, http_client) = {
+                            let data = ctx.data.read().await;
+                            (
+                                data.get::<DbPool>().expect("database connection pool missing from Discord context").clone(),
+                                data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
+                            )
+                        };
+                        let mut transaction = pool.begin().await?;
+
+                        // Parse race_id and binding_id from custom_id
+                        let (race_id_str, binding_id_str) = match params.split_once('_') {
+                            Some((r, b)) => (r, b),
+                            None => {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("Invalid button format.")
+                                )).await?;
+                                return Ok(());
+                            }
+                        };
+
+                        let race_id: Id<Races> = match race_id_str.parse::<u64>() {
+                            Ok(id) => Id::from(id),
+                            Err(_) => {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("Invalid race ID.")
+                                )).await?;
+                                return Ok(());
+                            }
+                        };
+
+                        let binding_id: Id<RoleBindings> = match binding_id_str.parse::<u64>() {
+                            Ok(id) => Id::from(id),
+                            Err(_) => {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("Invalid role binding ID.")
+                                )).await?;
+                                return Ok(());
+                            }
+                        };
+
+                        // Get the user from Discord ID
+                        let user = match User::from_discord(&mut *transaction, interaction.user.id).await? {
+                            Some(u) => u,
+                            None => {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("You need to link your Discord account on the website first.")
+                                )).await?;
+                                return Ok(());
+                            }
+                        };
+
+                        // Get the race
+                        let race = match Race::from_id(&mut transaction, &http_client, race_id).await {
+                            Ok(r) => r,
+                            Err(_) => {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("Could not find this race.")
+                                )).await?;
+                                return Ok(());
+                            }
+                        };
+
+                        // Verify user still has an approved request for this role binding
+                        let has_approval = event::roles::RoleRequest::approved_for_user(
+                            &mut transaction,
+                            binding_id,
+                            user.id,
+                        ).await?;
+
+                        if !has_approval {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content("You don't have permission for this role.")
+                            )).await?;
+                            return Ok(());
+                        }
+
+                        // Check if already signed up
+                        let already_signed = event::roles::Signup::active_for_user(
+                            &mut transaction,
+                            race_id,
+                            binding_id,
+                            user.id,
+                        ).await?;
+
+                        if already_signed {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content("You're already signed up for this role on this race.")
+                            )).await?;
+                            return Ok(());
+                        }
+
+                        // Create the signup
+                        event::roles::Signup::create(
+                            &mut transaction,
+                            race_id,
+                            binding_id,
+                            user.id,
+                            None,
+                        ).await?;
+
+                        transaction.commit().await?;
+
+                        // Confirm success
+                        interaction.create_response(ctx, CreateInteractionResponse::Message(
+                            CreateInteractionResponseMessage::new()
+                                .ephemeral(true)
+                                .content(format!(
+                                    "You've signed up! Check the race details at: <https://hth.zeldaspeedruns.com/event/{}/{}/races/{}>",
+                                    race.series.slug(),
+                                    race.event,
+                                    u64::from(race_id)
+                                ))
+                        )).await?;
                     } else {
                         panic!("received message component interaction with unknown custom ID {custom_id:?}")
                     },
