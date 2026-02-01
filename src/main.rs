@@ -68,6 +68,7 @@ mod team;
 mod time;
 #[cfg(unix)] mod unix_socket;
 mod user;
+mod volunteer_requests;
 mod weekly;
 
 include!(concat!(env!("OUT_DIR"), "/version.rs"));
@@ -149,6 +150,7 @@ enum Error {
     #[error(transparent)] Serenity(#[from] serenity::Error),
     #[error(transparent)] Sql(#[from] sqlx::Error),
     #[error(transparent)] Task(#[from] tokio::task::JoinError),
+    #[error(transparent)] VolunteerRequests(#[from] volunteer_requests::Error),
     #[cfg(unix)] #[error(transparent)] Wheel(#[from] wheel::Error),
     #[cfg(unix)] #[error(transparent)] Write(#[from] async_proto::WriteError),
 }
@@ -285,6 +287,11 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Ok(Err(e)) => Err(Error::from(e)),
             Err(e) => Err(Error::Task(e)),
         });
+        let volunteer_request_task = tokio::spawn(volunteer_request_manager(db_pool.clone(), discord_builder.ctx_fut.clone(), rocket.shutdown())).map(|res| match res {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(e),
+            Err(e) => Err(Error::Task(e)),
+        });
         let async_race_task = tokio::spawn(async_race_manager(db_pool, discord_builder.ctx_fut.clone(), http_client, rocket.shutdown())).map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(e),
@@ -306,7 +313,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Err(e) => Err(Error::from(e)),
         });
         #[cfg(not(unix))] let unix_socket_task = future::ok(());
-        let ((), (), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, async_race_task, rocket_task, unix_socket_task)?;
+        let ((), (), (), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, async_race_task, volunteer_request_task, rocket_task, unix_socket_task)?;
     }
     Ok(())
 }
@@ -331,6 +338,29 @@ async fn async_race_manager(
             _ = shutdown.clone() => break,
         }
     }
-    
+
+    Ok(())
+}
+
+/// Background task for posting volunteer request announcements
+async fn volunteer_request_manager(
+    db_pool: PgPool,
+    discord_ctx: RwFuture<DiscordCtx>,
+    shutdown: rocket::Shutdown,
+) -> Result<(), Error> {
+    let mut interval = tokio::time::interval(Duration::from_secs(30 * 60)); // Check every 30 minutes
+
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                let discord_ctx = discord_ctx.read().await;
+                if let Err(e) = volunteer_requests::check_and_post_volunteer_requests(&db_pool, &discord_ctx).await {
+                    eprintln!("Error checking volunteer requests: {}", e);
+                }
+            }
+            _ = shutdown.clone() => break,
+        }
+    }
+
     Ok(())
 }

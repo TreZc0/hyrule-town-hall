@@ -1472,6 +1472,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             ignored: race.ignored,
                                             schedule_locked: race.schedule_locked,
                                             discord_scheduled_event_id: race.discord_scheduled_event_id,
+                                            volunteer_request_sent: race.volunteer_request_sent,
                                         };
                                         race.save(&mut transaction).await?;
                                         

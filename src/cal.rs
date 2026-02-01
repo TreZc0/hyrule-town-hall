@@ -384,6 +384,7 @@ pub(crate) struct Race {
     pub(crate) async_notified_2: bool,
     pub(crate) async_notified_3: bool,
     pub(crate) discord_scheduled_event_id: Option<PgSnowflake<ScheduledEventId>>,
+    pub(crate) volunteer_request_sent: bool,
 }
 
 impl Race {
@@ -461,7 +462,8 @@ impl Race {
             async_notified_1,
             async_notified_2,
             async_notified_3,
-            discord_scheduled_event_id AS "discord_scheduled_event_id: PgSnowflake<ScheduledEventId>"
+            discord_scheduled_event_id AS "discord_scheduled_event_id: PgSnowflake<ScheduledEventId>",
+            volunteer_request_sent
         FROM races WHERE id = $1"#, id as _).fetch_one(&mut **transaction).await?;
         let source = if let Some(id) = row.challonge_match {
             Source::Challonge { id }
@@ -616,6 +618,7 @@ impl Race {
             async_notified_2: row.async_notified_2,
             async_notified_3: row.async_notified_3,
             discord_scheduled_event_id: row.discord_scheduled_event_id.map(|PgSnowflake(id)| PgSnowflake(id)),
+            volunteer_request_sent: row.volunteer_request_sent,
             id, source, entrants,
         })
     }
@@ -686,6 +689,7 @@ impl Race {
                     async_notified_2: false,
                     async_notified_3: false,
                     discord_scheduled_event_id: None,
+                    volunteer_request_sent: false,
                 });
                 races.last_mut().expect("just pushed")
             }.save(&mut *transaction).await?,
@@ -735,6 +739,7 @@ impl Race {
                                     async_notified_2: false,
                                     async_notified_3: false,
                                     discord_scheduled_event_id: None,
+                                    volunteer_request_sent: false,
                                     schedule,
                                 };
                                 race.save(&mut *transaction).await?;
@@ -783,6 +788,7 @@ impl Race {
                                     async_notified_2: false,
                                     async_notified_3: false,
                                     discord_scheduled_event_id: None,
+                                    volunteer_request_sent: false,
                                     schedule,
                                 };
                                 race.save(&mut *transaction).await?;
@@ -2042,6 +2048,7 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
                     async_notified_2: false,
                     async_notified_3: false,
                     discord_scheduled_event_id: None,
+                    volunteer_request_sent: false,
                     scheduling_thread,
                 };
                 if game == 1 {
@@ -2844,6 +2851,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                     async_notified_2: false,
                                     async_notified_3: false,
                                     discord_scheduled_event_id: None,
+                                    volunteer_request_sent: false,
                                 };
                                 if let Some(race) = races.iter_mut().find(|race| if let Source::League { id } = race.source { id == match_data.id } else { false }) {
                                     if !race.schedule_locked {

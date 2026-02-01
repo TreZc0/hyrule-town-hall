@@ -23,6 +23,7 @@ use {
         game,
         cal::{Race, RaceSchedule, Entrants, Entrant},
         prelude::DiscordCtx,
+        volunteer_requests,
     },
     rocket_util::Origin,
     std::collections::{HashMap, HashSet},
@@ -45,6 +46,8 @@ pub(crate) enum Error {
     Cal(#[from] cal::Error),
     #[error(transparent)]
     Game(#[from] game::GameError),
+    #[error(transparent)]
+    VolunteerRequests(#[from] volunteer_requests::Error),
 }
 
 impl From<Error> for StatusOrError<Error> {
@@ -933,6 +936,32 @@ async fn roles_page(
             let base_url = format!("/event/{}/{}/roles", data.series.slug(), &data.event);
 
             html! {
+                h2 : "Volunteer Request Settings";
+                p : "Configure automatic volunteer request announcements for upcoming races.";
+
+                @let mut errors = ctx.errors().collect_vec();
+                : full_form(uri!(update_volunteer_request_settings(data.series, &*data.event)), csrf.as_ref(), html! {
+                    : form_field("volunteer_requests_enabled", &mut errors, html! {
+                        input(type = "checkbox", name = "volunteer_requests_enabled", id = "volunteer_requests_enabled", checked? = data.volunteer_requests_enabled);
+                        label(for = "volunteer_requests_enabled") : " Enable automatic volunteer request posts";
+                    });
+                    : form_field("volunteer_request_lead_time_hours", &mut errors, html! {
+                        label(for = "volunteer_request_lead_time_hours") : "Lead time (hours before race):";
+                        input(type = "number", name = "volunteer_request_lead_time_hours", id = "volunteer_request_lead_time_hours", value = data.volunteer_request_lead_time_hours.to_string(), min = "1", max = "168");
+                    });
+                    : form_field("volunteer_request_ping_enabled", &mut errors, html! {
+                        input(type = "checkbox", name = "volunteer_request_ping_enabled", id = "volunteer_request_ping_enabled", checked? = data.volunteer_request_ping_enabled);
+                        label(for = "volunteer_request_ping_enabled") : " Ping roles when below minimum volunteers";
+                    });
+                }, errors, "Save Volunteer Request Settings");
+
+                // Manual trigger button
+                : full_form(uri!(trigger_volunteer_requests(data.series, &*data.event)), csrf.as_ref(), html! {
+                    p : "Manually check for races needing volunteers and post announcements now.";
+                }, Vec::new(), "Check Now");
+
+                hr;
+
                 h2 : "Role Management";
                 p : "Manage volunteer roles for this event.";
 
@@ -4264,4 +4293,146 @@ pub(crate) async fn copy_volunteers_from_event(
             .await?,
         )
     })
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct VolunteerRequestSettingsForm {
+    #[field(default = String::new())]
+    csrf: String,
+    #[field(default = false)]
+    volunteer_requests_enabled: bool,
+    volunteer_request_lead_time_hours: i32,
+    #[field(default = false)]
+    volunteer_request_ping_enabled: bool,
+}
+
+#[rocket::post("/event/<series>/<event>/roles/volunteer-request-settings", data = "<form>")]
+pub(crate) async fn update_volunteer_request_settings(
+    pool: &State<PgPool>,
+    me: User,
+    series: Series,
+    event: &str,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, VolunteerRequestSettingsForm>>
+) -> Result<RedirectOrContent, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    Ok(if let Some(ref value) = form.value {
+        if data.is_ended() {
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be configured.",
+            ));
+        }
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+            form.context.push_error(form::Error::validation(
+                "You must be an organizer to manage volunteer request settings.",
+            ));
+        }
+        if value.volunteer_request_lead_time_hours < 1 || value.volunteer_request_lead_time_hours > 168 {
+            form.context.push_error(form::Error::validation(
+                "Lead time must be between 1 and 168 hours.",
+            ));
+        }
+
+        if form.context.errors().next().is_some() {
+            RedirectOrContent::Content(
+                roles_page(
+                    transaction,
+                    Some(me),
+                    &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
+                    data,
+                    form.context,
+                    csrf,
+                    None,
+                )
+                .await?,
+            )
+        } else {
+            sqlx::query!(
+                r#"UPDATE events SET
+                    volunteer_requests_enabled = $1,
+                    volunteer_request_lead_time_hours = $2,
+                    volunteer_request_ping_enabled = $3
+                WHERE series = $4 AND event = $5"#,
+                value.volunteer_requests_enabled,
+                value.volunteer_request_lead_time_hours,
+                value.volunteer_request_ping_enabled,
+                series as _,
+                event
+            )
+            .execute(&mut *transaction)
+            .await?;
+
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
+        }
+    } else {
+        RedirectOrContent::Content(
+            roles_page(
+                transaction,
+                Some(me),
+                &Origin(HttpOrigin::parse_owned(format!("/event/{}/{}/roles", series.slug(), event)).unwrap()),
+                data,
+                form.context,
+                csrf,
+                None,
+            )
+            .await?,
+        )
+    })
+}
+
+#[rocket::post("/event/<series>/<event>/roles/trigger-volunteer-requests", data = "<form>")]
+pub(crate) async fn trigger_volunteer_requests(
+    pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
+    me: User,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, EmptyForm>>
+) -> Result<Redirect, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    // Check organizer permission
+    if !data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+
+    // Validate CSRF
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.value.is_none() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+
+    transaction.commit().await?;
+
+    // Trigger the check
+    let discord = discord_ctx.read().await;
+    match volunteer_requests::check_and_post_for_event(pool.inner(), &*discord, series, event).await {
+        Ok(volunteer_requests::CheckResult::Posted(count)) => {
+            println!("Manually triggered volunteer requests for {}/{}: posted {} races", series.slug(), event, count);
+        }
+        Ok(volunteer_requests::CheckResult::NoRacesNeeded) => {
+            println!("Manually triggered volunteer requests for {}/{}: no races needed", series.slug(), event);
+        }
+        Ok(volunteer_requests::CheckResult::NotEnabled) => {
+            println!("Manually triggered volunteer requests for {}/{}: not enabled", series.slug(), event);
+        }
+        Ok(volunteer_requests::CheckResult::NoChannel) => {
+            println!("Manually triggered volunteer requests for {}/{}: no channel configured", series.slug(), event);
+        }
+        Err(e) => {
+            eprintln!("Error triggering volunteer requests for {}/{}: {}", series.slug(), event, e);
+        }
+    }
+
+    Ok(Redirect::to(uri!(get(series, event, _))))
 }

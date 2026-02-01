@@ -203,6 +203,12 @@ pub(crate) struct Data<'a> {
     /// When true, qualifier requests create Discord threads with READY/countdown/FINISH buttons
     /// instead of using web forms for submission.
     pub(crate) automated_asyncs: bool,
+    /// When true, automatic volunteer request posts are enabled for this event.
+    pub(crate) volunteer_requests_enabled: bool,
+    /// How many hours in advance to post volunteer request announcements.
+    pub(crate) volunteer_request_lead_time_hours: i32,
+    /// When true, role pings are included in volunteer request posts when below min_count.
+    pub(crate) volunteer_request_ping_enabled: bool,
 }
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
@@ -265,7 +271,10 @@ impl<'a> Data<'a> {
             discord_events_require_restream,
             listed,
             round_modes AS "round_modes: Json<HashMap<String, String>>",
-            automated_asyncs
+            automated_asyncs,
+            volunteer_requests_enabled,
+            volunteer_request_lead_time_hours,
+            volunteer_request_ping_enabled
         FROM events WHERE series = $1 AND event = $2"#, series as _, &event).fetch_optional(&mut **transaction).await?
             .map(|row| Ok::<_, DataError>(Self {
                 display_name: row.display_name,
@@ -318,6 +327,9 @@ impl<'a> Data<'a> {
                 listed: row.listed,
                 round_modes: row.round_modes.map(|Json(round_modes)| round_modes),
                 automated_asyncs: row.automated_asyncs,
+                volunteer_requests_enabled: row.volunteer_requests_enabled,
+                volunteer_request_lead_time_hours: row.volunteer_request_lead_time_hours,
+                volunteer_request_ping_enabled: row.volunteer_request_ping_enabled,
             }))
             .transpose()
     }
@@ -804,9 +816,9 @@ impl<'a> Data<'a> {
                             a(class = "button", href = uri!(configure::get(self.series, &*self.event))) : "Configure";
                         }
                         @if let Tab::Roles = tab {
-                            a(class = "button selected", href? = is_subpage.then(|| uri!(roles::get(self.series, &*self.event, _)))) : "Roles";
+                            a(class = "button selected", href? = is_subpage.then(|| uri!(roles::get(self.series, &*self.event, _)))) : "Volunteer Setup";
                         } else {
-                            a(class = "button", href = uri!(roles::get(self.series, &*self.event, _))) : "Roles";
+                            a(class = "button", href = uri!(roles::get(self.series, &*self.event, _))) : "Volunteer Setup";
                         }
                         @if self.asyncs_active {
                             @if let Tab::Asyncs = tab {

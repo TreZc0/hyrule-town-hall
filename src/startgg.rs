@@ -298,6 +298,7 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
             async_notified_2: false,
             async_notified_3: false,
             discord_scheduled_event_id: None,
+            volunteer_request_sent: false,
             phase,
             round,
         });
