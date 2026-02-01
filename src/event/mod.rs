@@ -209,6 +209,8 @@ pub(crate) struct Data<'a> {
     pub(crate) volunteer_request_lead_time_hours: i32,
     /// When true, role pings are included in volunteer request posts when below min_count.
     pub(crate) volunteer_request_ping_enabled: bool,
+    /// When true, uses event-specific role bindings. When false, uses game-level role bindings.
+    pub(crate) force_custom_role_binding: bool,
 }
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
@@ -274,7 +276,8 @@ impl<'a> Data<'a> {
             automated_asyncs,
             volunteer_requests_enabled,
             volunteer_request_lead_time_hours,
-            volunteer_request_ping_enabled
+            volunteer_request_ping_enabled,
+            force_custom_role_binding
         FROM events WHERE series = $1 AND event = $2"#, series as _, &event).fetch_optional(&mut **transaction).await?
             .map(|row| Ok::<_, DataError>(Self {
                 display_name: row.display_name,
@@ -330,6 +333,7 @@ impl<'a> Data<'a> {
                 volunteer_requests_enabled: row.volunteer_requests_enabled,
                 volunteer_request_lead_time_hours: row.volunteer_request_lead_time_hours,
                 volunteer_request_ping_enabled: row.volunteer_request_ping_enabled,
+                force_custom_role_binding: row.force_custom_role_binding.unwrap_or(true),
             }))
             .transpose()
     }

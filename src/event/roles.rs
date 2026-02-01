@@ -732,6 +732,47 @@ impl RoleRequest {
         .fetch_all(&mut **pool)
         .await
     }
+
+    /// Get a user's approved role requests for a game (game-level role bindings).
+    /// This is used for Discord signup buttons when events use game-level bindings.
+    pub(crate) async fn for_user_and_game(
+        pool: &mut Transaction<'_, Postgres>,
+        user_id: Id<Users>,
+        game_id: i32,
+    ) -> sqlx::Result<Vec<Self>> {
+        sqlx::query_as!(
+            Self,
+            r#"
+                SELECT
+                    rr.id AS "id: Id<RoleRequests>",
+                    rr.role_binding_id AS "role_binding_id: Id<RoleBindings>",
+                    rr.user_id AS "user_id: Id<Users>",
+                    rr.status AS "status: RoleRequestStatus",
+                    rr.notes,
+                    rr.created_at,
+                    rr.updated_at,
+                    rb.series AS "series: Series",
+                    rb.event,
+                    rb.min_count,
+                    rb.max_count,
+                    rt.name AS "role_type_name",
+                    rb.language AS "language: Language"
+                FROM role_requests rr
+                JOIN role_bindings rb ON rr.role_binding_id = rb.id
+                JOIN role_types rt ON rb.role_type_id = rt.id
+                WHERE rr.user_id = $1
+                  AND rb.game_id = $2
+                  AND rb.series IS NULL
+                  AND rb.event IS NULL
+                  AND rr.status = 'approved'
+                ORDER BY rt.name
+            "#,
+            user_id as _,
+            game_id
+        )
+        .fetch_all(&mut **pool)
+        .await
+    }
 }
 
 impl Signup {

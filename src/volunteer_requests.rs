@@ -27,6 +27,7 @@ pub(crate) enum Error {
 struct RoleNeed {
     role_name: String,
     discord_role_id: Option<i64>,
+    confirmed_names: Vec<String>,
     confirmed_count: i32,
     pending_count: i32,
     min_count: i32,
@@ -281,10 +282,19 @@ async fn get_races_needing_announcements(
                 continue;
             }
 
-            // Count confirmed volunteers for this role
-            let confirmed_count = signups.iter()
+            // Get confirmed signups for this role
+            let confirmed_signups: Vec<_> = signups.iter()
                 .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Confirmed))
-                .count() as i32;
+                .collect();
+            let confirmed_count = confirmed_signups.len() as i32;
+
+            // Get names of confirmed volunteers
+            let mut confirmed_names = Vec::new();
+            for signup in &confirmed_signups {
+                if let Ok(Some(user)) = User::from_id(&mut **transaction, signup.user_id).await {
+                    confirmed_names.push(user.display_name().to_owned());
+                }
+            }
 
             // Count pending volunteers for this role
             let pending_count = signups.iter()
@@ -297,6 +307,7 @@ async fn get_races_needing_announcements(
                 role_needs.push(RoleNeed {
                     role_name: binding.role_type_name.clone(),
                     discord_role_id: binding.discord_role_id,
+                    confirmed_names,
                     confirmed_count,
                     pending_count,
                     min_count: binding.min_count,
@@ -437,10 +448,17 @@ fn build_announcement_message(
             msg.push("  - ");
             msg.push(&role_need.role_name);
             msg.push(": ");
+            if !role_need.confirmed_names.is_empty() {
+                msg.push(&role_need.confirmed_names.join(", "));
+                msg.push(" ");
+            } else {
+                msg.push("none yet ");
+            }
+            msg.push("(");
             msg.push(&role_need.confirmed_count.to_string());
             msg.push("/");
             msg.push(&role_need.max_count.to_string());
-            msg.push(" confirmed");
+            msg.push(")");
             if role_need.pending_count > 0 {
                 msg.push(" (");
                 msg.push(&role_need.pending_count.to_string());

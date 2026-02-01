@@ -2964,13 +2964,37 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             }
                         };
 
-                        // Get user's approved role requests for this event
-                        let approved_requests = event::roles::RoleRequest::for_user_and_event(
-                            &mut transaction,
-                            user.id,
-                            race.series,
-                            &race.event,
-                        ).await?;
+                        // Check if event uses custom role bindings or game-level bindings
+                        let uses_custom_bindings = sqlx::query_scalar!(
+                            r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,
+                            race.series as _,
+                            &race.event
+                        )
+                        .fetch_optional(&mut *transaction)
+                        .await?
+                        .unwrap_or(Some(true))
+                        .unwrap_or(true);
+
+                        // Get user's approved role requests
+                        let approved_requests = if uses_custom_bindings {
+                            event::roles::RoleRequest::for_user_and_event(
+                                &mut transaction,
+                                user.id,
+                                race.series,
+                                &race.event,
+                            ).await?
+                        } else {
+                            // Get game-level role requests
+                            if let Some(game) = crate::game::Game::from_series(&mut transaction, race.series).await? {
+                                event::roles::RoleRequest::for_user_and_game(
+                                    &mut transaction,
+                                    user.id,
+                                    game.id,
+                                ).await?
+                            } else {
+                                Vec::new()
+                            }
+                        };
 
                         if approved_requests.is_empty() {
                             interaction.create_response(ctx, CreateInteractionResponse::Message(

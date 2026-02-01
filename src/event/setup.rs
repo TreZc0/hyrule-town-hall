@@ -227,6 +227,12 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             input(type = "checkbox", id = "show_opt_out", name = "show_opt_out", checked? = ctx.field_value("show_opt_out").map_or(event.show_opt_out, |value| value == "on"));
                             label(for = "show_opt_out") : "Show Opt-Out";
                         });
+
+                        : form_field("force_custom_role_binding", &mut errors, html! {
+                            input(type = "checkbox", id = "force_custom_role_binding", name = "force_custom_role_binding", checked? = ctx.field_value("force_custom_role_binding").map_or(event.force_custom_role_binding, |value| value == "on"));
+                            label(for = "force_custom_role_binding") : "Use event-specific volunteer roles";
+                            label(class = "help") : " (When enabled, uses event-specific role bindings. When disabled, uses game-level volunteer roles.)";
+                        });
                     }, errors.clone(), "Save Basic Info");
                     
                     h3 : "Enter Flow Configuration";
@@ -393,6 +399,7 @@ pub(crate) struct SetupForm {
     hide_races_tab: bool,
     show_qualifier_times: bool,
     show_opt_out: bool,
+    force_custom_role_binding: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/setup", data = "<form>")]
@@ -704,8 +711,8 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                     challonge_community = $21, team_config = $22, language = $23,
                     default_game_count = $24, open_stream_delay = $25, invitational_stream_delay = $26,
                     hide_teams_tab = $27, hide_races_tab = $28, show_qualifier_times = $29,
-                    show_opt_out = $30
-                WHERE series = $31 AND event = $32
+                    show_opt_out = $30, force_custom_role_binding = $31
+                WHERE series = $32 AND event = $33
             "#,
                 value.display_name,
                 start,
@@ -737,6 +744,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 value.hide_races_tab,
                 value.show_qualifier_times,
                 value.show_opt_out,
+                value.force_custom_role_binding,
                 event_data.series as _,
                 &event_data.event
             ).execute(&mut *transaction).await?;
