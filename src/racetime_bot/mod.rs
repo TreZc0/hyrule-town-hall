@@ -2730,21 +2730,43 @@ impl SeedRollUpdate {
                     seed::Files::TriforceBlitz { is_dev: false, uuid } => format!("https://www.triforceblitz.com/seed/{uuid}"),
                     seed::Files::TriforceBlitz { is_dev: true, uuid } => format!("https://dev.triforceblitz.com/seeds/{uuid}"),
                     seed::Files::TfbSotd { ordinal, .. } => format!("https://www.triforceblitz.com/seed/daily/{ordinal}"),
-                    seed::Files::TwwrPermalink { permalink, .. } => format!("{permalink}"),
+                    seed::Files::TwwrPermalink { permalink, .. } => format!("Permalink {permalink}"),
                 };
-                let mut message = if let French = language {
+                let message = if let French = language {
                     format!("@entrants Voici votre seed : {seed_url}")
                 } else {
                     format!("@entrants Here is your seed: {seed_url}")
                 };
-                if let Some(VersionedBranch::Tww { identifier, github_url }) = version {
-                    if let French = language {
-                        message.push_str(&format!(" Cette course utilise la version '{identifier}' du randomizer TWW (téléchargement : {github_url})."));
-                    } else {
-                        message.push_str(&format!(" This race uses TWW randomizer build '{identifier}' (download: {github_url})."));
-                    }
-                }
                 ctx.say(message).await?;
+
+                // Send hash to chat with proper emoji formatting (for TWWR and other seeds)
+                let game_id_for_hash = if let Some(OfficialRaceData { event, .. }) = official_data {
+                    let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+                    let game_id = get_game_id_from_event(&mut transaction, &event.series.to_string()).await.to_racetime()?;
+                    transaction.commit().await.to_racetime()?;
+                    game_id
+                } else {
+                    1 // Default to OOTR if no official data
+                };
+
+                if let Some(ref file_hash) = extra.file_hash {
+                    let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+                    let formatted_hash = format_hash_with_game_id(file_hash.clone(), &mut transaction, game_id_for_hash).await.to_racetime()?;
+                    transaction.commit().await.to_racetime()?;
+                    ctx.say(if let French = language {
+                        format!("Hash de la seed : {formatted_hash}")
+                    } else {
+                        format!("Seed Hash: {formatted_hash}")
+                    }).await?;
+                }
+
+                if let Some(VersionedBranch::Tww { identifier, github_url }) = version {
+                    ctx.say(if let French = language {
+                        format!("Cette course utilise la version '{identifier}' du randomizer TWW ({github_url}).")
+                    } else {
+                        format!("This race uses TWW randomizer build '{identifier}' ({github_url}).")
+                    }).await?;
+                }
                 match unlock_spoiler_log {
                     UnlockSpoilerLog::Now => ctx.say("The spoiler log is also available on the seed page.").await?,
                     UnlockSpoilerLog::Progression => ctx.say("The progression spoiler is also available on the seed page. The full spoiler will be available there after the race.").await?,
@@ -2768,30 +2790,10 @@ impl SeedRollUpdate {
                 if extra.password.is_some() {
                     ctx.say("Please note that this seed is password protected. You will receive the password to start a file ingame as soon as the countdown starts.").await?;
                 }
-                
-                // Get game_id for the event and call set_bot_raceinfo with database-driven hash icons
-                let game_id = if let Some(OfficialRaceData { event, .. }) = official_data {
-                    let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
-                    let game_id = get_game_id_from_event(&mut transaction, &event.series.to_string()).await.to_racetime()?;
-                    transaction.commit().await.to_racetime()?;
-                    game_id
-                } else {
-                    1 // Default to OOTR if no official data
-                };
-                
+
+                // Set bot race info with database-driven hash icons
                 let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
-
-                // Send hash to chat with proper emoji formatting
-                if let Some(ref file_hash) = extra.file_hash {
-                    let formatted_hash = format_hash_with_game_id(file_hash.clone(), &mut transaction, game_id).await.to_racetime()?;
-                    ctx.say(if let French = language {
-                        format!("Hash de la seed : {formatted_hash}")
-                    } else {
-                        format!("Seed Hash: {formatted_hash}")
-                    }).await?;
-                }
-
-                set_bot_raceinfo(ctx, &seed, rsl_preset, false, &mut transaction, game_id).await?;
+                set_bot_raceinfo(ctx, &seed, rsl_preset, false, &mut transaction, game_id_for_hash).await?;
                 transaction.commit().await.to_racetime()?;
                 
                 if let Some(OfficialRaceData { cal_event, event, restreams, .. }) = official_data {
@@ -2995,20 +2997,23 @@ async fn room_options(goal: Goal, event: &event::Data<'_>, cal_event: &cal::Even
 
 async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl_preset: Option<rsl::Preset>, show_password: bool, transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<(), Error> {
     let extra = seed.extra(Utc::now()).await.to_racetime()?;
-    
-    let file_hash_str = if let Some(ref hash) = extra.file_hash {
-        format_hash_with_game_id(hash.clone(), transaction, game_id).await.to_racetime()?
+
+    // For TWWR, we handle the format differently (permalink + seed hash on one line)
+    let is_twwr = matches!(seed.files.as_ref(), Some(seed::Files::TwwrPermalink { .. }));
+
+    let file_hash_str = if !is_twwr && extra.file_hash.is_some() {
+        format_hash_with_game_id(extra.file_hash.clone().unwrap(), transaction, game_id).await.to_racetime()?
     } else {
         String::new()
     };
-    
+
     ctx.set_bot_raceinfo(&format!(
         "{rsl_preset}{file_hash}{sep}{password}{newline}{seed_url}",
         rsl_preset = rsl_preset.map(|preset| format!("{}\n", preset.race_info())).unwrap_or_default(),
         file_hash = file_hash_str,
-        sep = if extra.file_hash.is_some() && extra.password.is_some() && show_password { " | " } else { "" },
+        sep = if !is_twwr && extra.file_hash.is_some() && extra.password.is_some() && show_password { " | " } else { "" },
         password = extra.password.filter(|_| show_password).map(|password| format_password(password).to_string()).unwrap_or_default(),
-        newline = if extra.file_hash.is_some() || extra.password.is_some() && show_password { "\n" } else { "" },
+        newline = if (!is_twwr && extra.file_hash.is_some()) || extra.password.is_some() && show_password { "\n" } else { "" },
         seed_url = match seed.files.as_ref().expect("received seed with no files") {
                 seed::Files::AlttprDoorRando { uuid } => {
                 let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
@@ -3020,7 +3025,11 @@ async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl
             seed::Files::TriforceBlitz { is_dev: false, uuid } => format!("https://www.triforceblitz.com/seed/{uuid}"),
             seed::Files::TriforceBlitz { is_dev: true, uuid } => format!("https://dev.triforceblitz.com/seeds/{uuid}"),
             seed::Files::TfbSotd { ordinal, .. } => format!("https://www.triforceblitz.com/seed/daily/{ordinal}"),
-            seed::Files::TwwrPermalink { permalink, .. } => permalink.clone(),
+            seed::Files::TwwrPermalink { permalink, .. } => {
+                // Format: "Permalink : {permalink} | Seed Hash: {seed_hash}"
+                let hash_str = format_hash_with_game_id(extra.file_hash.clone().unwrap(), transaction, game_id).await.to_racetime()?;
+                format!("Permalink : {permalink} | Seed Hash: {hash_str}")
+            },
         },
     )).await
 }
