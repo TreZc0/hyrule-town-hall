@@ -246,6 +246,7 @@ pub(crate) struct ExportConfig {
     pub(crate) backend_id: i32,
     pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,
+    pub(crate) estimate_override: Option<String>,
     pub(crate) delay_minutes: i32,
     pub(crate) nodecg_pk: Option<i32>,
     pub(crate) trigger_condition: ExportTrigger,
@@ -266,6 +267,7 @@ impl ExportConfig {
                 backend_id,
                 title,
                 description,
+                estimate_override,
                 delay_minutes,
                 nodecg_pk,
                 trigger_condition AS "trigger_condition: ExportTrigger",
@@ -291,6 +293,7 @@ impl ExportConfig {
                 backend_id,
                 title,
                 description,
+                estimate_override,
                 delay_minutes,
                 nodecg_pk,
                 trigger_condition AS "trigger_condition: ExportTrigger",
@@ -315,6 +318,7 @@ impl ExportConfig {
                 backend_id,
                 title,
                 description,
+                estimate_override,
                 delay_minutes,
                 nodecg_pk,
                 trigger_condition AS "trigger_condition: ExportTrigger",
@@ -335,6 +339,7 @@ impl ExportConfig {
         backend_id: i32,
         title: Option<&str>,
         description: Option<&str>,
+        estimate_override: Option<&str>,
         delay_minutes: i32,
         nodecg_pk: Option<i32>,
         trigger_condition: ExportTrigger,
@@ -342,10 +347,10 @@ impl ExportConfig {
         let id = sqlx::query_scalar!(r#"
             INSERT INTO zsr_restream_exports (
                 series, event, backend_id,
-                title, description, delay_minutes, nodecg_pk,
+                title, description, estimate_override, delay_minutes, nodecg_pk,
                 trigger_condition
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING id
         "#,
             series as _,
@@ -353,6 +358,7 @@ impl ExportConfig {
             backend_id,
             title,
             description,
+            estimate_override,
             delay_minutes,
             nodecg_pk,
             trigger_condition as _
@@ -367,6 +373,7 @@ impl ExportConfig {
             backend_id,
             title: title.map(|s| s.to_owned()),
             description: description.map(|s| s.to_owned()),
+            estimate_override: estimate_override.map(|s| s.to_owned()),
             delay_minutes,
             nodecg_pk,
             trigger_condition,
@@ -380,6 +387,7 @@ impl ExportConfig {
         id: i32,
         title: Option<&str>,
         description: Option<&str>,
+        estimate_override: Option<&str>,
         delay_minutes: i32,
         nodecg_pk: Option<i32>,
         trigger_condition: ExportTrigger,
@@ -389,16 +397,18 @@ impl ExportConfig {
             UPDATE zsr_restream_exports SET
                 title = $2,
                 description = $3,
-                delay_minutes = $4,
-                nodecg_pk = $5,
-                trigger_condition = $6,
-                enabled = $7,
+                estimate_override = $4,
+                delay_minutes = $5,
+                nodecg_pk = $6,
+                trigger_condition = $7,
+                enabled = $8,
                 updated_at = NOW()
             WHERE id = $1
         "#,
             id,
             title,
             description,
+            estimate_override,
             delay_minutes,
             nodecg_pk,
             trigger_condition as _,
@@ -659,7 +669,7 @@ pub(crate) fn get_runner_count(race: &Race) -> i32 {
 }
 
 /// Format a TimeDelta as HH:MM:SS for the estimate column
-fn format_estimate(duration: TimeDelta) -> String {
+pub(crate) fn format_estimate(duration: TimeDelta) -> String {
     let total_seconds = duration.num_seconds();
     let hours = total_seconds / 3600;
     let minutes = (total_seconds % 3600) / 60;
@@ -692,8 +702,9 @@ pub(crate) async fn ensure_description_entry(
         .any(|row| row.first().map(|s| s == title).unwrap_or(false));
 
     if !title_exists {
-        // Get the estimate from the series default duration
-        let estimate = format_estimate(export.series.default_race_duration());
+        // Get the estimate - use override if present, otherwise calculate from series default duration
+        let estimate = export.estimate_override.clone()
+            .unwrap_or_else(|| format_estimate(export.series.default_race_duration()));
 
         // Build the row data
         let values = vec![vec![

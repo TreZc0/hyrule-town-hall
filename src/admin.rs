@@ -1212,7 +1212,7 @@ pub(crate) async fn zsr_backends(
                 });
                 : form_field("notes_col", &mut Vec::new(), html! {
                     label(for = "notes_col") : "Notes Column";
-                    input(type = "text", id = "notes_col", name = "notes_col", required, value = "S", placeholder = "e.g., S");
+                    input(type = "text", id = "notes_col", name = "notes_col", required, value = "N", placeholder = "e.g., N");
                 });
                 : form_field("dst_formula_standard", &mut Vec::new(), html! {
                     label(for = "dst_formula_standard") : "Standard Time Formula";

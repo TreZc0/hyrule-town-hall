@@ -204,8 +204,15 @@ pub(crate) async fn get(
                     });
 
                     : form_field("description", &mut Vec::new(), html! {
-                        label(for = "description") : "Description/Estimate";
-                        input(type = "text", id = "description", name = "description", placeholder = "e.g., 3:00:00");
+                        label(for = "description") : "Description";
+                        textarea(id = "description", name = "description", rows = "3", placeholder = "Event description for the Descriptions sheet");
+                    });
+
+                    : form_field("estimate_override", &mut Vec::new(), html! {
+                        label(for = "estimate_override") : "Estimate Override (optional)";
+                        input(type = "text", id = "estimate_override", name = "estimate_override",
+                            placeholder = format!("Leave empty to use series default ({})",
+                                zsr_export::format_estimate(series.default_race_duration())));
                     });
 
                     : form_field("delay_minutes", &mut Vec::new(), html! {
@@ -260,6 +267,7 @@ pub(crate) struct AddExportForm {
     backend_id: i32,
     title: Option<String>,
     description: Option<String>,
+    estimate_override: Option<String>,
     delay_minutes: i32,
     nodecg_pk: Option<i32>,
     trigger_condition: String,
@@ -292,6 +300,7 @@ pub(crate) async fn add_export(
 
         let title = value.title.as_ref().filter(|s| !s.is_empty()).map(|s| s.as_str());
         let description = value.description.as_ref().filter(|s| !s.is_empty()).map(|s| s.as_str());
+        let estimate_override = value.estimate_override.as_ref().filter(|s| !s.is_empty()).map(|s| s.as_str());
 
         let mut transaction = pool.begin().await?;
 
@@ -302,6 +311,7 @@ pub(crate) async fn add_export(
             value.backend_id,
             title,
             description,
+            estimate_override,
             value.delay_minutes,
             value.nodecg_pk,
             trigger,
@@ -378,9 +388,16 @@ pub(crate) async fn edit_export(
                 });
 
                 : form_field("description", &mut Vec::new(), html! {
-                    label(for = "description") : "Description/Estimate";
-                    input(type = "text", id = "description", name = "description",
-                        value = export.description.as_deref().unwrap_or(""));
+                    label(for = "description") : "Description";
+                    textarea(id = "description", name = "description", rows = "3") : export.description.as_deref().unwrap_or("");
+                });
+
+                : form_field("estimate_override", &mut Vec::new(), html! {
+                    label(for = "estimate_override") : "Estimate Override (optional)";
+                    input(type = "text", id = "estimate_override", name = "estimate_override",
+                        value = export.estimate_override.as_deref().unwrap_or(""),
+                        placeholder = format!("Leave empty to use series default ({})",
+                            zsr_export::format_estimate(export.series.default_race_duration())));
                 });
 
                 : form_field("delay_minutes", &mut Vec::new(), html! {
@@ -434,6 +451,7 @@ pub(crate) struct UpdateExportForm {
     csrf: String,
     title: Option<String>,
     description: Option<String>,
+    estimate_override: Option<String>,
     delay_minutes: i32,
     nodecg_pk: Option<i32>,
     trigger_condition: String,
@@ -467,6 +485,7 @@ pub(crate) async fn update_export(
 
         let title = value.title.as_ref().filter(|s| !s.is_empty()).map(|s| s.as_str());
         let description = value.description.as_ref().filter(|s| !s.is_empty()).map(|s| s.as_str());
+        let estimate_override = value.estimate_override.as_ref().filter(|s| !s.is_empty()).map(|s| s.as_str());
 
         let mut transaction = pool.begin().await?;
 
@@ -475,6 +494,7 @@ pub(crate) async fn update_export(
             export_id,
             title,
             description,
+            estimate_override,
             value.delay_minutes,
             value.nodecg_pk,
             trigger,
