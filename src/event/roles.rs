@@ -2765,6 +2765,14 @@ async fn match_signup_page(
 
         html! {
             h2 : "Match Volunteer Signups";
+
+            // Display form validation errors if any
+            @for error in _ctx.errors() {
+                div(class = "error") {
+                    p : error;
+                }
+            }
+
             h3 {
                 : format!("{} {} {}",
                     race.phase.as_deref().unwrap_or(""),
@@ -2856,7 +2864,7 @@ async fn match_signup_page(
                                             input(type = "hidden", name = "signup_id", value = signup.id.to_string());
                                             input(type = "hidden", name = "action", value = "confirm");
                                             @if active_languages.len() > 1 {
-                                                input(type = "hidden", name = "lang", value = current_language.to_string().to_lowercase());
+                                                input(type = "hidden", name = "lang", value = current_language.short_code());
                                             }
                                         },
                                         "Confirm"
@@ -2871,7 +2879,7 @@ async fn match_signup_page(
                                             input(type = "hidden", name = "signup_id", value = signup.id.to_string());
                                             input(type = "hidden", name = "action", value = "decline");
                                             @if active_languages.len() > 1 {
-                                                input(type = "hidden", name = "lang", value = current_language.to_string().to_lowercase());
+                                                input(type = "hidden", name = "lang", value = current_language.short_code());
                                             }
                                         },
                                         "Decline"
@@ -2888,7 +2896,7 @@ async fn match_signup_page(
                                         html! {
                                             input(type = "hidden", name = "signup_id", value = signup.id.to_string());
                                             @if active_languages.len() > 1 {
-                                                input(type = "hidden", name = "lang", value = current_language.to_string().to_lowercase());
+                                                input(type = "hidden", name = "lang", value = current_language.short_code());
                                             }
                                         },
                                         "Revert to Pending"
@@ -2912,7 +2920,14 @@ async fn match_signup_page(
             }
             @for binding in &filtered_bindings {
                 div(class = "role-binding") {
-                    h4 : binding.role_type_name;
+                    h4 {
+                        : binding.role_type_name;
+                        @if active_languages.len() > 1 {
+                            : " (";
+                            : binding.language.to_string();
+                            : ")";
+                        }
+                    }
                     p {
                         @if binding.min_count == binding.max_count {
                             : "Required: ";
@@ -3024,7 +3039,7 @@ async fn match_signup_page(
                             : full_form(uri!(signup_for_match(data.series, &*data.event, race_id)), csrf.as_ref(), html! {
                                 input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
                                 @if active_languages.len() > 1 {
-                                    input(type = "hidden", name = "lang", value = current_language.to_string().to_lowercase());
+                                    input(type = "hidden", name = "lang", value = current_language.short_code());
                                 }
                                 : form_field("notes", &mut errors, html! {
                                     label(for = "notes") : "Notes:";
