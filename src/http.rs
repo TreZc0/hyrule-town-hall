@@ -287,10 +287,10 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
         };
         // Sort scheduled races first (by start time), then unscheduled races
         match (start1, start2) {
-            (None, None) => std::cmp::Ordering::Equal,
-            (None, Some(_)) => std::cmp::Ordering::Greater, // Unscheduled comes after scheduled
-            (Some(_), None) => std::cmp::Ordering::Less,    // Scheduled comes before unscheduled
-            (Some(s1), Some(s2)) => s1.cmp(&s2),             // Compare scheduled times (soonest first)
+            (None, None) => Equal,
+            (None, Some(_)) => Greater, // Unscheduled comes after scheduled
+            (Some(_), None) => Less,    // Scheduled comes before unscheduled
+            (Some(s1), Some(s2)) => s1.cmp(&s2), // Compare scheduled times (soonest first)
         }
             .then_with(|| race1.series.slug().cmp(race2.series.slug()))
             .then_with(|| race1.event.cmp(&race2.event))
