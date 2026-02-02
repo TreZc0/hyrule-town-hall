@@ -2991,6 +2991,23 @@ async fn match_signup_page(
                                     : errors;
                                     : decline_button;
                                 }
+                            } else if matches!(signup.status, VolunteerSignupStatus::Confirmed | VolunteerSignupStatus::Declined) {
+                                div(class = "signup-actions") {
+                                    @let (errors, revert_button) = button_form_ext(
+                                        uri!(revoke_signup(data.series, &*data.event, race_id)),
+                                        csrf.as_ref(),
+                                        Vec::new(),
+                                        html! {
+                                            input(type = "hidden", name = "signup_id", value = signup.id.to_string());
+                                            @if active_languages.len() > 1 {
+                                                input(type = "hidden", name = "lang", value = current_language.to_string().to_lowercase());
+                                            }
+                                        },
+                                        "Revert to Pending"
+                                    );
+                                    : errors;
+                                    : revert_button;
+                                }
                             }
                         }
                     }
@@ -3335,10 +3352,10 @@ pub(crate) async fn revoke_signup(
             ));
         }
 
-        // Only allow revoking confirmed signups
-        if !matches!(signup.status, VolunteerSignupStatus::Confirmed) {
+        // Only allow reverting confirmed or declined signups
+        if !matches!(signup.status, VolunteerSignupStatus::Confirmed | VolunteerSignupStatus::Declined) {
             form.context.push_error(form::Error::validation(
-                "You can only revoke confirmed signups",
+                "You can only revert confirmed or declined signups",
             ));
         }
 
