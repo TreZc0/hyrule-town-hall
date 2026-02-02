@@ -2439,9 +2439,10 @@ pub(crate) async fn signup_for_match(
             };
             Signup::create(&mut transaction, race_id, value.role_binding_id, me.id, notes).await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(
-                series, &*event, race_id, value.lang
-            ))))
+            RedirectOrContent::Redirect(match value.lang {
+                Some(lang) => Redirect::to(format!("/event/{}/{}/races/{}/signups?lang={}", series.slug(), event, race_id, lang.short_code())),
+                None => Redirect::to(format!("/event/{}/{}/races/{}/signups", series.slug(), event, race_id)),
+            })
         }
     } else {
         RedirectOrContent::Content(
@@ -2697,9 +2698,10 @@ pub(crate) async fn manage_roster(
             }
 
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(
-                series, &*event, race_id, value.lang
-            ))))
+            RedirectOrContent::Redirect(match value.lang {
+                Some(lang) => Redirect::to(format!("/event/{}/{}/races/{}/signups?lang={}", series.slug(), event, race_id, lang.short_code())),
+                None => Redirect::to(format!("/event/{}/{}/races/{}/signups", series.slug(), event, race_id)),
+            })
         }
     } else {
         RedirectOrContent::Content(
@@ -3156,7 +3158,10 @@ pub(crate) async fn withdraw_signup(
             // Update the signup status to Aborted
             Signup::update_status(&mut transaction, value.signup_id, VolunteerSignupStatus::Aborted).await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(series, event, race_id, value.lang))))
+            RedirectOrContent::Redirect(match value.lang {
+                Some(lang) => Redirect::to(format!("/event/{}/{}/races/{}/signups?lang={}", series.slug(), event, race_id, lang.short_code())),
+                None => Redirect::to(format!("/event/{}/{}/races/{}/signups", series.slug(), event, race_id)),
+            })
         }
     } else {
         RedirectOrContent::Content(
@@ -3243,7 +3248,10 @@ pub(crate) async fn revoke_signup(
             // Update the signup status back to Pending
             Signup::update_status(&mut transaction, value.signup_id, VolunteerSignupStatus::Pending).await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(series, event, race_id, value.lang))))
+            RedirectOrContent::Redirect(match value.lang {
+                Some(lang) => Redirect::to(format!("/event/{}/{}/races/{}/signups?lang={}", series.slug(), event, race_id, lang.short_code())),
+                None => Redirect::to(format!("/event/{}/{}/races/{}/signups", series.slug(), event, race_id)),
+            })
         }
     } else {
         RedirectOrContent::Content(
