@@ -2181,7 +2181,14 @@ async fn volunteer_page(
                             .max_by_key(|req| req.created_at);
                         @let has_active_request = my_request.map_or(false, |req| matches!(req.status, RoleRequestStatus::Pending | RoleRequestStatus::Approved));
                         div(class = "role-binding") {
-                            h4 : binding.role_type_name;
+                            h4 {
+                                : binding.role_type_name;
+                                @if active_languages.len() > 1 {
+                                    : " (";
+                                    : binding.language;
+                                    : ")";
+                                }
+                            }
                             p {
                                 @if binding.min_count == binding.max_count {
                                     : "Required: ";
@@ -2290,7 +2297,14 @@ async fn volunteer_page(
                     @for role_request in my_approved_roles {
                         @let binding = effective_role_bindings.iter().find(|b| b.id == role_request.role_binding_id);
                         @if let Some(binding) = binding {
-                            h4 : format!("{} - {}", binding.role_type_name, role_request.role_type_name);
+                            h4 {
+                                : binding.role_type_name;
+                                @if active_languages.len() > 1 {
+                                    : " (";
+                                    : binding.language;
+                                    : ")";
+                                }
+                            }
                             @let available_races = upcoming_races.iter().filter(|race| {
                                 // Filter races that need this role type
                                 // This is a simplified check - you might want more sophisticated logic
@@ -2357,6 +2371,7 @@ async fn volunteer_page(
 pub(crate) async fn volunteer_page_get(
     pool: &State<PgPool>,
     me: Option<User>,
+    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
     lang: Option<Language>,
@@ -2367,7 +2382,7 @@ pub(crate) async fn volunteer_page_get(
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let ctx = Context::default();
     let uri = HttpOrigin::parse_owned(format!("/event/{}/{}/volunteer-roles", series.slug(), event)).unwrap();
-    Ok(volunteer_page(transaction, me, &Origin(uri.clone()), data, ctx, None, lang).await?)
+    Ok(volunteer_page(transaction, me, &Origin(uri.clone()), data, ctx, csrf, lang).await?)
 }
 
 // Match signup functionality
@@ -3101,6 +3116,7 @@ async fn match_signup_page(
 pub(crate) async fn match_signup_page_get(
     pool: &State<PgPool>,
     me: Option<User>,
+    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
     race_id: Id<Races>,
@@ -3112,7 +3128,7 @@ pub(crate) async fn match_signup_page_get(
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let ctx = Context::default();
     let uri = HttpOrigin::parse_owned(format!("/event/{}/{}/races/{}", series.slug(), event, race_id)).unwrap();
-    Ok(match_signup_page(transaction, me, &Origin(uri.clone()), data, race_id, ctx, None, lang).await?)
+    Ok(match_signup_page(transaction, me, &Origin(uri.clone()), data, race_id, ctx, csrf, lang).await?)
 }
 
 #[derive(FromForm, CsrfForm)]
