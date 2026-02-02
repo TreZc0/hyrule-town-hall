@@ -2901,12 +2901,11 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
             let mut transaction = db_pool.begin().await?;
             for row in sqlx::query!(r#"SELECT series AS "series: Series", event FROM events WHERE end_time IS NULL OR end_time > NOW()"#).fetch_all(&mut *transaction).await? {
                 let event = event::Data::new(&mut transaction, row.series, row.event).await?.expect("event deleted during transaction");
-                if event.auto_import && event.is_started(&mut transaction).await? {
-                    println!("auto-importing races for {}/{}...", event.series.slug(), event.event);
+                if event.auto_import {
                     match event.match_source() {
                         MatchSource::Manual => {}
                         MatchSource::Challonge { .. } => {} // Challonge's API doesn't provide enough data to automate race imports
-                        MatchSource::League => {
+                        MatchSource::League => if event.is_started(&mut transaction).await? {
                             let mut races = Vec::default();
                             for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE series = $1 AND event = $2"#, event.series as _, &event.event).fetch_all(&mut *transaction).await? {
                                 races.push(Race::from_id(&mut transaction, &http_client, id).await?);
@@ -2991,7 +2990,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                     races.last_mut().expect("just pushed")
                                 }.save(&mut transaction).await?;
                             }
-                        }
+                        },
                         MatchSource::StartGG(event_slug) => loop {
                             match startgg::races_to_import(&mut transaction, &http_client, &config, &event, event_slug).await {
                                 Ok((races, _)) => {
@@ -3001,7 +3000,6 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                     break
                                 }
                                 Err(Error::UnknownTeamStartGG(entrant)) => {
-                                    println!("attempted to import from start.gg failed due to unknown team, attempting to fix...");
                                     let response = startgg::query_cached::<startgg::TeamMembersQuery>(&http_client, &config.startgg, startgg::team_members_query::Variables { entrant: entrant.clone() }).await?;
                                     let startgg::team_members_query::ResponseData {
                                         entrant: Some(startgg::team_members_query::TeamMembersQueryEntrant {
@@ -3018,7 +3016,6 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                     sqlx::query!("UPDATE teams SET startgg_id = $1 WHERE id = $2", entrant as _, team.id as _).execute(&mut *transaction).await?;
                                     transaction.commit().await?;
                                     transaction = db_pool.begin().await?;
-                                    println!("automatic fix successful, trying again...");
                                 }
                                 Err(e) => return Err(e.into()),
                             }
@@ -3138,7 +3135,6 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                 }
             }
             transaction.commit().await?;
-            println!("done auto-importing races");
         });
         select! {
             () = &mut shutdown => break,
