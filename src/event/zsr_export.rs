@@ -440,7 +440,7 @@ pub(crate) struct UpdateExportForm {
     enabled: bool,
 }
 
-#[rocket::post("/event/<series>/<event>/zsr-export/<export_id>", data = "<form>")]
+#[rocket::post("/event/<series>/<event>/zsr-export/<export_id>/edit", data = "<form>")]
 pub(crate) async fn update_export(
     pool: &State<PgPool>,
     me: User,

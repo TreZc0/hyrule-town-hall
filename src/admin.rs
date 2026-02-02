@@ -1382,7 +1382,7 @@ pub(crate) async fn edit_zsr_backend(
     ).await.map_err(Error::from)?)
 }
 
-#[rocket::post("/admin/zsr-backends/<backend_id>", data = "<form>")]
+#[rocket::post("/admin/zsr-backends/<backend_id>/edit", data = "<form>")]
 pub(crate) async fn update_zsr_backend(
     pool: &State<PgPool>,
     me: User,
