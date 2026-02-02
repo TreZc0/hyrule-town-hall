@@ -2871,6 +2871,7 @@ pub(crate) enum AutoImportError {
     #[error(transparent)] EventData(#[from] event::DataError),
     #[error(transparent)] Serenity(#[from] serenity::Error),
     #[error(transparent)] Sql(#[from] sqlx::Error),
+    #[error(transparent)] StartGG(#[from] startgg::Error),
     #[error(transparent)] Url(#[from] url::ParseError),
     #[error(transparent)] Wheel(#[from] wheel::Error),
     #[error("HTTP error{}: {}", if let Some(url) = .0.url() { format!(" at {url}") } else { String::default() }, .0)]
@@ -2886,6 +2887,7 @@ impl IsNetworkError for AutoImportError {
             Self::EventData(_) => false,
             Self::Serenity(_) => false,
             Self::Sql(_) => false,
+            Self::StartGG(e) => e.is_network_error(),
             Self::Url(_) => false,
             Self::Wheel(e) => e.is_network_error(),
             Self::Http(e) => e.is_network_error(),
@@ -2900,6 +2902,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
             for row in sqlx::query!(r#"SELECT series AS "series: Series", event FROM events WHERE end_time IS NULL OR end_time > NOW()"#).fetch_all(&mut *transaction).await? {
                 let event = event::Data::new(&mut transaction, row.series, row.event).await?.expect("event deleted during transaction");
                 if event.auto_import && event.is_started(&mut transaction).await? {
+                    println!("auto-importing races for {}/{}...", event.series.slug(), event.event);
                     match event.match_source() {
                         MatchSource::Manual => {}
                         MatchSource::Challonge { .. } => {} // Challonge's API doesn't provide enough data to automate race imports
@@ -2989,10 +2992,35 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                 }.save(&mut transaction).await?;
                             }
                         }
-                        MatchSource::StartGG(event_slug) => {
-                            let (races, _) = startgg::races_to_import(&mut transaction, &http_client, &config, &event, event_slug).await?;
-                            for race in races {
-                                transaction = import_race(transaction, &*discord_ctx.read().await, race).await?;
+                        MatchSource::StartGG(event_slug) => loop {
+                            match startgg::races_to_import(&mut transaction, &http_client, &config, &event, event_slug).await {
+                                Ok((races, _)) => {
+                                    for race in races {
+                                        transaction = import_race(transaction, &*discord_ctx.read().await, race).await?;
+                                    }
+                                    break
+                                }
+                                Err(Error::UnknownTeamStartGG(entrant)) => {
+                                    println!("attempted to import from start.gg failed due to unknown team, attempting to fix...");
+                                    let response = startgg::query_cached::<startgg::TeamMembersQuery>(&http_client, &config.startgg, startgg::team_members_query::Variables { entrant: entrant.clone() }).await?;
+                                    let startgg::team_members_query::ResponseData {
+                                        entrant: Some(startgg::team_members_query::TeamMembersQueryEntrant {
+                                            participants: Some(participants),
+                                        }),
+                                    } = response else { return Err(Error::UnknownTeamStartGG(entrant).into()) };
+                                    let Ok(startgg::team_members_query::TeamMembersQueryEntrantParticipants {
+                                        user: Some(startgg::team_members_query::TeamMembersQueryEntrantParticipantsUser { //TODO if user is None, this is a participant without a start.gg account, match on display name or DM Fenhl about connecting manually, don't return error
+                                            id: Some(user_id),
+                                        }),
+                                    }) = participants.into_iter().filter_map(identity).exactly_one() else { return Err(Error::UnknownTeamStartGG(entrant).into()) };
+                                    let Some(user) = User::from_startgg(&mut *transaction, user_id).await? else { return Err(Error::UnknownTeamStartGG(entrant).into()) };
+                                    let Some(team) = Team::from_event_and_member(&mut transaction, event.series, &event.event, user.id).await? else { return Err(Error::UnknownTeamStartGG(entrant).into()) };
+                                    sqlx::query!("UPDATE teams SET startgg_id = $1 WHERE id = $2", entrant as _, team.id as _).execute(&mut *transaction).await?;
+                                    transaction.commit().await?;
+                                    transaction = db_pool.begin().await?;
+                                    println!("automatic fix successful, trying again...");
+                                }
+                                Err(e) => return Err(e.into()),
                             }
                         }
                     }
@@ -3110,6 +3138,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                 }
             }
             transaction.commit().await?;
+            println!("done auto-importing races");
         });
         select! {
             () = &mut shutdown => break,

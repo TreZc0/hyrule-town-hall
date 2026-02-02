@@ -235,6 +235,40 @@ impl User {
         )
     }
 
+    pub(crate) async fn from_startgg(pool: impl PgExecutor<'_>, startgg_id: startgg::ID) -> sqlx::Result<Option<Self>> {
+        Ok(
+            sqlx::query!(r#"SELECT
+                id AS "id: Id<Users>",
+                display_source AS "display_source: DisplaySource",
+                racetime_id,
+                racetime_display_name,
+                racetime_discriminator AS "racetime_discriminator: Discriminator",
+                racetime_pronouns AS "racetime_pronouns: RaceTimePronouns",
+                discord_id AS "discord_id: PgSnowflake<UserId>",
+                discord_display_name,
+                discord_discriminator AS "discord_discriminator: Discriminator",
+                discord_username,
+                challonge_id,
+                is_archivist
+            FROM users WHERE startgg_id = $1"#, startgg_id as _).fetch_optional(pool).await?
+            .map(|row| Self::from_row(
+                row.id,
+                row.display_source,
+                row.racetime_id,
+                row.racetime_display_name,
+                row.racetime_discriminator,
+                row.racetime_pronouns,
+                row.discord_id,
+                row.discord_display_name,
+                row.discord_discriminator,
+                row.discord_username,
+                row.challonge_id,
+                Some(startgg_id),
+                row.is_archivist,
+            ))
+        )
+    }
+
     pub(crate) fn display_name(&self) -> &str {
         match self.display_source {
             DisplaySource::RaceTime => &self.racetime.as_ref().expect("user with racetime.gg display preference but no racetime.gg display name").display_name,

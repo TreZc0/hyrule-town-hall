@@ -1,0 +1,9 @@
+query TeamMembersQuery($entrant: ID!) {
+  entrant(id: $entrant) {
+    participants {
+      user {
+        id
+      }
+    }
+  }
+}
