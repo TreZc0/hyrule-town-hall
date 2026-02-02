@@ -2053,7 +2053,7 @@ async fn volunteer_page(
     me: Option<User>,
     _uri: &Origin<'_>,
     data: Data<'_>,
-    _ctx: Context<'_>,
+    ctx: Context<'_>,
     csrf: Option<CsrfToken>,
     selected_lang: Option<Language>,
 ) -> Result<RawHtml<String>, Error> {
@@ -2260,12 +2260,12 @@ async fn volunteer_page(
                                         }
                                     }
                                 }
-                                @let mut errors = Vec::new();
+                                @let errors = ctx.errors().collect::<Vec<_>>();
                                 : full_form(uri!(forfeit_role(data.series, &*data.event)), csrf.as_ref(), html! {
                                     input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
                                 }, errors, "Forfeit Role");
                             } else {
-                                @let mut errors = Vec::new();
+                                @let mut errors = ctx.errors().collect::<Vec<_>>();
                                 @let button_text = if binding.auto_approve {
                                     format!("Volunteer for {} role", binding.role_type_name)
                                 } else {
@@ -2850,24 +2850,29 @@ async fn match_signup_page(
 
             @if can_manage {
                 h3 : "Manage Signups";
-                @for signup in &signups {
+                @let declined_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Declined)).collect::<Vec<_>>();
+                @let active_signups = signups.iter().filter(|s| !matches!(s.status, VolunteerSignupStatus::Declined)).collect::<Vec<_>>();
+
+                @for signup in &active_signups {
                     @if let Some(user) = User::from_id(&mut *transaction, signup.user_id).await? {
                         div(class = "signup-item") {
-                            p {
-                                strong : user.display_name();
-                                : " - ";
-                                : signup.role_type_name;
-                                : " (";
-                                @match signup.status {
-                                    VolunteerSignupStatus::Pending => : "Pending";
-                                    VolunteerSignupStatus::Confirmed => : "Confirmed";
-                                    VolunteerSignupStatus::Declined => : "Declined";
-                                    VolunteerSignupStatus::Aborted => : "Aborted";
+                            div(class = "signup-item-content") {
+                                p {
+                                    strong : user.display_name();
+                                    : " - ";
+                                    : signup.role_type_name;
+                                    : " (";
+                                    @match signup.status {
+                                        VolunteerSignupStatus::Pending => : "Pending";
+                                        VolunteerSignupStatus::Confirmed => : "Confirmed";
+                                        VolunteerSignupStatus::Declined => : "Declined";
+                                        VolunteerSignupStatus::Aborted => : "Aborted";
+                                    }
+                                    : ")";
                                 }
-                                : ")";
-                            }
-                            @if let Some(ref notes) = signup.notes {
-                                p(class = "signup-notes") : notes;
+                                @if let Some(ref notes) = signup.notes {
+                                    p(class = "signup-notes") : notes;
+                                }
                             }
                             @if matches!(signup.status, VolunteerSignupStatus::Pending) {
                                 div(class = "signup-actions") {
@@ -2902,7 +2907,7 @@ async fn match_signup_page(
                                     : errors;
                                     : decline_button;
                                 }
-                            } else if matches!(signup.status, VolunteerSignupStatus::Confirmed | VolunteerSignupStatus::Declined) {
+                            } else if matches!(signup.status, VolunteerSignupStatus::Confirmed) {
                                 div(class = "signup-actions") {
                                     @let (errors, revert_button) = button_form_ext(
                                         uri!(revoke_signup(data.series, &*data.event, race_id)),
@@ -2918,6 +2923,45 @@ async fn match_signup_page(
                                     );
                                     : errors;
                                     : revert_button;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                @if !declined_signups.is_empty() {
+                    details {
+                        summary : format!("Declined Signups ({})", declined_signups.len());
+                        @for signup in &declined_signups {
+                            @if let Some(user) = User::from_id(&mut *transaction, signup.user_id).await? {
+                                div(class = "signup-item") {
+                                    div(class = "signup-item-content") {
+                                        p {
+                                            strong : user.display_name();
+                                            : " - ";
+                                            : signup.role_type_name;
+                                            : " (Declined)";
+                                        }
+                                        @if let Some(ref notes) = signup.notes {
+                                            p(class = "signup-notes") : notes;
+                                        }
+                                    }
+                                    div(class = "signup-actions") {
+                                        @let (errors, revert_button) = button_form_ext(
+                                            uri!(revoke_signup(data.series, &*data.event, race_id)),
+                                            csrf.as_ref(),
+                                            Vec::new(),
+                                            html! {
+                                                input(type = "hidden", name = "signup_id", value = signup.id.to_string());
+                                                @if active_languages.len() > 1 {
+                                                    input(type = "hidden", name = "lang", value = current_language.short_code());
+                                                }
+                                            },
+                                            "Revert to Pending"
+                                        );
+                                        : errors;
+                                        : revert_button;
+                                    }
                                 }
                             }
                         }
