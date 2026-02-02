@@ -575,14 +575,50 @@ impl<'a> Data<'a> {
     }
 
     pub(crate) async fn has_role_bindings(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<bool, Error> {
-        let count = sqlx::query_scalar!(
+        // Check for event-specific role bindings
+        let event_count = sqlx::query_scalar!(
             r#"SELECT COUNT(*) FROM role_bindings WHERE series = $1 AND event = $2"#,
             self.series as _,
             &self.event
         )
         .fetch_one(&mut **transaction)
-        .await?;
-        Ok(count.unwrap_or(0) > 0)
+        .await?
+        .unwrap_or(0);
+
+        if event_count > 0 {
+            return Ok(true);
+        }
+
+        // Check if event uses custom bindings
+        let uses_custom_bindings = sqlx::query_scalar!(
+            r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,
+            self.series as _,
+            &self.event
+        )
+        .fetch_optional(&mut **transaction)
+        .await?
+        .unwrap_or(Some(true))
+        .unwrap_or(true);
+
+        // If using custom bindings, we already checked event bindings above
+        if uses_custom_bindings {
+            return Ok(false);
+        }
+
+        // Check for game-level role bindings
+        let game = game::Game::from_series(&mut *transaction, self.series).await?;
+        if let Some(game) = game {
+            let game_count = sqlx::query_scalar!(
+                r#"SELECT COUNT(*) FROM role_bindings WHERE game_id = $1"#,
+                game.id
+            )
+            .fetch_one(&mut **transaction)
+            .await?
+            .unwrap_or(0);
+            Ok(game_count > 0)
+        } else {
+            Ok(false)
+        }
     }
 
     /// Returns Swiss standings for this event, if it's a Startgg event
