@@ -2434,20 +2434,76 @@ pub(crate) async fn race_table(
                                         @if all_teams_consented {
                                             @let signups = Signup::for_race(&mut *transaction, race.id).await?;
                                             @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
-                                            
+
                                             @if !confirmed_signups.is_empty() {
                                                 @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
-                                                @for binding in role_bindings {
-                                                    @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
-                                                    @if !binding_signups.is_empty() {
-                                                        : binding.role_type_name;
-                                                        : ": ";
-                                                        @for (i, signup) in binding_signups.iter().enumerate() {
-                                                            @if i > 0 { : ", "; }
-                                                            @let user = User::from_id(&mut **transaction, signup.user_id).await?;
-                                                            : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+
+                                                // Group bindings by language and check which languages have volunteers
+                                                @let languages_with_volunteers = role_bindings.iter()
+                                                    .filter(|binding| confirmed_signups.iter().any(|s| s.role_binding_id == binding.id))
+                                                    .map(|binding| binding.language)
+                                                    .collect::<HashSet<_>>();
+
+                                                // Pre-fetch all users into a HashMap for use in tooltips
+                                                @let user_cache = {
+                                                    let mut cache = HashMap::new();
+                                                    let unique_user_ids = confirmed_signups.iter().map(|s| s.user_id).collect::<HashSet<_>>();
+                                                    for user_id in unique_user_ids {
+                                                        let user = User::from_id(&mut **transaction, user_id).await.ok().flatten();
+                                                        cache.insert(user_id, user);
+                                                    }
+                                                    cache
+                                                };
+
+                                                @if languages_with_volunteers.len() == 1 {
+                                                    // Single language: show volunteers with language abbreviation
+                                                    @let language = *languages_with_volunteers.iter().next().unwrap();
+                                                    @for binding in role_bindings {
+                                                        @if binding.language == language {
+                                                            @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                                                            @if !binding_signups.is_empty() {
+                                                                : binding.role_type_name;
+                                                                : " (";
+                                                                : language.short_code();
+                                                                : "): ";
+                                                                @for (i, signup) in binding_signups.iter().enumerate() {
+                                                                    @if i > 0 { : ", "; }
+                                                                    : user_cache.get(&signup.user_id)
+                                                                        .and_then(|opt| opt.as_ref())
+                                                                        .map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                                                }
+                                                                br;
+                                                            }
                                                         }
-                                                        br;
+                                                    }
+                                                } else if languages_with_volunteers.len() > 1 {
+                                                    // Multiple languages: show languages as hoverable links
+                                                    @for (lang_idx, language) in languages_with_volunteers.iter().enumerate() {
+                                                        @if lang_idx > 0 { : ", "; }
+
+                                                        // Build tooltip for this language using pre-fetched users
+                                                        @let tooltip_content = role_bindings.iter()
+                                                            .filter(|b| b.language == *language)
+                                                            .filter_map(|binding| {
+                                                                let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                                                                if binding_signups.is_empty() {
+                                                                    None
+                                                                } else {
+                                                                    let users = binding_signups.iter()
+                                                                        .map(|signup| user_cache.get(&signup.user_id)
+                                                                            .and_then(|opt| opt.as_ref())
+                                                                            .map_or_else(|| signup.user_id.to_string(), |u| u.to_string()))
+                                                                        .collect::<Vec<_>>()
+                                                                        .join(", ");
+                                                                    Some(format!("{}: {}", binding.role_type_name, users))
+                                                                }
+                                                            })
+                                                            .collect::<Vec<_>>()
+                                                            .join("\n");
+
+                                                        span(class = "settings-link", data_tooltip = tooltip_content) {
+                                                            : language.to_string();
+                                                        }
                                                     }
                                                 }
                                             }
@@ -2476,17 +2532,73 @@ pub(crate) async fn race_table(
                                                 : "pending";
                                             } else if !confirmed_signups.is_empty() {
                                                 @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
-                                                @for binding in role_bindings {
-                                                    @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
-                                                    @if !binding_signups.is_empty() {
-                                                        : binding.role_type_name;
-                                                        : ": ";
-                                                        @for (i, signup) in binding_signups.iter().enumerate() {
-                                                            @if i > 0 { : ", "; }
-                                                            @let user = User::from_id(&mut **transaction, signup.user_id).await?;
-                                                            : user.map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+
+                                                // Group bindings by language and check which languages have volunteers
+                                                @let languages_with_volunteers = role_bindings.iter()
+                                                    .filter(|binding| confirmed_signups.iter().any(|s| s.role_binding_id == binding.id))
+                                                    .map(|binding| binding.language)
+                                                    .collect::<HashSet<_>>();
+
+                                                // Pre-fetch all users into a HashMap for use in tooltips
+                                                @let user_cache = {
+                                                    let mut cache = HashMap::new();
+                                                    let unique_user_ids = confirmed_signups.iter().map(|s| s.user_id).collect::<HashSet<_>>();
+                                                    for user_id in unique_user_ids {
+                                                        let user = User::from_id(&mut **transaction, user_id).await.ok().flatten();
+                                                        cache.insert(user_id, user);
+                                                    }
+                                                    cache
+                                                };
+
+                                                @if languages_with_volunteers.len() == 1 {
+                                                    // Single language: show volunteers with language abbreviation
+                                                    @let language = *languages_with_volunteers.iter().next().unwrap();
+                                                    @for binding in role_bindings {
+                                                        @if binding.language == language {
+                                                            @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                                                            @if !binding_signups.is_empty() {
+                                                                : binding.role_type_name;
+                                                                : " (";
+                                                                : language.short_code();
+                                                                : "): ";
+                                                                @for (i, signup) in binding_signups.iter().enumerate() {
+                                                                    @if i > 0 { : ", "; }
+                                                                    : user_cache.get(&signup.user_id)
+                                                                        .and_then(|opt| opt.as_ref())
+                                                                        .map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                                                }
+                                                                br;
+                                                            }
                                                         }
-                                                        br;
+                                                    }
+                                                } else if languages_with_volunteers.len() > 1 {
+                                                    // Multiple languages: show languages as hoverable links
+                                                    @for (lang_idx, language) in languages_with_volunteers.iter().enumerate() {
+                                                        @if lang_idx > 0 { : ", "; }
+
+                                                        // Build tooltip for this language using pre-fetched users
+                                                        @let tooltip_content = role_bindings.iter()
+                                                            .filter(|b| b.language == *language)
+                                                            .filter_map(|binding| {
+                                                                let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                                                                if binding_signups.is_empty() {
+                                                                    None
+                                                                } else {
+                                                                    let users = binding_signups.iter()
+                                                                        .map(|signup| user_cache.get(&signup.user_id)
+                                                                            .and_then(|opt| opt.as_ref())
+                                                                            .map_or_else(|| signup.user_id.to_string(), |u| u.to_string()))
+                                                                        .collect::<Vec<_>>()
+                                                                        .join(", ");
+                                                                    Some(format!("{}: {}", binding.role_type_name, users))
+                                                                }
+                                                            })
+                                                            .collect::<Vec<_>>()
+                                                            .join("\n");
+
+                                                        span(class = "settings-link", data_tooltip = tooltip_content) {
+                                                            : language.to_string();
+                                                        }
                                                     }
                                                 }
                                             }
