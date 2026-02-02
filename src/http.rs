@@ -697,6 +697,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         games::remove_game_role_binding,
         games::approve_game_role_request,
         games::reject_game_role_request,
+        games::revoke_game_role_request,
     ])
     .mount("/static", FileServer::without_index("assets/static"))
     .register("/", rocket::catchers![

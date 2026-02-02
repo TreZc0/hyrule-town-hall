@@ -72,23 +72,16 @@ pub(crate) async fn list(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
     ).await.map_err(Error::from)?)
 }
 
-#[allow(dead_code)]
-#[rocket::get("/games/<game_name>?<lang>")]
-pub(crate) async fn get(
-    pool: &State<PgPool>,
+async fn game_page<'a>(
+    mut transaction: Transaction<'_, Postgres>,
     me: Option<User>,
-    uri: Origin<'_>,
+    uri: &Origin<'_>,
+    game: Game,
+    form_errors: Vec<form::Error<'a>>,
     csrf: Option<CsrfToken>,
-    game_name: &str,
     lang: Option<Language>,
-) -> Result<RawHtml<String>, StatusOrError<Error>> {
-    let mut transaction = pool.begin().await.map_err(Error::from)?;
-    
-    let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
-        .ok_or(StatusOrError::Status(Status::NotFound))?;
-    
-    let series = game.series(&mut transaction).await.map_err(Error::from)?;
+) -> Result<RawHtml<String>, Error> {
+    let series = game.series(&mut transaction).await?;
     let _admins = game.admins(&mut transaction).await.map_err(Error::from)?;
     let is_admin = if let Some(ref me) = me {
         game.is_admin(&mut transaction, me).await.map_err(Error::from)?
@@ -171,7 +164,7 @@ pub(crate) async fn get(
             h2 : "Game Volunteer Roles";
             p : "The coverage through restreams of matches and events requires volunteers. We are very grateful for anyone stepping up to help!";
 
-            @let base_url = format!("/games/{}", game_name);
+            @let base_url = format!("/games/{}", game.name);
 
             // Language tabs (only shown if multiple languages)
             : render_language_tabs(&active_languages, current_language, &base_url);
@@ -245,13 +238,13 @@ pub(crate) async fn get(
                                     }
                                 }
                             }
-                            @let mut errors = Vec::new();
+                            @let errors = form_errors.iter().collect::<Vec<_>>();
                             : full_form(uri!(forfeit_game_role(&game.name)), csrf.as_ref(), html! {
                                 input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
                             }, errors, "Forfeit Role");
                         } else {
                             @if let Some(ref me) = me {
-                                @let mut errors = Vec::new();
+                                @let mut errors = form_errors.iter().collect::<Vec<_>>();
                                 @let button_text = if binding.auto_approve {
                                     format!("Volunteer for {} role", binding.role_type_name)
                                 } else {
@@ -297,12 +290,31 @@ pub(crate) async fn get(
     Ok(page(
         transaction,
         &me,
-        &uri,
+        uri,
         PageStyle::default(),
         &format!("{} — Games", game.display_name),
         content,
     )
-    .await.map_err(Error::from)?)
+    .await?)
+}
+
+#[allow(dead_code)]
+#[rocket::get("/games/<game_name>?<lang>")]
+pub(crate) async fn get(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    game_name: &str,
+    lang: Option<Language>,
+) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
+
+    let game = Game::from_name(&mut transaction, game_name)
+        .await.map_err(Error::from)?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    Ok(game_page(transaction, me, &uri, game, Vec::new(), csrf, lang).await.map_err(Error::from)?)
 }
 
 #[allow(dead_code)]
@@ -634,6 +646,7 @@ pub(crate) async fn manage_roles(
                                         th : "User";
                                         th : "Notes";
                                         th : "Approved";
+                                        th : "Actions";
                                     }
                                 }
                                 tbody {
@@ -654,6 +667,16 @@ pub(crate) async fn manage_roles(
                                                 }
                                             }
                                             td : format_datetime(request.updated_at, DateTimeFormat { long: false, running_text: false });
+                                            td {
+                                                @let (errors, revoke_button) = button_form(
+                                                    uri!(revoke_game_role_request(&game_name, request.id)),
+                                                    csrf.as_ref(),
+                                                    Vec::new(),
+                                                    "Remove"
+                                                );
+                                                : errors;
+                                                div(class = "button-row") : revoke_button;
+                                            }
                                         }
                                     }
                                 }
@@ -698,57 +721,70 @@ pub(crate) struct ForfeitGameRoleForm {
 pub(crate) async fn apply_for_game_role(
     pool: &State<PgPool>,
     me: Option<User>,
+    uri: Origin<'_>,
     game_name: &str,
     csrf: Option<CsrfToken>,
     form: Form<Contextual<'_, ApplyForGameRoleForm>>,
-) -> Result<Redirect, StatusOrError<Error>> {
+) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    
-    if let Some(ref value) = form.value {
+
+    Ok(if let Some(ref value) = form.value {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
-        
+
         // Check if user already has an active request for this role binding
         if RoleRequest::active_for_user(&mut transaction, value.role_binding_id, me.id).await.map_err(Error::from)? {
-            return Ok(Redirect::to(uri!(get(game_name, _))));
+            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(game_name, _)))));
         }
-        
+
         // Create the role request
         let notes = if value.notes.is_empty() {
             String::new()
         } else {
             value.notes.clone()
         };
-        
+
         RoleRequest::create(
             &mut transaction,
             value.role_binding_id,
             me.id,
             notes,
         ).await.map_err(Error::from)?;
-        
+
         transaction.commit().await.map_err(Error::from)?;
-    }
-    
-    Ok(Redirect::to(uri!(get(game_name, _))))
+        RedirectOrContent::Redirect(Redirect::to(uri!(get(game_name, _))))
+    } else {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        let game = Game::from_name(&mut transaction, game_name)
+            .await.map_err(Error::from)?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+        let errors = form.context.errors().map(|e| e.clone()).collect::<Vec<_>>();
+        RedirectOrContent::Content(
+            game_page(transaction, Some(me), &uri, game, errors, csrf, None).await.map_err(Error::from)?
+        )
+    })
 }
 
 #[rocket::post("/games/<game_name>/forfeit", data = "<form>")]
 pub(crate) async fn forfeit_game_role(
     pool: &State<PgPool>,
     me: Option<User>,
+    uri: Origin<'_>,
     game_name: &str,
     csrf: Option<CsrfToken>,
     form: Form<Contextual<'_, ForfeitGameRoleForm>>,
-) -> Result<Redirect, StatusOrError<Error>> {
+) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    
-    if let Some(ref value) = form.value {
-        let mut transaction = pool.begin().await.map_err(Error::from)?;
-        
+
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
+    let game = Game::from_name(&mut transaction, game_name)
+        .await.map_err(Error::from)?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    Ok(if let Some(ref value) = form.value {
         // Find the role request for this user and role binding
         let role_request = sqlx::query_as!(
             RoleRequest,
@@ -784,10 +820,22 @@ pub(crate) async fn forfeit_game_role(
             // Update the status to aborted
             RoleRequest::update_status(&mut transaction, request.id, RoleRequestStatus::Aborted).await.map_err(Error::from)?;
             transaction.commit().await.map_err(Error::from)?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(game_name, _))))
+        } else {
+            form.context.push_error(form::Error::validation(
+                "No active role request found to forfeit",
+            ));
+            let errors = form.context.errors().map(|e| e.clone()).collect::<Vec<_>>();
+            RedirectOrContent::Content(
+                game_page(transaction, Some(me), &uri, game, errors, csrf, None).await.map_err(Error::from)?
+            )
         }
-    }
-    
-    Ok(Redirect::to(uri!(get(game_name, _))))
+    } else {
+        let errors = form.context.errors().map(|e| e.clone()).collect::<Vec<_>>();
+        RedirectOrContent::Content(
+            game_page(transaction, Some(me), &uri, game, errors, csrf, None).await.map_err(Error::from)?
+        )
+    })
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -817,6 +865,12 @@ pub(crate) struct ApproveGameRoleRequestForm {
 
 #[derive(FromForm, CsrfForm)]
 pub(crate) struct RejectGameRoleRequestForm {
+    #[field(default = String::new())]
+    csrf: String,
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct RevokeGameRoleRequestForm {
     #[field(default = String::new())]
     csrf: String,
 }
@@ -992,6 +1046,41 @@ pub(crate) async fn reject_game_role_request(
         transaction.commit().await.map_err(Error::from)?;
     }
     
+    Ok(Redirect::to(uri!(manage_roles(game_name, _))))
+}
+
+#[rocket::post("/games/<game_name>/roles/<request>/revoke", data = "<form>")]
+pub(crate) async fn revoke_game_role_request(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    game_name: &str,
+    request: Id<RoleRequests>,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, RevokeGameRoleRequestForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if form.value.is_some() {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        let game = Game::from_name(&mut transaction, game_name)
+            .await.map_err(Error::from)?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+
+        if !is_game_admin && !is_global_admin {
+            return Err(StatusOrError::Status(Status::Forbidden));
+        }
+
+        // Update the role request status to Aborted
+        RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Aborted).await.map_err(Error::from)?;
+
+        transaction.commit().await.map_err(Error::from)?;
+    }
+
     Ok(Redirect::to(uri!(manage_roles(game_name, _))))
 }
 
