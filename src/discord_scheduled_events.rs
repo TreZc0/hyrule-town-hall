@@ -216,7 +216,28 @@ pub(crate) async fn create_discord_scheduled_event(
     )
     .description(description)
     .end_time(Timestamp::from_unix_timestamp(end_time.timestamp()).expect("valid timestamp"))
-    .location(event_config.url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "https://ootrandomizer.com".to_string()));
+    .location({
+        let url = event_config.url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "https://ootrandomizer.com".to_string());
+        if url.len() > 100 {
+            // For start.gg URLs, try to cut off the event-specific part
+            if url.contains("start.gg") {
+                if let Some(event_pos) = url.find("/event/") {
+                    let base_url = &url[..event_pos];
+                    if base_url.len() <= 100 {
+                        base_url.to_string()
+                    } else {
+                        url.chars().take(97).collect::<String>() + "..."
+                    }
+                } else {
+                    url.chars().take(97).collect::<String>() + "..."
+                }
+            } else {
+                url.chars().take(97).collect::<String>() + "..."
+            }
+        } else {
+            url
+        }
+    });
 
     let scheduled_event = guild_id.create_scheduled_event(&ctx.http, builder).await?;
 
@@ -289,7 +310,28 @@ pub(crate) async fn update_discord_scheduled_event(
         )
         .description(description)
         .end_time(Timestamp::from_unix_timestamp(end_time.timestamp()).expect("valid timestamp"))
-        .location(event_config.url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "https://ootrandomizer.com".to_string()));
+        .location({
+            let url = event_config.url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "https://ootrandomizer.com".to_string());
+            if url.len() > 100 {
+                // For start.gg URLs, try to cut off the event-specific part
+                if url.contains("start.gg") {
+                    if let Some(event_pos) = url.find("/event/") {
+                        let base_url = &url[..event_pos];
+                        if base_url.len() <= 100 {
+                            base_url.to_string()
+                        } else {
+                            url.chars().take(97).collect::<String>() + "..."
+                        }
+                    } else {
+                        url.chars().take(97).collect::<String>() + "..."
+                    }
+                } else {
+                    url.chars().take(97).collect::<String>() + "..."
+                }
+            } else {
+                url
+            }
+        });
 
         let scheduled_event = guild_id.create_scheduled_event(&ctx.http, builder).await?;
 

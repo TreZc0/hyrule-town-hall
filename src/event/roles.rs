@@ -2378,6 +2378,7 @@ pub(crate) struct SignupForMatchForm {
     role_binding_id: Id<RoleBindings>,
     #[field(default = String::new())]
     notes: String,
+    lang: Option<Language>,
 }
 
 #[rocket::post("/event/<series>/<event>/races/<race_id>/signup", data = "<form>")]
@@ -2426,7 +2427,7 @@ pub(crate) async fn signup_for_match(
                     race_id,
                     form.context,
                     csrf,
-                    None,
+                    value.lang,
                 )
                 .await?,
             )
@@ -2439,7 +2440,7 @@ pub(crate) async fn signup_for_match(
             Signup::create(&mut transaction, race_id, value.role_binding_id, me.id, notes).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(
-                series, &*event, race_id, _
+                series, &*event, race_id, value.lang
             ))))
         }
     } else {
@@ -2466,6 +2467,7 @@ pub(crate) struct ManageRosterForm {
     signup_id: Id<Signups>,
     #[field(default = String::new())]
     action: String,
+    lang: Option<Language>,
 }
 
 #[rocket::post(
@@ -2515,7 +2517,7 @@ pub(crate) async fn manage_roster(
                     race_id,
                     form.context,
                     csrf,
-                    None,
+                    value.lang,
                 )
                 .await?,
             )
@@ -2535,7 +2537,7 @@ pub(crate) async fn manage_roster(
                             race_id,
                             form.context,
                             csrf,
-                            None,
+                            value.lang,
                         )
                         .await?,
                     ));
@@ -2693,10 +2695,10 @@ pub(crate) async fn manage_roster(
                     }
                 }
             }
-            
+
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(
-                series, &*event, race_id, _
+                series, &*event, race_id, value.lang
             ))))
         }
     } else {
@@ -2746,6 +2748,13 @@ async fn match_signup_page(
     // Filter bindings by selected language
     let filtered_bindings: Vec<&EffectiveRoleBinding> = EffectiveRoleBinding::filter_by_language(&effective_role_bindings, current_language);
     let base_url = format!("/event/{}/{}/races/{}/signups", data.series.slug(), &data.event, race_id);
+
+    // Get user's role requests if logged in
+    let my_requests = if let Some(ref me) = me {
+        Some(RoleRequest::for_user(&mut transaction, me.id).await?)
+    } else {
+        None
+    };
 
     let content = if let Some(ref me) = me {
         let is_organizer = data.organizers(&mut transaction).await?.contains(me);
@@ -2844,6 +2853,9 @@ async fn match_signup_page(
                                         html! {
                                             input(type = "hidden", name = "signup_id", value = signup.id.to_string());
                                             input(type = "hidden", name = "action", value = "confirm");
+                                            @if active_languages.len() > 1 {
+                                                input(type = "hidden", name = "lang", value = current_language.to_string().to_lowercase());
+                                            }
                                         },
                                         "Confirm"
                                     );
@@ -2856,6 +2868,9 @@ async fn match_signup_page(
                                         html! {
                                             input(type = "hidden", name = "signup_id", value = signup.id.to_string());
                                             input(type = "hidden", name = "action", value = "decline");
+                                            @if active_languages.len() > 1 {
+                                                input(type = "hidden", name = "lang", value = current_language.to_string().to_lowercase());
+                                            }
                                         },
                                         "Decline"
                                     );
@@ -2948,56 +2963,66 @@ async fn match_signup_page(
                         }
                     }
 
-                    @if let Some(ref me) = Some(me) {
-                        @let my_signup = role_signups.iter().find(|s| s.user_id == me.id);
-                        @if my_signup.is_none() {
-                            @let errors = Vec::new();
-                            @let max_reached = confirmed_signups.len() as i32 >= binding.max_count;
-                            @let is_async = matches!(race.schedule, RaceSchedule::Async { .. });
-                            @let is_ended = race.is_ended();
-                            @let disabled = max_reached || is_async || is_ended;
-                            @let reason = if max_reached {
-                                Some("Maximum number of volunteers reached for this role.")
-                            } else if is_async {
-                                Some("Signups are not available for async races.")
-                            } else if is_ended {
-                                Some("This race has ended and can no longer accept signups.")
-                            } else {
-                                None
-                            };
-                            @if disabled {
-                                @let (errors, signup_button) = button_form_ext_disabled(
-                                    uri!(signup_for_match(data.series, &*data.event, race_id)),
-                                    csrf.as_ref(),
-                                    errors,
-                                    html! {
-                                        input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                    },
-                                    &format!("Sign up for {}", binding.role_type_name),
-                                    true
-                                );
-                                : errors;
-                                div(class = "button-row") {
-                                    : signup_button;
-                                }
-                            } else {
-                                @let mut errors = Vec::new();
-                                : full_form(uri!(signup_for_match(data.series, &*data.event, race_id)), csrf.as_ref(), html! {
+                    @let is_approved = RoleRequest::approved_for_user(&mut transaction, binding.id, me.id).await?;
+                    @let my_signup = role_signups.iter().find(|s| s.user_id == me.id);
+                    @let has_pending_request = my_requests.as_ref().map(|reqs| {
+                        reqs.iter().any(|req| req.role_binding_id == binding.id && matches!(req.status, RoleRequestStatus::Pending))
+                    }).unwrap_or(false);
+                    @if my_signup.is_some() {
+                        p : "You have already signed up for this role.";
+                    } else if is_approved {
+                        @let errors = Vec::new();
+                        @let max_reached = confirmed_signups.len() as i32 >= binding.max_count;
+                        @let is_async = matches!(race.schedule, RaceSchedule::Async { .. });
+                        @let is_ended = race.is_ended();
+                        @let disabled = max_reached || is_async || is_ended;
+                        @let reason = if max_reached {
+                            Some("Maximum number of volunteers reached for this role.")
+                        } else if is_async {
+                            Some("Signups are not available for async races.")
+                        } else if is_ended {
+                            Some("This race has ended and can no longer accept signups.")
+                        } else {
+                            None
+                        };
+                        @if disabled {
+                            @let (errors, signup_button) = button_form_ext_disabled(
+                                uri!(signup_for_match(data.series, &*data.event, race_id)),
+                                csrf.as_ref(),
+                                errors,
+                                html! {
                                     input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                    : form_field("notes", &mut errors, html! {
-                                        label(for = "notes") : "Notes:";
-                                        input(type = "text", name = "notes", id = "notes", maxlength = "60", size = "30", placeholder = "Optional notes for organizers");
-                                    });
-                                }, errors, &format!("Sign up for {}", binding.role_type_name));
-                            }
-                            @if let Some(reason) = reason {
-                                p(class = "disabled-reason") : reason;
+                                },
+                                &format!("Sign up for {}", binding.role_type_name),
+                                true
+                            );
+                            : errors;
+                            div(class = "button-row") {
+                                : signup_button;
                             }
                         } else {
-                            p : "You have already signed up for this role.";
+                            @let mut errors = Vec::new();
+                            : full_form(uri!(signup_for_match(data.series, &*data.event, race_id)), csrf.as_ref(), html! {
+                                input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                @if active_languages.len() > 1 {
+                                    input(type = "hidden", name = "lang", value = current_language.to_string().to_lowercase());
+                                }
+                                : form_field("notes", &mut errors, html! {
+                                    label(for = "notes") : "Notes:";
+                                    input(type = "text", name = "notes", id = "notes", maxlength = "60", size = "30", placeholder = "Optional notes for organizers");
+                                });
+                            }, errors, &format!("Sign up for {}", binding.role_type_name));
                         }
+                        @if let Some(reason) = reason {
+                            p(class = "disabled-reason") : reason;
+                        }
+                    } else if has_pending_request {
+                        p : "You requested this role — please wait for approval.";
                     } else {
-                        p : "You are not approved for this role.";
+                        p : "You need to be approved for this role before you can sign up.";
+                        p {
+                            a(href = uri!(volunteer_page_get(data.series, &*data.event, _))) : "Request this role";
+                        }
                     }
 
                     @if !role_signups.is_empty() {
@@ -3061,6 +3086,7 @@ pub(crate) struct WithdrawSignupForm {
     #[field(default = String::new())]
     csrf: String,
     signup_id: Id<Signups>,
+    lang: Option<Language>,
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -3068,6 +3094,7 @@ pub(crate) struct RevokeSignupForm {
     #[field(default = String::new())]
     csrf: String,
     signup_id: Id<Signups>,
+    lang: Option<Language>,
 }
 
 #[rocket::post("/event/<series>/<event>/races/<race_id>/withdraw-signup", data = "<form>")]
@@ -3121,7 +3148,7 @@ pub(crate) async fn withdraw_signup(
                     race_id,
                     form.context,
                     csrf,
-                    None,
+                    value.lang,
                 )
                 .await?,
             )
@@ -3129,7 +3156,7 @@ pub(crate) async fn withdraw_signup(
             // Update the signup status to Aborted
             Signup::update_status(&mut transaction, value.signup_id, VolunteerSignupStatus::Aborted).await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(series, event, race_id, _))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(series, event, race_id, value.lang))))
         }
     } else {
         RedirectOrContent::Content(
@@ -3208,7 +3235,7 @@ pub(crate) async fn revoke_signup(
                     race_id,
                     form.context,
                     csrf,
-                    None,
+                    value.lang,
                 )
                 .await?,
             )
@@ -3216,7 +3243,7 @@ pub(crate) async fn revoke_signup(
             // Update the signup status back to Pending
             Signup::update_status(&mut transaction, value.signup_id, VolunteerSignupStatus::Pending).await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(series, event, race_id, _))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(match_signup_page_get(series, event, race_id, value.lang))))
         }
     } else {
         RedirectOrContent::Content(
