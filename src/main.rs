@@ -70,6 +70,7 @@ mod time;
 mod user;
 mod volunteer_requests;
 mod weekly;
+mod zsr_export;
 
 include!(concat!(env!("OUT_DIR"), "/version.rs"));
 
@@ -152,6 +153,7 @@ enum Error {
     #[error(transparent)] Task(#[from] tokio::task::JoinError),
     #[error(transparent)] VolunteerRequests(#[from] volunteer_requests::Error),
     #[cfg(unix)] #[error(transparent)] Wheel(#[from] wheel::Error),
+    #[error(transparent)] ZsrExport(#[from] zsr_export::Error),
     #[cfg(unix)] #[error(transparent)] Write(#[from] async_proto::WriteError),
 }
 
@@ -311,7 +313,12 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
         });
-        let async_race_task = tokio::spawn(async_race_manager(db_pool, discord_builder.ctx_fut.clone(), http_client, rocket.shutdown())).map(|res| match res {
+        let async_race_task = tokio::spawn(async_race_manager(db_pool.clone(), discord_builder.ctx_fut.clone(), http_client.clone(), rocket.shutdown())).map(|res| match res {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(e),
+            Err(e) => Err(Error::Task(e)),
+        });
+        let zsr_export_task = tokio::spawn(zsr_export_manager(db_pool, http_client, rocket.shutdown())).map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
@@ -332,7 +339,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Err(e) => Err(Error::from(e)),
         });
         #[cfg(not(unix))] let unix_socket_task = future::ok(());
-        let ((), (), (), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, async_race_task, volunteer_request_task, rocket_task, unix_socket_task)?;
+        let ((), (), (), (), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, async_race_task, volunteer_request_task, zsr_export_task, rocket_task, unix_socket_task)?;
     }
     Ok(())
 }
@@ -375,6 +382,28 @@ async fn volunteer_request_manager(
                 let discord_ctx = discord_ctx.read().await;
                 if let Err(e) = volunteer_requests::check_and_post_volunteer_requests(&db_pool, &discord_ctx).await {
                     eprintln!("Error checking volunteer requests: {}", e);
+                }
+            }
+            _ = shutdown.clone() => break,
+        }
+    }
+
+    Ok(())
+}
+
+/// Background task for syncing ZSR restream exports
+async fn zsr_export_manager(
+    db_pool: PgPool,
+    http_client: reqwest::Client,
+    shutdown: rocket::Shutdown,
+) -> Result<(), Error> {
+    let mut interval = tokio::time::interval(Duration::from_secs(5 * 60)); // Check every 5 minutes
+
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                if let Err(e) = zsr_export::check_and_sync_all_exports(&db_pool, &http_client).await {
+                    eprintln!("Error syncing ZSR exports: {}", e);
                 }
             }
             _ = shutdown.clone() => break,

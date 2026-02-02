@@ -15,6 +15,7 @@ use crate::http::page;
 use sqlx::{Postgres, Transaction};
 use crate::{
     game::{Game, GameError},
+    lang::Language,
     prelude::*,
     user::User,
     event::{self, roles::{GameRoleBinding, RoleType}},
@@ -144,6 +145,11 @@ pub(crate) async fn index(
             h2 : "Add New Game";
             p {
                 a(href = uri!(add_game_form)) : "Add New Game";
+            }
+
+            h2 : "ZSR Restreaming Backends";
+            p {
+                a(href = uri!(zsr_backends)) : "Manage ZSR Backends";
             }
         }
     };
@@ -1103,4 +1109,344 @@ pub(crate) async fn game_management_overview(
         "Game Management — Hyrule Town Hall",
         content,
     ).await.map_err(Error::from)?)
-} 
+}
+
+// ============================================================================
+// ZSR Restreaming Backends Management
+// ============================================================================
+
+#[rocket::get("/admin/zsr-backends")]
+pub(crate) async fn zsr_backends(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    let me = me.ok_or(Error::Unauthorized)?;
+    if !is_trez(&me) {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
+    let backends = crate::zsr_export::RestreamingBackend::all(&mut transaction).await.map_err(Error::from)?;
+    transaction.commit().await.map_err(Error::from)?;
+
+    let content = html! {
+        article {
+            h1 : "ZSR Restreaming Backends";
+
+            @if backends.is_empty() {
+                p : "No backends configured.";
+            } else {
+                table {
+                    thead {
+                        tr {
+                            th : "Name";
+                            th : "Language";
+                            th : "Sheet ID";
+                            th : "Columns (ID/Comm/Track/Channel/Notes)";
+                            th : "Actions";
+                        }
+                    }
+                    tbody {
+                        @for backend in &backends {
+                            tr {
+                                td : &backend.name;
+                                td : backend.language.to_string();
+                                td(style = "max-width: 200px; overflow: hidden; text-overflow: ellipsis;") : &backend.google_sheet_id;
+                                td : format!("{}/{}/{}/{}/{}",
+                                    &backend.hth_export_id_col,
+                                    &backend.commentators_col,
+                                    &backend.trackers_col,
+                                    &backend.restream_channel_col,
+                                    &backend.notes_col
+                                );
+                                td {
+                                    a(href = uri!(edit_zsr_backend(backend.id))) : "Edit";
+                                    : " | ";
+                                    form(method = "post", action = uri!(delete_zsr_backend(backend.id)), style = "display: inline;") {
+                                        input(type = "hidden", name = "csrf", value = csrf.as_ref().map(|t| t.authenticity_token().to_string()).unwrap_or_default());
+                                        button(type = "submit", onclick = "return confirm('Delete this backend? All exports using it will also be deleted.')") : "Delete";
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            h2 : "Add New Backend";
+            : full_form(uri!(add_zsr_backend), csrf.as_ref(), html! {
+                : form_field("name", &mut Vec::new(), html! {
+                    label(for = "name") : "Name";
+                    input(type = "text", id = "name", name = "name", required, placeholder = "e.g., ZSR, ZSRDE, ZSRFR");
+                });
+                : form_field("google_sheet_id", &mut Vec::new(), html! {
+                    label(for = "google_sheet_id") : "Google Sheet ID";
+                    input(type = "text", id = "google_sheet_id", name = "google_sheet_id", required, placeholder = "e.g., 1TDREocBAHKxokCZCfyHUWtMkHoUFwaNR3srU3Wljo1A");
+                });
+                : form_field("language", &mut Vec::new(), html! {
+                    label(for = "language") : "Language";
+                    select(id = "language", name = "language", required) {
+                        option(value = "en") : "English";
+                        option(value = "fr") : "French";
+                        option(value = "de") : "German";
+                        option(value = "pt") : "Portuguese";
+                    }
+                });
+                : form_field("hth_export_id_col", &mut Vec::new(), html! {
+                    label(for = "hth_export_id_col") : "HTH Export ID Column";
+                    input(type = "text", id = "hth_export_id_col", name = "hth_export_id_col", required, value = "R", placeholder = "e.g., R");
+                });
+                : form_field("commentators_col", &mut Vec::new(), html! {
+                    label(for = "commentators_col") : "Commentators Column";
+                    input(type = "text", id = "commentators_col", name = "commentators_col", required, value = "P", placeholder = "e.g., P");
+                });
+                : form_field("trackers_col", &mut Vec::new(), html! {
+                    label(for = "trackers_col") : "Trackers Column";
+                    input(type = "text", id = "trackers_col", name = "trackers_col", required, value = "Q", placeholder = "e.g., Q");
+                });
+                : form_field("restream_channel_col", &mut Vec::new(), html! {
+                    label(for = "restream_channel_col") : "Restream Channel Column";
+                    input(type = "text", id = "restream_channel_col", name = "restream_channel_col", required, value = "I", placeholder = "e.g., I");
+                });
+                : form_field("notes_col", &mut Vec::new(), html! {
+                    label(for = "notes_col") : "Notes Column";
+                    input(type = "text", id = "notes_col", name = "notes_col", required, value = "S", placeholder = "e.g., S");
+                });
+                : form_field("dst_formula_standard", &mut Vec::new(), html! {
+                    label(for = "dst_formula_standard") : "Standard Time Formula";
+                    input(type = "text", id = "dst_formula_standard", name = "dst_formula_standard", required,
+                        value = "=IF(A{row}=\"\",\"\",A{row}-Sheet2!$A$1)", placeholder = "Use {row} for row number");
+                });
+                : form_field("dst_formula_dst", &mut Vec::new(), html! {
+                    label(for = "dst_formula_dst") : "Daylight Saving Time Formula";
+                    input(type = "text", id = "dst_formula_dst", name = "dst_formula_dst", required,
+                        value = "=IF(A{row}=\"\",\"\",A{row}-Sheet2!$A$2)", placeholder = "Use {row} for row number");
+                });
+            }, Vec::new(), "Add Backend");
+
+            p {
+                a(href = uri!(index)) : "Back to Admin Panel";
+            }
+        }
+    };
+
+    Ok(page(
+        pool.begin().await.map_err(Error::from)?,
+        &Some(me),
+        &uri,
+        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        "ZSR Backends — Hyrule Town Hall",
+        content,
+    ).await.map_err(Error::from)?)
+}
+
+#[derive(Debug, FromForm, CsrfForm)]
+pub(crate) struct ZsrBackendForm {
+    #[field(default = String::new())]
+    csrf: String,
+    name: String,
+    google_sheet_id: String,
+    language: Language,
+    hth_export_id_col: String,
+    commentators_col: String,
+    trackers_col: String,
+    restream_channel_col: String,
+    notes_col: String,
+    dst_formula_standard: String,
+    dst_formula_dst: String,
+}
+
+#[rocket::post("/admin/zsr-backends", data = "<form>")]
+pub(crate) async fn add_zsr_backend(
+    pool: &State<PgPool>,
+    me: User,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, ZsrBackendForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    if !is_trez(&me) {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if let Some(ref value) = form.value {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+
+        crate::zsr_export::RestreamingBackend::create(
+            &mut transaction,
+            &value.name,
+            &value.google_sheet_id,
+            value.language,
+            &value.hth_export_id_col,
+            &value.commentators_col,
+            &value.trackers_col,
+            &value.restream_channel_col,
+            &value.notes_col,
+            &value.dst_formula_standard,
+            &value.dst_formula_dst,
+        ).await.map_err(Error::from)?;
+
+        transaction.commit().await.map_err(Error::from)?;
+    }
+
+    Ok(Redirect::to(uri!(zsr_backends)))
+}
+
+#[rocket::get("/admin/zsr-backends/<backend_id>/edit")]
+pub(crate) async fn edit_zsr_backend(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    backend_id: i32,
+) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    let me = me.ok_or(Error::Unauthorized)?;
+    if !is_trez(&me) {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
+    let backend = crate::zsr_export::RestreamingBackend::from_id(&mut transaction, backend_id).await
+        .map_err(Error::from)?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    transaction.commit().await.map_err(Error::from)?;
+
+    let content = html! {
+        article {
+            h1 : format!("Edit Backend — {}", backend.name);
+
+            : full_form(uri!(update_zsr_backend(backend_id)), csrf.as_ref(), html! {
+                : form_field("name", &mut Vec::new(), html! {
+                    label(for = "name") : "Name";
+                    input(type = "text", id = "name", name = "name", required, value = &backend.name);
+                });
+                : form_field("google_sheet_id", &mut Vec::new(), html! {
+                    label(for = "google_sheet_id") : "Google Sheet ID";
+                    input(type = "text", id = "google_sheet_id", name = "google_sheet_id", required, value = &backend.google_sheet_id);
+                });
+                : form_field("language", &mut Vec::new(), html! {
+                    label(for = "language") : "Language";
+                    select(id = "language", name = "language", required) {
+                        option(value = "en", selected? = backend.language == English) : "English";
+                        option(value = "fr", selected? = backend.language == French) : "French";
+                        option(value = "de", selected? = backend.language == German) : "German";
+                        option(value = "pt", selected? = backend.language == Portuguese) : "Portuguese";
+                    }
+                });
+                : form_field("hth_export_id_col", &mut Vec::new(), html! {
+                    label(for = "hth_export_id_col") : "HTH Export ID Column";
+                    input(type = "text", id = "hth_export_id_col", name = "hth_export_id_col", required, value = &backend.hth_export_id_col);
+                });
+                : form_field("commentators_col", &mut Vec::new(), html! {
+                    label(for = "commentators_col") : "Commentators Column";
+                    input(type = "text", id = "commentators_col", name = "commentators_col", required, value = &backend.commentators_col);
+                });
+                : form_field("trackers_col", &mut Vec::new(), html! {
+                    label(for = "trackers_col") : "Trackers Column";
+                    input(type = "text", id = "trackers_col", name = "trackers_col", required, value = &backend.trackers_col);
+                });
+                : form_field("restream_channel_col", &mut Vec::new(), html! {
+                    label(for = "restream_channel_col") : "Restream Channel Column";
+                    input(type = "text", id = "restream_channel_col", name = "restream_channel_col", required, value = &backend.restream_channel_col);
+                });
+                : form_field("notes_col", &mut Vec::new(), html! {
+                    label(for = "notes_col") : "Notes Column";
+                    input(type = "text", id = "notes_col", name = "notes_col", required, value = &backend.notes_col);
+                });
+                : form_field("dst_formula_standard", &mut Vec::new(), html! {
+                    label(for = "dst_formula_standard") : "Standard Time Formula";
+                    input(type = "text", id = "dst_formula_standard", name = "dst_formula_standard", required, value = &backend.dst_formula_standard);
+                });
+                : form_field("dst_formula_dst", &mut Vec::new(), html! {
+                    label(for = "dst_formula_dst") : "Daylight Saving Time Formula";
+                    input(type = "text", id = "dst_formula_dst", name = "dst_formula_dst", required, value = &backend.dst_formula_dst);
+                });
+            }, Vec::new(), "Save Changes");
+
+            p {
+                a(href = uri!(zsr_backends)) : "Back to ZSR Backends";
+            }
+        }
+    };
+
+    Ok(page(
+        pool.begin().await.map_err(Error::from)?,
+        &Some(me),
+        &uri,
+        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        &format!("Edit Backend — {}", backend.name),
+        content,
+    ).await.map_err(Error::from)?)
+}
+
+#[rocket::post("/admin/zsr-backends/<backend_id>", data = "<form>")]
+pub(crate) async fn update_zsr_backend(
+    pool: &State<PgPool>,
+    me: User,
+    csrf: Option<CsrfToken>,
+    backend_id: i32,
+    form: Form<Contextual<'_, ZsrBackendForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    if !is_trez(&me) {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if let Some(ref value) = form.value {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+
+        crate::zsr_export::RestreamingBackend::update(
+            &mut transaction,
+            backend_id,
+            &value.name,
+            &value.google_sheet_id,
+            value.language,
+            &value.hth_export_id_col,
+            &value.commentators_col,
+            &value.trackers_col,
+            &value.restream_channel_col,
+            &value.notes_col,
+            &value.dst_formula_standard,
+            &value.dst_formula_dst,
+        ).await.map_err(Error::from)?;
+
+        transaction.commit().await.map_err(Error::from)?;
+    }
+
+    Ok(Redirect::to(uri!(zsr_backends)))
+}
+
+#[derive(Debug, FromForm, CsrfForm)]
+pub(crate) struct DeleteBackendForm {
+    #[field(default = String::new())]
+    csrf: String,
+}
+
+#[rocket::post("/admin/zsr-backends/<backend_id>/delete", data = "<form>")]
+pub(crate) async fn delete_zsr_backend(
+    pool: &State<PgPool>,
+    me: User,
+    csrf: Option<CsrfToken>,
+    backend_id: i32,
+    form: Form<Contextual<'_, DeleteBackendForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    if !is_trez(&me) {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if form.value.is_some() {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        crate::zsr_export::RestreamingBackend::delete(&mut transaction, backend_id).await.map_err(Error::from)?;
+        transaction.commit().await.map_err(Error::from)?;
+    }
+
+    Ok(Redirect::to(uri!(zsr_backends)))
+}

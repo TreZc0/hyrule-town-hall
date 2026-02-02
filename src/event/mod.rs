@@ -23,6 +23,7 @@ pub(crate) mod setup;
 pub(crate) mod teams;
 pub(crate) mod roles;
 pub(crate) mod asyncs;
+pub(crate) mod zsr_export;
 
 #[derive(Debug, Clone, Copy, sqlx::Type)]
 #[sqlx(type_name = "signup_status", rename_all = "snake_case")]
@@ -874,6 +875,11 @@ impl<'a> Data<'a> {
                         } else {
                             a(class = "button", href = uri!(setup::get(self.series, &*self.event))) : "Setup";
                         }
+                        @if let Tab::ZsrExport = tab {
+                            a(class = "button selected", href? = is_subpage.then(|| uri!(zsr_export::get(self.series, &*self.event)))) : "ZSR Export";
+                        } else {
+                            a(class = "button", href = uri!(zsr_export::get(self.series, &*self.event))) : "ZSR Export";
+                        }
                     }
                 }
             }
@@ -904,6 +910,7 @@ pub(crate) enum Tab {
     SwissStandings,
     Setup,
     Asyncs,
+    ZsrExport,
 }
 
 #[derive(Debug, thiserror::Error)]

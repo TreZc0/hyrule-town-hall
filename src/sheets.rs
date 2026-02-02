@@ -117,3 +117,212 @@ pub(crate) async fn values(http_client: reqwest::Client, sheet_id: &str, range: 
         })
     })
 }
+
+// ============================================================================
+// Write Operations for ZSR Export
+// ============================================================================
+
+/// Rate limiter for write operations (separate from read cache)
+static WRITE_RATE_LIMIT: LazyLock<Mutex<Instant>> = LazyLock::new(|| Mutex::new(Instant::now()));
+
+/// Error type for write operations (no caching involved)
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum WriteError {
+    #[error(transparent)] OAuth(#[from] yup_oauth2::Error),
+    #[error(transparent)] Reqwest(#[from] reqwest::Error),
+    #[error(transparent)] Wheel(#[from] wheel::Error),
+    #[error("empty token is not valid")]
+    EmptyToken,
+    #[error("OAuth token is expired")]
+    TokenExpired,
+}
+
+impl IsNetworkError for WriteError {
+    fn is_network_error(&self) -> bool {
+        match self {
+            Self::OAuth(_) => false,
+            Self::Reqwest(e) => e.is_network_error(),
+            Self::Wheel(e) => e.is_network_error(),
+            Self::EmptyToken => false,
+            Self::TokenExpired => false,
+        }
+    }
+}
+
+/// Get OAuth token for Google Sheets API
+async fn get_auth_token() -> Result<String, WriteError> {
+    let gsuite_secret = read_service_account_key("assets/google-client-secret.json").await.at("assets/google-client-secret.json")?;
+    let auth = ServiceAccountAuthenticator::builder(gsuite_secret)
+        .build().await.at_unknown()?;
+    let token = auth.token(&["https://www.googleapis.com/auth/spreadsheets"]).await?;
+    if token.is_expired() { return Err(WriteError::TokenExpired) }
+    let Some(token_str) = token.token() else { return Err(WriteError::EmptyToken) };
+    if token_str.is_empty() { return Err(WriteError::EmptyToken) }
+    Ok(token_str.to_owned())
+}
+
+/// Update values in a specific range (overwrites existing data)
+pub(crate) async fn update_values(
+    http_client: &reqwest::Client,
+    sheet_id: &str,
+    range: &str,
+    values: Vec<Vec<String>>,
+) -> Result<(), WriteError> {
+    lock!(next_write = WRITE_RATE_LIMIT; {
+        sleep_until(*next_write).await;
+
+        let token = get_auth_token().await?;
+
+        #[derive(Serialize)]
+        struct ValueRange {
+            range: String,
+            values: Vec<Vec<String>>,
+        }
+
+        http_client.put(&format!(
+            "https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/{range}"
+        ))
+            .bearer_auth(&token)
+            .query(&[("valueInputOption", "USER_ENTERED")])
+            .json(&ValueRange {
+                range: range.to_owned(),
+                values,
+            })
+            .send().await?
+            .detailed_error_for_status().await?;
+
+        *next_write = Instant::now() + RATE_LIMIT;
+        Ok(())
+    })
+}
+
+/// Response from append operation
+#[derive(Debug, Deserialize)]
+pub(crate) struct AppendResponse {
+    #[serde(rename = "updates")]
+    pub(crate) updates: AppendUpdates,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct AppendUpdates {
+    #[serde(rename = "updatedRange")]
+    pub(crate) updated_range: String,
+    #[serde(rename = "updatedRows")]
+    pub(crate) updated_rows: i32,
+}
+
+/// Append values to a sheet (adds new rows)
+pub(crate) async fn append_values(
+    http_client: &reqwest::Client,
+    sheet_id: &str,
+    range: &str,
+    values: Vec<Vec<String>>,
+) -> Result<AppendResponse, WriteError> {
+    lock!(next_write = WRITE_RATE_LIMIT; {
+        sleep_until(*next_write).await;
+
+        let token = get_auth_token().await?;
+
+        #[derive(Serialize)]
+        struct ValueRange {
+            values: Vec<Vec<String>>,
+        }
+
+        let response = http_client.post(&format!(
+            "https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/{range}:append"
+        ))
+            .bearer_auth(&token)
+            .query(&[
+                ("valueInputOption", "USER_ENTERED"),
+                ("insertDataOption", "INSERT_ROWS"),
+            ])
+            .json(&ValueRange { values })
+            .send().await?
+            .detailed_error_for_status().await?
+            .json_with_text_in_error::<AppendResponse>().await?;
+
+        *next_write = Instant::now() + RATE_LIMIT;
+        Ok(response)
+    })
+}
+
+/// Read values without caching (for write operations that need fresh data)
+pub(crate) async fn read_values_uncached(
+    http_client: &reqwest::Client,
+    sheet_id: &str,
+    range: &str,
+) -> Result<Vec<Vec<String>>, WriteError> {
+    lock!(next_write = WRITE_RATE_LIMIT; {
+        sleep_until(*next_write).await;
+
+        let token = get_auth_token().await?;
+
+        #[derive(Deserialize)]
+        struct ValueRange {
+            #[serde(default)]
+            values: Vec<Vec<String>>,
+        }
+
+        let response = http_client.get(&format!(
+            "https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/{range}"
+        ))
+            .bearer_auth(&token)
+            .query(&[
+                ("valueRenderOption", "FORMATTED_VALUE"),
+                ("dateTimeRenderOption", "FORMATTED_STRING"),
+                ("majorDimension", "ROWS"),
+            ])
+            .send().await?
+            .detailed_error_for_status().await?
+            .json_with_text_in_error::<ValueRange>().await?;
+
+        *next_write = Instant::now() + RATE_LIMIT;
+        Ok(response.values)
+    })
+}
+
+/// Batch update multiple ranges at once
+pub(crate) async fn batch_update_values(
+    http_client: &reqwest::Client,
+    sheet_id: &str,
+    data: Vec<(String, Vec<Vec<String>>)>, // (range, values) pairs
+) -> Result<(), WriteError> {
+    if data.is_empty() {
+        return Ok(());
+    }
+
+    lock!(next_write = WRITE_RATE_LIMIT; {
+        sleep_until(*next_write).await;
+
+        let token = get_auth_token().await?;
+
+        #[derive(Serialize)]
+        struct BatchUpdateRequest {
+            data: Vec<ValueRange>,
+            #[serde(rename = "valueInputOption")]
+            value_input_option: String,
+        }
+
+        #[derive(Serialize)]
+        struct ValueRange {
+            range: String,
+            values: Vec<Vec<String>>,
+        }
+
+        let request = BatchUpdateRequest {
+            data: data.into_iter().map(|(range, values)| ValueRange { range, values }).collect(),
+            value_input_option: "USER_ENTERED".to_owned(),
+        };
+
+        http_client.post(&format!(
+            "https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values:batchUpdate"
+        ))
+            .bearer_auth(&token)
+            .json(&request)
+            .send().await?
+            .detailed_error_for_status().await?;
+
+        *next_write = Instant::now() + RATE_LIMIT;
+        Ok(())
+    })
+}

@@ -258,3 +258,21 @@ impl From<Id<Races>> for mhstatus::RaceId {
         Self(id.inner)
     }
 }
+
+#[allow(dead_code)]
+pub(crate) enum ZsrBackends {}
+
+impl Table for ZsrBackends {
+    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
+        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM zsr_restreaming_backends WHERE id = $1) AS "exists!""#, id as i32)
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) enum ZsrExports {}
+
+impl Table for ZsrExports {
+    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
+        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM zsr_restream_exports WHERE id = $1) AS "exists!""#, id as i32)
+    }
+}

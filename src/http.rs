@@ -698,6 +698,18 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         games::approve_game_role_request,
         games::reject_game_role_request,
         games::revoke_game_role_request,
+        admin::zsr_backends,
+        admin::add_zsr_backend,
+        admin::edit_zsr_backend,
+        admin::update_zsr_backend,
+        admin::delete_zsr_backend,
+        event::zsr_export::get,
+        event::zsr_export::add_export,
+        event::zsr_export::edit_export,
+        event::zsr_export::update_export,
+        event::zsr_export::delete_export,
+        event::zsr_export::sync_export,
+        event::zsr_export::sync_all,
     ])
     .mount("/static", FileServer::without_index("assets/static"))
     .register("/", rocket::catchers![
