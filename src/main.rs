@@ -213,13 +213,32 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             .hickory_dns(true)
             .build()?;
         let discord_builder = serenity_utils::builder(config.discord.bot_token.clone()).await?;
-        let mut db_options = PgConnectOptions::default()
-            .username("mido")
-            .database(if Environment::default().is_dev() { "fados_house" } else { "midos_house" })
-            .application_name("midos-house")
-            .log_slow_statements(log::LevelFilter::Warn, Duration::from_secs(10));
 
-        // Override with config if provided
+        // Check for DATABASE_URL environment variable in dev mode only
+        let mut db_options = if Environment::default().is_dev() {
+            if let Ok(database_url) = env::var("DATABASE_URL") {
+                // Use DATABASE_URL for dedicated authentication (dev mode only)
+                database_url.parse::<PgConnectOptions>()?
+                    .application_name("midos-house")
+                    .log_slow_statements(log::LevelFilter::Warn, Duration::from_secs(10))
+            } else {
+                // Default to peer authentication in dev
+                PgConnectOptions::default()
+                    .username("mido")
+                    .database("fados_house")
+                    .application_name("midos-house")
+                    .log_slow_statements(log::LevelFilter::Warn, Duration::from_secs(10))
+            }
+        } else {
+            // Production always uses peer authentication by default
+            PgConnectOptions::default()
+                .username("mido")
+                .database("midos_house")
+                .application_name("midos-house")
+                .log_slow_statements(log::LevelFilter::Warn, Duration::from_secs(10))
+        };
+
+        // Override with config if provided (takes precedence over both DATABASE_URL and defaults)
         if let Some(ref db_config) = config.database {
             if let Some(ref host) = db_config.host {
                 db_options = db_options.host(host);
