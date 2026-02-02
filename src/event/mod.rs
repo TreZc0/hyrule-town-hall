@@ -698,6 +698,8 @@ impl<'a> Data<'a> {
         } else {
             false
         };
+        let has_zsr_backends = sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM zsr_restreaming_backends) AS "exists!""#)
+            .fetch_one(&mut **transaction).await?;
         Ok(html! {
             h1 {
                 a(class = "nav", href? = (!matches!(tab, Tab::Info) || is_subpage).then(|| uri!(info(self.series, &*self.event)))) : &self.display_name;
@@ -875,10 +877,12 @@ impl<'a> Data<'a> {
                         } else {
                             a(class = "button", href = uri!(setup::get(self.series, &*self.event))) : "Setup";
                         }
-                        @if let Tab::ZsrExport = tab {
-                            a(class = "button selected", href? = is_subpage.then(|| uri!(zsr_export::get(self.series, &*self.event)))) : "ZSR Export";
-                        } else {
-                            a(class = "button", href = uri!(zsr_export::get(self.series, &*self.event))) : "ZSR Export";
+                        @if has_zsr_backends {
+                            @if let Tab::ZsrExport = tab {
+                                a(class = "button selected", href? = is_subpage.then(|| uri!(zsr_export::get(self.series, &*self.event)))) : "ZSR Export";
+                            } else {
+                                a(class = "button", href = uri!(zsr_export::get(self.series, &*self.event))) : "ZSR Export";
+                            }
                         }
                     }
                 }

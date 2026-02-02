@@ -179,7 +179,13 @@ pub(crate) async fn get(
 
             h3 : "Add New Export";
 
-            @if available_backends.is_empty() {
+            @if backends.is_empty() {
+                p {
+                    : "No restreaming backends configured. ";
+                    a(href = uri!(crate::admin::zsr_backends())) : "Configure backends in the admin panel";
+                    : " first.";
+                }
+            } else if available_backends.is_empty() {
                 p : "All backends are already configured for this event.";
             } else {
                 : full_form(uri!(add_export(series, &*event)), csrf.as_ref(), html! {
