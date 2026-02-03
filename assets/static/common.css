@@ -581,6 +581,10 @@ p.error {
   overflow-wrap: break-word;
 }
 
+.settings-link.twwr-seed-link:hover::after {
+  word-break: break-all;
+}
+
 .help {
   margin-left: 5px;
   font-style: oblique
