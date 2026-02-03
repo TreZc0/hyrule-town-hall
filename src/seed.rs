@@ -276,8 +276,18 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
             a(href = format!("https://www.triforceblitz.com/seed/daily/{ordinal}"), target = "_blank") : "View";
         }),
         Some(Files::TwwrPermalink { ref permalink, ref seed_hash }) => Some(html! {
-            span(class = "settings-link twwr-seed-link", data_tooltip = format!("Permalink: {}\nSeed Hash: {}", permalink, seed_hash)) {
+            span(class = "settings-link twwr-seed-link") {
                 : "Hover for Seed";
+                span(class = "tooltip-content") {
+                    div {
+                        strong : "Permalink: ";
+                        code(style = "user-select: all") : permalink;
+                    }
+                    div {
+                        strong : "Seed Hash: ";
+                        : seed_hash;
+                    }
+                }
             }
         }),
         None => None,
