@@ -566,6 +566,19 @@ impl Goal {
         }
     }
 
+    /// Returns whether this goal requires seed generation.
+    ///
+    /// For speedrunning events that don't use randomizer seeds, this returns false.
+    /// This allows racetime.gg room auto-generation while completely skipping seed rolling.
+
+    pub(crate) fn requires_seed(&self) -> bool {
+        const NO_SEED_GOALS: &[Goal] = &[
+            // Goal::OotSpeedrunAny,
+        ];
+
+        !NO_SEED_GOALS.contains(self)
+    }
+
     pub(crate) fn unlock_spoiler_log(&self, official_race: bool, spoiler_seed: bool) -> UnlockSpoilerLog {
         if spoiler_seed {
             UnlockSpoilerLog::Now
@@ -4870,7 +4883,8 @@ impl RaceHandler<GlobalState> for Handler {
             lock!(@read state = this.race_state; {
                 if existing_seed.files.is_some() {
                     this.queue_existing_seed(ctx, existing_seed, English, "a", format!("seed")).await; //TODO better article/description
-                } else {
+                } else if goal.requires_seed() {
+                    // Only roll seeds for goals that require them
                     let event_id = Some((event.series, &*event.event));
                     match *state {
                         RaceState::Init => match goal {
@@ -5349,14 +5363,17 @@ impl RaceHandler<GlobalState> for Handler {
                 }
             },
             "seed" | "spoilerseed" => if let RaceStatusValue::Open | RaceStatusValue::Invitational = ctx.data().await.status.value {
-                lock!(@write state = self.race_state; match *state {
-                    RaceState::Init => if self.locked && !self.can_monitor(ctx, is_monitor, msg).await.to_racetime()? {
-                        ctx.say(if let French = goal.language() {
-                            format!("Désolé {reply_to}, la race est verrouillée. Seuls {} peuvent générer une seed pour cette race.", if self.is_official() { "les race monitors et les organisateurs du tournoi" } else { "les race monitors" })
+                if !goal.requires_seed() {
+                    ctx.say(format!("Sorry {reply_to}, this race does not use randomizer seeds. You can start the race directly without rolling a seed.")).await?;
+                } else {
+                    lock!(@write state = self.race_state; match *state {
+                        RaceState::Init => if self.locked && !self.can_monitor(ctx, is_monitor, msg).await.to_racetime()? {
+                            ctx.say(if let French = goal.language() {
+                                format!("Désolé {reply_to}, la race est verrouillée. Seuls {} peuvent générer une seed pour cette race.", if self.is_official() { "les race monitors et les organisateurs du tournoi" } else { "les race monitors" })
+                            } else {
+                                format!("Sorry {reply_to}, seed rolling is locked. Only {} may roll a seed for this race.", if self.is_official() { "race monitors or tournament organizers" } else { "race monitors" })
+                            }).await?;
                         } else {
-                            format!("Sorry {reply_to}, seed rolling is locked. Only {} may roll a seed for this race.", if self.is_official() { "race monitors or tournament organizers" } else { "race monitors" })
-                        }).await?;
-                    } else {
                         let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
                         match goal.parse_seed_command(&mut transaction, &ctx.global_state, self.is_official(), cmd_name.eq_ignore_ascii_case("spoilerseed"), false, &args).await.to_racetime()? {
                             SeedCommandParseResult::Alttpr => {
@@ -5408,7 +5425,8 @@ impl RaceHandler<GlobalState> for Handler {
                     RaceState::Draft { .. } => ctx.say(format!("Sorry {reply_to}, settings are already being drafted.")).await?,
                     RaceState::Rolling => ctx.say(format!("Sorry {reply_to}, but I'm already rolling a seed for this room. Please wait.")).await?,
                     RaceState::Rolled(_) | RaceState::SpoilerSent => ctx.say(format!("Sorry {reply_to}, but I already rolled a seed. Check the race info!")).await?,
-                });
+                    });
+                }
             } else {
                 ctx.say(if let French = goal.language() {
                     format!("Désolé {reply_to}, mais la race a débuté.")
@@ -5430,17 +5448,20 @@ impl RaceHandler<GlobalState> for Handler {
                 }
             }, reply_to).await?),
             "reroll" => if let RaceStatusValue::Open | RaceStatusValue::Invitational = ctx.data().await.status.value {
-                lock!(@write state = self.race_state; match *state {
-                    RaceState::Init => {
-                        // Check if user is an entrant or monitor
-                        let data = ctx.data().await;
-                        let is_entrant = msg.user.as_ref().is_some_and(|user|
-                            data.entrants.iter().any(|e| e.user.as_ref().is_some_and(|u| u.id == user.id))
-                        );
+                if !goal.requires_seed() {
+                    ctx.say(format!("Sorry {reply_to}, this race does not use randomizer seeds.")).await?;
+                } else {
+                    lock!(@write state = self.race_state; match *state {
+                        RaceState::Init => {
+                            // Check if user is an entrant or monitor
+                            let data = ctx.data().await;
+                            let is_entrant = msg.user.as_ref().is_some_and(|user|
+                                data.entrants.iter().any(|e| e.user.as_ref().is_some_and(|u| u.id == user.id))
+                            );
 
-                        if !is_entrant && !self.can_monitor(ctx, is_monitor, msg).await.to_racetime()? {
-                            ctx.say(format!("Sorry {reply_to}, only @entrants or race monitors may use this command.")).await?;
-                        } else if let Some(settings) = goal.single_settings() {
+                            if !is_entrant && !self.can_monitor(ctx, is_monitor, msg).await.to_racetime()? {
+                                ctx.say(format!("Sorry {reply_to}, only @entrants or race monitors may use this command.")).await?;
+                            } else if let Some(settings) = goal.single_settings() {
                             // Goal has default settings, use them to roll
                             let event = self.official_data.as_ref().map(|OfficialRaceData { event, .. }| event);
                             let unlock_spoiler_log = goal.unlock_spoiler_log(false, false);
@@ -5454,7 +5475,8 @@ impl RaceHandler<GlobalState> for Handler {
                     RaceState::Draft { .. } => ctx.say(format!("Sorry {reply_to}, settings are currently being drafted. Please finish the draft first.")).await?,
                     RaceState::Rolling => ctx.say(format!("Sorry {reply_to}, I'm currently rolling a seed. Please wait for it to finish.")).await?,
                     RaceState::Rolled(_) | RaceState::SpoilerSent => ctx.say(format!("Sorry {reply_to}, a seed has already been rolled successfully. Check the race info!")).await?,
-                });
+                    });
+                }
             } else {
                 ctx.say(format!("Sorry {reply_to}, but the race has already started.")).await?;
             },
