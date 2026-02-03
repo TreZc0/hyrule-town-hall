@@ -1582,7 +1582,11 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             race.schedule_updated_at = Some(Utc::now());
                                             race.save(&mut transaction).await?;
                                             // Create or update Discord scheduled event
-                                            match crate::discord_scheduled_events::create_discord_scheduled_event(ctx, &mut transaction, &mut race, &event).await {
+                                            let http_client = {
+                                                let data = ctx.data.read().await;
+                                                data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone()
+                                            };
+                                            match crate::discord_scheduled_events::create_discord_scheduled_event(ctx, &mut transaction, &mut race, &event, &http_client).await {
                                                 Ok(()) => {
                                                     race.save(&mut transaction).await?; // Save updated discord_scheduled_event_id
                                                 }
@@ -1634,7 +1638,11 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                 })
                                             } else {
                                                 // Create Discord scheduled event for races scheduled > 30 minutes in advance
-                                                match crate::discord_scheduled_events::create_discord_scheduled_event(ctx, &mut transaction, &mut cal_event.race, &event).await {
+                                                let http_client = {
+                                                    let data = ctx.data.read().await;
+                                                    data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone()
+                                                };
+                                                match crate::discord_scheduled_events::create_discord_scheduled_event(ctx, &mut transaction, &mut cal_event.race, &event, &http_client).await {
                                                     Ok(()) => {
                                                         cal_event.race.save(&mut transaction).await?;
                                                     }

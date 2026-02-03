@@ -265,7 +265,8 @@ pub(crate) struct Mutation;
             // Update Discord scheduled event if applicable
             let event = race.event(&mut *db).await?;
             if let Some(discord_ctx) = ctx.data_opt::<crate::prelude::RwFuture<crate::discord_scheduled_events::DiscordCtx>>() {
-                if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&*discord_ctx.read().await, &mut *db, &race, &event).await {
+                let http_client = ctx.data_unchecked::<reqwest::Client>();
+                if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&*discord_ctx.read().await, &mut *db, &race, &event, http_client).await {
                     eprintln!("Failed to update Discord scheduled event for race {}: {}", race.id, e);
                 }
             }
@@ -293,7 +294,8 @@ pub(crate) struct Mutation;
             // Update Discord scheduled event if applicable
             let event = race.event(&mut *db).await?;
             if let Some(discord_ctx) = ctx.data_opt::<crate::prelude::RwFuture<crate::discord_scheduled_events::DiscordCtx>>() {
-                if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&*discord_ctx.read().await, &mut *db, &race, &event).await {
+                let http_client = ctx.data_unchecked::<reqwest::Client>();
+                if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&*discord_ctx.read().await, &mut *db, &race, &event, http_client).await {
                     eprintln!("Failed to update Discord scheduled event for race {}: {}", race.id, e);
                 }
             }

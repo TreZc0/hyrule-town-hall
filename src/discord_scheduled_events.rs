@@ -1,9 +1,10 @@
 use {
     crate::{
-        cal::{Race, RaceSchedule, Entrants},
+        cal::{Entrant, Race, RaceSchedule, Entrants},
         discord_bot::PgSnowflake,
         event::Data as EventData,
         prelude::*,
+        racetime_bot,
     },
     chrono::TimeDelta,
     serenity::all::{
@@ -54,6 +55,58 @@ pub(crate) fn should_create_discord_event(
         !race.video_urls.is_empty()
     } else {
         true
+    }
+}
+
+/// Generate a multistream URL from entrants' twitch channels if both players have them
+async fn generate_multistream_url(
+    http_client: &reqwest::Client,
+    race: &Race,
+) -> Option<String> {
+    // Only create multistream for 2-player races
+    let entrants = match &race.entrants {
+        Entrants::Two(entrants) => entrants,
+        _ => return None,
+    };
+
+    // Get twitch usernames for both players
+    let mut twitch_names = Vec::new();
+
+    for entrant in entrants {
+        let twitch_username = match entrant {
+            Entrant::Discord { twitch_username, racetime_id, .. } |
+            Entrant::Named { twitch_username, racetime_id, .. } => {
+                // First try the stored twitch_username
+                if let Some(username) = twitch_username {
+                    if !username.is_empty() {
+                        Some(username.clone())
+                    } else {
+                        None
+                    }
+                } else if let Some(racetime_user_id) = racetime_id {
+                    // Fetch from racetime.gg user profile
+                    if let Ok(Some(user_profile)) = racetime_bot::user_data(http_client, racetime_user_id).await {
+                        user_profile.twitch_name
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            Entrant::MidosHouseTeam(_) => None,
+        };
+
+        if let Some(username) = twitch_username {
+            twitch_names.push(username);
+        }
+    }
+
+    // Only create multistream if both players have twitch channels
+    if twitch_names.len() == 2 {
+        Some(format!("https://kadgar.net/live/{}/{}", twitch_names[0], twitch_names[1]))
+    } else {
+        None
     }
 }
 
@@ -179,6 +232,7 @@ pub(crate) async fn create_discord_scheduled_event(
     transaction: &mut Transaction<'_, Postgres>,
     race: &mut Race,
     event_config: &EventData<'_>,
+    http_client: &reqwest::Client,
 ) -> Result<(), Error> {
     let guild_id = event_config.discord_guild.ok_or(Error::NoDiscordGuild)?;
 
@@ -198,7 +252,7 @@ pub(crate) async fn create_discord_scheduled_event(
 
     // If event already exists, update it instead
     if race.discord_scheduled_event_id.is_some() {
-        return update_discord_scheduled_event(ctx, transaction, race, event_config).await;
+        return update_discord_scheduled_event(ctx, transaction, race, event_config, http_client).await;
     }
 
     // Generate event content
@@ -217,7 +271,23 @@ pub(crate) async fn create_discord_scheduled_event(
     .description(description)
     .end_time(Timestamp::from_unix_timestamp(end_time.timestamp()).expect("valid timestamp"))
     .location({
-        let url = event_config.url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "https://ootrandomizer.com".to_string());
+        // Priority: restream URL (event language preferred) > multistream URL > event URL
+        let mut url = if !race.video_urls.is_empty() {
+            // Prefer restream in the event's primary language, otherwise use any restream
+            race.video_urls.get(&event_config.language)
+                .or_else(|| race.video_urls.values().next())
+                .map(|u| u.to_string())
+        } else {
+            // Try to get multistream URL from player twitch channels
+            generate_multistream_url(http_client, race).await
+        };
+
+        // Fall back to event URL if nothing else available
+        if url.is_none() {
+            url = Some(event_config.url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "https://ootrandomizer.com".to_string()));
+        }
+
+        let url = url.unwrap();
         if url.len() > 100 {
             // For start.gg URLs, try to cut off the event-specific part
             if url.contains("start.gg") {
@@ -253,6 +323,7 @@ pub(crate) async fn update_discord_scheduled_event(
     transaction: &mut Transaction<'_, Postgres>,
     race: &Race,
     event_config: &EventData<'_>,
+    http_client: &reqwest::Client,
 ) -> Result<(), Error> {
     let guild_id = event_config.discord_guild.ok_or(Error::NoDiscordGuild)?;
     let event_id = match &race.discord_scheduled_event_id {
@@ -311,7 +382,23 @@ pub(crate) async fn update_discord_scheduled_event(
         .description(description)
         .end_time(Timestamp::from_unix_timestamp(end_time.timestamp()).expect("valid timestamp"))
         .location({
-            let url = event_config.url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "https://ootrandomizer.com".to_string());
+            // Priority: restream URL (event language preferred) > multistream URL > event URL
+            let mut url = if !race.video_urls.is_empty() {
+                // Prefer restream in the event's primary language, otherwise use any restream
+                race.video_urls.get(&event_config.language)
+                    .or_else(|| race.video_urls.values().next())
+                    .map(|u| u.to_string())
+            } else {
+                // Try to get multistream URL from player twitch channels
+                generate_multistream_url(http_client, race).await
+            };
+
+            // Fall back to event URL if nothing else available
+            if url.is_none() {
+                url = Some(event_config.url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "https://ootrandomizer.com".to_string()));
+            }
+
+            let url = url.unwrap();
             if url.len() > 100 {
                 // For start.gg URLs, try to cut off the event-specific part
                 if url.contains("start.gg") {
@@ -351,11 +438,51 @@ pub(crate) async fn update_discord_scheduled_event(
     let end_time = start + TimeDelta::hours(3);
 
     // Update the event
+    let location = {
+        // Priority: restream URL (event language preferred) > multistream URL > event URL
+        let mut url = if !race.video_urls.is_empty() {
+            // Prefer restream in the event's primary language, otherwise use any restream
+            race.video_urls.get(&event_config.language)
+                .or_else(|| race.video_urls.values().next())
+                .map(|u| u.to_string())
+        } else {
+            // Try to get multistream URL from player twitch channels
+            generate_multistream_url(http_client, race).await
+        };
+
+        // Fall back to event URL if nothing else available
+        if url.is_none() {
+            url = Some(event_config.url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "https://ootrandomizer.com".to_string()));
+        }
+
+        let url = url.unwrap();
+        if url.len() > 100 {
+            // For start.gg URLs, try to cut off the event-specific part
+            if url.contains("start.gg") {
+                if let Some(event_pos) = url.find("/event/") {
+                    let base_url = &url[..event_pos];
+                    if base_url.len() <= 100 {
+                        base_url.to_string()
+                    } else {
+                        url.chars().take(97).collect::<String>() + "..."
+                    }
+                } else {
+                    url.chars().take(97).collect::<String>() + "..."
+                }
+            } else {
+                url.chars().take(97).collect::<String>() + "..."
+            }
+        } else {
+            url
+        }
+    };
+
     let builder = EditScheduledEvent::new()
         .name(title)
         .description(description)
         .start_time(Timestamp::from_unix_timestamp(start.timestamp()).expect("valid timestamp"))
-        .end_time(Timestamp::from_unix_timestamp(end_time.timestamp()).expect("valid timestamp"));
+        .end_time(Timestamp::from_unix_timestamp(end_time.timestamp()).expect("valid timestamp"))
+        .location(location);
 
     guild_id.edit_scheduled_event(&ctx.http, event_id, builder).await?;
 

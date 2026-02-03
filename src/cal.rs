@@ -4087,7 +4087,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
 
             // Update Discord scheduled event if restream URLs changed
             if race.video_urls != original_video_urls {
-                if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&*discord_ctx.read().await, &mut transaction, &race, &event).await {
+                if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&*discord_ctx.read().await, &mut transaction, &race, &event, http_client.inner()).await {
                     eprintln!("Failed to update Discord scheduled event for race {}: {}", race.id, e);
                 }
             }
