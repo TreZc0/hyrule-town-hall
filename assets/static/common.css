@@ -593,7 +593,7 @@ p.error {
   transform: translateX(-50%);
   background-color: var(--bg-surface);
   color: var(--text);
-  padding: 8px 12px;
+  padding: 12px;
   border: 1px solid var(--border);
   border-radius: 4px;
   font-size: 0.75rem;
@@ -605,6 +605,14 @@ p.error {
   word-wrap: break-word;
   overflow-wrap: break-word;
   pointer-events: auto;
+}
+
+.tooltip-content > div {
+  margin-bottom: 8px;
+}
+
+.tooltip-content > div:last-child {
+  margin-bottom: 0;
 }
 
 .settings-link:hover .tooltip-content {
