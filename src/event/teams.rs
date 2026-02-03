@@ -357,7 +357,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     })
                 }
             }
-            if data.is_started(&mut *transaction).await? {
+            if worst_case_extrapolation.is_none() && data.is_started(&mut *transaction).await? {
                 scores.retain(|user, _| matches!(user, MemberUser::MidosHouse(_)));
             } else {
                 let opt_outs = sqlx::query_scalar!("SELECT racetime_id FROM opt_outs WHERE series = $1 AND event = $2", data.series as _, &data.event).fetch_all(&mut **transaction).await?;
