@@ -790,12 +790,20 @@ enum WeeklySchedulesFormDefaults<'v> {
     None,
     AddContext(Context<'v>),
     DeleteContext(Id<WeeklySchedules>, Context<'v>),
+    ToggleContext(Id<WeeklySchedules>, Context<'v>),
 }
 
 impl<'v> WeeklySchedulesFormDefaults<'v> {
     fn delete_errors(&self, for_schedule: Id<WeeklySchedules>) -> Vec<&form::Error<'v>> {
         match self {
             Self::DeleteContext(schedule_id, ctx) if *schedule_id == for_schedule => ctx.errors().collect(),
+            _ => Vec::default(),
+        }
+    }
+
+    fn toggle_errors(&self, for_schedule: Id<WeeklySchedules>) -> Vec<&form::Error<'v>> {
+        match self {
+            Self::ToggleContext(schedule_id, ctx) if *schedule_id == for_schedule => ctx.errors().collect(),
             _ => Vec::default(),
         }
     }
@@ -944,6 +952,11 @@ async fn weekly_schedules_form(mut transaction: Transaction<'_, Postgres>, me: O
                                     td {
                                         div(class = "button-row") {
                                             a(class = "button", href = uri!(weekly_schedule_edit_get(event.series, &*event.event, schedule.id))) : "Edit";
+                                            @let toggle_text = if schedule.active { "Pause" } else { "Resume" };
+                                            @let toggle_errors = defaults.toggle_errors(schedule.id);
+                                            @let (toggle_errors, toggle_button) = button_form(uri!(weekly_schedule_toggle(event.series, &*event.event, schedule.id)), csrf, toggle_errors, toggle_text);
+                                            : toggle_errors;
+                                            : toggle_button;
                                             @let errors = defaults.delete_errors(schedule.id);
                                             @let (errors, button) = button_form(uri!(weekly_schedule_delete(event.series, &*event.event, schedule.id)), csrf, errors, "Delete");
                                             : errors;
@@ -1170,6 +1183,37 @@ pub(crate) async fn weekly_schedule_delete(pool: &State<PgPool>, me: User, uri: 
         }
     } else {
         RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::DeleteContext(schedule_id, form.context)).await?)
+    })
+}
+
+#[rocket::post("/event/<series>/<event>/configure/weekly-schedules/<schedule_id>/toggle", data = "<form>")]
+pub(crate) async fn weekly_schedule_toggle(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, schedule_id: Id<WeeklySchedules>, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    Ok(if form.value.is_some() {
+        if data.is_ended() {
+            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
+        }
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+        }
+        let schedule = WeeklySchedule::from_id(&mut transaction, schedule_id).await?;
+        if schedule.is_none() {
+            form.context.push_error(form::Error::validation("Schedule not found."));
+        }
+        if form.context.errors().next().is_some() {
+            RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::ToggleContext(schedule_id, form.context)).await?)
+        } else {
+            let mut schedule = schedule.unwrap();
+            schedule.active = !schedule.active;
+            schedule.save(&mut transaction).await?;
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(weekly_schedules_get(series, event))))
+        }
+    } else {
+        RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::ToggleContext(schedule_id, form.context)).await?)
     })
 }
 

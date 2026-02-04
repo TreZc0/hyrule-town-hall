@@ -6,7 +6,7 @@ use {
             Description,
             DtEnd,
             DtStart,
-            //RRule, // regular weekly schedule suspended during s/9 qualifiers
+            RRule,
             Summary,
             URL,
         },
@@ -34,7 +34,7 @@ use {
         prelude::*,
         racetime_bot,
         sheets,
-        weekly::WeeklySchedule,
+        weekly::{WeeklySchedule, WeeklySchedules},
     },
     crate::id::RoleBindings,
 };
@@ -1644,7 +1644,7 @@ fn dtend<Z: TimeZone + IntoIcsTzid>(datetime: DateTime<Z>) -> DtEnd<'static> {
 
 async fn add_event_races(transaction: &mut Transaction<'_, Postgres>, discord_ctx: &DiscordCtx, http_client: &reqwest::Client, cal: &mut ICalendar<'_>, event: &event::Data<'_>) -> Result<(), Error> {
     let now = Utc::now();
-    //let mut latest_instantiated_weeklies = HashMap::new(); // regular weekly schedule suspended during s/9 qualifiers
+    let mut latest_instantiated_weeklies: HashMap<Id<WeeklySchedules>, DateTime<Utc>> = HashMap::new();
     for race in Race::for_event(transaction, http_client, event).await?.into_iter() {
         for race_event in race.cal_events() {
             if let Some(start) = race_event.start() {
@@ -1741,9 +1741,40 @@ async fn add_event_races(transaction: &mut Transaction<'_, Postgres>, discord_ct
                     cal_event.push(URL::new(uri!(base_uri(), event::info(event.series, &*event.event)).to_string()));
                 }
                 cal.add_event(cal_event);
-                //TODO: Consider adding recurring calendar events for weekly schedules using the database-driven WeeklySchedule model
+                // Track latest instantiated weekly by schedule
+                if let Some(round) = &race.round {
+                    if round.ends_with(" Weekly") {
+                        let weekly_name = round.trim_end_matches(" Weekly");
+                        if let Some(schedule) = WeeklySchedule::for_round(&mut *transaction, race.series, &race.event, weekly_name).await? {
+                            let entry = latest_instantiated_weeklies.entry(schedule.id).or_insert(start.to_utc());
+                            if start.to_utc() > *entry {
+                                *entry = start.to_utc();
+                            }
+                        }
+                    }
+                }
             }
         }
+    }
+    // Add recurring calendar events for active weekly schedules
+    let weekly_schedules = WeeklySchedule::for_event(&mut *transaction, event.series, &event.event).await?;
+    for schedule in weekly_schedules.into_iter().filter(|s| s.active) {
+        // Find when to start the recurring event (after last instantiated race)
+        let start = if let Some(&last) = latest_instantiated_weeklies.get(&schedule.id) {
+            schedule.next_after(last)
+        } else {
+            schedule.next_after(now)
+        };
+
+        let mut cal_event = ics::Event::new(
+            format!("weekly-{}@midos.house", schedule.id),
+            dtstamp(now),
+        );
+        cal_event.push(Summary::new(ics::escape_text(format!("{} {} Weekly", event.short_name(), schedule.name))));
+        cal_event.push(dtstart(start));
+        cal_event.push(dtend(start + event.series.default_race_duration()));
+        cal_event.push(RRule::new(format!("FREQ=DAILY;INTERVAL={}", schedule.frequency_days)));
+        cal.add_event(cal_event);
     }
     Ok(())
 }

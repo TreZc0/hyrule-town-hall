@@ -635,6 +635,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::configure::weekly_schedules_get,
         event::configure::weekly_schedule_add,
         event::configure::weekly_schedule_delete,
+        event::configure::weekly_schedule_toggle,
         event::configure::weekly_schedule_edit_get,
         event::configure::weekly_schedule_edit_post,
         event::configure::search_users,
