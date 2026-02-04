@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO weekly_schedules (id, series, event, name, frequency_days, time_of_day, timezone, anchor_date, active, settings_description, notification_channel_id, room_open_minutes_before)\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)\n            ON CONFLICT (id) DO UPDATE SET\n                name = EXCLUDED.name,\n                frequency_days = EXCLUDED.frequency_days,\n                time_of_day = EXCLUDED.time_of_day,\n                timezone = EXCLUDED.timezone,\n                anchor_date = EXCLUDED.anchor_date,\n                active = EXCLUDED.active,\n                settings_description = EXCLUDED.settings_description,\n                notification_channel_id = EXCLUDED.notification_channel_id,\n                room_open_minutes_before = EXCLUDED.room_open_minutes_before\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Int2",
+        "Time",
+        "Text",
+        "Date",
+        "Bool",
+        "Text",
+        "Int8",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1f55e096519e42faf52c08b41b5fc2ab259d0726219624211841e1d068da4b34"
+}

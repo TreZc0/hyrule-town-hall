@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM zsr_race_exports\n            WHERE race_id = $1 AND export_id = $2\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4e74a44ab9237603a6856f73cf2641346d16e05793654c11f4631d735895d0f1"
+}

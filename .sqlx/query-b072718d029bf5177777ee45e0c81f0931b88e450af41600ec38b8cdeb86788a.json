@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO zsr_restream_exports (\n                series, event, backend_id,\n                title, description, estimate_override, delay_minutes, nodecg_pk,\n                trigger_condition\n            )\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)\n            RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Int4",
+        "Varchar",
+        "Text",
+        "Varchar",
+        "Int4",
+        "Int4",
+        {
+          "Custom": {
+            "name": "zsr_export_trigger",
+            "kind": {
+              "Enum": [
+                "when_scheduled",
+                "when_restream_channel_set",
+                "when_volunteer_signed_up"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b072718d029bf5177777ee45e0c81f0931b88e450af41600ec38b8cdeb86788a"
+}

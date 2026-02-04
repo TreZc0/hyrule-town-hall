@@ -7,6 +7,7 @@ query EventSetsQuery($event_slug: String!, $page: Int!) {
       nodes {
         id
         phaseGroup {
+          displayIdentifier
           phase {
             name
           }

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE races SET volunteer_request_sent = true WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "21bfaa1ddb55f5386cf6b2f8c030bed7ee2a76eb080001b15e87b3b44bdd5951"
+}

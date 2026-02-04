@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT start_time IS NOT NULL AS \"started!\" FROM async_teams WHERE team = $1 AND kind = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "started!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        {
+          "Custom": {
+            "name": "async_kind",
+            "kind": {
+              "Enum": [
+                "qualifier",
+                "qualifier2",
+                "qualifier3",
+                "tiebreaker1",
+                "tiebreaker2"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c7635aca5bdcf588cfa6c170896d6fc4b630353297b712a66819e121af8bfc76"
+}

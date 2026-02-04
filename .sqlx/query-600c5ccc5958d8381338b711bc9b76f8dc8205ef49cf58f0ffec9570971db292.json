@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE async_teams SET start_time = $1 WHERE team = $2 AND kind = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8",
+        {
+          "Custom": {
+            "name": "async_kind",
+            "kind": {
+              "Enum": [
+                "qualifier",
+                "qualifier2",
+                "qualifier3",
+                "tiebreaker1",
+                "tiebreaker2"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "600c5ccc5958d8381338b711bc9b76f8dc8205ef49cf58f0ffec9570971db292"
+}

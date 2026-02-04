@@ -1558,6 +1558,8 @@ pub(crate) enum Error {
     #[error(transparent)] Wheel(#[from] wheel::Error),
     #[error("anonymized entrant in race without hidden entrants")]
     AnonymizedEntrant,
+    #[error("attempted to rewrite start.gg phase/round name with pool placeholder, but start.gg didn't report a pool name")]
+    PoolPlaceholder,
     #[error("no team with this ID")]
     UnknownTeam,
     #[error("start.gg team ID {0} is not associated with a Hyrule Town Hall team")]
@@ -1600,6 +1602,7 @@ impl IsNetworkError for Error {
             Self::Url(_) => false,
             Self::Wheel(e) => e.is_network_error(),
             Self::AnonymizedEntrant => false,
+            Self::PoolPlaceholder => false,
             Self::UnknownTeam => false,
             Self::UnknownTeamStartGG(_) => false,
             Self::UnqualifiedEntrant { .. } => false,

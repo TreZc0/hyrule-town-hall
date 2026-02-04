@@ -1,0 +1,94 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                id,\n                name,\n                google_sheet_id,\n                language AS \"language: Language\",\n                hth_export_id_col,\n                commentators_col,\n                trackers_col,\n                restream_channel_col,\n                notes_col,\n                dst_formula_standard,\n                dst_formula_dst\n            FROM zsr_restreaming_backends\n            WHERE id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "google_sheet_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "language: Language",
+        "type_info": {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "hth_export_id_col",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "commentators_col",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "trackers_col",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "restream_channel_col",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "notes_col",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "dst_formula_standard",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "dst_formula_dst",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c7bac49e57c905f6f18515eb0bd6a8e9162583b24384cc8d0403eaeee6f5215d"
+}

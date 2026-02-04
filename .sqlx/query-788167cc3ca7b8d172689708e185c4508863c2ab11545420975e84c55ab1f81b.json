@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE zsr_restream_exports SET\n                title = $2,\n                description = $3,\n                estimate_override = $4,\n                delay_minutes = $5,\n                nodecg_pk = $6,\n                trigger_condition = $7,\n                enabled = $8,\n                updated_at = NOW()\n            WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Varchar",
+        "Text",
+        "Varchar",
+        "Int4",
+        "Int4",
+        {
+          "Custom": {
+            "name": "zsr_export_trigger",
+            "kind": {
+              "Enum": [
+                "when_scheduled",
+                "when_restream_channel_set",
+                "when_volunteer_signed_up"
+              ]
+            }
+          }
+        },
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "788167cc3ca7b8d172689708e185c4508863c2ab11545420975e84c55ab1f81b"
+}

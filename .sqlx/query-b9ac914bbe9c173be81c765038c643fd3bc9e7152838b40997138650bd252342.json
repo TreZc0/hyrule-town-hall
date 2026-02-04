@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO zsr_race_exports (race_id, export_id, sheet_row_id)\n            VALUES ($1, $2, $3)\n            ON CONFLICT (race_id, export_id)\n            DO UPDATE SET\n                sheet_row_id = $3,\n                last_synced_at = NOW()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b9ac914bbe9c173be81c765038c643fd3bc9e7152838b40997138650bd252342"
+}

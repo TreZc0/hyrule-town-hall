@@ -261,14 +261,37 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
         races: &mut Vec<Race>,
         startgg_event: &str,
         set: ID,
-        phase: Option<String>,
-        round: Option<String>,
+        mut phase: Option<String>,
+        mut round: Option<String>,
+        pool: Option<String>,
         team1: Team,
         team2: Team,
         set_games_type: Option<i64>,
         total_games: Option<i64>,
         best_of: Option<i64>,
     ) -> Result<Option<ImportSkipReason>, cal::Error> {
+        if let Some(row) = sqlx::query!("
+            SELECT mapped_phase, mapped_round
+            FROM startgg_phase_round_mappings
+            WHERE (original_phase IS NULL OR original_phase = $1) AND (original_round IS NULL OR original_round = $2)
+            ORDER BY (original_phase IS NOT NULL AND original_round IS NOT NULL) DESC, (original_phase IS NOT NULL OR original_round IS NOT NULL) DESC
+            LIMIT 1
+        ", &phase as _, &round as _).fetch_optional(&mut **transaction).await? {
+            if let Some(mapped_phase) = row.mapped_phase {
+                phase = Some(if mapped_phase.contains("{% pool %}") {
+                    mapped_phase.replace("{% pool %}", pool.as_deref().ok_or(cal::Error::PoolPlaceholder)?)
+                } else {
+                    mapped_phase
+                });
+            }
+            if let Some(mapped_round) = row.mapped_round {
+                round = Some(if mapped_round.contains("{% pool %}") {
+                    mapped_round.replace("{% pool %}", pool.as_deref().ok_or(cal::Error::PoolPlaceholder)?)
+                } else {
+                    mapped_round
+                });
+            }
+        }
         races.push(Race {
             id: Id::new(&mut *transaction).await?,
             series: event.series,
@@ -344,7 +367,8 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
                 let phase = phase_group.as_ref()
                     .and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup { phase, .. }| phase.as_ref())
                     .and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroupPhase { name }| name.clone());
-                if let Some(reason) = process_set(&mut *transaction, http_client, event, races, event_slug, id.clone(), phase, full_round_text, team1, team2, set_games_type, total_games, best_of).await? {
+                let pool = phase_group.and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup { display_identifier, .. }| display_identifier);
+                if let Some(reason) = process_set(&mut *transaction, http_client, event, races, event_slug, id.clone(), phase, full_round_text, pool, team1, team2, set_games_type, total_games, best_of).await? {
                     skips.push((id, reason));
                 }
             } else {

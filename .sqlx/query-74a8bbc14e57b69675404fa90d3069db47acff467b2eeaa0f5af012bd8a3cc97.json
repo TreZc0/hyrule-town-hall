@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM event_discord_role_overrides WHERE series = $1 AND event = $2 AND role_binding_id = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "74a8bbc14e57b69675404fa90d3069db47acff467b2eeaa0f5af012bd8a3cc97"
+}

@@ -1,0 +1,460 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n            series AS \"series: Series\",\n            event,\n            challonge_match,\n            league_id,\n            sheet_timestamp,\n            startgg_event,\n            startgg_set AS \"startgg_set: startgg::ID\",\n            speedgaming_id,\n            game,\n            team1 AS \"team1: Id<Teams>\",\n            team2 AS \"team2: Id<Teams>\",\n            team3 AS \"team3: Id<Teams>\",\n            p1,\n            p2,\n            p3,\n            p1_discord AS \"p1_discord: PgSnowflake<UserId>\",\n            p2_discord AS \"p2_discord: PgSnowflake<UserId>\",\n            p1_racetime,\n            p2_racetime,\n            p1_twitch,\n            p2_twitch,\n            total,\n            finished,\n            phase,\n            round,\n            scheduling_thread AS \"scheduling_thread: PgSnowflake<ChannelId>\",\n            draft_state AS \"draft_state: Json<Draft>\",\n            start,\n            async_start1,\n            async_start2,\n            async_start3,\n            end_time,\n            async_end1,\n            async_end2,\n            async_end3,\n            room,\n            async_room1,\n            async_room2,\n            async_room3,\n            schedule_updated_at,\n            fpa_invoked,\n            breaks_used,\n            seed_data,\n            file_stem,\n            locked_spoiler_log_path,\n            web_id,\n            web_gen_time,\n            is_tfb_dev,\n            tfb_uuid,\n            xkeys_uuid,\n            hash1,\n            hash2,\n            hash3,\n            hash4,\n            hash5,\n            seed_password,\n            video_url,\n            restreamer,\n            video_url_fr,\n            restreamer_fr,\n            video_url_de,\n            restreamer_de,\n            video_url_pt,\n            restreamer_pt,\n            last_edited_by AS \"last_edited_by: Id<Users>\",\n            last_edited_at,\n            ignored,\n            schedule_locked,\n            notified,\n            async_notified_1,\n            async_notified_2,\n            async_notified_3,\n            discord_scheduled_event_id AS \"discord_scheduled_event_id: PgSnowflake<ScheduledEventId>\",\n            volunteer_request_sent\n        FROM races WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "series: Series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "event",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "challonge_match",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "league_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "sheet_timestamp",
+        "type_info": "Timestamp"
+      },
+      {
+        "ordinal": 5,
+        "name": "startgg_event",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "startgg_set: startgg::ID",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "speedgaming_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "game",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 9,
+        "name": "team1: Id<Teams>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 10,
+        "name": "team2: Id<Teams>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 11,
+        "name": "team3: Id<Teams>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 12,
+        "name": "p1",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "p2",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "p3",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 15,
+        "name": "p1_discord: PgSnowflake<UserId>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 16,
+        "name": "p2_discord: PgSnowflake<UserId>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 17,
+        "name": "p1_racetime",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 18,
+        "name": "p2_racetime",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 19,
+        "name": "p1_twitch",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 20,
+        "name": "p2_twitch",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 21,
+        "name": "total",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 22,
+        "name": "finished",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 23,
+        "name": "phase",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 24,
+        "name": "round",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 25,
+        "name": "scheduling_thread: PgSnowflake<ChannelId>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 26,
+        "name": "draft_state: Json<Draft>",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 27,
+        "name": "start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 28,
+        "name": "async_start1",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 29,
+        "name": "async_start2",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 30,
+        "name": "async_start3",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 31,
+        "name": "end_time",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 32,
+        "name": "async_end1",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 33,
+        "name": "async_end2",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 34,
+        "name": "async_end3",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 35,
+        "name": "room",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 36,
+        "name": "async_room1",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 37,
+        "name": "async_room2",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 38,
+        "name": "async_room3",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 39,
+        "name": "schedule_updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 40,
+        "name": "fpa_invoked",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 41,
+        "name": "breaks_used",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 42,
+        "name": "seed_data",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 43,
+        "name": "file_stem",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 44,
+        "name": "locked_spoiler_log_path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 45,
+        "name": "web_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 46,
+        "name": "web_gen_time",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 47,
+        "name": "is_tfb_dev",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 48,
+        "name": "tfb_uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 49,
+        "name": "xkeys_uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 50,
+        "name": "hash1",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 51,
+        "name": "hash2",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 52,
+        "name": "hash3",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 53,
+        "name": "hash4",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 54,
+        "name": "hash5",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 55,
+        "name": "seed_password",
+        "type_info": "Bpchar"
+      },
+      {
+        "ordinal": 56,
+        "name": "video_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 57,
+        "name": "restreamer",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 58,
+        "name": "video_url_fr",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 59,
+        "name": "restreamer_fr",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 60,
+        "name": "video_url_de",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 61,
+        "name": "restreamer_de",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 62,
+        "name": "video_url_pt",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 63,
+        "name": "restreamer_pt",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 64,
+        "name": "last_edited_by: Id<Users>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 65,
+        "name": "last_edited_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 66,
+        "name": "ignored",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 67,
+        "name": "schedule_locked",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 68,
+        "name": "notified",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 69,
+        "name": "async_notified_1",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 70,
+        "name": "async_notified_2",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 71,
+        "name": "async_notified_3",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 72,
+        "name": "discord_scheduled_event_id: PgSnowflake<ScheduledEventId>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 73,
+        "name": "volunteer_request_sent",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "458339921c0e41126f9f1c23638f9f35de0c80034af543fb0c7a475a556e75a4"
+}

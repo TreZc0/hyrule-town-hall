@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                                SELECT event FROM events\n                                WHERE series = $1 AND event != $2\n                                ORDER BY start DESC\n                                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "event",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a0da5991cd834e6e64acddd247b99ed641579c17b62addeee0ffda793ca15646"
+}

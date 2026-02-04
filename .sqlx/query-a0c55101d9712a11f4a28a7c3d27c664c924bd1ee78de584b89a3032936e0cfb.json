@@ -1,0 +1,54 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT kind AS \"kind: AsyncKind\", file_stem, web_id, seed_data FROM asyncs WHERE series = $1 AND event = $2 ORDER BY kind",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kind: AsyncKind",
+        "type_info": {
+          "Custom": {
+            "name": "async_kind",
+            "kind": {
+              "Enum": [
+                "qualifier",
+                "qualifier2",
+                "qualifier3",
+                "tiebreaker1",
+                "tiebreaker2"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "file_stem",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "web_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "seed_data",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "a0c55101d9712a11f4a28a7c3d27c664c924bd1ee78de584b89a3032936e0cfb"
+}

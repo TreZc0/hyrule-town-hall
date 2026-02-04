@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                id,\n                series,\n                event,\n                name,\n                frequency_days,\n                time_of_day,\n                timezone,\n                anchor_date,\n                active,\n                settings_description,\n                notification_channel_id,\n                room_open_minutes_before\n            FROM weekly_schedules\n            WHERE id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "event",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "frequency_days",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 5,
+        "name": "time_of_day",
+        "type_info": "Time"
+      },
+      {
+        "ordinal": 6,
+        "name": "timezone",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "anchor_date",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 8,
+        "name": "active",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "settings_description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "notification_channel_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 11,
+        "name": "room_open_minutes_before",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "5ae336980c616d6cf4bc9fdbaa0262fbb744b56cfc828cfa3aad314850715556"
+}

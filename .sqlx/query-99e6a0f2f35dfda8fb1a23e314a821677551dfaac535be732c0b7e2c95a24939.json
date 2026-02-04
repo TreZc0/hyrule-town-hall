@@ -1,0 +1,93 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                id,\n                series AS \"series: Series\",\n                event,\n                backend_id,\n                title,\n                description,\n                estimate_override,\n                delay_minutes,\n                nodecg_pk,\n                trigger_condition AS \"trigger_condition: ExportTrigger\",\n                enabled\n            FROM zsr_restream_exports\n            WHERE id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "series: Series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "event",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "backend_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "estimate_override",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "delay_minutes",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "nodecg_pk",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "trigger_condition: ExportTrigger",
+        "type_info": {
+          "Custom": {
+            "name": "zsr_export_trigger",
+            "kind": {
+              "Enum": [
+                "when_scheduled",
+                "when_restream_channel_set",
+                "when_volunteer_signed_up"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "enabled",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "99e6a0f2f35dfda8fb1a23e314a821677551dfaac535be732c0b7e2c95a24939"
+}

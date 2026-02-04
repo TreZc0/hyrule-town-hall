@@ -1,0 +1,92 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                id,\n                name,\n                google_sheet_id,\n                language AS \"language: Language\",\n                hth_export_id_col,\n                commentators_col,\n                trackers_col,\n                restream_channel_col,\n                notes_col,\n                dst_formula_standard,\n                dst_formula_dst\n            FROM zsr_restreaming_backends\n            ORDER BY name\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "google_sheet_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "language: Language",
+        "type_info": {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "hth_export_id_col",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "commentators_col",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "trackers_col",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "restream_channel_col",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "notes_col",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "dst_formula_standard",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "dst_formula_dst",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9a232d5ceed92e296cdd31330becdc3afd0bf11cb3d7ba983967527bc15b7447"
+}

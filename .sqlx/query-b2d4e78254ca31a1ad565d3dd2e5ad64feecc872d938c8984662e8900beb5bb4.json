@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE zsr_restreaming_backends SET\n                name = $2,\n                google_sheet_id = $3,\n                language = $4,\n                hth_export_id_col = $5,\n                commentators_col = $6,\n                trackers_col = $7,\n                restream_channel_col = $8,\n                notes_col = $9,\n                dst_formula_standard = $10,\n                dst_formula_dst = $11,\n                updated_at = NOW()\n            WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Varchar",
+        "Varchar",
+        {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        },
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b2d4e78254ca31a1ad565d3dd2e5ad64feecc872d938c8984662e8900beb5bb4"
+}
