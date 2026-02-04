@@ -39,7 +39,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 chrono-tz = "0.10"
 clap = { version = "4", features = ["derive"] }
 collect-mac = "0.1"
-convert_case = "0.10"
+convert_case = "0.11"
 csv = "1"
 derivative = "2"
 derive_more = { version = "2", features = ["display", "from", "from_str"] }
