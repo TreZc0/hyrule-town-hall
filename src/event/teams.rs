@@ -47,6 +47,7 @@ pub(crate) enum MemberUser {
     },
     /// A user who represents someone new joining future qualifiers, for worst-case placement calculation.
     Newcomer,
+    Deleted,
 }
 
 impl PartialEq for MemberUser {
@@ -58,13 +59,17 @@ impl PartialEq for MemberUser {
                 => id1 == id2,
             | (Self::Newcomer, Self::Newcomer)
                 => true,
+            | (Self::Deleted, Self::Deleted)
+                => true,
             | (Self::MidosHouse(user), Self::RaceTime { id, .. })
             | (Self::RaceTime { id, .. }, Self::MidosHouse(user))
                 => user.racetime.as_ref().is_some_and(|racetime| racetime.id == *id),
-            | (Self::MidosHouse(_), Self::Newcomer)
-            | (Self::RaceTime { .. }, Self::Newcomer)
-            | (Self::Newcomer, Self::MidosHouse(_))
-            | (Self::Newcomer, Self::RaceTime { .. })
+            | (Self::MidosHouse(_), Self::Newcomer | Self::Deleted)
+            | (Self::RaceTime { .. }, Self::Newcomer | Self::Deleted)
+            | (Self::Newcomer | Self::Deleted, Self::MidosHouse(_))
+            | (Self::Newcomer | Self::Deleted, Self::RaceTime { .. })
+            | (Self::Newcomer, Self::Deleted)
+            | (Self::Deleted, Self::Newcomer)
                 => false,
         }
     }
@@ -89,6 +94,9 @@ impl Hash for MemberUser {
             Self::Newcomer => {
                 2u8.hash(state);
             }
+            Self::Deleted => {
+                3u8.hash(state);
+            }
         }
     }
 }
@@ -104,12 +112,12 @@ impl Ord for MemberUser {
         let racetime_id1 = match self {
             Self::MidosHouse(user) => user.racetime.as_ref().map(|racetime| &racetime.id),
             Self::RaceTime { id, .. } => Some(id),
-            Self::Newcomer => None,
+            Self::Newcomer | Self::Deleted => None,
         };
         let racetime_id2 = match other {
             Self::MidosHouse(user) => user.racetime.as_ref().map(|racetime| &racetime.id),
             Self::RaceTime { id, .. } => Some(id),
-            Self::Newcomer => None,
+            Self::Newcomer | Self::Deleted => None,
         };
         if let (Some(id1), Some(id2)) = (racetime_id1, racetime_id2) {
             id1.cmp(id2)
@@ -119,12 +127,19 @@ impl Ord for MemberUser {
                     .then_with(|| user1.id.cmp(&user2.id)),
                 (Self::MidosHouse(_), Self::RaceTime { .. }) => Less,
                 (Self::MidosHouse(_), Self::Newcomer) => Less,
+                (Self::MidosHouse(_), Self::Deleted) => Less,
                 (Self::RaceTime { .. }, Self::MidosHouse(_)) => Greater,
                 (Self::RaceTime { id: id1, .. }, Self::RaceTime { id: id2, .. }) => id1.cmp(id2),
                 (Self::RaceTime { .. }, Self::Newcomer) => Less,
+                (Self::RaceTime { .. }, Self::Deleted) => Less,
                 (Self::Newcomer, Self::MidosHouse(_)) => Greater,
                 (Self::Newcomer, Self::RaceTime { .. }) => Greater,
                 (Self::Newcomer, Self::Newcomer) => Equal,
+                (Self::Newcomer, Self::Deleted) => Less,
+                (Self::Deleted, Self::MidosHouse(_)) => Greater,
+                (Self::Deleted, Self::RaceTime { .. }) => Greater,
+                (Self::Deleted, Self::Newcomer) => Greater,
+                (Self::Deleted, Self::Deleted) => Equal,
             }
         }
     }
@@ -136,6 +151,21 @@ impl PartialEq<User> for MemberUser {
             Self::MidosHouse(user) => user == other,
             Self::RaceTime { id, .. } => other.racetime.as_ref().is_some_and(|racetime| racetime.id == *id),
             Self::Newcomer => false,
+            Self::Deleted => false,
+        }
+    }
+}
+
+impl From<Option<racetime::model::UserData>> for MemberUser {
+    fn from(user: Option<racetime::model::UserData>) -> Self {
+        if let Some(user) = user {
+            Self::RaceTime {
+                id: user.id,
+                url: user.url,
+                name: user.name,
+            }
+        } else {
+            Self::Deleted
         }
     }
 }
@@ -256,7 +286,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                 _ => {}
                             }
                             for entrant in &mut entrants {
-                                let user = racetime::model::UserData::try_from(entrant.user.clone().unwrap())?;
+                                let user = entrant.user.clone().map(racetime::model::UserData::try_from).transpose()?;
                                 match entrant.status.value {
                                     | EntrantStatusValue::Requested
                                         => {}
@@ -265,11 +295,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                     | EntrantStatusValue::Ready
                                     | EntrantStatusValue::InProgress
                                         => if let Some(extrapolate_for) = worst_case_extrapolation {
-                                            let user = MemberUser::RaceTime {
-                                                id: user.id,
-                                                url: user.url,
-                                                name: user.name,
-                                            };
+                                            let user = MemberUser::from(user);
                                             if user == *extrapolate_for {
                                                 entrant.status.value = EntrantStatusValue::Dnf;
                                             } else {
@@ -310,12 +336,8 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                     | EntrantStatusValue::Dq
                                         => {}
                                 }
-                                let user = racetime::model::UserData::try_from(entrant.user.unwrap())?;
-                                scores.entry(MemberUser::RaceTime {
-                                    id: user.id,
-                                    url: user.url,
-                                    name: user.name,
-                                }).or_default().push(r64(if let Some(finish_time) = entrant.finish_time {
+                                let user = entrant.user.clone().map(racetime::model::UserData::try_from).transpose()?;
+                                scores.entry(MemberUser::from(user)).or_default().push(r64(if let Some(finish_time) = entrant.finish_time {
                                     match score_kind {
                                         QualifierScoreKind::Standard => {
                                             // https://docs.google.com/document/d/1IHrOGxFQpt3HpQ-9kQ6AVAARc04x6c96N1aHnHfHaKM/edit
@@ -344,10 +366,12 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 }
             }
             let teams = Team::for_event(&mut *transaction, data.series, &data.event).await?;
+            let mut user_teams = HashMap::new();
             for team in &teams {
                 let user = team.members(&mut *transaction).await?.into_iter().exactly_one().expect("SGL-style qualifiers in team-based event");
                 let racetime_id = user.racetime.as_ref().expect("SGL-style qualifiers with entrant without racetime.gg account").id.clone();
                 if let Some(score) = scores.remove(&MemberUser::RaceTime { id: racetime_id.clone(), url: String::default(), name: String::default() }) {
+                    user_teams.insert(user.id, team.clone());
                     scores.insert(MemberUser::MidosHouse(user), score);
                 } else {
                     return Err(cal::Error::UnqualifiedEntrant {
@@ -363,13 +387,16 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 let opt_outs = sqlx::query_scalar!("SELECT racetime_id FROM opt_outs WHERE series = $1 AND event = $2", data.series as _, &data.event).fetch_all(&mut **transaction).await?;
                 scores.retain(move |user, _| match user {
                     MemberUser::RaceTime { id, .. } => !opt_outs.contains(id),
-                    MemberUser::MidosHouse(_) | MemberUser::Newcomer => true,
+                    MemberUser::MidosHouse(_) | MemberUser::Newcomer | MemberUser::Deleted => true,
                 });
             }
             let mut signups = Vec::with_capacity(scores.len());
             for (user, mut scores) in scores {
                 signups.push(SignupsTeam {
-                    team: None, //TODO
+                    team: match &user {
+                        MemberUser::MidosHouse(user) => user_teams.remove(&user.id),
+                        MemberUser::RaceTime { .. } | MemberUser::Newcomer | MemberUser::Deleted => None,
+                    },
                     members: vec![SignupsMember {
                         role: Role::None,
                         is_confirmed: match &user {
@@ -389,7 +416,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                 }
                                 false
                             }
-                            MemberUser::Newcomer => false, // unused
+                            MemberUser::Newcomer | MemberUser::Deleted => false, // unused
                         },
                         qualifier_time: None,
                         qualifier_vod: None,
@@ -465,20 +492,12 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 if room_data.status.value != RaceStatusValue::Finished { continue }
                 if room_data.hide_entrants { continue }
                 let mut entrants = room_data.entrants.clone();
-                entrants.retain(|entrant| racetime::model::UserData::try_from(entrant.user.clone().unwrap()).is_ok_and(|user| entrant_data.entry(MemberUser::RaceTime {
-                    id: user.id,
-                    url: user.url,
-                    name: user.name,
-                }).or_default().0 < 2));
+                entrants.retain(|entrant| entrant.user.clone().map(racetime::model::UserData::try_from).transpose().is_ok_and(|user| entrant_data.entry(MemberUser::from(user)).or_default().0 < 2));
                 let num_entrants = entrants.len();
                 entrants.sort_unstable_by_key(|entrant| (entrant.finish_time.is_none(), entrant.finish_time));
                 for (placement, entrant) in entrants.into_iter().enumerate() {
-                    let user = racetime::model::UserData::try_from(entrant.user.unwrap())?;
-                    let (num_qualifiers, qualification_level) = entrant_data.entry(MemberUser::RaceTime {
-                        id: user.id,
-                        url: user.url,
-                        name: user.name,
-                    }).or_default();
+                    let user = entrant.user.map(racetime::model::UserData::try_from).transpose()?;
+                    let (num_qualifiers, qualification_level) = entrant_data.entry(MemberUser::from(user)).or_default();
                     if *num_qualifiers < 2 {
                         *num_qualifiers += 1;
                         *qualification_level = if placement < 3 {
@@ -501,19 +520,11 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 if room_data.status.value == RaceStatusValue::Finished;
                 then {
                     let mut entrants = room_data.entrants.clone();
-                    entrants.retain(|entrant| racetime::model::UserData::try_from(entrant.user.clone().unwrap()).is_ok_and(|user| entrant_data.entry(MemberUser::RaceTime {
-                        id: user.id,
-                        url: user.url,
-                        name: user.name,
-                    }).or_default().1 == QualificationLevel::ChoppinBlock));
+                    entrants.retain(|entrant| entrant.user.clone().map(racetime::model::UserData::try_from).transpose().is_ok_and(|user| entrant_data.entry(MemberUser::from(user)).or_default().1 == QualificationLevel::ChoppinBlock));
                     entrants.sort_unstable_by_key(|entrant| (entrant.finish_time.is_none(), entrant.finish_time));
                     for entrant in entrants.drain(..entrants.len().min(32 - num_qualified)) {
-                        let user = racetime::model::UserData::try_from(entrant.user.unwrap())?;
-                        entrant_data.entry(MemberUser::RaceTime {
-                            id: user.id,
-                            url: user.url,
-                            name: user.name,
-                        }).or_default().1 = QualificationLevel::Qualified;
+                        let user = entrant.user.map(racetime::model::UserData::try_from).transpose()?;
+                        entrant_data.entry(MemberUser::from(user)).or_default().1 = QualificationLevel::Qualified;
                     }
                     true
                 } else {
@@ -981,6 +992,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                         }
                                         MemberUser::RaceTime { url, name, .. } => a(href = format!("https://{}{url}", racetime_host())) : name;
                                         MemberUser::Newcomer => @unreachable // only returned if signups_sorted is called with worst_case_extrapolation = true, which it isn't above
+                                        MemberUser::Deleted => em : "deleted user";
                                     }
                                 }
                             }
@@ -1115,6 +1127,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                     MemberUser::MidosHouse(user) => : user;
                                                     MemberUser::RaceTime { url, name, .. } => a(href = format!("https://{}{url}", racetime_host())) : name;
                                                     MemberUser::Newcomer => @unreachable // only returned if signups_sorted is called with worst_case_extrapolation = true, which it isn't above
+                                                    MemberUser::Deleted => em : "deleted user";
                                                 }
                                             }));
                                         }

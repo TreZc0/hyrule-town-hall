@@ -245,7 +245,7 @@ impl Requirement {
                         if race.phase.as_ref().is_some_and(|phase| phase == "Live Qualifier") {
                             if let Ok(room) = race.rooms().exactly_one() {
                                 let room_data = cache.race_data(&room).await?;
-                                if room_data.entrants.iter().any(|entrant| entrant.status.value == EntrantStatusValue::Done && entrant.user.as_ref().unwrap().id == racetime.id) {
+                                if room_data.entrants.iter().any(|entrant| entrant.status.value == EntrantStatusValue::Done && entrant.user.as_ref().is_some_and(|user| user.id == racetime.id)) {
                                     break 'checked true
                                 }
                             }

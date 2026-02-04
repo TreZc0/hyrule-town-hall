@@ -530,11 +530,15 @@ impl Handler {
         let data = ctx.data().await;
         let Some(OfficialRaceData { ref cal_event, ref event, fpa_invoked, breaks_used, ref scores, .. }) = self.official_data else { return Ok(true) };
         Ok(if let Some(scores) = data.entrants.iter().map(|entrant| {
-            let key = if let Some(ref team) = entrant.team { &team.slug } else { &entrant.user.as_ref().unwrap().id };
-            match entrant.status.value {
-                EntrantStatusValue::Dnf => Some((key.clone(), tfb::Score::dnf(event.team_config))),
-                EntrantStatusValue::Done => scores.get(key).and_then(|&score| Some((key.clone(), score?))),
-                _ => None,
+            let key = if let Some(ref team) = entrant.team { Some(&team.slug) } else { entrant.user.as_ref().map(|user| &user.id) };
+            if let Some(key) = key {
+                match entrant.status.value {
+                    EntrantStatusValue::Dnf => Some((key.clone(), tfb::Score::dnf(event.team_config))),
+                    EntrantStatusValue::Done => scores.get(key).and_then(|&score| Some((key.clone(), score?))),
+                    _ => None,
+                }
+            } else {
+                None
             }
         }).collect() {
             ctx.say("All scores received. Thank you for playing Triforce Blitz, see you next race!").await?;
@@ -632,19 +636,21 @@ impl Handler {
                         if let Some(mut tfb_scores) = tfb_scores {
                             let mut teams = Vec::with_capacity(data.entrants.len());
                             for entrant in &data.entrants {
-                                teams.push((if_chain! {
-                                    if let Some(user) = User::from_racetime(&mut *transaction, &entrant.user.as_ref().unwrap().id).await.to_racetime()?;
-                                    if let Some(team) = Team::from_event_and_member(&mut transaction, event.series, &event.event, user.id).await.to_racetime()?;
-                                    then {
-                                        Entrant::MidosHouseTeam(team)
-                                    } else {
-                                        Entrant::Named {
-                                            name: entrant.user.as_ref().unwrap().full_name.clone(),
-                                            racetime_id: Some(entrant.user.as_ref().unwrap().id.clone()),
-                                            twitch_username: entrant.user.as_ref().unwrap().twitch_name.clone(),
+                                if let Some(rt_user) = &entrant.user {
+                                    teams.push((if_chain! {
+                                        if let Some(user) = User::from_racetime(&mut *transaction, &rt_user.id).await.to_racetime()?;
+                                        if let Some(team) = Team::from_event_and_member(&mut transaction, event.series, &event.event, user.id).await.to_racetime()?;
+                                        then {
+                                            Entrant::MidosHouseTeam(team)
+                                        } else {
+                                            Entrant::Named {
+                                                name: rt_user.full_name.clone(),
+                                                racetime_id: Some(rt_user.id.clone()),
+                                                twitch_username: rt_user.twitch_name.clone(),
+                                            }
                                         }
-                                    }
-                                }, tfb_scores.remove(&entrant.user.as_ref().unwrap().id).expect("missing TFB score"), room.clone()));
+                                    }, tfb_scores.remove(&rt_user.id).expect("missing TFB score"), room.clone()));
+                                }
                             }
                             if let Ok(teams) = teams.try_into() {
                                 transaction = report_1v1(transaction, ctx, cal_event, event, teams).await?;
@@ -654,19 +660,21 @@ impl Handler {
                         } else {
                             let mut teams = Vec::with_capacity(data.entrants.len());
                             for entrant in &data.entrants {
-                                teams.push((if_chain! {
-                                    if let Some(user) = User::from_racetime(&mut *transaction, &entrant.user.as_ref().unwrap().id).await.to_racetime()?;
-                                    if let Some(team) = Team::from_event_and_member(&mut transaction, event.series, &event.event, user.id).await.to_racetime()?;
-                                    then {
-                                        Entrant::MidosHouseTeam(team)
-                                    } else {
-                                        Entrant::Named {
-                                            name: entrant.user.as_ref().unwrap().full_name.clone(),
-                                            racetime_id: Some(entrant.user.as_ref().unwrap().id.clone()),
-                                            twitch_username: entrant.user.as_ref().unwrap().twitch_name.clone(),
+                                if let Some(rt_user) = &entrant.user {
+                                    teams.push((if_chain! {
+                                        if let Some(user) = User::from_racetime(&mut *transaction, &rt_user.id).await.to_racetime()?;
+                                        if let Some(team) = Team::from_event_and_member(&mut transaction, event.series, &event.event, user.id).await.to_racetime()?;
+                                        then {
+                                            Entrant::MidosHouseTeam(team)
+                                        } else {
+                                            Entrant::Named {
+                                                name: rt_user.full_name.clone(),
+                                                racetime_id: Some(rt_user.id.clone()),
+                                                twitch_username: rt_user.twitch_name.clone(),
+                                            }
                                         }
-                                    }
-                                }, entrant.finish_time, room.clone()));
+                                    }, entrant.finish_time, room.clone()));
+                                }
                             }
                             if let Ok(teams) = teams.try_into() {
                                 transaction = report_1v1(transaction, ctx, cal_event, event, teams).await?;
