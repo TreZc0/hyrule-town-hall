@@ -184,7 +184,12 @@ async fn game_page<'a>(
                     @let has_active_request = my_request.map_or(false, |req| matches!(req.status, RoleRequestStatus::Pending | RoleRequestStatus::Approved));
                     
                     div(class = "role-binding") {
-                        h4 : binding.role_type_name;
+                        h4 {
+                            : binding.role_type_name;
+                            : " (";
+                            : binding.language;
+                            : ")";
+                        }
                         p {
                             @if binding.min_count == binding.max_count {
                                 : "Required: ";

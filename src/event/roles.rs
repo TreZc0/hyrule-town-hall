@@ -2184,11 +2184,9 @@ async fn volunteer_page(
                         div(class = "role-binding") {
                             h4 {
                                 : binding.role_type_name;
-                                @if active_languages.len() > 1 {
-                                    : " (";
-                                    : binding.language;
-                                    : ")";
-                                }
+                                : " (";
+                                : binding.language;
+                                : ")";
                             }
                             p {
                                 @if binding.min_count == binding.max_count {
@@ -2302,24 +2300,22 @@ async fn volunteer_page(
                 @if !my_approved_roles.is_empty() && !upcoming_races.is_empty() {
                     h3 : "Sign Up for Matches";
                     p : "You have been approved for the following roles. You can now sign up for specific matches:";
-                    
+
                     @for role_request in my_approved_roles {
                         @let binding = effective_role_bindings.iter().find(|b| b.id == role_request.role_binding_id);
                         @if let Some(binding) = binding {
                             h4 {
                                 : binding.role_type_name;
-                                @if active_languages.len() > 1 {
-                                    : " (";
-                                    : binding.language;
-                                    : ")";
-                                }
+                                : " (";
+                                : binding.language;
+                                : ")";
                             }
                             @let available_races = upcoming_races.iter().filter(|race| {
                                 // Filter races that need this role type
                                 // This is a simplified check - you might want more sophisticated logic
                                 true
                             }).collect::<Vec<_>>();
-                            
+
                             @if available_races.is_empty() {
                                 p : "No upcoming races available for signup.";
                             } else {
@@ -2980,21 +2976,17 @@ async fn match_signup_page(
 
             h3 {
                 : "Role Signups";
-                @if active_languages.len() > 1 {
-                    : " (";
-                    : current_language.to_string();
-                    : ")";
-                }
+                : " (";
+                : current_language.to_string();
+                : ")";
             }
             @for binding in &filtered_bindings {
                 div(class = "role-binding") {
                     h4 {
                         : binding.role_type_name;
-                        @if active_languages.len() > 1 {
-                            : " (";
-                            : binding.language.to_string();
-                            : ")";
-                        }
+                        : " (";
+                        : binding.language.to_string();
+                        : ")";
                     }
                     p {
                         @if binding.min_count == binding.max_count {
