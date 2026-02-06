@@ -812,8 +812,8 @@ pub(crate) async fn forfeit_game_role(
                 ORDER BY rr.created_at DESC
                 LIMIT 1
             "#,
-            i64::from(value.role_binding_id) as i32,
-            i64::from(me.id) as i32
+            value.role_binding_id as _,
+            me.id as _
         )
         .fetch_optional(&mut *transaction)
         .await.map_err(Error::from)?;
