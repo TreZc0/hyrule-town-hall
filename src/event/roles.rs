@@ -2260,10 +2260,18 @@ async fn volunteer_page(
                                         }
                                     }
                                 }
-                                @let errors = ctx.errors().collect::<Vec<_>>();
-                                : full_form(uri!(forfeit_role(data.series, &*data.event)), csrf.as_ref(), html! {
-                                    input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                }, errors, "Forfeit Role");
+                                @if binding.is_game_binding {
+                                    p(class = "game-role-link") {
+                                        : "To forfeit this game-level role, visit the ";
+                                        a(href = uri!(crate::games::manage_roles(data.series.slug(), _))) : "game role management page";
+                                        : ".";
+                                    }
+                                } else {
+                                    @let errors = ctx.errors().collect::<Vec<_>>();
+                                    : full_form(uri!(forfeit_role(data.series, &*data.event)), csrf.as_ref(), html! {
+                                        input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                    }, errors, "Forfeit Role");
+                                }
                             } else {
                                 @let mut errors = ctx.errors().collect::<Vec<_>>();
                                 @let button_text = if binding.auto_approve {

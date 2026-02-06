@@ -1,0 +1,119 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT rr.id as \"id!: Id<RoleRequests>\", rr.role_binding_id as \"role_binding_id!: Id<RoleBindings>\", rr.user_id as \"user_id!: Id<Users>\",\n                      rr.status as \"status!: RoleRequestStatus\", rr.notes, rr.created_at as \"created_at!\", rr.updated_at as \"updated_at!\",\n                      rb.series as \"series!: Series\", rb.event as \"event!\", rb.min_count as \"min_count!\", rb.max_count as \"max_count!\",\n                      rt.name as \"role_type_name!\",\n                      rb.language as \"language!: Language\"\n               FROM role_requests rr\n               JOIN role_bindings rb ON rr.role_binding_id = rb.id\n               JOIN role_types rt ON rb.role_type_id = rt.id\n               WHERE rb.series = $1 AND rb.event = $2 AND rr.status = 'approved'\n               ORDER BY rt.name ASC, rr.created_at ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!: Id<RoleRequests>",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "role_binding_id!: Id<RoleBindings>",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "user_id!: Id<Users>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "status!: RoleRequestStatus",
+        "type_info": {
+          "Custom": {
+            "name": "role_request_status",
+            "kind": {
+              "Enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "aborted"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "notes",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "created_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "updated_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "series!: Series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "event!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "min_count!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "max_count!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "role_type_name!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 12,
+        "name": "language!: Language",
+        "type_info": {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c5cade9b3a15b00747b6764644f3c36b355040909e1a03d37a3691ac8325ea79"
+}

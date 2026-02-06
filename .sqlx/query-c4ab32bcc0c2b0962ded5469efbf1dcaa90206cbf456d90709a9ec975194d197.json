@@ -14,7 +14,19 @@
         "Int4",
         "Int8",
         "Text",
-        "Varchar"
+        {
+          "Custom": {
+            "name": "role_request_status",
+            "kind": {
+              "Enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "aborted"
+              ]
+            }
+          }
+        }
       ]
     },
     "nullable": [

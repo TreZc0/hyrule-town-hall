@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT team AS \"team: Id<Teams>\", kind AS \"kind: event::AsyncKind\"\n           FROM async_teams \n           WHERE discord_thread = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team: Id<Teams>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "kind: event::AsyncKind",
+        "type_info": {
+          "Custom": {
+            "name": "async_kind",
+            "kind": {
+              "Enum": [
+                "qualifier",
+                "qualifier2",
+                "qualifier3",
+                "tiebreaker1",
+                "tiebreaker2"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "8909fef5d62a20ba3b426e7e1a36f36eb15f6ecc832c1078b749312b3052399b"
+}

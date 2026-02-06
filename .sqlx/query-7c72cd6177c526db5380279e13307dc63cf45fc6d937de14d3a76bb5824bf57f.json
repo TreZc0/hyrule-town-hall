@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO asyncs (series, event, kind, file_stem, web_id) VALUES ($1, $2, $3, $4, $5)\n                   ON CONFLICT (series, event, kind) DO UPDATE SET file_stem = EXCLUDED.file_stem, web_id = EXCLUDED.web_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        {
+          "Custom": {
+            "name": "async_kind",
+            "kind": {
+              "Enum": [
+                "qualifier",
+                "qualifier2",
+                "qualifier3",
+                "tiebreaker1",
+                "tiebreaker2"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7c72cd6177c526db5380279e13307dc63cf45fc6d937de14d3a76bb5824bf57f"
+}

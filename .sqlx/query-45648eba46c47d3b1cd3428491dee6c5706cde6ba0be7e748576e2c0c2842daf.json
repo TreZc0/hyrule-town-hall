@@ -1,0 +1,39 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE events\n                SET display_name = $1, start = $2, end_time = $3, url = $4, video_url = $5,\n                    discord_invite_url = $6, discord_guild = $7, discord_race_room_channel = $8,\n                    discord_race_results_channel = $9, discord_volunteer_info_channel = $10,\n                    discord_organizer_channel = $11, discord_scheduling_channel = $12,\n                    discord_async_channel = $13, short_name = $14, speedgaming_slug = $15,\n                    listed = $16, manual_reporting_with_breaks = $17, asyncs_active = $18,\n                    automated_asyncs = $19, swiss_standings = $20, discord_events_enabled = $21,\n                    discord_events_require_restream = $22, emulator_settings_reminder = $23,\n                    prevent_late_joins = $24\n                WHERE series = $25 AND event = $26\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Text",
+        "Text",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "45648eba46c47d3b1cd3428491dee6c5706cde6ba0be7e748576e2c0c2842daf"
+}
