@@ -797,7 +797,7 @@ pub(crate) async fn forfeit_game_role(
                     rr.notes,
                     rr.created_at,
                     rr.updated_at,
-                    rb.series AS "series: Series",
+                    rb.series AS "series?: Series",
                     rb.event,
                     rb.min_count,
                     rb.max_count,
