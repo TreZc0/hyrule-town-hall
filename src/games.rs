@@ -4,7 +4,7 @@ use crate::{
     user::User,
     event::roles::{GameRoleBinding, RoleType, RoleRequest, RoleRequestStatus, render_language_tabs, render_language_content_box_start, render_language_content_box_end},
     http::{PageError, StatusOrError},
-    form::{form_field, full_form, button_form},
+    form::{form_field, full_form, full_form_confirm, button_form, button_form_confirm},
     id::{RoleBindings, RoleRequests, RoleTypes},
     time::{format_datetime, DateTimeFormat},
 };
@@ -239,9 +239,9 @@ async fn game_page<'a>(
                                 }
                             }
                             @let errors = form_errors.iter().collect::<Vec<_>>();
-                            : full_form(uri!(forfeit_game_role(&game.name)), csrf.as_ref(), html! {
+                            : full_form_confirm(uri!(forfeit_game_role(&game.name)), csrf.as_ref(), html! {
                                 input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                            }, errors, "Forfeit Role");
+                            }, errors, "Forfeit Role", "Are you sure you want to forfeit this role?");
                         } else {
                             @if let Some(ref me) = me {
                                 @let mut errors = form_errors.iter().collect::<Vec<_>>();
@@ -670,11 +670,12 @@ pub(crate) async fn manage_roles(
                                             }
                                             td : format_datetime(request.updated_at, DateTimeFormat { long: false, running_text: false });
                                             td {
-                                                @let (errors, revoke_button) = button_form(
+                                                @let (errors, revoke_button) = button_form_confirm(
                                                     uri!(revoke_game_role_request(&game_name, request.id)),
                                                     csrf.as_ref(),
                                                     Vec::new(),
-                                                    "Remove"
+                                                    "Remove",
+                                                    "Are you sure you want to remove this approved role?"
                                                 );
                                                 : errors;
                                                 div(class = "button-row") : revoke_button;

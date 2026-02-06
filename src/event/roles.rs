@@ -13,7 +13,7 @@ use {
     chrono::{DateTime, Utc},
     crate::{
         event::{Data, Tab},
-        form::{EmptyForm, button_form, button_form_ext_disabled, form_field, full_form},
+        form::{EmptyForm, button_form, button_form_confirm, button_form_ext_disabled, form_field, full_form, full_form_confirm},
         http::{PageError, StatusOrError},
         id::{RoleBindings, RoleRequests, RoleTypes, Signups, EventDiscordRoleOverrides, EventDisabledRoleBindings},
         prelude::*,
@@ -1311,11 +1311,12 @@ async fn roles_page(
                                                         @if request.series.is_none() && request.event.is_none() {
                                                             p(class = "game-binding-info") : "Globally managed role assignment - no editing here";
                                                         } else {
-                                                                                                        @let (errors, revoke_button) = button_form(
+                                                                                                        @let (errors, revoke_button) = button_form_confirm(
                                                     uri!(revoke_role_request(data.series, &*data.event, request.id)),
                                                     csrf.as_ref(),
                                                     Vec::new(),
-                                                    "Revoke"
+                                                    "Revoke",
+                                                    "Are you sure you want to revoke this approved role?"
                                                 );
                                                             : errors;
                                                             div(class = "button-row") : revoke_button;
@@ -2268,9 +2269,9 @@ async fn volunteer_page(
                                     }
                                 } else {
                                     @let errors = ctx.errors().collect::<Vec<_>>();
-                                    : full_form(uri!(forfeit_role(data.series, &*data.event)), csrf.as_ref(), html! {
+                                    : full_form_confirm(uri!(forfeit_role(data.series, &*data.event)), csrf.as_ref(), html! {
                                         input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                    }, errors, "Forfeit Role");
+                                    }, errors, "Forfeit Role", "Are you sure you want to forfeit this role?");
                                 }
                             } else {
                                 @let mut errors = ctx.errors().collect::<Vec<_>>();

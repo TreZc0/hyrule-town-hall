@@ -86,3 +86,36 @@ pub(crate) fn full_form(uri: Origin<'_>, csrf: Option<&CsrfToken>, content: impl
     }
 }
 
+pub(crate) fn full_form_confirm(uri: Origin<'_>, csrf: Option<&CsrfToken>, content: impl ToHtml, errors: Vec<&form::Error<'_>>, submit_text: &str, confirm_message: &str) -> RawHtml<String> {
+    let onsubmit = format!("return confirm('{}')", confirm_message.replace('\'', "\\'"));
+    html! {
+        form(action = uri.to_string(), method = "post", onsubmit = onsubmit) {
+            : csrf;
+            @for error in errors {
+                : render_form_error(error);
+            }
+            : content;
+            fieldset {
+                input(type = "submit", value = submit_text);
+            }
+        }
+    }
+}
+
+pub(crate) fn button_form_confirm(uri: Origin<'_>, csrf: Option<&CsrfToken>, errors: Vec<&form::Error<'_>>, submit_text: &str, confirm_message: &str) -> (RawHtml<String>, RawHtml<String>) {
+    let onsubmit = format!("return confirm('{}')", confirm_message.replace('\'', "\\'"));
+    (
+        html! {
+            @for error in errors {
+                : render_form_error(error);
+            }
+        },
+        html! {
+            form(action = uri.to_string(), method = "post", onsubmit = onsubmit) {
+                : csrf;
+                input(type = "submit", value = submit_text);
+            }
+        },
+    )
+}
+
