@@ -2155,7 +2155,7 @@ async fn volunteer_page(
                         p : "This event uses game-level role bindings. To volunteer for roles, you need to apply for game roles instead of event-specific roles.";
                         p {
                             : "Please visit the ";
-                            a(href = uri!(crate::games::manage_roles(data.series.slug(), _))) : "game role management page";
+                            a(href = uri!(crate::games::get(data.series.slug(), _))) : "game volunteer page";
                             : " to apply for roles that will be available across all events for this game.";
                         }
                     }
@@ -2263,7 +2263,7 @@ async fn volunteer_page(
                                 @if binding.is_game_binding {
                                     p(class = "game-role-link") {
                                         : "To forfeit this game-level role, visit the ";
-                                        a(href = uri!(crate::games::manage_roles(data.series.slug(), _))) : "game role management page";
+                                        a(href = uri!(crate::games::get(data.series.slug(), _))) : "game volunteer page";
                                         : ".";
                                     }
                                 } else {

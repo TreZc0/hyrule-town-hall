@@ -565,10 +565,11 @@ pub(crate) async fn manage_roles(
                     }
                 });
             }, errors, "Add Role Binding");
-            
-            h2 : "Pending Role Requests";
-            @if pending_requests.is_empty() {
-                p : "No pending role requests.";
+
+            h2 : format!("Pending Role Requests ({})", current_language);
+            @let filtered_pending_requests = pending_requests.iter().filter(|req| req.language == current_language).collect::<Vec<_>>();
+            @if filtered_pending_requests.is_empty() {
+                p : "No pending role requests for this language.";
             } else {
                 table {
                     thead {
@@ -581,7 +582,7 @@ pub(crate) async fn manage_roles(
                         }
                     }
                     tbody {
-                        @for request in pending_requests {
+                        @for request in filtered_pending_requests {
                             @if let Some(user) = User::from_id(&mut *transaction, request.user_id).await.map_err(Error::from)? {
                                 tr {
                                     td : user.display_name();
@@ -619,15 +620,16 @@ pub(crate) async fn manage_roles(
                     }
                 }
             }
-            
-            h2 : "Approved Role Requests";
-            @if approved_requests.is_empty() {
-                p : "No approved role requests.";
+
+            h2 : format!("Approved Role Requests ({})", current_language);
+            @let filtered_approved_requests = approved_requests.iter().filter(|req| req.language == current_language).collect::<Vec<_>>();
+            @if filtered_approved_requests.is_empty() {
+                p : "No approved role requests for this language.";
             } else {
                 // Group by role_binding_id to get per-language grouping
                 @let grouped = {
                     let mut map = std::collections::BTreeMap::new();
-                    for request in &approved_requests {
+                    for request in &filtered_approved_requests {
                         map.entry(request.role_binding_id).or_insert_with(Vec::new).push(request);
                     }
                     map
