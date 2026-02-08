@@ -18,7 +18,7 @@ use crate::{
     lang::Language,
     prelude::*,
     user::User,
-    event::{self, roles::{GameRoleBinding, RoleType}},
+    event::{self, roles::{GameRoleBinding, RoleType, render_language_tabs, render_language_content_box_start, render_language_content_box_end}},
     series::Series,
     id::{RoleTypes, RoleBindings},
 };
@@ -673,13 +673,14 @@ pub(crate) async fn manage_game_series(
     ).await.map_err(Error::from)?)
 } 
 
-#[rocket::get("/game/<game_name>/manage")]
+#[rocket::get("/game/<game_name>/manage?<lang>")]
 pub(crate) async fn game_management(
     pool: &State<PgPool>,
     me: Option<User>,
     uri: Origin<'_>,
     csrf: Option<CsrfToken>,
     game_name: &str,
+    lang: Option<Language>,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let me = me.ok_or(Error::Unauthorized)?;
     
@@ -759,6 +760,20 @@ pub(crate) async fn game_management(
         }
     }
 
+    // Get active languages and filter bindings
+    let active_languages: Vec<Language> = {
+        let mut langs: Vec<Language> = game_role_bindings.iter().map(|b| b.language).collect();
+        langs.sort_by_key(|l| l.short_code());
+        langs.dedup();
+        langs
+    };
+    let current_language = lang
+        .filter(|l| active_languages.contains(l))
+        .or_else(|| active_languages.first().copied())
+        .unwrap_or(English);
+    let filtered_bindings: Vec<&GameRoleBinding> = game_role_bindings.iter().filter(|b| b.language == current_language).collect();
+    let base_url = format!("/game/{}/manage", game_name);
+
     let content = html! {
         article {
             h1 : format!("Game Management — {}", game_display_name);
@@ -803,9 +818,17 @@ pub(crate) async fn game_management(
             
             h2 : "Game Role Bindings";
             p : "Game-level role bindings apply to all events in this game. Event-specific role bindings can override these.";
-            
-            @if game_role_bindings.is_empty() {
-                p : "No game-level role bindings configured yet.";
+
+            // Language tabs
+            : render_language_tabs(&active_languages, current_language, &base_url);
+
+            // Start content box if we have tabs
+            @if active_languages.len() > 1 {
+                : render_language_content_box_start();
+            }
+
+            @if filtered_bindings.is_empty() {
+                p : "No role bindings configured for this language.";
             } else {
                 table {
                     thead {
@@ -818,7 +841,7 @@ pub(crate) async fn game_management(
                         }
                     }
                     tbody {
-                        @for binding in &game_role_bindings {
+                        @for binding in &filtered_bindings {
                             tr {
                                 td : binding.role_type_name;
                                 td : binding.min_count;
@@ -844,6 +867,11 @@ pub(crate) async fn game_management(
                         }
                     }
                 }
+            }
+
+            // Close content box if we have tabs
+            @if active_languages.len() > 1 {
+                : render_language_content_box_end();
             }
             
             h3 : "Add Game Role Binding";
@@ -964,7 +992,7 @@ pub(crate) async fn add_game_role_binding(
         
         // Check if role binding already exists
         if GameRoleBinding::exists_for_role_type(&mut transaction, game.id, value.role_type_id, value.language).await.map_err(Error::from)? {
-            return Ok(Redirect::to(uri!(game_management(game_name))));
+            return Ok(Redirect::to(uri!(game_management(game_name, _))));
         }
 
         // Add role binding
@@ -981,7 +1009,7 @@ pub(crate) async fn add_game_role_binding(
         
         transaction.commit().await.map_err(Error::from)?;
     }
-    Ok(Redirect::to(uri!(game_management(game_name))))
+    Ok(Redirect::to(uri!(game_management(game_name, _))))
 }
 
 #[rocket::post("/game/<game_name>/role-bindings/<binding_id>/remove", data = "<form>")]
@@ -1021,7 +1049,7 @@ pub(crate) async fn remove_game_role_binding(
         
         transaction.commit().await.map_err(Error::from)?;
     }
-    Ok(Redirect::to(uri!(game_management(game_name))))
+    Ok(Redirect::to(uri!(game_management(game_name, _))))
 }
 
 async fn get_series_events<'a>(pool: &'a PgPool, series: Series) -> Result<Option<Vec<(String, String)>>, GameError> {
@@ -1082,7 +1110,7 @@ pub(crate) async fn game_management_overview(
                                 p : description;
                             }
                             p {
-                                a(href = uri!(game_management(&game.name))) : "Manage Game";
+                                a(href = uri!(game_management(&game.name, _))) : "Manage Game";
                             }
                         }
                     }
