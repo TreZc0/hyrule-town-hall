@@ -1008,7 +1008,7 @@ async fn roles_page(
             let effective_role_bindings = EffectiveRoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
 
             // Get active languages and determine selected language
-            let active_languages = EffectiveRoleBinding::active_languages(&effective_role_bindings);
+            let active_languages = EffectiveRoleBinding::active_languages(&effective_role_bindings, data.default_volunteer_language);
             let current_language = selected_lang
                 .filter(|l| active_languages.contains(l))
                 .or_else(|| active_languages.iter().find(|&&l| l == data.default_volunteer_language).copied())
@@ -2271,7 +2271,7 @@ async fn volunteer_page(
             let upcoming_races = Race::for_event(&mut transaction, &reqwest::Client::new(), &data).await?;
 
             // Get active languages and determine selected language
-            let active_languages = EffectiveRoleBinding::active_languages(&effective_role_bindings);
+            let active_languages = EffectiveRoleBinding::active_languages(&effective_role_bindings, data.default_volunteer_language);
             let current_language = selected_lang
                 .filter(|l| active_languages.contains(l))
                 .or_else(|| active_languages.iter().find(|&&l| l == data.default_volunteer_language).copied())
@@ -2900,7 +2900,7 @@ async fn match_signup_page(
     let effective_role_bindings = EffectiveRoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
 
     // Get active languages and determine selected language
-    let active_languages = EffectiveRoleBinding::active_languages(&effective_role_bindings);
+    let active_languages = EffectiveRoleBinding::active_languages(&effective_role_bindings, data.default_volunteer_language);
     let current_language = selected_lang
         .filter(|l| active_languages.contains(l))
         .or_else(|| active_languages.iter().find(|&&l| l == data.default_volunteer_language).copied())
@@ -3968,7 +3968,8 @@ impl EffectiveRoleBinding {
     }
 
     /// Get unique languages from a list of effective role bindings, sorted
-    pub(crate) fn active_languages(bindings: &[Self]) -> Vec<Language> {
+    /// Prioritizes the preferred language first (if it has bindings), else English (if it has bindings)
+    pub(crate) fn active_languages(bindings: &[Self], preferred_language: Language) -> Vec<Language> {
         let mut languages: Vec<Language> = bindings
             .iter()
             .map(|b| b.language)
@@ -3976,6 +3977,16 @@ impl EffectiveRoleBinding {
             .into_iter()
             .collect();
         languages.sort_by_key(|l| l.short_code().to_string());
+
+        // Put preferred language first if it exists, else English
+        if let Some(pref_idx) = languages.iter().position(|&l| l == preferred_language) {
+            let pref = languages.remove(pref_idx);
+            languages.insert(0, pref);
+        } else if let Some(en_idx) = languages.iter().position(|&l| l == English) {
+            let en = languages.remove(en_idx);
+            languages.insert(0, en);
+        }
+
         languages
     }
 

@@ -102,6 +102,11 @@ async fn game_page<'a>(
         let mut langs: Vec<Language> = role_bindings.iter().map(|b| b.language).collect();
         langs.sort_by_key(|l| l.short_code());
         langs.dedup();
+        // Put English first if it exists
+        if let Some(en_idx) = langs.iter().position(|&l| l == English) {
+            let en = langs.remove(en_idx);
+            langs.insert(0, en);
+        }
         langs
     };
     let current_language = lang
@@ -470,6 +475,11 @@ pub(crate) async fn manage_roles(
         let mut langs: Vec<Language> = role_bindings.iter().map(|b| b.language).collect();
         langs.sort_by_key(|l| l.short_code());
         langs.dedup();
+        // Put English first if it exists
+        if let Some(en_idx) = langs.iter().position(|&l| l == English) {
+            let en = langs.remove(en_idx);
+            langs.insert(0, en);
+        }
         langs
     };
     let current_language = lang

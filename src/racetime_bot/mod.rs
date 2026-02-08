@@ -3038,10 +3038,8 @@ async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl
             seed::Files::TriforceBlitz { is_dev: false, uuid } => format!("https://www.triforceblitz.com/seed/{uuid}"),
             seed::Files::TriforceBlitz { is_dev: true, uuid } => format!("https://dev.triforceblitz.com/seeds/{uuid}"),
             seed::Files::TfbSotd { ordinal, .. } => format!("https://www.triforceblitz.com/seed/daily/{ordinal}"),
-            seed::Files::TwwrPermalink { permalink, .. } => {
-                // Format: "Permalink : {permalink} | Seed Hash: {seed_hash}"
-                let hash_str = format_hash_with_game_id(extra.file_hash.clone().unwrap(), transaction, game_id).await.to_racetime()?;
-                format!("Permalink : {permalink} | Seed Hash: {hash_str}")
+            seed::Files::TwwrPermalink { permalink, seed_hash } => {
+                format!("Permalink : {permalink} | Seed Hash: {seed_hash}")
             },
         },
     )).await
