@@ -2401,7 +2401,7 @@ pub(crate) async fn race_table(
                                 } else {
                                     // hide seed if unfinished async
                                     //TODO show to the team that played the 1st async half
-                                    @if event.single_settings.is_none() && race.single_settings(&mut *transaction).await?.is_some() {
+                                    @if event.game(&mut *transaction).await?.map(|g| g.name == "ootr").unwrap_or(false) && event.single_settings.is_none() && race.single_settings(&mut *transaction).await?.is_some() {
                                         a(class = "clean_button", href = uri!(practice_seed(event.series, &*event.event, race.id))) {
                                             : favicon(&Url::parse("https://ootrandomizer.com/").unwrap()); //TODO adjust based on seed host
                                             : "Practice";
