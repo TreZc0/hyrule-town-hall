@@ -288,6 +288,12 @@ async fn game_page<'a>(
                 p {
                     a(href = uri!(manage_roles(&game.name, _))) : "Manage Game Roles";
                 }
+                p {
+                    a(href = uri!(manage_restreamers(&game.name))) : "Manage Restream Coordinators";
+                }
+                p {
+                    a(href = uri!(manage_notification_channels(&game.name))) : "Manage Notification Channels";
+                }
             }
         }
     };
@@ -435,8 +441,9 @@ pub(crate) async fn manage_roles(
 
     let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
     let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+    let is_game_restreamer = game.is_restreamer_any_language(&mut transaction, &me).await.map_err(Error::from)?;
 
-    if !is_game_admin && !is_global_admin {
+    if !is_game_admin && !is_global_admin && !is_game_restreamer {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
 
@@ -728,6 +735,7 @@ pub(crate) struct ForfeitGameRoleForm {
 #[rocket::post("/games/<game_name>/apply", data = "<form>")]
 pub(crate) async fn apply_for_game_role(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: Option<User>,
     uri: Origin<'_>,
     game_name: &str,
@@ -741,10 +749,18 @@ pub(crate) async fn apply_for_game_role(
     Ok(if let Some(ref value) = form.value {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
 
+        let game = Game::from_name(&mut transaction, game_name)
+            .await.map_err(Error::from)?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+
         // Check if user already has an active request for this role binding
         if RoleRequest::active_for_user(&mut transaction, value.role_binding_id, me.id).await.map_err(Error::from)? {
             return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(game_name, _)))));
         }
+
+        // Look up the role binding to check auto_approve and language
+        let role_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
+        let role_binding = role_bindings.iter().find(|b| b.id == value.role_binding_id);
 
         // Create the role request
         let notes = if value.notes.is_empty() {
@@ -757,8 +773,42 @@ pub(crate) async fn apply_for_game_role(
             &mut transaction,
             value.role_binding_id,
             me.id,
-            notes,
+            notes.clone(),
         ).await.map_err(Error::from)?;
+
+        // Send Discord notification for non-auto-approve roles
+        if let Some(binding) = role_binding {
+            if !binding.auto_approve {
+                if let Ok(Some((_guild_id, channel_id))) = game.notification_channel(&mut transaction, binding.language).await {
+                    let discord_ctx = discord_ctx.read().await;
+                    let mut msg = MessageBuilder::default();
+                    msg.push("New volunteer application: ");
+                    msg.mention_user(&me);
+                    msg.push(" has applied for the **");
+                    msg.push_safe(&binding.role_type_name);
+                    msg.push("** role (");
+                    msg.push(binding.language.to_string());
+                    msg.push(") in **");
+                    msg.push_safe(&game.display_name);
+                    msg.push("**.");
+
+                    if !notes.is_empty() {
+                        msg.push("\nNotes: ");
+                        msg.push_safe(&notes);
+                    }
+
+                    msg.push("\n\nClick here to review and manage role requests: ");
+                    msg.push_named_link_no_preview("Manage Roles", format!("{}/games/{}/roles",
+                        base_uri(),
+                        game.name
+                    ));
+
+                    if let Err(e) = channel_id.say(&*discord_ctx, msg.build()).await {
+                        eprintln!("Failed to send Discord notification for game role request: {}", e);
+                    }
+                }
+            }
+        }
 
         transaction.commit().await.map_err(Error::from)?;
         RedirectOrContent::Redirect(Redirect::to(uri!(get(game_name, _))))
@@ -999,26 +1049,40 @@ pub(crate) async fn approve_game_role_request(
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    
+
     if form.value.is_some() {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
             .await.map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
-        
+
         let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
         let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
-        
-        if !is_game_admin && !is_global_admin {
+
+        // Look up the role binding language for restreamer permission check
+        let role_binding_language = sqlx::query_scalar!(
+            r#"SELECT rb.language AS "language: Language" FROM role_requests rr JOIN role_bindings rb ON rr.role_binding_id = rb.id WHERE rr.id = $1"#,
+            request as _
+        )
+        .fetch_optional(&mut *transaction)
+        .await.map_err(Error::from)?;
+
+        let is_game_restreamer = if let Some(lang) = role_binding_language {
+            game.is_restreamer(&mut transaction, &me, lang).await.map_err(Error::from)?
+        } else {
+            false
+        };
+
+        if !is_game_admin && !is_global_admin && !is_game_restreamer {
             return Err(StatusOrError::Status(Status::Forbidden));
         }
-        
+
         // Update the role request status
         RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Approved).await.map_err(Error::from)?;
-        
+
         transaction.commit().await.map_err(Error::from)?;
     }
-    
+
     Ok(Redirect::to(uri!(manage_roles(game_name, _))))
 }
 
@@ -1034,26 +1098,39 @@ pub(crate) async fn reject_game_role_request(
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    
+
     if form.value.is_some() {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
             .await.map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
-        
+
         let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
         let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
-        
-        if !is_game_admin && !is_global_admin {
+
+        let role_binding_language = sqlx::query_scalar!(
+            r#"SELECT rb.language AS "language: Language" FROM role_requests rr JOIN role_bindings rb ON rr.role_binding_id = rb.id WHERE rr.id = $1"#,
+            request as _
+        )
+        .fetch_optional(&mut *transaction)
+        .await.map_err(Error::from)?;
+
+        let is_game_restreamer = if let Some(lang) = role_binding_language {
+            game.is_restreamer(&mut transaction, &me, lang).await.map_err(Error::from)?
+        } else {
+            false
+        };
+
+        if !is_game_admin && !is_global_admin && !is_game_restreamer {
             return Err(StatusOrError::Status(Status::Forbidden));
         }
-        
+
         // Update the role request status
         RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Rejected).await.map_err(Error::from)?;
-        
+
         transaction.commit().await.map_err(Error::from)?;
     }
-    
+
     Ok(Redirect::to(uri!(manage_roles(game_name, _))))
 }
 
@@ -1079,7 +1156,20 @@ pub(crate) async fn revoke_game_role_request(
         let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
         let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
 
-        if !is_game_admin && !is_global_admin {
+        let role_binding_language = sqlx::query_scalar!(
+            r#"SELECT rb.language AS "language: Language" FROM role_requests rr JOIN role_bindings rb ON rr.role_binding_id = rb.id WHERE rr.id = $1"#,
+            request as _
+        )
+        .fetch_optional(&mut *transaction)
+        .await.map_err(Error::from)?;
+
+        let is_game_restreamer = if let Some(lang) = role_binding_language {
+            game.is_restreamer(&mut transaction, &me, lang).await.map_err(Error::from)?
+        } else {
+            false
+        };
+
+        if !is_game_admin && !is_global_admin && !is_game_restreamer {
             return Err(StatusOrError::Status(Status::Forbidden));
         }
 
@@ -1261,9 +1351,545 @@ pub(crate) async fn remove_game_admin(
         )
         .execute(&mut *transaction)
         .await.map_err(Error::from)?;
-        
+
         transaction.commit().await.map_err(Error::from)?;
     }
-    
+
     Ok(Redirect::to(uri!(manage_admins(game_name))))
+}
+
+// --- Game Restream Coordinators Management ---
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct AddGameRestreamerForm {
+    #[field(default = String::new())]
+    csrf: String,
+    restreamer: String,
+    #[field(default = Vec::new())]
+    languages: Vec<Language>,
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct RemoveGameRestreamerForm {
+    #[field(default = String::new())]
+    csrf: String,
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct RemoveGameRestreamerLanguageForm {
+    #[field(default = String::new())]
+    csrf: String,
+    language: Language,
+}
+
+#[allow(dead_code)]
+#[rocket::get("/games/<game_name>/restreamers")]
+pub(crate) async fn manage_restreamers(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    game_name: &str,
+) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
+
+    let game = Game::from_name(&mut transaction, game_name)
+        .await.map_err(Error::from)?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
+
+    let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+    let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+
+    if !is_game_admin && !is_global_admin {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+
+    let restreamers = game.restreamers(&mut transaction).await.map_err(Error::from)?;
+
+    // Group restreamers by user
+    let mut grouped: std::collections::BTreeMap<i64, (User, Vec<Language>)> = std::collections::BTreeMap::new();
+    for (user, lang) in restreamers {
+        grouped.entry(i64::from(user.id))
+            .and_modify(|(_, langs)| langs.push(lang))
+            .or_insert((user, vec![lang]));
+    }
+
+    let content = html! {
+        article {
+            h1 : format!("Manage Restream Coordinators — {}", game.display_name);
+
+            h2 : "Current Restream Coordinators";
+            @if grouped.is_empty() {
+                p : "No restream coordinators assigned to this game.";
+            } else {
+                table {
+                    thead {
+                        tr {
+                            th : "Coordinator";
+                            th : "Languages";
+                            th : "Actions";
+                        }
+                    }
+                    tbody {
+                        @for (_uid, (user, langs)) in &grouped {
+                            tr {
+                                td : user.display_name();
+                                td {
+                                    @for (i, lang) in langs.iter().enumerate() {
+                                        @if i > 0 {
+                                            : ", ";
+                                        }
+                                        : lang;
+                                    }
+                                }
+                                td {
+                                    @let (errors, remove_button) = button_form_confirm(
+                                        uri!(remove_game_restreamer(&game_name, user.id)),
+                                        csrf.as_ref(),
+                                        Vec::new(),
+                                        "Remove All",
+                                        "Are you sure you want to remove this restream coordinator?"
+                                    );
+                                    : errors;
+                                    div(class = "button-row") : remove_button;
+
+                                    @for lang in langs {
+                                        div(class = "button-row") {
+                                            form(method = "post", action = uri!(remove_game_restreamer_language(&game_name, user.id)).to_string()) {
+                                                @if let Some(ref csrf) = csrf {
+                                                    input(type = "hidden", name = "csrf", value = csrf.authenticity_token());
+                                                }
+                                                input(type = "hidden", name = "language", value = lang.short_code());
+                                                input(type = "submit", value = format!("Remove {}", lang));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            h3 : "Add Restream Coordinator";
+            @let mut errors = Vec::new();
+            : full_form(uri!(add_game_restreamer(&game_name)), csrf.as_ref(), html! {
+                : form_field("restreamer", &mut errors, html! {
+                    label(for = "restreamer") : "Restream coordinator:";
+                    div(class = "autocomplete-container") {
+                        input(type = "text", id = "restreamer", name = "restreamer", autocomplete = "off");
+                        div(id = "user-suggestions", class = "suggestions", style = "display: none;") {}
+                    }
+                    label(class = "help") : "(Start typing a username to search for users. The search will match display names, racetime.gg IDs, and Discord usernames.)";
+                });
+                : form_field("languages", &mut errors, html! {
+                    label : "Languages:";
+                    div {
+                        label {
+                            input(type = "checkbox", name = "languages", value = "en");
+                            : " English";
+                        }
+                        label {
+                            input(type = "checkbox", name = "languages", value = "fr");
+                            : " French";
+                        }
+                        label {
+                            input(type = "checkbox", name = "languages", value = "de");
+                            : " German";
+                        }
+                        label {
+                            input(type = "checkbox", name = "languages", value = "pt");
+                            : " Portuguese";
+                        }
+                    }
+                });
+            }, errors, "Add Coordinator");
+
+            script(src = static_url!("user-search.js")) {}
+
+            p {
+                a(href = uri!(get(&game_name, _))) : "← Back to Game";
+            }
+        }
+    };
+
+    Ok(page(
+        transaction,
+        &Some(me),
+        &uri,
+        PageStyle::default(),
+        &format!("Manage Restream Coordinators — {}", game.display_name),
+        content,
+    )
+    .await.map_err(Error::from)?)
+}
+
+#[rocket::post("/games/<game_name>/restreamers", data = "<form>")]
+pub(crate) async fn add_game_restreamer(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    game_name: &str,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, AddGameRestreamerForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if let Some(ref value) = form.value {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        let game = Game::from_name(&mut transaction, game_name)
+            .await.map_err(Error::from)?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+
+        if !is_game_admin && !is_global_admin {
+            return Err(StatusOrError::Status(Status::Forbidden));
+        }
+
+        let restreamer_id = match value.restreamer.parse::<u64>() {
+            Ok(id) => Id::<Users>::from(id),
+            Err(_) => {
+                return Ok(Redirect::to(uri!(manage_restreamers(game_name))));
+            }
+        };
+
+        // Check if user exists
+        if User::from_id(&mut *transaction, restreamer_id).await.map_err(Error::from)?.is_none() {
+            return Ok(Redirect::to(uri!(manage_restreamers(game_name))));
+        }
+
+        // Insert for each selected language
+        for lang in &value.languages {
+            sqlx::query!(
+                r#"INSERT INTO game_restreamers (game_id, restreamer, language) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING"#,
+                game.id,
+                i64::from(restreamer_id),
+                *lang as _
+            )
+            .execute(&mut *transaction)
+            .await.map_err(Error::from)?;
+        }
+
+        transaction.commit().await.map_err(Error::from)?;
+    }
+
+    Ok(Redirect::to(uri!(manage_restreamers(game_name))))
+}
+
+#[rocket::post("/games/<game_name>/restreamers/<user_id>/remove", data = "<form>")]
+pub(crate) async fn remove_game_restreamer(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    game_name: &str,
+    user_id: Id<Users>,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, RemoveGameRestreamerForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if form.value.is_some() {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        let game = Game::from_name(&mut transaction, game_name)
+            .await.map_err(Error::from)?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+
+        if !is_game_admin && !is_global_admin {
+            return Err(StatusOrError::Status(Status::Forbidden));
+        }
+
+        sqlx::query!(
+            r#"DELETE FROM game_restreamers WHERE game_id = $1 AND restreamer = $2"#,
+            game.id,
+            i64::from(user_id)
+        )
+        .execute(&mut *transaction)
+        .await.map_err(Error::from)?;
+
+        transaction.commit().await.map_err(Error::from)?;
+    }
+
+    Ok(Redirect::to(uri!(manage_restreamers(game_name))))
+}
+
+#[rocket::post("/games/<game_name>/restreamers/<user_id>/remove-language", data = "<form>")]
+pub(crate) async fn remove_game_restreamer_language(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    game_name: &str,
+    user_id: Id<Users>,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, RemoveGameRestreamerLanguageForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if let Some(ref value) = form.value {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        let game = Game::from_name(&mut transaction, game_name)
+            .await.map_err(Error::from)?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+
+        if !is_game_admin && !is_global_admin {
+            return Err(StatusOrError::Status(Status::Forbidden));
+        }
+
+        sqlx::query!(
+            r#"DELETE FROM game_restreamers WHERE game_id = $1 AND restreamer = $2 AND language = $3"#,
+            game.id,
+            i64::from(user_id),
+            value.language as _
+        )
+        .execute(&mut *transaction)
+        .await.map_err(Error::from)?;
+
+        transaction.commit().await.map_err(Error::from)?;
+    }
+
+    Ok(Redirect::to(uri!(manage_restreamers(game_name))))
+}
+
+// --- Game Notification Channels Management ---
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct AddNotificationChannelForm {
+    #[field(default = String::new())]
+    csrf: String,
+    language: Language,
+    guild_id: String,
+    channel_id: String,
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct RemoveNotificationChannelForm {
+    #[field(default = String::new())]
+    csrf: String,
+}
+
+#[allow(dead_code)]
+#[rocket::get("/games/<game_name>/notification-channels")]
+pub(crate) async fn manage_notification_channels(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    game_name: &str,
+) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
+
+    let game = Game::from_name(&mut transaction, game_name)
+        .await.map_err(Error::from)?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
+
+    let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+    let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+
+    if !is_game_admin && !is_global_admin {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+
+    let channels = sqlx::query!(
+        r#"SELECT language AS "language: Language", guild_id, channel_id FROM game_notification_channels WHERE game_id = $1 ORDER BY language"#,
+        game.id
+    )
+    .fetch_all(&mut *transaction)
+    .await.map_err(Error::from)?;
+
+    let content = html! {
+        article {
+            h1 : format!("Manage Notification Channels — {}", game.display_name);
+
+            h2 : "Current Notification Channels";
+            @if channels.is_empty() {
+                p : "No notification channels configured for this game.";
+            } else {
+                table {
+                    thead {
+                        tr {
+                            th : "Language";
+                            th : "Guild ID";
+                            th : "Channel ID";
+                            th : "Actions";
+                        }
+                    }
+                    tbody {
+                        @for channel in &channels {
+                            tr {
+                                td : channel.language.to_string();
+                                td : channel.guild_id.to_string();
+                                td : channel.channel_id.to_string();
+                                td {
+                                    @let (errors, remove_button) = button_form_confirm(
+                                        uri!(remove_notification_channel(&game_name, channel.language.short_code())),
+                                        csrf.as_ref(),
+                                        Vec::new(),
+                                        "Remove",
+                                        "Are you sure you want to remove this notification channel?"
+                                    );
+                                    : errors;
+                                    div(class = "button-row") : remove_button;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            h3 : "Add / Update Notification Channel";
+            @let mut errors = Vec::new();
+            : full_form(uri!(add_notification_channel(&game_name)), csrf.as_ref(), html! {
+                : form_field("language", &mut errors, html! {
+                    label(for = "language") : "Language:";
+                    select(name = "language", id = "language") {
+                        option(value = "en") : "English";
+                        option(value = "fr") : "French";
+                        option(value = "de") : "German";
+                        option(value = "pt") : "Portuguese";
+                    }
+                });
+                : form_field("guild_id", &mut errors, html! {
+                    label(for = "guild_id") : "Guild (Server) ID:";
+                    input(type = "text", name = "guild_id", id = "guild_id", placeholder = "e.g. 123456789012345678");
+                });
+                : form_field("channel_id", &mut errors, html! {
+                    label(for = "channel_id") : "Channel ID:";
+                    input(type = "text", name = "channel_id", id = "channel_id", placeholder = "e.g. 123456789012345678");
+                });
+            }, errors, "Add / Update Channel");
+
+            p {
+                a(href = uri!(get(&game_name, _))) : "← Back to Game";
+            }
+        }
+    };
+
+    Ok(page(
+        transaction,
+        &Some(me),
+        &uri,
+        PageStyle::default(),
+        &format!("Manage Notification Channels — {}", game.display_name),
+        content,
+    )
+    .await.map_err(Error::from)?)
+}
+
+#[rocket::post("/games/<game_name>/notification-channels", data = "<form>")]
+pub(crate) async fn add_notification_channel(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    game_name: &str,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, AddNotificationChannelForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if let Some(ref value) = form.value {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        let game = Game::from_name(&mut transaction, game_name)
+            .await.map_err(Error::from)?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+
+        if !is_game_admin && !is_global_admin {
+            return Err(StatusOrError::Status(Status::Forbidden));
+        }
+
+        let guild_id = match value.guild_id.trim().parse::<i64>() {
+            Ok(id) => id,
+            Err(_) => {
+                return Ok(Redirect::to(uri!(manage_notification_channels(game_name))));
+            }
+        };
+
+        let channel_id = match value.channel_id.trim().parse::<i64>() {
+            Ok(id) => id,
+            Err(_) => {
+                return Ok(Redirect::to(uri!(manage_notification_channels(game_name))));
+            }
+        };
+
+        sqlx::query!(
+            r#"INSERT INTO game_notification_channels (game_id, language, guild_id, channel_id) VALUES ($1, $2, $3, $4)
+               ON CONFLICT (game_id, language) DO UPDATE SET guild_id = $3, channel_id = $4"#,
+            game.id,
+            value.language as _,
+            guild_id,
+            channel_id
+        )
+        .execute(&mut *transaction)
+        .await.map_err(Error::from)?;
+
+        transaction.commit().await.map_err(Error::from)?;
+    }
+
+    Ok(Redirect::to(uri!(manage_notification_channels(game_name))))
+}
+
+#[rocket::post("/games/<game_name>/notification-channels/<language>/remove", data = "<form>")]
+pub(crate) async fn remove_notification_channel(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    game_name: &str,
+    language: &str,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, RemoveNotificationChannelForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if form.value.is_some() {
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        let game = Game::from_name(&mut transaction, game_name)
+            .await.map_err(Error::from)?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_global_admin = u64::from(me.id) == 16287394041462225947_u64;
+
+        if !is_game_admin && !is_global_admin {
+            return Err(StatusOrError::Status(Status::Forbidden));
+        }
+
+        // Parse language from URL parameter
+        let lang = match language {
+            "en" => English,
+            "fr" => French,
+            "de" => German,
+            "pt" => Portuguese,
+            _ => return Err(StatusOrError::Status(Status::NotFound)),
+        };
+
+        sqlx::query!(
+            r#"DELETE FROM game_notification_channels WHERE game_id = $1 AND language = $2"#,
+            game.id,
+            lang as _
+        )
+        .execute(&mut *transaction)
+        .await.map_err(Error::from)?;
+
+        transaction.commit().await.map_err(Error::from)?;
+    }
+
+    Ok(Redirect::to(uri!(manage_notification_channels(game_name))))
 }

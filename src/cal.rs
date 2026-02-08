@@ -2373,7 +2373,14 @@ pub(crate) async fn race_table(
                                 @if scheduled && all_teams_consented {
                                         @if let Some(user) = user {
                                             @let is_organizer = event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(user));
-                                            @let is_restreamer = event.restreamers(&mut *transaction).await.ok().map_or(false, |rest| rest.contains(user));
+                                            @let is_event_restreamer = event.restreamers(&mut *transaction).await.ok().map_or(false, |rest| rest.contains(user));
+                                            @let is_game_restreamer = if is_event_restreamer { false } else {
+                                                match crate::game::Game::from_series(&mut *transaction, race.series).await {
+                                                    Ok(Some(game)) => game.is_restreamer_any_language(&mut *transaction, user).await.unwrap_or(false),
+                                                    _ => false,
+                                                }
+                                            };
+                                            @let is_restreamer = is_event_restreamer || is_game_restreamer;
                                             @if is_organizer || is_restreamer {
                                                 a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id, _))) : "Manage Volunteers";
                                             } else if let Some(approved_roles) = approved_role_binding_ids {

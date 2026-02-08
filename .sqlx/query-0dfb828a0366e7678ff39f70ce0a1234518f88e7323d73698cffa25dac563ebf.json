@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO game_notification_channels (game_id, language, guild_id, channel_id) VALUES ($1, $2, $3, $4)\n               ON CONFLICT (game_id, language) DO UPDATE SET guild_id = $3, channel_id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        },
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0dfb828a0366e7678ff39f70ce0a1234518f88e7323d73698cffa25dac563ebf"
+}

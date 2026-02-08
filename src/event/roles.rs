@@ -2177,7 +2177,13 @@ async fn volunteer_page(
     let content = if let Some(ref me) = me {
         // Check if user has access to view volunteer signups
         let is_organizer = data.organizers(&mut transaction).await?.contains(me);
-        let is_restreamer = data.restreamers(&mut transaction).await?.contains(me);
+        let mut is_restreamer = data.restreamers(&mut transaction).await?.contains(me);
+        // Also check game-level restreamers
+        if !is_restreamer {
+            if let Some(game) = game::Game::from_series(&mut transaction, data.series).await.map_err(Error::from)? {
+                is_restreamer = game.is_restreamer_any_language(&mut transaction, me).await.map_err(Error::from)?;
+            }
+        }
         // Check if event uses custom role bindings
         let uses_custom_bindings = sqlx::query_scalar!(
             r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,
@@ -2632,7 +2638,12 @@ pub(crate) async fn manage_roster(
         }
 
         let is_organizer = data.organizers(&mut transaction).await?.contains(&me);
-        let is_restreamer = data.restreamers(&mut transaction).await?.contains(&me);
+        let mut is_restreamer = data.restreamers(&mut transaction).await?.contains(&me);
+        if !is_restreamer {
+            if let Some(game) = game::Game::from_series(&mut transaction, data.series).await.map_err(Error::from)? {
+                is_restreamer = game.is_restreamer_any_language(&mut transaction, &me).await.map_err(Error::from)?;
+            }
+        }
 
         if !is_organizer && !is_restreamer {
             form.context.push_error(form::Error::validation(
@@ -2892,7 +2903,12 @@ async fn match_signup_page(
 
     let content = if let Some(ref me) = me {
         let is_organizer = data.organizers(&mut transaction).await?.contains(me);
-        let is_restreamer = data.restreamers(&mut transaction).await?.contains(me);
+        let mut is_restreamer = data.restreamers(&mut transaction).await?.contains(me);
+        if !is_restreamer {
+            if let Some(game) = game::Game::from_series(&mut transaction, data.series).await.map_err(Error::from)? {
+                is_restreamer = game.is_restreamer_any_language(&mut transaction, me).await.map_err(Error::from)?;
+            }
+        }
         let can_manage = is_organizer || is_restreamer;
 
         html! {
@@ -3410,7 +3426,12 @@ pub(crate) async fn revoke_signup(
         }
 
         let is_organizer = data.organizers(&mut transaction).await?.contains(&me);
-        let is_restreamer = data.restreamers(&mut transaction).await?.contains(&me);
+        let mut is_restreamer = data.restreamers(&mut transaction).await?.contains(&me);
+        if !is_restreamer {
+            if let Some(game) = game::Game::from_series(&mut transaction, data.series).await.map_err(Error::from)? {
+                is_restreamer = game.is_restreamer_any_language(&mut transaction, &me).await.map_err(Error::from)?;
+            }
+        }
 
         if !is_organizer && !is_restreamer {
             form.context.push_error(form::Error::validation(

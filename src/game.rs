@@ -84,7 +84,6 @@ impl Game {
         Ok(rows.into_iter().map(|row| row.series).collect())
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn from_series(transaction: &mut Transaction<'_, Postgres>, series: Series) -> Result<Option<Self>, GameError> {
         let row = sqlx::query!(
             r#"SELECT g.id, g.name, g.display_name, g.description, g.created_at, g.updated_at 
@@ -138,5 +137,76 @@ impl Game {
         Ok(count.unwrap_or(0) > 0)
     }
 
+    pub(crate) async fn notification_channel(&self, transaction: &mut Transaction<'_, Postgres>, language: Language) -> Result<Option<(GuildId, ChannelId)>, GameError> {
+        let row = sqlx::query!(
+            r#"SELECT guild_id, channel_id FROM game_notification_channels WHERE game_id = $1 AND language = $2"#,
+            self.id,
+            language as _
+        )
+        .fetch_optional(&mut **transaction)
+        .await?;
 
+        Ok(row.map(|row| (GuildId::new(row.guild_id as u64), ChannelId::new(row.channel_id as u64))))
+    }
+
+    pub(crate) async fn restreamers(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<(User, Language)>, GameError> {
+        let rows = sqlx::query!(
+            r#"SELECT restreamer, language AS "language: Language" FROM game_restreamers WHERE game_id = $1 ORDER BY restreamer"#,
+            self.id
+        )
+        .fetch_all(&mut **transaction)
+        .await?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            if let Some(user) = User::from_id(&mut **transaction, Id::<Users>::from(row.restreamer as i64)).await? {
+                result.push((user, row.language));
+            }
+        }
+        Ok(result)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn restreamers_for_language(&self, transaction: &mut Transaction<'_, Postgres>, language: Language) -> Result<Vec<User>, GameError> {
+        let rows = sqlx::query_scalar!(
+            r#"SELECT restreamer FROM game_restreamers WHERE game_id = $1 AND language = $2 ORDER BY restreamer"#,
+            self.id,
+            language as _
+        )
+        .fetch_all(&mut **transaction)
+        .await?;
+
+        let mut users = Vec::new();
+        for restreamer_id in rows {
+            if let Some(user) = User::from_id(&mut **transaction, Id::<Users>::from(restreamer_id as i64)).await? {
+                users.push(user);
+            }
+        }
+        Ok(users)
+    }
+
+    pub(crate) async fn is_restreamer(&self, transaction: &mut Transaction<'_, Postgres>, user: &User, language: Language) -> Result<bool, GameError> {
+        let count = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) FROM game_restreamers WHERE game_id = $1 AND restreamer = $2 AND language = $3"#,
+            self.id,
+            i64::from(user.id),
+            language as _
+        )
+        .fetch_one(&mut **transaction)
+        .await?;
+
+        Ok(count.unwrap_or(0) > 0)
+    }
+
+    pub(crate) async fn is_restreamer_any_language(&self, transaction: &mut Transaction<'_, Postgres>, user: &User) -> Result<bool, GameError> {
+        let count = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) FROM game_restreamers WHERE game_id = $1 AND restreamer = $2"#,
+            self.id,
+            i64::from(user.id)
+        )
+        .fetch_one(&mut **transaction)
+        .await?;
+
+        Ok(count.unwrap_or(0) > 0)
+    }
 } 

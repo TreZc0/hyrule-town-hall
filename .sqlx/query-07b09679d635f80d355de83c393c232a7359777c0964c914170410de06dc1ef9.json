@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM game_restreamers WHERE game_id = $1 AND restreamer = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "07b09679d635f80d355de83c393c232a7359777c0964c914170410de06dc1ef9"
+}

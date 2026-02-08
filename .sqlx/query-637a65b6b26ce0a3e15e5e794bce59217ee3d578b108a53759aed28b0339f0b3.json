@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM game_notification_channels WHERE game_id = $1 AND language = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "637a65b6b26ce0a3e15e5e794bce59217ee3d578b108a53759aed28b0339f0b3"
+}
