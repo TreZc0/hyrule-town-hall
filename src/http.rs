@@ -709,6 +709,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         games::add_game_restreamer,
         games::remove_game_restreamer,
         games::remove_game_restreamer_language,
+        games::update_game_restreamer_languages,
         games::manage_notification_channels,
         games::add_notification_channel,
         games::remove_notification_channel,

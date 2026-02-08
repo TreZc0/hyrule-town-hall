@@ -958,6 +958,7 @@ async fn roles_page(
     ctx: Context<'_>,
     csrf: Option<CsrfToken>,
     selected_lang: Option<Language>,
+    msg: Option<String>,
 ) -> Result<RawHtml<String>, Error> {
     let header = data
         .header(&mut transaction, me.as_ref(), Tab::Roles, false)
@@ -1019,6 +1020,10 @@ async fn roles_page(
             let base_url = format!("/event/{}/{}/roles", data.series.slug(), &data.event);
 
             html! {
+                @if let Some(ref msg) = msg {
+                    div(class = "info-box") { p : msg; }
+                }
+
                 h2 : "Volunteer Request Settings";
                 p : "Configure automatic volunteer request announcements for upcoming races.";
 
@@ -1478,7 +1483,7 @@ async fn roles_page(
     .await?)
 }
 
-#[rocket::get("/event/<series>/<event>/roles?<lang>")]
+#[rocket::get("/event/<series>/<event>/roles?<lang>&<msg>")]
 pub(crate) async fn get(
     pool: &State<PgPool>,
     me: Option<User>,
@@ -1487,13 +1492,14 @@ pub(crate) async fn get(
     series: Series,
     event: &str,
     lang: Option<Language>,
+    msg: Option<String>,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let ctx = Context::default();
-    Ok(roles_page(transaction, me, &uri, data, ctx, csrf, lang).await?)
+    Ok(roles_page(transaction, me, &uri, data, ctx, csrf, lang, msg).await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -1578,6 +1584,7 @@ pub(crate) async fn add_role_binding(
                     form.context,
                     csrf,
                     None,
+                    None,
                 )
                 .await?,
             )
@@ -1600,6 +1607,7 @@ pub(crate) async fn add_role_binding(
                                 form.context,
                                 csrf,
                                 None,
+                                None,
                             )
                             .await?,
                         ));
@@ -1620,7 +1628,7 @@ pub(crate) async fn add_role_binding(
             )
             .await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _))))
         }
     } else {
         RedirectOrContent::Content(
@@ -1631,6 +1639,7 @@ pub(crate) async fn add_role_binding(
                 data,
                 form.context,
                 csrf,
+                None,
                 None,
             )
             .await?,
@@ -1677,13 +1686,14 @@ pub(crate) async fn delete_role_binding(
                     form.context,
                     csrf,
                     None,
+                    None,
                 )
                 .await?,
             )
         } else {
             RoleBinding::delete(&mut transaction, binding).await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _))))
         }
     } else {
         RedirectOrContent::Content(
@@ -1694,6 +1704,7 @@ pub(crate) async fn delete_role_binding(
                 data,
                 form.context,
                 csrf,
+                None,
                 None,
             )
             .await?,
@@ -1756,7 +1767,7 @@ pub(crate) async fn edit_role_binding(
     .await?;
 
     transaction.commit().await?;
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _)))))
 }
 
 #[rocket::post("/event/<series>/<event>/roles/<request>/approve", data = "<form>")]
@@ -1799,6 +1810,7 @@ pub(crate) async fn approve_role_request(
                     form.context,
                     csrf,
                     None,
+                    None,
                 )
                 .await?,
             )
@@ -1840,7 +1852,8 @@ pub(crate) async fn approve_role_request(
             }
 
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
+            let redirect_url = format!("/event/{}/{}/roles?msg={}", series.slug(), event, urlencoding::encode("Role request approved successfully."));
+            RedirectOrContent::Redirect(Redirect::to(redirect_url))
         }
     } else {
         RedirectOrContent::Content(
@@ -1851,6 +1864,7 @@ pub(crate) async fn approve_role_request(
                 data,
                 form.context,
                 csrf,
+                None,
                 None,
             )
             .await?,
@@ -1897,6 +1911,7 @@ pub(crate) async fn reject_role_request(
                     form.context,
                     csrf,
                     None,
+                    None,
                 )
                 .await?,
             )
@@ -1904,7 +1919,8 @@ pub(crate) async fn reject_role_request(
             RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Rejected)
                 .await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
+            let redirect_url = format!("/event/{}/{}/roles?msg={}", series.slug(), event, urlencoding::encode("Role request rejected."));
+            RedirectOrContent::Redirect(Redirect::to(redirect_url))
         }
     } else {
         RedirectOrContent::Content(
@@ -1915,6 +1931,7 @@ pub(crate) async fn reject_role_request(
                 data,
                 form.context,
                 csrf,
+                None,
                 None,
             )
             .await?,
@@ -3549,6 +3566,7 @@ pub(crate) async fn withdraw_role_request(
                     form.context,
                     csrf,
                     None,
+                    None,
                 )
                 .await?,
             )
@@ -3556,7 +3574,7 @@ pub(crate) async fn withdraw_role_request(
             // Update the role request status to Aborted
             RoleRequest::update_status(&mut transaction, value.request_id, RoleRequestStatus::Aborted).await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _))))
         }
     } else {
         RedirectOrContent::Content(
@@ -3567,6 +3585,7 @@ pub(crate) async fn withdraw_role_request(
                 data,
                 form.context,
                 csrf,
+                None,
                 None,
             )
             .await?,
@@ -3637,6 +3656,7 @@ pub(crate) async fn revoke_role_request(
                 form.context,
                 csrf,
                 None,
+                None,
             )
             .await?,
         )
@@ -3644,7 +3664,8 @@ pub(crate) async fn revoke_role_request(
         // Update the role request status back to Pending
         RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Pending).await?;
         transaction.commit().await?;
-        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
+        let redirect_url = format!("/event/{}/{}/roles?msg={}", series.slug(), event, urlencoding::encode("Role assignment revoked."));
+        RedirectOrContent::Redirect(Redirect::to(redirect_url))
     })
 }
 
@@ -4040,7 +4061,7 @@ pub(crate) async fn disable_role_binding(
     }
 
     transaction.commit().await?;
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _)))))
 }
 
 #[rocket::post("/event/<series>/<event>/role-types/<role_type_id>/enable-binding")]
@@ -4070,7 +4091,7 @@ pub(crate) async fn enable_role_binding(
     EventDisabledRoleBinding::delete(&mut transaction, series, event, role_type_id).await?;
 
     transaction.commit().await?;
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _)))))
 }
 
 
@@ -4154,6 +4175,7 @@ pub(crate) async fn add_discord_override(
                     form.context,
                     csrf,
                     None,
+                    None,
                 )
                 .await?,
             )
@@ -4173,6 +4195,7 @@ pub(crate) async fn add_discord_override(
                             data,
                             form.context,
                             csrf,
+                            None,
                             None,
                         )
                         .await?,
@@ -4216,10 +4239,10 @@ pub(crate) async fn add_discord_override(
             }
 
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _))))
         }
     } else {
-        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
+        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _))))
     })
 }
 
@@ -4286,6 +4309,7 @@ pub(crate) async fn add_discord_override_from_form_data(
                     form.context,
                     csrf,
                     None,
+                    None,
                 )
                 .await?,
             )
@@ -4305,6 +4329,7 @@ pub(crate) async fn add_discord_override_from_form_data(
                             data,
                             form.context,
                             csrf,
+                            None,
                             None,
                         )
                         .await?,
@@ -4348,10 +4373,10 @@ pub(crate) async fn add_discord_override_from_form_data(
             }
 
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _))))
         }
     } else {
-        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
+        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _))))
     })
 }
 
@@ -4377,7 +4402,7 @@ pub(crate) async fn delete_discord_override(
     EventDiscordRoleOverride::delete_for_role_binding(&mut transaction, series, event, role_binding_id).await?;
 
     transaction.commit().await?;
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _)))))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -4425,6 +4450,7 @@ pub(crate) async fn copy_volunteers_from_event(
                     data,
                     form.context,
                     csrf,
+                    None,
                     None,
                 )
                 .await?,
@@ -4509,7 +4535,7 @@ pub(crate) async fn copy_volunteers_from_event(
             eprintln!("Copied {} volunteers from {} to {}. Skipped {} duplicates.",
                      copied_count, source_event, event, skipped_count);
 
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _))))
         }
     } else {
         RedirectOrContent::Content(
@@ -4520,6 +4546,7 @@ pub(crate) async fn copy_volunteers_from_event(
                 data,
                 form.context,
                 csrf,
+                None,
                 None,
             )
             .await?,
@@ -4581,6 +4608,7 @@ pub(crate) async fn update_volunteer_request_settings(
                     form.context,
                     csrf,
                     None,
+                    None,
                 )
                 .await?,
             )
@@ -4601,7 +4629,7 @@ pub(crate) async fn update_volunteer_request_settings(
             .await?;
 
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _))))
         }
     } else {
         RedirectOrContent::Content(
@@ -4612,6 +4640,7 @@ pub(crate) async fn update_volunteer_request_settings(
                 data,
                 form.context,
                 csrf,
+                None,
                 None,
             )
             .await?,
@@ -4666,5 +4695,5 @@ pub(crate) async fn trigger_volunteer_requests(
         }
     }
 
-    Ok(Redirect::to(uri!(get(series, event, _))))
+    Ok(Redirect::to(uri!(get(series, event, _, _))))
 }

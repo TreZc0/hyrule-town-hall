@@ -859,9 +859,9 @@ impl<'a> Data<'a> {
                             a(class = "button", href = uri!(configure::get(self.series, &*self.event))) : "Configure";
                         }
                         @if let Tab::Roles = tab {
-                            a(class = "button selected", href? = is_subpage.then(|| uri!(roles::get(self.series, &*self.event, _)))) : "Volunteer Setup";
+                            a(class = "button selected", href? = is_subpage.then(|| uri!(roles::get(self.series, &*self.event, _, _)))) : "Volunteer Setup";
                         } else {
-                            a(class = "button", href = uri!(roles::get(self.series, &*self.event, _))) : "Volunteer Setup";
+                            a(class = "button", href = uri!(roles::get(self.series, &*self.event, _, _))) : "Volunteer Setup";
                         }
                         @if self.asyncs_active {
                             @if let Tab::Asyncs = tab {

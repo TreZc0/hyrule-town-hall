@@ -808,7 +808,7 @@ pub(crate) async fn game_management(
                                 li {
                                     a(href = uri!(event::info(*series_item, &*event_name))) : display_name;
                                     : " - ";
-                                    a(href = uri!(event::roles::get(*series_item, &*event_name, _))) : "Manage Roles";
+                                    a(href = uri!(event::roles::get(*series_item, &*event_name, _, _))) : "Manage Roles";
                                 }
                             }
                         }
