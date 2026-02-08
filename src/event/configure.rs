@@ -585,9 +585,13 @@ async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres
     
     for team in teams {
         let team_members = sqlx::query!(r#"
-            SELECT member, startgg_id AS "startgg_id: startgg::ID"
-            FROM team_members 
-            WHERE team = $1
+            SELECT tm.member, tm.startgg_id AS "startgg_id: startgg::ID",
+                   CASE WHEN u.display_source = 'racetime' THEN u.racetime_display_name
+                        WHEN u.display_source = 'discord' THEN u.discord_display_name
+                   END AS display_name
+            FROM team_members tm
+            LEFT JOIN users u ON u.id = tm.member
+            WHERE tm.team = $1
         "#, team.id as _).fetch_all(&mut **transaction).await
             .map_err(|e| {
                 log::error!("Database error while fetching team members for team {} (event: {}): {}", team.id, event_slug, e);
@@ -617,10 +621,15 @@ async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres
                     team.name.as_deref().unwrap_or("Unknown"), team.id, entrant_id);
             } else {
                 // Could not find a matching entrant
-                let team_name = team.name.clone().unwrap_or_else(|| format!("Team {}", team.id));
-                log::warn!("Could not find matching StartGG entrant for team '{}' (ID: {}) in event '{}'", 
-                    team_name, team.id, event_slug);
-                failed_teams.push(team_name);
+                let team_label = team.name.clone().unwrap_or_else(|| format!("Team {}", team.id));
+                let display = if let Some(ref display_name) = member.display_name {
+                    format!("{} [{}]", team_label, display_name)
+                } else {
+                    team_label
+                };
+                log::warn!("Could not find matching StartGG entrant for team '{}' (ID: {}) in event '{}'",
+                    display, team.id, event_slug);
+                failed_teams.push(display);
             }
         } else {
             log::warn!("Team '{}' (ID: {}) has {} members, expected 1 for StartGG sync (event: '{}')", 
