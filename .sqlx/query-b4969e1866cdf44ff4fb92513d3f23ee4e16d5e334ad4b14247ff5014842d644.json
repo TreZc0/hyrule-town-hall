@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT\n                    rr.id AS \"id: Id<RoleRequests>\",\n                    rr.role_binding_id AS \"role_binding_id: Id<RoleBindings>\",\n                    rr.user_id AS \"user_id: Id<Users>\",\n                    rr.status AS \"status: RoleRequestStatus\",\n                    rr.notes,\n                    rr.created_at,\n                    rr.updated_at,\n                    rb.series AS \"series: Series\",\n                    rb.event,\n                    rb.min_count,\n                    rb.max_count,\n                    rt.name AS \"role_type_name\",\n                    rb.language AS \"language: Language\"\n                FROM role_requests rr\n                JOIN role_bindings rb ON rr.role_binding_id = rb.id\n                JOIN role_types rt ON rb.role_type_id = rt.id\n                WHERE rr.role_binding_id = $1 AND rr.user_id = $2 AND rr.status IN ('pending', 'approved')\n                ORDER BY rr.created_at DESC\n                LIMIT 1\n            ",
+  "query": "\n                SELECT\n                    rr.id AS \"id: Id<RoleRequests>\",\n                    rr.role_binding_id AS \"role_binding_id: Id<RoleBindings>\",\n                    rr.user_id AS \"user_id: Id<Users>\",\n                    rr.status AS \"status: RoleRequestStatus\",\n                    rr.notes,\n                    rr.created_at,\n                    rr.updated_at,\n                    rb.series AS \"series?: Series\",\n                    rb.event,\n                    rb.min_count,\n                    rb.max_count,\n                    rt.name AS \"role_type_name\",\n                    rb.language AS \"language: Language\"\n                FROM role_requests rr\n                JOIN role_bindings rb ON rr.role_binding_id = rb.id\n                JOIN role_types rt ON rb.role_type_id = rt.id\n                WHERE rr.role_binding_id = $1 AND rr.user_id = $2 AND rr.status IN ('pending', 'approved')\n                ORDER BY rr.created_at DESC\n                LIMIT 1\n            ",
   "describe": {
     "columns": [
       {
@@ -40,7 +40,7 @@
       },
       {
         "ordinal": 7,
-        "name": "series: Series",
+        "name": "series?: Series",
         "type_info": "Varchar"
       },
       {
@@ -103,5 +103,5 @@
       false
     ]
   },
-  "hash": "6facb3891ca03832356c7bae03d6505cc7d796fef853431fb04a3a9cd8da8029"
+  "hash": "b4969e1866cdf44ff4fb92513d3f23ee4e16d5e334ad4b14247ff5014842d644"
 }

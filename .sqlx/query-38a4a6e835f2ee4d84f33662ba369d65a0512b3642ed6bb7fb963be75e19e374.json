@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT\n                    rr.id AS \"id: Id<RoleRequests>\",\n                    rr.role_binding_id AS \"role_binding_id: Id<RoleBindings>\",\n                    rr.user_id AS \"user_id: Id<Users>\",\n                    rr.status AS \"status: RoleRequestStatus\",\n                    rr.notes,\n                    rr.created_at,\n                    rr.updated_at,\n                    rb.series AS \"series: Series\",\n                    rb.event,\n                    rb.min_count,\n                    rb.max_count,\n                    rt.name AS \"role_type_name\",\n                    rb.language AS \"language: Language\"\n                FROM role_requests rr\n                JOIN role_bindings rb ON rr.role_binding_id = rb.id\n                JOIN role_types rt ON rb.role_type_id = rt.id\n                WHERE rr.user_id = $1\n                ORDER BY rr.created_at DESC\n            ",
+  "query": "\n                SELECT\n                    rr.id AS \"id: Id<RoleRequests>\",\n                    rr.role_binding_id AS \"role_binding_id: Id<RoleBindings>\",\n                    rr.user_id AS \"user_id: Id<Users>\",\n                    rr.status AS \"status: RoleRequestStatus\",\n                    rr.notes,\n                    rr.created_at,\n                    rr.updated_at,\n                    rb.series AS \"series?: Series\",\n                    rb.event,\n                    rb.min_count,\n                    rb.max_count,\n                    rt.name AS \"role_type_name\",\n                    rb.language AS \"language: Language\"\n                FROM role_requests rr\n                JOIN role_bindings rb ON rr.role_binding_id = rb.id\n                JOIN role_types rt ON rb.role_type_id = rt.id\n                WHERE rr.user_id = $1\n                ORDER BY rr.created_at DESC\n            ",
   "describe": {
     "columns": [
       {
@@ -40,7 +40,7 @@
       },
       {
         "ordinal": 7,
-        "name": "series: Series",
+        "name": "series?: Series",
         "type_info": "Varchar"
       },
       {
@@ -102,5 +102,5 @@
       false
     ]
   },
-  "hash": "2d09f79617375ab01aaac1bd30046988ba44bd503952b53f4e2be7507e7cf59b"
+  "hash": "38a4a6e835f2ee4d84f33662ba369d65a0512b3642ed6bb7fb963be75e19e374"
 }

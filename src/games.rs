@@ -4,7 +4,7 @@ use crate::{
     user::User,
     event::roles::{GameRoleBinding, RoleType, RoleRequest, RoleRequestStatus, render_language_tabs, render_language_content_box_start, render_language_content_box_end},
     http::{PageError, StatusOrError},
-    form::{form_field, full_form, button_form},
+    form::{form_field, full_form, full_form_confirm, button_form, button_form_confirm},
     id::{RoleBindings, RoleRequests, RoleTypes},
     time::{format_datetime, DateTimeFormat},
 };
@@ -184,7 +184,12 @@ async fn game_page<'a>(
                     @let has_active_request = my_request.map_or(false, |req| matches!(req.status, RoleRequestStatus::Pending | RoleRequestStatus::Approved));
                     
                     div(class = "role-binding") {
-                        h4 : binding.role_type_name;
+                        h4 {
+                            : binding.role_type_name;
+                            : " (";
+                            : binding.language;
+                            : ")";
+                        }
                         p {
                             @if binding.min_count == binding.max_count {
                                 : "Required: ";
@@ -239,9 +244,9 @@ async fn game_page<'a>(
                                 }
                             }
                             @let errors = form_errors.iter().collect::<Vec<_>>();
-                            : full_form(uri!(forfeit_game_role(&game.name)), csrf.as_ref(), html! {
+                            : full_form_confirm(uri!(forfeit_game_role(&game.name)), csrf.as_ref(), html! {
                                 input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                            }, errors, "Forfeit Role");
+                            }, errors, "Forfeit Role", "Are you sure you want to forfeit this role?");
                         } else {
                             @if let Some(ref me) = me {
                                 @let mut errors = form_errors.iter().collect::<Vec<_>>();
@@ -565,10 +570,11 @@ pub(crate) async fn manage_roles(
                     }
                 });
             }, errors, "Add Role Binding");
-            
-            h2 : "Pending Role Requests";
-            @if pending_requests.is_empty() {
-                p : "No pending role requests.";
+
+            h2 : format!("Pending Role Requests ({})", current_language);
+            @let filtered_pending_requests = pending_requests.iter().filter(|req| req.language == current_language).collect::<Vec<_>>();
+            @if filtered_pending_requests.is_empty() {
+                p : "No pending role requests for this language.";
             } else {
                 table {
                     thead {
@@ -581,7 +587,7 @@ pub(crate) async fn manage_roles(
                         }
                     }
                     tbody {
-                        @for request in pending_requests {
+                        @for request in filtered_pending_requests {
                             @if let Some(user) = User::from_id(&mut *transaction, request.user_id).await.map_err(Error::from)? {
                                 tr {
                                     td : user.display_name();
@@ -619,15 +625,16 @@ pub(crate) async fn manage_roles(
                     }
                 }
             }
-            
-            h2 : "Approved Role Requests";
-            @if approved_requests.is_empty() {
-                p : "No approved role requests.";
+
+            h2 : format!("Approved Role Requests ({})", current_language);
+            @let filtered_approved_requests = approved_requests.iter().filter(|req| req.language == current_language).collect::<Vec<_>>();
+            @if filtered_approved_requests.is_empty() {
+                p : "No approved role requests for this language.";
             } else {
                 // Group by role_binding_id to get per-language grouping
                 @let grouped = {
                     let mut map = std::collections::BTreeMap::new();
-                    for request in &approved_requests {
+                    for request in &filtered_approved_requests {
                         map.entry(request.role_binding_id).or_insert_with(Vec::new).push(request);
                     }
                     map
@@ -668,11 +675,12 @@ pub(crate) async fn manage_roles(
                                             }
                                             td : format_datetime(request.updated_at, DateTimeFormat { long: false, running_text: false });
                                             td {
-                                                @let (errors, revoke_button) = button_form(
+                                                @let (errors, revoke_button) = button_form_confirm(
                                                     uri!(revoke_game_role_request(&game_name, request.id)),
                                                     csrf.as_ref(),
                                                     Vec::new(),
-                                                    "Remove"
+                                                    "Remove",
+                                                    "Are you sure you want to remove this approved role?"
                                                 );
                                                 : errors;
                                                 div(class = "button-row") : revoke_button;
@@ -797,7 +805,7 @@ pub(crate) async fn forfeit_game_role(
                     rr.notes,
                     rr.created_at,
                     rr.updated_at,
-                    rb.series AS "series: Series",
+                    rb.series AS "series?: Series",
                     rb.event,
                     rb.min_count,
                     rb.max_count,
@@ -810,8 +818,8 @@ pub(crate) async fn forfeit_game_role(
                 ORDER BY rr.created_at DESC
                 LIMIT 1
             "#,
-            i64::from(value.role_binding_id) as i32,
-            i64::from(me.id) as i32
+            value.role_binding_id as _,
+            me.id as _
         )
         .fetch_optional(&mut *transaction)
         .await.map_err(Error::from)?;

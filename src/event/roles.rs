@@ -13,7 +13,7 @@ use {
     chrono::{DateTime, Utc},
     crate::{
         event::{Data, Tab},
-        form::{EmptyForm, button_form, button_form_ext_disabled, form_field, full_form},
+        form::{EmptyForm, button_form, button_form_confirm, button_form_ext_disabled, form_field, full_form, full_form_confirm},
         http::{PageError, StatusOrError},
         id::{RoleBindings, RoleRequests, RoleTypes, Signups, EventDiscordRoleOverrides, EventDisabledRoleBindings},
         prelude::*,
@@ -511,7 +511,7 @@ impl RoleRequest {
                     rr.notes,
                     rr.created_at,
                     rr.updated_at,
-                    rb.series AS "series: Series",
+                    rb.series AS "series?: Series",
                     rb.event,
                     rb.min_count,
                     rb.max_count,
@@ -674,7 +674,7 @@ impl RoleRequest {
                     rr.notes,
                     rr.created_at,
                     rr.updated_at,
-                    rb.series AS "series: Series",
+                    rb.series AS "series?: Series",
                     rb.event,
                     rb.min_count,
                     rb.max_count,
@@ -1423,11 +1423,12 @@ async fn roles_page(
                                                         @if request.series.is_none() && request.event.is_none() {
                                                             p(class = "game-binding-info") : "Globally managed role assignment - no editing here";
                                                         } else {
-                                                                                                        @let (errors, revoke_button) = button_form(
+                                                                                                        @let (errors, revoke_button) = button_form_confirm(
                                                     uri!(revoke_role_request(data.series, &*data.event, request.id)),
                                                     csrf.as_ref(),
                                                     Vec::new(),
-                                                    "Revoke"
+                                                    "Revoke",
+                                                    "Are you sure you want to revoke this approved role?"
                                                 );
                                                             : errors;
                                                             div(class = "button-row") : revoke_button;
@@ -2103,7 +2104,7 @@ pub(crate) async fn forfeit_role(
                     rr.notes,
                     rr.created_at,
                     rr.updated_at,
-                    rb.series AS "series: Series",
+                    rb.series AS "series?: Series",
                     rb.event,
                     rb.min_count,
                     rb.max_count,
@@ -2116,8 +2117,8 @@ pub(crate) async fn forfeit_role(
                 ORDER BY rr.created_at DESC
                 LIMIT 1
             "#,
-            i64::from(value.role_binding_id) as i32,
-            i64::from(me.id) as i32
+            value.role_binding_id as _,
+            me.id as _
         )
         .fetch_optional(&mut *transaction)
         .await?;
@@ -2267,7 +2268,7 @@ async fn volunteer_page(
                         p : "This event uses game-level role bindings. To volunteer for roles, you need to apply for game roles instead of event-specific roles.";
                         p {
                             : "Please visit the ";
-                            a(href = uri!(crate::games::manage_roles(data.series.slug(), _))) : "game role management page";
+                            a(href = uri!(crate::games::get(data.series.slug(), _))) : "game volunteer page";
                             : " to apply for roles that will be available across all events for this game.";
                         }
                     }
@@ -2295,11 +2296,9 @@ async fn volunteer_page(
                         div(class = "role-binding") {
                             h4 {
                                 : binding.role_type_name;
-                                @if active_languages.len() > 1 {
-                                    : " (";
-                                    : binding.language;
-                                    : ")";
-                                }
+                                : " (";
+                                : binding.language;
+                                : ")";
                             }
                             p {
                                 @if binding.min_count == binding.max_count {
@@ -2372,10 +2371,18 @@ async fn volunteer_page(
                                         }
                                     }
                                 }
-                                @let errors = ctx.errors().collect::<Vec<_>>();
-                                : full_form(uri!(forfeit_role(data.series, &*data.event)), csrf.as_ref(), html! {
-                                    input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                }, errors, "Forfeit Role");
+                                @if binding.is_game_binding {
+                                    p(class = "game-role-link") {
+                                        : "To forfeit this game-level role, visit the ";
+                                        a(href = uri!(crate::games::get(data.series.slug(), _))) : "game volunteer page";
+                                        : ".";
+                                    }
+                                } else {
+                                    @let errors = ctx.errors().collect::<Vec<_>>();
+                                    : full_form_confirm(uri!(forfeit_role(data.series, &*data.event)), csrf.as_ref(), html! {
+                                        input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                    }, errors, "Forfeit Role", "Are you sure you want to forfeit this role?");
+                                }
                             } else {
                                 @let mut errors = ctx.errors().collect::<Vec<_>>();
                                 @let button_text = if binding.auto_approve {
@@ -2405,24 +2412,22 @@ async fn volunteer_page(
                 @if !my_approved_roles.is_empty() && !upcoming_races.is_empty() {
                     h3 : "Sign Up for Matches";
                     p : "You have been approved for the following roles. You can now sign up for specific matches:";
-                    
+
                     @for role_request in my_approved_roles {
                         @let binding = effective_role_bindings.iter().find(|b| b.id == role_request.role_binding_id);
                         @if let Some(binding) = binding {
                             h4 {
                                 : binding.role_type_name;
-                                @if active_languages.len() > 1 {
-                                    : " (";
-                                    : binding.language;
-                                    : ")";
-                                }
+                                : " (";
+                                : binding.language;
+                                : ")";
                             }
                             @let available_races = upcoming_races.iter().filter(|race| {
                                 // Filter races that need this role type
                                 // This is a simplified check - you might want more sophisticated logic
                                 true
                             }).collect::<Vec<_>>();
-                            
+
                             @if available_races.is_empty() {
                                 p : "No upcoming races available for signup.";
                             } else {
@@ -3083,21 +3088,17 @@ async fn match_signup_page(
 
             h3 {
                 : "Role Signups";
-                @if active_languages.len() > 1 {
-                    : " (";
-                    : current_language.to_string();
-                    : ")";
-                }
+                : " (";
+                : current_language.to_string();
+                : ")";
             }
             @for binding in &filtered_bindings {
                 div(class = "role-binding") {
                     h4 {
                         : binding.role_type_name;
-                        @if active_languages.len() > 1 {
-                            : " (";
-                            : binding.language.to_string();
-                            : ")";
-                        }
+                        : " (";
+                        : binding.language.to_string();
+                        : ")";
                     }
                     p {
                         @if binding.min_count == binding.max_count {
