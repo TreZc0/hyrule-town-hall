@@ -39,4 +39,20 @@ document.addEventListener('DOMContentLoaded', function() {
             timezoneField.value = 'UTC';
         }
     }
+
+    // Update local timezone option in weekly schedule forms
+    const localOption = document.getElementById('local-tz-option');
+    if (localOption) {
+        try {
+            const userTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            if (userTz) {
+                localOption.value = userTz;
+                localOption.textContent = 'Local timezone (' + userTz + ')';
+            } else {
+                localOption.remove();
+            }
+        } catch (e) {
+            localOption.remove();
+        }
+    }
 });
