@@ -56,7 +56,13 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
             }
         }
     } else if let Some(ref me) = me {
-        if event.organizers(&mut transaction).await?.contains(me) || me.is_global_admin() {
+        let is_organizer_or_global = event.organizers(&mut transaction).await?.contains(me) || me.is_global_admin();
+        let is_game_admin = if let Some(game) = event.game(&mut transaction).await? {
+            game.is_admin(&mut transaction, me).await.map_err(event::Error::from)?
+        } else {
+            false
+        };
+        if is_organizer_or_global {
             let mut errors = ctx.errors().collect_vec();
             html! {
                 @if event.series == Series::Standard && event.event == "w" {
@@ -171,6 +177,14 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                     }
                     li {
                         a(href = uri!(weekly_schedules_get(event.series, &*event.event))) : "Manage weekly schedules";
+                    }
+                }
+            }
+        } else if is_game_admin {
+            html! {
+                ul {
+                    li {
+                        a(href = uri!(restreamers_get(event.series, &*event.event))) : "Manage restream coordinators";
                     }
                 }
             }
@@ -359,7 +373,12 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
             }
         }
     } else if let Some(ref me) = me {
-        if event.organizers(&mut transaction).await?.contains(me) {
+        let is_game_admin = if let Some(game) = event.game(&mut transaction).await? {
+            game.is_admin(&mut transaction, me).await.map_err(event::Error::from)?
+        } else {
+            false
+        };
+        if event.organizers(&mut transaction).await?.contains(me) || me.is_global_admin() || is_game_admin {
             let restreamers = event.restreamers(&mut transaction).await?;
             html! {
                 h2 : "Manage restream coordinators";
@@ -401,7 +420,7 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
                         label(class = "help") : "(Start typing a username to search for users. The search will match display names, racetime.gg IDs, and Discord usernames.)";
                     });
                 }, errors, "Add");
-                
+
                 script(src = static_url!("user-search.js")) {}
             }
         } else {
@@ -451,7 +470,12 @@ pub(crate) async fn add_restreamer(pool: &State<PgPool>, me: User, uri: Origin<'
         if data.is_ended() {
             form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
         }
-        if !data.organizers(&mut transaction).await?.contains(&me) {
+        let is_game_admin = if let Some(game) = data.game(&mut transaction).await? {
+            game.is_admin(&mut transaction, &me).await.map_err(event::Error::from)?
+        } else {
+            false
+        };
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() && !is_game_admin {
             form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
         }
         let restreamer_id = match value.restreamer.parse::<u64>() {
@@ -492,7 +516,12 @@ pub(crate) async fn remove_restreamer(pool: &State<PgPool>, me: User, uri: Origi
         if data.is_ended() {
             form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
         }
-        if !data.organizers(&mut transaction).await?.contains(&me) {
+        let is_game_admin = if let Some(game) = data.game(&mut transaction).await? {
+            game.is_admin(&mut transaction, &me).await.map_err(event::Error::from)?
+        } else {
+            false
+        };
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() && !is_game_admin {
             form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
         }
         if let Some(restreamer) = User::from_id(&mut *transaction, restreamer).await? {

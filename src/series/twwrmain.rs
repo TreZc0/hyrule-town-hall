@@ -22,7 +22,7 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                     } else if active_schedules.len() == 1 {
                         @let schedule = active_schedules[0];
                         p {
-                            : format!("Weekly races for The Wind Waker Randomizer run every {} ", schedule.name);
+                            : "Weekly races for The Wind Waker Randomizer run every ";
                             : format_recurring_time(schedule.next_after(now));
                             : " (next: ";
                             : format_datetime(schedule.next_after(now), DateTimeFormat { long: true, running_text: false });
@@ -33,7 +33,7 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                         ul {
                             @for schedule in active_schedules {
                                 li {
-                                    : format!("{} ", schedule.name);
+                                    : format!("{}: ", schedule.name);
                                     : format_recurring_time(schedule.next_after(now));
                                     : " (next: ";
                                     : format_datetime(schedule.next_after(now), DateTimeFormat { long: true, running_text: false });

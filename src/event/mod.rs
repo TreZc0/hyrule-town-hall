@@ -852,12 +852,16 @@ impl<'a> Data<'a> {
                     }
                 }
                 @if let Some(me) = me {
-                    @if !self.is_ended() && (self.organizers(transaction).await?.contains(me) || me.is_global_admin()) {
+                    @let is_organizer_or_global = self.organizers(transaction).await?.contains(me) || me.is_global_admin();
+                    @let is_game_admin = if let Some(game) = self.game(&mut *transaction).await? { game.is_admin(&mut *transaction, me).await.map_err(Error::from)? } else { false };
+                    @if !self.is_ended() && (is_organizer_or_global || is_game_admin) {
                         @if let Tab::Configure = tab {
                             a(class = "button selected", href? = is_subpage.then(|| uri!(configure::get(self.series, &*self.event)))) : "Configure";
                         } else {
                             a(class = "button", href = uri!(configure::get(self.series, &*self.event))) : "Configure";
                         }
+                    }
+                    @if !self.is_ended() && is_organizer_or_global {
                         @if let Tab::Roles = tab {
                             a(class = "button selected", href? = is_subpage.then(|| uri!(roles::get(self.series, &*self.event, _, _)))) : "Volunteer Setup";
                         } else {
