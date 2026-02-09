@@ -2771,6 +2771,14 @@ impl SeedRollUpdate {
                     } else {
                         format!("Seed Hash: {formatted_hash}")
                     }).await?;
+                } else if let Some(seed::Files::TwwrPermalink { ref seed_hash, .. }) = seed.files {
+                    if !seed_hash.is_empty() {
+                        ctx.say(if let French = language {
+                            format!("Hash de la seed : {seed_hash}")
+                        } else {
+                            format!("Seed Hash: {seed_hash}")
+                        }).await?;
+                    }
                 }
 
                 if let Some(VersionedBranch::Tww { identifier, github_url }) = version {
@@ -3039,7 +3047,7 @@ async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl
             seed::Files::TriforceBlitz { is_dev: true, uuid } => format!("https://dev.triforceblitz.com/seeds/{uuid}"),
             seed::Files::TfbSotd { ordinal, .. } => format!("https://www.triforceblitz.com/seed/daily/{ordinal}"),
             seed::Files::TwwrPermalink { permalink, seed_hash } => {
-                format!("Permalink : {permalink} | Seed Hash: {seed_hash}")
+                format!("Permalink: {permalink} | Seed Hash: {seed_hash}")
             },
         },
     )).await
