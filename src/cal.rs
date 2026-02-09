@@ -624,7 +624,6 @@ impl Race {
     }
 
     pub(crate) async fn for_event(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, event: &event::Data<'_>) -> Result<Vec<Self>, Error> {
-        let now = Utc::now();
         let mut races = Vec::default();
         for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE series = $1 AND event = $2"#, event.series as _, &event.event).fetch_all(&mut **transaction).await? {
             races.push(Self::from_id(&mut *transaction, http_client, id).await?);
@@ -703,100 +702,9 @@ impl Race {
                 _ => unimplemented!(),
             },
             Series::Standard => match &*event.event {
-                "w" => {
-                    // Use database-driven weekly schedules
-                    let weekly_schedules = WeeklySchedule::for_event(&mut *transaction, event.series, &event.event).await?;
-                    for ws in weekly_schedules.iter().filter(|s| s.active) {
-                        // Create races for the next two upcoming occurrences
-                        let next_weekly = ws.next_after(now);
-                        let weekly_after = ws.next_after(next_weekly);
-                        for weekly_time in [next_weekly, weekly_after] {
-                            let schedule = RaceSchedule::Live { start: weekly_time.to_utc(), end: None, room: None };
-                            if !races.iter().any(|race| race.series == event.series && race.event == event.event && race.schedule.start_matches(&schedule)) {
-                                let race = Race {
-                                    id: Id::new(&mut *transaction).await?,
-                                    series: event.series,
-                                    event: event.event.to_string(),
-                                    source: Source::Manual,
-                                    entrants: Entrants::Open,
-                                    phase: None,
-                                    round: Some(format!("{} Weekly", ws.name)),
-                                    game: None,
-                                    scheduling_thread: None,
-                                    schedule_updated_at: None,
-                                    fpa_invoked: false,
-                                    breaks_used: false,
-                                    draft: None,
-                                    seed: seed::Data::default(),
-                                    video_urls: HashMap::default(),
-                                    restreamers: HashMap::default(),
-                                    last_edited_by: None,
-                                    last_edited_at: None,
-                                    ignored: false,
-                                    schedule_locked: false,
-                                    notified: false,
-                                    async_notified_1: false,
-                                    async_notified_2: false,
-                                    async_notified_3: false,
-                                    discord_scheduled_event_id: None,
-                                    volunteer_request_sent: false,
-                                    schedule,
-                                };
-                                race.save(&mut *transaction).await?;
-                                races.push(race);
-                            }
-                        }
-                    }
-                },
-                //TODO add archives of old Standard tournaments and Challenge Cups?
                 _ => {} // new events are scheduled via Mido's House
             },
             Series::TwwrMain => match &*event.event {
-                "w" => {
-                    // Use database-driven weekly schedules
-                    let weekly_schedules = WeeklySchedule::for_event(&mut *transaction, event.series, &event.event).await?;
-                    for ws in weekly_schedules.iter().filter(|s| s.active) {
-                        // Create races for the next two upcoming occurrences
-                        let next_weekly = ws.next_after(now);
-                        let weekly_after = ws.next_after(next_weekly);
-                        for weekly_time in [next_weekly, weekly_after] {
-                            let schedule = RaceSchedule::Live { start: weekly_time.to_utc(), end: None, room: None };
-                            if !races.iter().any(|race| race.series == event.series && race.event == event.event && race.schedule.start_matches(&schedule)) {
-                                let race = Race {
-                                    id: Id::new(&mut *transaction).await?,
-                                    series: event.series,
-                                    event: event.event.to_string(),
-                                    source: Source::Manual,
-                                    entrants: Entrants::Open,
-                                    phase: None,
-                                    round: Some(format!("{} Weekly", ws.name)),
-                                    game: None,
-                                    scheduling_thread: None,
-                                    schedule_updated_at: None,
-                                    fpa_invoked: false,
-                                    breaks_used: false,
-                                    draft: None,
-                                    seed: seed::Data::default(),
-                                    video_urls: HashMap::default(),
-                                    restreamers: HashMap::default(),
-                                    last_edited_by: None,
-                                    last_edited_at: None,
-                                    ignored: false,
-                                    schedule_locked: false,
-                                    notified: false,
-                                    async_notified_1: false,
-                                    async_notified_2: false,
-                                    async_notified_3: false,
-                                    discord_scheduled_event_id: None,
-                                    volunteer_request_sent: false,
-                                    schedule,
-                                };
-                                race.save(&mut *transaction).await?;
-                                races.push(race);
-                            }
-                        }
-                    }
-                },
                 _ => {} // other TWWR events are scheduled via Mido's House
             },
             | Series::AlttprDe
@@ -3183,6 +3091,78 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
         }
     }
     Ok(())
+}
+
+/// Ensures that races exist for the next two occurrences of each active weekly schedule.
+///
+/// This is called both from the `weekly_race_manager` background task 
+/// (to create races proactively before the room-opening window).
+pub(crate) async fn ensure_weekly_races(
+    transaction: &mut Transaction<'_, Postgres>,
+    series: Series,
+    event: &str,
+    now: DateTime<Utc>,
+) -> Result<Vec<Race>, Error> {
+    let weekly_schedules = WeeklySchedule::for_event(&mut *transaction, series, event).await?;
+    let mut created = Vec::new();
+    for ws in weekly_schedules.iter().filter(|s| s.active) {
+        let next_weekly = ws.next_after(now);
+        let weekly_after = ws.next_after(next_weekly);
+        let frequency_label = match ws.frequency_days {
+            7 => "Weekly",
+            14 => "Biweekly",
+            28 | 30 => "Monthly",
+            _ => "Weekly",
+        };
+        let round = format!("{} {frequency_label}", ws.name);
+        for weekly_time in [next_weekly, weekly_after] {
+            let start = weekly_time.to_utc();
+            let exists = sqlx::query_scalar!(
+                r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND start = $3 AND round = $4 AND NOT ignored) AS "exists!""#,
+                series as _,
+                event,
+                start,
+                round,
+            )
+            .fetch_one(&mut **transaction)
+            .await?;
+            if !exists {
+                let schedule = RaceSchedule::Live { start, end: None, room: None };
+                let race = Race {
+                    id: Id::new(&mut *transaction).await?,
+                    series,
+                    event: event.to_owned(),
+                    source: Source::Manual,
+                    entrants: Entrants::Open,
+                    phase: None,
+                    round: Some(round.clone()),
+                    game: None,
+                    scheduling_thread: None,
+                    schedule_updated_at: None,
+                    fpa_invoked: false,
+                    breaks_used: false,
+                    draft: None,
+                    seed: seed::Data::default(),
+                    video_urls: HashMap::default(),
+                    restreamers: HashMap::default(),
+                    last_edited_by: None,
+                    last_edited_at: None,
+                    ignored: false,
+                    schedule_locked: false,
+                    notified: false,
+                    async_notified_1: false,
+                    async_notified_2: false,
+                    async_notified_3: false,
+                    discord_scheduled_event_id: None,
+                    volunteer_request_sent: false,
+                    schedule,
+                };
+                race.save(&mut *transaction).await?;
+                created.push(race);
+            }
+        }
+    }
+    Ok(created)
 }
 
 pub(crate) async fn auto_import_races(db_pool: PgPool, http_client: reqwest::Client, config: Config, shutdown: rocket::Shutdown, discord_ctx: RwFuture<DiscordCtx>, new_room_lock: Arc<Mutex<()>>) -> Result<(), AutoImportError> {

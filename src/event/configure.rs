@@ -141,6 +141,13 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                                 label(for = "manual_reporting_with_breaks") : "Disable automatic result reporting if !breaks command is used";
                             });
                         }
+                        @if let Some(VersionedBranch::Tww { identifier, .. }) = &event.rando_version {
+                            : form_field("settings_string", &mut errors, html! {
+                                label(for = "settings_string") : "Settings string:";
+                                input(type = "text", id = "settings_string", name = "settings_string", value? = ctx.field_value("settings_string").or(event.settings_string.as_deref()));
+                                label(class = "help") : format!("(needs to be compatible with version {})", identifier);
+                            });
+                        }
                         : form_field("asyncs_active", &mut errors, html! {
                             input(type = "checkbox", id = "asyncs_active", name = "asyncs_active", checked? = ctx.field_value("asyncs_active").map_or(event.asyncs_active, |value| value == "on"));
                             label(for = "asyncs_active") : "Allow async races";
@@ -234,6 +241,7 @@ pub(crate) struct ConfigureForm {
     discord_events_enabled: bool,
     discord_events_require_restream: bool,
     automated_asyncs: bool,
+    settings_string: Option<String>,
 }
 
 #[rocket::post("/event/<series>/<event>/configure", data = "<form>")]
@@ -324,6 +332,12 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             }
             if value.automated_asyncs != data.automated_asyncs {
                 sqlx::query!("UPDATE events SET automated_asyncs = $1 WHERE series = $2 AND event = $3", value.automated_asyncs, data.series as _, &data.event).execute(&mut *transaction).await?;
+            }
+            if matches!(data.rando_version, Some(VersionedBranch::Tww { .. })) {
+                let new_settings_string = value.settings_string.as_deref().filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_owned());
+                if new_settings_string != data.settings_string {
+                    sqlx::query!("UPDATE events SET settings_string = $1 WHERE series = $2 AND event = $3", new_settings_string, data.series as _, &data.event).execute(&mut *transaction).await?;
+                }
             }
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))

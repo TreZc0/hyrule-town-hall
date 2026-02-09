@@ -318,7 +318,12 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
         });
-        let zsr_export_task = tokio::spawn(zsr_export_manager(db_pool, http_client, rocket.shutdown())).map(|res| match res {
+        let zsr_export_task = tokio::spawn(zsr_export_manager(db_pool.clone(), http_client, rocket.shutdown())).map(|res| match res {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(e),
+            Err(e) => Err(Error::Task(e)),
+        });
+        let weekly_race_task = tokio::spawn(weekly_race_manager(db_pool.clone(), rocket.shutdown())).map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
@@ -339,7 +344,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Err(e) => Err(Error::from(e)),
         });
         #[cfg(not(unix))] let unix_socket_task = future::ok(());
-        let ((), (), (), (), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, async_race_task, volunteer_request_task, zsr_export_task, rocket_task, unix_socket_task)?;
+        let ((), (), (), (), (), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, async_race_task, volunteer_request_task, zsr_export_task, weekly_race_task, rocket_task, unix_socket_task)?;
     }
     Ok(())
 }
@@ -404,6 +409,64 @@ async fn zsr_export_manager(
             _ = interval.tick() => {
                 if let Err(e) = zsr_export::check_and_sync_all_exports(&db_pool, &http_client).await {
                     eprintln!("Error syncing ZSR exports: {}", e);
+                }
+            }
+            _ = shutdown.clone() => break,
+        }
+    }
+
+    Ok(())
+}
+
+/// Background task for proactively creating weekly races so that the
+/// room-opening loop (`create_rooms`) can find them even if no page has
+/// been visited.
+async fn weekly_race_manager(
+    db_pool: PgPool,
+    shutdown: rocket::Shutdown,
+) -> Result<(), Error> {
+    let mut interval = tokio::time::interval(Duration::from_secs(5 * 60)); // Check every 5 minutes
+
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                let now = Utc::now();
+                let rows = match sqlx::query!(
+                    r#"SELECT DISTINCT series, event FROM weekly_schedules WHERE active"#
+                )
+                .fetch_all(&db_pool)
+                .await {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        eprintln!("Error querying weekly schedules: {e}");
+                        continue;
+                    }
+                };
+                for row in rows {
+                    let series: Series = match row.series.parse() {
+                        Ok(s) => s,
+                        Err(()) => {
+                            eprintln!("Error parsing series '{}' from weekly_schedules", row.series);
+                            continue;
+                        }
+                    };
+                    let mut transaction = match db_pool.begin().await {
+                        Ok(t) => t,
+                        Err(e) => {
+                            eprintln!("Error starting transaction for weekly races: {e}");
+                            continue;
+                        }
+                    };
+                    match cal::ensure_weekly_races(&mut transaction, series, &row.event, now).await {
+                        Ok(_) => {
+                            if let Err(e) = transaction.commit().await {
+                                eprintln!("Error committing weekly races for {}/{}: {e}", series.slug(), row.event);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Error ensuring weekly races for {}/{}: {e}", series.slug(), row.event);
+                        }
+                    }
                 }
             }
             _ = shutdown.clone() => break,
