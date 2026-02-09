@@ -1000,13 +1000,31 @@ async fn weekly_schedules_form(mut transaction: Transaction<'_, Postgres>, me: O
                     : form_field("timezone", &mut errors, html! {
                         label(for = "timezone") : "Timezone:";
                         select(id = "timezone", name = "timezone") {
-                            option(value = "America/New_York", selected? = defaults.add_timezone().map_or(true, |v| v == "America/New_York")) : "America/New_York (Eastern)";
-                            option(value = "America/Chicago", selected? = defaults.add_timezone().map_or(false, |v| v == "America/Chicago")) : "America/Chicago (Central)";
-                            option(value = "America/Denver", selected? = defaults.add_timezone().map_or(false, |v| v == "America/Denver")) : "America/Denver (Mountain)";
-                            option(value = "America/Los_Angeles", selected? = defaults.add_timezone().map_or(false, |v| v == "America/Los_Angeles")) : "America/Los_Angeles (Pacific)";
-                            option(value = "Europe/London", selected? = defaults.add_timezone().map_or(false, |v| v == "Europe/London")) : "Europe/London (GMT/BST)";
+                            option(value = "", id = "local-tz-option", selected? = defaults.add_timezone().map_or(true, |v| v.is_empty())) : "Local timezone (detecting...)";
+                            option(value = "UTC", selected? = defaults.add_timezone().map_or(false, |v| v == "UTC")) : "UTC";
                             option(value = "Europe/Paris", selected? = defaults.add_timezone().map_or(false, |v| v == "Europe/Paris")) : "Europe/Paris (CET/CEST)";
-                            option(value = "Europe/Berlin", selected? = defaults.add_timezone().map_or(false, |v| v == "Europe/Berlin")) : "Europe/Berlin (CET/CEST)";
+                            option(value = "America/New_York", selected? = defaults.add_timezone().map_or(false, |v| v == "America/New_York")) : "America/New_York (Eastern)";
+                        }
+                        label(class = "help") : "(Defaults to your local timezone)";
+                        script {
+                            : r#"
+                                (function() {
+                                    try {
+                                        const userTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                                        const select = document.getElementById('timezone');
+                                        const localOption = document.getElementById('local-tz-option');
+                                        if (userTz && select && localOption) {
+                                            localOption.value = userTz;
+                                            localOption.textContent = 'Local timezone (' + userTz + ')';
+                                            if (select.value === '' || select.value === userTz) {
+                                                select.value = userTz;
+                                            }
+                                        }
+                                    } catch (e) {
+                                        console.error('Failed to detect timezone:', e);
+                                    }
+                                })();
+                            "#;
                         }
                     });
                     : form_field("anchor_date", &mut errors, html! {
@@ -1261,13 +1279,31 @@ async fn weekly_schedule_edit_form(mut transaction: Transaction<'_, Postgres>, m
                         label(for = "timezone") : "Timezone:";
                         @let current_tz = ctx.field_value("timezone").unwrap_or(schedule.timezone.name());
                         select(id = "timezone", name = "timezone") {
-                            option(value = "America/New_York", selected? = current_tz == "America/New_York") : "America/New_York (Eastern)";
-                            option(value = "America/Chicago", selected? = current_tz == "America/Chicago") : "America/Chicago (Central)";
-                            option(value = "America/Denver", selected? = current_tz == "America/Denver") : "America/Denver (Mountain)";
-                            option(value = "America/Los_Angeles", selected? = current_tz == "America/Los_Angeles") : "America/Los_Angeles (Pacific)";
-                            option(value = "Europe/London", selected? = current_tz == "Europe/London") : "Europe/London (GMT/BST)";
+                            @if current_tz != "UTC" && current_tz != "Europe/Paris" && current_tz != "America/New_York" {
+                                option(value = current_tz, selected = "selected") : format!("{} (current)", current_tz);
+                            }
+                            option(value = "", id = "local-tz-option") : "Local timezone (detecting...)";
+                            option(value = "UTC", selected? = current_tz == "UTC") : "UTC";
                             option(value = "Europe/Paris", selected? = current_tz == "Europe/Paris") : "Europe/Paris (CET/CEST)";
-                            option(value = "Europe/Berlin", selected? = current_tz == "Europe/Berlin") : "Europe/Berlin (CET/CEST)";
+                            option(value = "America/New_York", selected? = current_tz == "America/New_York") : "America/New_York (Eastern)";
+                        }
+                        label(class = "help") : "(Defaults to your local timezone)";
+                        script {
+                            : r#"
+                                (function() {
+                                    try {
+                                        const userTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                                        const select = document.getElementById('timezone');
+                                        const localOption = document.getElementById('local-tz-option');
+                                        if (userTz && select && localOption) {
+                                            localOption.value = userTz;
+                                            localOption.textContent = 'Local timezone (' + userTz + ')';
+                                        }
+                                    } catch (e) {
+                                        console.error('Failed to detect timezone:', e);
+                                    }
+                                })();
+                            "#;
                         }
                     });
                     : form_field("anchor_date", &mut errors, html! {
