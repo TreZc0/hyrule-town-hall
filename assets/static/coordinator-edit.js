@@ -113,7 +113,7 @@ function restoreActionButtons(actionsCell, userId) {
     var gameName = window.location.pathname.split('/')[2];
 
     actionsCell.innerHTML = '<div style="display: flex; gap: 8px;">' +
-        '<button class="button" onclick="startEditCoordinator(\'' + userId + '\')">Edit</button>' +
+        '<button class="button config-edit-btn" onclick="startEditCoordinator(\'' + userId + '\')">Edit</button>' +
         '<form method="post" action="/games/' + gameName + '/restreamers/' + userId + '/remove" style="display: inline;" onsubmit="return confirm(\'Are you sure you want to remove this restream coordinator?\')">' +
         '<input type="hidden" name="csrf" value="' + csrfValue + '">' +
         '<input type="submit" value="Delete" class="button">' +

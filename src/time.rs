@@ -224,6 +224,23 @@ where Z::Offset: fmt::Display {
     }
 }
 
+/// Formats a recurring time (e.g., weekly schedule) showing day of week and time.
+/// This will be converted to the user's local timezone by JavaScript.
+pub(crate) fn format_recurring_time<Z: TimeZone>(datetime: DateTime<Z>) -> RawHtml<String> {
+    let utc = datetime.to_utc();
+    let paris = datetime.with_timezone(&Europe::Paris);
+    let new_york = datetime.with_timezone(&America::New_York);
+    html! {
+        span(class = "recurring-time", data_timestamp = datetime.timestamp_millis()) {
+            : utc.format("%A at %H:%M UTC").to_string();
+            : " • ";
+            : paris.format("%A at %H:%M %Z").to_string();
+            : " • ";
+            : new_york.format("%A at %-I:%M %p %Z").to_string();
+        }
+    }
+}
+
 pub(crate) fn timezone_info_html() -> RawHtml<String> {
     html! {
         span(class = "timezone-wrapper") {

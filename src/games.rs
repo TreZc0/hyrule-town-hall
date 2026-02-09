@@ -543,7 +543,7 @@ pub(crate) async fn manage_roles(
                                 }
                                 td(style = "text-align: center;") {
                                     div(class = "actions", style = "display: flex; justify-content: center; gap: 8px; flex-wrap: wrap;") {
-                                        button(class = "button edit-btn", onclick = format!("startEdit({})", binding.id)) : "Edit";
+                                        button(class = "button edit-btn config-edit-btn", onclick = format!("startEdit({})", binding.id)) : "Edit";
 
                                         @let (errors, delete_button) = button_form(
                                             uri!(remove_game_role_binding(&game_name, binding.id)),
@@ -1477,7 +1477,7 @@ pub(crate) async fn manage_restreamers(
                                 }
                                 td(class = "coordinator-actions") {
                                     div(style = "display: flex; gap: 8px;") {
-                                        button(class = "button", onclick = format!("startEditCoordinator('{}')", user.id)) : "Edit";
+                                        button(class = "button config-edit-btn", onclick = format!("startEditCoordinator('{}')", user.id)) : "Edit";
 
                                         @let (errors, remove_button) = button_form_confirm(
                                             uri!(remove_game_restreamer(&game_name, user.id)),

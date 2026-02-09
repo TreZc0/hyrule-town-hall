@@ -960,7 +960,7 @@ async fn weekly_schedules_form(mut transaction: Transaction<'_, Postgres>, me: O
                                     }
                                     td {
                                         div(class = "button-row") {
-                                            a(class = "button", href = uri!(weekly_schedule_edit_get(event.series, &*event.event, schedule.id))) : "Edit";
+                                            a(class = "button config-edit-btn", href = uri!(weekly_schedule_edit_get(event.series, &*event.event, schedule.id))) : "Edit";
                                             @let toggle_text = if schedule.active { "Pause" } else { "Resume" };
                                             @let toggle_errors = defaults.toggle_errors(schedule.id);
                                             @let (toggle_errors, toggle_button) = button_form(uri!(weekly_schedule_toggle(event.series, &*event.event, schedule.id)), csrf, toggle_errors, toggle_text);
@@ -1000,9 +1000,10 @@ async fn weekly_schedules_form(mut transaction: Transaction<'_, Postgres>, me: O
                     : form_field("timezone", &mut errors, html! {
                         label(for = "timezone") : "Timezone:";
                         select(id = "timezone", name = "timezone") {
-                            option(value = "", id = "local-tz-option", selected? = defaults.add_timezone().map_or(true, |v| v.is_empty())) : "Local timezone (detecting...)";
+                            option(value = "", disabled = "disabled", selected? = defaults.add_timezone().map_or(true, |v| v.is_empty())) : "Select timezone";
+                            option(value = "", id = "local-tz-option") : "Local timezone (detecting...)";
                             option(value = "UTC", selected? = defaults.add_timezone().map_or(false, |v| v == "UTC")) : "UTC";
-                            option(value = "Europe/Paris", selected? = defaults.add_timezone().map_or(false, |v| v == "Europe/Paris")) : "Europe/Paris (CET/CEST)";
+                            option(value = "Europe/Berlin", selected? = defaults.add_timezone().map_or(false, |v| v == "Europe/Paris")) : "Europe/Central (CET/CEST)";
                             option(value = "America/New_York", selected? = defaults.add_timezone().map_or(false, |v| v == "America/New_York")) : "America/New_York (Eastern)";
                         }
                         label(class = "help") : "(Defaults to your local timezone)";
@@ -1011,14 +1012,10 @@ async fn weekly_schedules_form(mut transaction: Transaction<'_, Postgres>, me: O
                                 (function() {
                                     try {
                                         const userTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-                                        const select = document.getElementById('timezone');
                                         const localOption = document.getElementById('local-tz-option');
-                                        if (userTz && select && localOption) {
+                                        if (userTz && localOption) {
                                             localOption.value = userTz;
                                             localOption.textContent = 'Local timezone (' + userTz + ')';
-                                            if (select.value === '' || select.value === userTz) {
-                                                select.value = userTz;
-                                            }
                                         }
                                     } catch (e) {
                                         console.error('Failed to detect timezone:', e);

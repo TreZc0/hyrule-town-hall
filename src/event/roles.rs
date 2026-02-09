@@ -1161,7 +1161,7 @@ async fn roles_page(
                                             }
                                         } else {
                                             div(class = "actions", style = "display: flex; justify-content: center; gap: 8px; flex-wrap: wrap;") {
-                                                button(class = "button edit-btn", onclick = format!("startEdit({})", binding.id)) : "Edit";
+                                                button(class = "button edit-btn config-edit-btn", onclick = format!("startEdit({})", binding.id)) : "Edit";
                                                 
                                                 @let (errors, delete_button) = button_form(
                                                     uri!(delete_role_binding(data.series, &*data.event, binding.id)),

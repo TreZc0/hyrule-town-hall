@@ -628,6 +628,18 @@ p.error {
   font-style: oblique
 }
 
+/* Configuration page edit buttons */
+.config-edit-btn {
+  height: 51px;
+  position: relative;
+  border: 1px solid var(--border);
+  margin: 8px;
+  font-size: 14px;
+  padding: 8px;
+  padding-top: 12px;
+  background-color: var(--bg-surface);
+}
+
 /* Language tabs */
 .language-tabs {
   display: flex;

@@ -244,11 +244,9 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                         ol {
                             @for schedule in weekly_schedules.iter().filter(|s| s.active) {
                                 li {
-                                    : format!("The {} weekly at {}:{:02} {} (next: ",
-                                        schedule.name,
-                                        schedule.time_of_day.format("%l").to_string().trim(),
-                                        schedule.time_of_day.minute(),
-                                        schedule.timezone.name().split('/').last().unwrap_or("Unknown"));
+                                    : format!("The {} weekly ", schedule.name);
+                                    : format_recurring_time(schedule.next_after(now));
+                                    : " (next: ";
                                     : format_datetime(schedule.next_after(now), DateTimeFormat { long: true, running_text: false });
                                     : ")";
                                 }

@@ -44,7 +44,7 @@ function cancelEdit(bindingId) {
     const currentPath = window.location.pathname;
     const basePath = currentPath.replace('/roles', '');
     actionsDiv.innerHTML = `
-        <button class="button edit-btn" onclick="startEdit(${bindingId})">Edit</button>
+        <button class="button edit-btn config-edit-btn" onclick="startEdit(${bindingId})">Edit</button>
         <form action="${basePath}/role-bindings/${bindingId}/remove" method="post" style="display: inline;">
             <input type="hidden" name="csrf" value="` + document.querySelector('input[name="csrf"]').value + `">
             <input type="submit" value="Delete" class="button">
@@ -95,7 +95,7 @@ function saveEdit(bindingId) {
             // Restore edit button
             const actionsDiv = row.querySelector('.actions');
             actionsDiv.innerHTML = `
-                <button class="button edit-btn" onclick="startEdit(${bindingId})">Edit</button>
+                <button class="button edit-btn config-edit-btn" onclick="startEdit(${bindingId})">Edit</button>
                 <form action="${basePath}/role-bindings/${bindingId}/remove" method="post" style="display: inline;">
                     <input type="hidden" name="csrf" value="` + document.querySelector('input[name="csrf"]').value + `">
                     <input type="submit" value="Delete" class="button">

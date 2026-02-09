@@ -12,6 +12,13 @@ document.querySelectorAll('.daterange').forEach(function(dateRange) {
     dateRange.textContent = Intl.DateTimeFormat([], {dateStyle: 'long'}).formatRange(start, end);
 });
 
+document.querySelectorAll('.recurring-time').forEach(function(recurringTime) {
+    var date = new Date(parseInt(recurringTime.dataset.timestamp));
+    var weekday = date.toLocaleDateString(['en'], {weekday: 'long'});
+    var time = date.toLocaleTimeString(['en'], {hour: 'numeric', minute: '2-digit', timeZoneName: 'short'});
+    recurringTime.textContent = weekday + ' at ' + time;
+});
+
 document.querySelectorAll('.timezone').forEach(function(timezone) {
     timezone.textContent = Intl.DateTimeFormat(['en'], {timeZoneName: 'longGeneric'}).formatToParts().find(part => part.type == 'timeZoneName').value;
 });
