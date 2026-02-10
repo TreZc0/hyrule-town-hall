@@ -627,6 +627,8 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::teams::get,
         event::asyncs::get,
         event::asyncs::post,
+        event::qualifiers::get,
+        event::qualifiers::post_race,
         event::configure::get,
         event::configure::post,
         event::configure::restreamers_get,

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n            display_name,\n            short_name,\n            start,\n            end_time,\n            url,\n            challonge_community,\n            speedgaming_slug,\n            hide_races_tab,\n            hide_teams_tab,\n            teams_url,\n            enter_url,\n            video_url,\n            discord_guild AS \"discord_guild: PgSnowflake<GuildId>\",\n            discord_invite_url,\n            discord_race_room_channel AS \"discord_race_room_channel: PgSnowflake<ChannelId>\",\n            discord_race_results_channel AS \"discord_race_results_channel: PgSnowflake<ChannelId>\",\n            discord_organizer_channel AS \"discord_organizer_channel: PgSnowflake<ChannelId>\",\n            discord_scheduling_channel AS \"discord_scheduling_channel: PgSnowflake<ChannelId>\",\n            discord_volunteer_info_channel AS \"discord_volunteer_info_channel: PgSnowflake<ChannelId>\",\n            discord_async_channel AS \"discord_async_channel: PgSnowflake<ChannelId>\",\n            rando_version AS \"rando_version: Json<VersionedBranch>\",\n            settings_string,\n            single_settings AS \"single_settings: Json<seed::Settings>\",\n            team_config AS \"team_config: TeamConfig\",\n            enter_flow AS \"enter_flow: Json<enter::Flow>\",\n            show_opt_out,\n            show_qualifier_times,\n            default_game_count,\n            min_schedule_notice,\n            open_stream_delay,\n            invitational_stream_delay,\n            retime_window,\n            auto_import,\n            emulator_settings_reminder,\n            prevent_late_joins,\n            manual_reporting_with_breaks,\n            language AS \"language: Language\",\n            default_volunteer_language AS \"default_volunteer_language: Language\",\n            asyncs_active,\n            swiss_standings,\n            discord_events_enabled,\n            discord_events_require_restream,\n            listed,\n            round_modes AS \"round_modes: Json<HashMap<String, String>>\",\n            automated_asyncs,\n            volunteer_requests_enabled,\n            volunteer_request_lead_time_hours,\n            volunteer_request_ping_enabled,\n            force_custom_role_binding\n        FROM events WHERE series = $1 AND event = $2",
+  "query": "SELECT\n            display_name,\n            short_name,\n            start,\n            end_time,\n            url,\n            challonge_community,\n            speedgaming_slug,\n            hide_races_tab,\n            hide_teams_tab,\n            teams_url,\n            enter_url,\n            video_url,\n            discord_guild AS \"discord_guild: PgSnowflake<GuildId>\",\n            discord_invite_url,\n            discord_race_room_channel AS \"discord_race_room_channel: PgSnowflake<ChannelId>\",\n            discord_race_results_channel AS \"discord_race_results_channel: PgSnowflake<ChannelId>\",\n            discord_organizer_channel AS \"discord_organizer_channel: PgSnowflake<ChannelId>\",\n            discord_scheduling_channel AS \"discord_scheduling_channel: PgSnowflake<ChannelId>\",\n            discord_volunteer_info_channel AS \"discord_volunteer_info_channel: PgSnowflake<ChannelId>\",\n            discord_async_channel AS \"discord_async_channel: PgSnowflake<ChannelId>\",\n            rando_version AS \"rando_version: Json<VersionedBranch>\",\n            settings_string,\n            single_settings AS \"single_settings: Json<seed::Settings>\",\n            team_config AS \"team_config: TeamConfig\",\n            enter_flow AS \"enter_flow: Json<enter::Flow>\",\n            show_opt_out,\n            show_qualifier_times,\n            default_game_count,\n            min_schedule_notice,\n            open_stream_delay,\n            invitational_stream_delay,\n            retime_window,\n            auto_import,\n            emulator_settings_reminder,\n            prevent_late_joins,\n            manual_reporting_with_breaks,\n            language AS \"language: Language\",\n            default_volunteer_language AS \"default_volunteer_language: Language\",\n            asyncs_active,\n            swiss_standings,\n            discord_events_enabled,\n            discord_events_require_restream,\n            listed,\n            round_modes AS \"round_modes: Json<HashMap<String, String>>\",\n            automated_asyncs,\n            volunteer_requests_enabled,\n            volunteer_request_lead_time_hours,\n            volunteer_request_ping_enabled,\n            force_custom_role_binding,\n            qualifier_score_hiding AS \"qualifier_score_hiding: QualifierScoreHiding\"\n        FROM events WHERE series = $1 AND event = $2",
   "describe": {
     "columns": [
       {
@@ -284,6 +284,24 @@
         "ordinal": 48,
         "name": "force_custom_role_binding",
         "type_info": "Bool"
+      },
+      {
+        "ordinal": 49,
+        "name": "qualifier_score_hiding: QualifierScoreHiding",
+        "type_info": {
+          "Custom": {
+            "name": "qualifier_score_hiding",
+            "kind": {
+              "Enum": [
+                "none",
+                "async_only",
+                "full_points",
+                "full_points_counts",
+                "full_complete"
+              ]
+            }
+          }
+        }
       }
     ],
     "parameters": {
@@ -341,8 +359,9 @@
       false,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "4b2900576bd11e0e17b2421354bf3bf0b023eeb47566643d6346053622220343"
+  "hash": "14f2aaf70c9c4691505a3ee87c609f9a7fdfa8647abd78e81aa2519e06e22fcc"
 }

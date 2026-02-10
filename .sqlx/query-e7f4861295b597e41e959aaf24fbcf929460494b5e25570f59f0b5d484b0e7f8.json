@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT tm.member, tm.startgg_id AS \"startgg_id: startgg::ID\",\n                   CASE WHEN u.display_source = 'racetime' THEN u.racetime_display_name\n                        WHEN u.display_source = 'discord' THEN u.discord_display_name\n                   END AS display_name\n            FROM team_members tm\n            LEFT JOIN users u ON u.id = tm.member\n            WHERE tm.team = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "member",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "startgg_id: startgg::ID",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "display_name",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "e7f4861295b597e41e959aaf24fbcf929460494b5e25570f59f0b5d484b0e7f8"
+}

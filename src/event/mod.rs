@@ -23,6 +23,7 @@ pub(crate) mod setup;
 pub(crate) mod teams;
 pub(crate) mod roles;
 pub(crate) mod asyncs;
+pub(crate) mod qualifiers;
 pub(crate) mod zsr_export;
 
 #[derive(Debug, Clone, Copy, sqlx::Type)]
@@ -89,6 +90,16 @@ pub(crate) enum MatchSource<'a> {
     },
     League,
     StartGG(&'a str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[sqlx(type_name = "qualifier_score_hiding", rename_all = "snake_case")]
+pub(crate) enum QualifierScoreHiding {
+    None,
+    AsyncOnly,
+    FullPoints,
+    FullPointsCounts,
+    FullComplete,
 }
 
 #[derive(Debug, Clone, Copy, sqlx::Type)]
@@ -212,6 +223,8 @@ pub(crate) struct Data<'a> {
     pub(crate) volunteer_request_ping_enabled: bool,
     /// When true, uses event-specific role bindings. When false, uses game-level role bindings.
     pub(crate) force_custom_role_binding: bool,
+    /// Controls when qualifier scores are hidden on the teams page.
+    pub(crate) qualifier_score_hiding: QualifierScoreHiding,
 }
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
@@ -278,7 +291,8 @@ impl<'a> Data<'a> {
             volunteer_requests_enabled,
             volunteer_request_lead_time_hours,
             volunteer_request_ping_enabled,
-            force_custom_role_binding
+            force_custom_role_binding,
+            qualifier_score_hiding AS "qualifier_score_hiding: QualifierScoreHiding"
         FROM events WHERE series = $1 AND event = $2"#, series as _, &event).fetch_optional(&mut **transaction).await?
             .map(|row| Ok::<_, DataError>(Self {
                 display_name: row.display_name,
@@ -335,6 +349,7 @@ impl<'a> Data<'a> {
                 volunteer_request_lead_time_hours: row.volunteer_request_lead_time_hours,
                 volunteer_request_ping_enabled: row.volunteer_request_ping_enabled,
                 force_custom_role_binding: row.force_custom_role_binding.unwrap_or(true),
+                qualifier_score_hiding: row.qualifier_score_hiding,
             }))
             .transpose()
     }
@@ -463,12 +478,13 @@ impl<'a> Data<'a> {
     pub(crate) async fn qualifier_kind(&self, transaction: &mut Transaction<'_, Postgres>, me: Option<&User>) -> Result<QualifierKind, DataError> {
         Ok(match (self.series, &*self.event) {
             (Series::SongsOfHope, "1") => QualifierKind::SongsOfHope,
-            (Series::SpeedGaming, "2023onl" | "2024onl" | "2025onl") | (Series::Standard, "8") => {
+            (Series::SpeedGaming, "2023onl" | "2024onl" | "2025onl") | (Series::Standard, "8") | (Series::TwwrMain, "miniblins26") => {
                 QualifierKind::Score(match (self.series, &*self.event) {
                     (Series::SpeedGaming, "2023onl") => teams::QualifierScoreKind::Sgl2023Online,
                     (Series::SpeedGaming, "2024onl") => teams::QualifierScoreKind::Sgl2024Online,
                     (Series::SpeedGaming, "2025onl") => teams::QualifierScoreKind::Sgl2025Online,
                     (Series::Standard, "8") => teams::QualifierScoreKind::Standard,
+                    (Series::TwwrMain, "miniblins26") => teams::QualifierScoreKind::TwwrMiniblins26,
                     _ => unreachable!("checked by outer match"),
                 })
             }
@@ -873,6 +889,11 @@ impl<'a> Data<'a> {
                             } else {
                                 a(class = "button", href = uri!(asyncs::get(self.series, &*self.event))) : "Asyncs";
                             }
+                            @if let Tab::Qualifiers = tab {
+                                a(class = "button selected", href? = is_subpage.then(|| uri!(qualifiers::get(self.series, &*self.event)))) : "Qualifiers";
+                            } else {
+                                a(class = "button", href = uri!(qualifiers::get(self.series, &*self.event))) : "Qualifiers";
+                            }
                         }
                     }
                     @if !self.is_ended() && me.is_global_admin() {
@@ -918,6 +939,7 @@ pub(crate) enum Tab {
     SwissStandings,
     Setup,
     Asyncs,
+    Qualifiers,
     ZsrExport,
 }
 
@@ -2179,7 +2201,7 @@ pub(crate) async fn opt_out_post(pool: &State<PgPool>, discord_ctx: &State<RwFut
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, sqlx::Type, FromFormField, Sequence)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, sqlx::Type, FromFormField, Sequence)]
 #[sqlx(type_name = "async_kind", rename_all = "lowercase")]
 pub(crate) enum AsyncKind {
     #[sqlx(rename = "qualifier")]

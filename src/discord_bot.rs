@@ -2676,8 +2676,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     // Get seed info and distribute it
                                     let seed_info = sqlx::query!(
                                         r#"
-                                        SELECT a.web_id, a.tfb_uuid, a.xkeys_uuid, a.file_stem, 
+                                        SELECT a.web_id, a.tfb_uuid, a.xkeys_uuid, a.file_stem,
                                                a.hash1, a.hash2, a.hash3, a.hash4, a.hash5, a.seed_password,
+                                               a.seed_data,
                                                t.series AS "series: Series", t.event
                                         FROM async_teams at
                                         JOIN teams t ON at.team = t.id
@@ -2716,6 +2717,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             }
                                         }
                                         
+                                        if let Some(ref seed_data) = seed.seed_data {
+                                            if let Some(permalink) = seed_data.get("permalink").and_then(|v| v.as_str()) {
+                                                if !permalink.is_empty() {
+                                                    seed_msg.push(format!("**Permalink:** `{}`\n", permalink));
+                                                }
+                                            }
+                                            if let Some(seed_hash) = seed_data.get("seed_hash").and_then(|v| v.as_str()) {
+                                                if !seed_hash.is_empty() {
+                                                    seed_msg.push(format!("**Seed Hash:** {}\n", seed_hash));
+                                                }
+                                            }
+                                        }
+
                                         if let Some(password) = &seed.seed_password {
                                             seed_msg.push(format!("\nPassword: {}\n", password));
                                         }

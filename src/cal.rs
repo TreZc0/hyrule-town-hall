@@ -1472,12 +1472,6 @@ pub(crate) enum Error {
     UnknownTeam,
     #[error("start.gg team ID {0} is not associated with a Hyrule Town Hall team")]
     UnknownTeamStartGG(startgg::ID),
-    #[error("Unqualified entrant ({racetime_id}) in event ({}/{event}) with SGL-style qualifiers", series.slug())]
-    UnqualifiedEntrant {
-        series: Series,
-        event: String,
-        racetime_id: String,
-    },
 }
 
 impl From<racetime::model::AnonymousError> for Error {
@@ -1513,7 +1507,6 @@ impl IsNetworkError for Error {
             Self::PoolPlaceholder => false,
             Self::UnknownTeam => false,
             Self::UnknownTeamStartGG(_) => false,
-            Self::UnqualifiedEntrant { .. } => false,
         }
     }
 }

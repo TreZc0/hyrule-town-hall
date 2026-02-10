@@ -8,14 +8,17 @@ use {
     sqlx::types::Json,
     crate::{
         event::{
+            AsyncKind,
             Data,
             DataError,
+            QualifierScoreHiding,
             Role,
             SignupStatus,
             Tab,
             enter,
         },
         prelude::*,
+        time::decode_pginterval,
     },
 };
 
@@ -36,6 +39,7 @@ pub(crate) enum QualifierScoreKind {
     Sgl2023Online,
     Sgl2024Online,
     Sgl2025Online,
+    TwwrMiniblins26,
 }
 
 pub(crate) enum MemberUser {
@@ -178,7 +182,7 @@ pub(crate) struct SignupsMember {
     qualifier_vod: Option<String>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum Qualification {
     Single {
         qualified: bool,
@@ -191,6 +195,8 @@ pub(crate) enum Qualification {
         num_entered: usize,
         num_finished: usize,
         score: R64,
+        /// Per-round scores in chronological order, for expandable breakdown display.
+        round_scores: Vec<R64>,
     },
 }
 
@@ -230,38 +236,41 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
     let now = Utc::now();
     let mut signups = match qualifier_kind {
         QualifierKind::Score(score_kind) => {
-            let mut scores = HashMap::<_, Vec<_>>::default();
+            let mut scores = HashMap::<_, Vec<(DateTime<Utc>, R64)>>::default();
             for race in Race::for_event(transaction, &cache.http_client, data).await? {
                 if race.phase.as_ref().is_none_or(|phase| phase != "Qualifier") { continue }
                 let Ok(room) = race.rooms().exactly_one() else {
                     if let Some(extrapolate_for) = worst_case_extrapolation {
                         scores.entry(MemberUser::Newcomer).or_default();
                         for (user, score) in &mut scores {
-                            score.push(r64(if user == extrapolate_for {
+                            score.push((now, r64(if user == extrapolate_for {
                                 0.0
                             } else {
                                 match score_kind {
                                     QualifierScoreKind::Standard => 1100.0,
                                     QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => 110.0,
+                                    QualifierScoreKind::TwwrMiniblins26 => 5000.0,
                                 }
-                            }));
+                            })));
                         }
                     }
                     continue
                 };
                 let room_data = cache.race_data(&room).await?;
+                let race_start = room_data.started_at.unwrap_or(now);
                 if room_data.hide_entrants {
                     if let Some(extrapolate_for) = worst_case_extrapolation {
                         scores.entry(MemberUser::Newcomer).or_default();
                         for (user, score) in &mut scores {
-                            score.push(r64(if user == extrapolate_for {
+                            score.push((race_start, r64(if user == extrapolate_for {
                                 0.0
                             } else {
                                 match score_kind {
                                     QualifierScoreKind::Standard => 1100.0,
                                     QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => 110.0,
+                                    QualifierScoreKind::TwwrMiniblins26 => 5000.0,
                                 }
-                            }));
+                            })));
                         }
                     }
                 } else {
@@ -269,14 +278,15 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                         RaceStatusValue::Open => if let Some(extrapolate_for) = worst_case_extrapolation {
                             scores.entry(MemberUser::Newcomer).or_default();
                             for (user, score) in &mut scores {
-                                score.push(r64(if user == extrapolate_for {
+                                score.push((race_start, r64(if user == extrapolate_for {
                                     0.0
                                 } else {
                                     match score_kind {
                                         QualifierScoreKind::Standard => 1100.0,
                                         QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => 110.0,
+                                        QualifierScoreKind::TwwrMiniblins26 => 5000.0,
                                     }
-                                }));
+                                })));
                             }
                         },
                         RaceStatusValue::Cancelled => {}
@@ -318,6 +328,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                             let par_cutoff = match score_kind {
                                 QualifierScoreKind::Standard => 7u8,
                                 QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => if num_entrants < 20 { 3 } else { 4 },
+                                QualifierScoreKind::TwwrMiniblins26 => 3,
                             };
                             if worst_case_extrapolation.is_none() && room_data.status.value != RaceStatusValue::Finished && num_finishers < usize::from(par_cutoff) {
                                 continue // scores are not yet accurate
@@ -337,7 +348,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                         => {}
                                 }
                                 let user = entrant.user.clone().map(racetime::model::UserData::try_from).transpose()?;
-                                scores.entry(MemberUser::from(user)).or_default().push(r64(if let Some(finish_time) = entrant.finish_time {
+                                scores.entry(MemberUser::from(user)).or_default().push((race_start, r64(if let Some(finish_time) = entrant.finish_time {
                                     match score_kind {
                                         QualifierScoreKind::Standard => {
                                             // https://docs.google.com/document/d/1IHrOGxFQpt3HpQ-9kQ6AVAARc04x6c96N1aHnHfHaKM/edit
@@ -356,12 +367,92 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                             let par_time = finish_times[0..usize::from(par_cutoff)].iter().sum::<Duration>() / u32::from(par_cutoff);
                                             (100.0 * (2.0 - (finish_time.as_secs_f64() / par_time.as_secs_f64()))).clamp(10.0, 110.0)
                                         }
+                                        QualifierScoreKind::TwwrMiniblins26 => {
+                                            let par_time = finish_times[0..usize::from(par_cutoff)].iter().sum::<Duration>() / u32::from(par_cutoff);
+                                            (2000.0 + ((1.0 - (finish_time.as_secs_f64() - par_time.as_secs_f64()) / par_time.as_secs_f64()) * 1000.0).floor()).max(100.0)
+                                        }
                                     }
                                 } else {
                                     0.0
-                                }));
+                                })));
                             }
                         }
+                    }
+                }
+            }
+            // Integrate async qualifier scores
+            {
+                let async_results = sqlx::query!(r#"
+                    SELECT
+                        ap.player AS "player: Id<Users>",
+                        ap.time,
+                        ap.kind AS "kind: AsyncKind",
+                        at.start_time,
+                        a.end_time AS async_end_time
+                    FROM async_players ap
+                    INNER JOIN team_members tm ON tm.member = ap.player
+                    INNER JOIN teams t ON t.id = tm.team AND t.series = $1 AND t.event = $2
+                    INNER JOIN async_teams at ON at.team = t.id AND at.kind = ap.kind
+                    INNER JOIN asyncs a ON a.series = $1 AND a.event = $2 AND a.kind = ap.kind
+                    WHERE ap.series = $1 AND ap.event = $2
+                    AND ap.time IS NOT NULL
+                    AND at.submitted IS NOT NULL
+                "#, data.series as _, &data.event).fetch_all(&mut **transaction).await?;
+
+                // Group by kind to calculate per-qualifier par times
+                let mut async_by_kind = HashMap::<AsyncKind, Vec<(Id<Users>, Duration, DateTime<Utc>)>>::new();
+                for row in &async_results {
+                    // For async_only visibility, skip results from async windows that haven't closed yet
+                    if data.qualifier_score_hiding == QualifierScoreHiding::AsyncOnly {
+                        if row.async_end_time.is_none_or(|end| end > now) {
+                            continue;
+                        }
+                    }
+                    if let Some(ref time_interval) = row.time {
+                        if let Ok(time) = decode_pginterval(time_interval.clone()) {
+                            let start_time = row.start_time.unwrap_or(now);
+                            async_by_kind.entry(row.kind).or_default().push((row.player, time, start_time));
+                        }
+                    }
+                }
+
+                for (_kind, mut results) in async_by_kind {
+                    results.sort_by_key(|(_, time, _)| *time);
+                    let finish_times: Vec<Duration> = results.iter().map(|(_, t, _)| *t).collect();
+                    let num_entrants = results.len();
+                    let par_cutoff = match score_kind {
+                        QualifierScoreKind::Standard => 7usize.min(num_entrants),
+                        QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => if num_entrants < 20 { 3 } else { 4 },
+                        QualifierScoreKind::TwwrMiniblins26 => 3,
+                    };
+                    if finish_times.len() < par_cutoff {
+                        continue // not enough finishers to calculate par
+                    }
+
+                    for (player_id, finish_time, start_time) in &results {
+                        let score = match score_kind {
+                            QualifierScoreKind::Standard => {
+                                let finish_time = TimeDelta::from_std(*finish_time).expect("finish time out of range");
+                                let par_times = finish_times[0..par_cutoff].iter().map(|&ft| TimeDelta::from_std(ft).expect("finish time out of range")).collect_vec();
+                                let t_average = par_times.iter().sum::<TimeDelta>() / i32::try_from(par_cutoff).expect("too many entrants");
+                                let t_j_h = TimeDelta::minutes(8).mul_f64(1.0.min(0.0.max((TimeDelta::hours(2) + TimeDelta::minutes(30) - t_average).div_duration_f64(TimeDelta::hours(2) + TimeDelta::minutes(30) - (TimeDelta::hours(1) + TimeDelta::minutes(40))))));
+                                let t_jet = TimeDelta::minutes(8).min(t_j_h.mul_f64(0.0.max((finish_time - t_average).div_duration_f64(TimeDelta::minutes(8)) * 0.35)));
+                                let t_g_h = TimeDelta::from_secs_f64((par_times.iter().map(|ft| ft.abs_diff(t_average).as_secs_f64().powi(2)).sum::<f64>() / 1.max(par_cutoff - 1) as f64).sqrt());
+                                let sigma_finish = t_g_h.div_duration_f64(t_average);
+                                let t_gamble = TimeDelta::minutes(5).min(t_g_h.mul_f64(0.0.max((finish_time - t_average).div_duration_f64(t_g_h) * 0.0.max(sigma_finish / 0.035 - 1.0) * 0.3)));
+                                ((1.0 - (finish_time - t_average - TimeDelta::minutes(10).min(t_jet + t_gamble)).div_duration_f64(t_average)) * 1000.0).clamp(100.0, 1100.0)
+                            }
+                            QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => {
+                                let par_time = finish_times[0..par_cutoff].iter().sum::<Duration>() / par_cutoff as u32;
+                                (100.0 * (2.0 - (finish_time.as_secs_f64() / par_time.as_secs_f64()))).clamp(10.0, 110.0)
+                            }
+                            QualifierScoreKind::TwwrMiniblins26 => {
+                                let par_time = finish_times[0..par_cutoff].iter().sum::<Duration>() / par_cutoff as u32;
+                                (2000.0 + ((1.0 - (finish_time.as_secs_f64() - par_time.as_secs_f64()) / par_time.as_secs_f64()) * 1000.0).floor()).max(100.0)
+                            }
+                        };
+                        let user = User::from_id(&mut **transaction, *player_id).await?.expect("async player not found");
+                        scores.entry(MemberUser::MidosHouse(user)).or_default().push((*start_time, r64(score)));
                     }
                 }
             }
@@ -370,15 +461,12 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
             for team in &teams {
                 let user = team.members(&mut *transaction).await?.into_iter().exactly_one().expect("SGL-style qualifiers in team-based event");
                 let racetime_id = user.racetime.as_ref().expect("SGL-style qualifiers with entrant without racetime.gg account").id.clone();
-                if let Some(score) = scores.remove(&MemberUser::RaceTime { id: racetime_id.clone(), url: String::default(), name: String::default() }) {
-                    user_teams.insert(user.id, team.clone());
-                    scores.insert(MemberUser::MidosHouse(user), score);
+                user_teams.insert(user.id, team.clone());
+                if let Some(live_scores) = scores.remove(&MemberUser::RaceTime { id: racetime_id, url: String::default(), name: String::default() }) {
+                    scores.entry(MemberUser::MidosHouse(user)).or_default().extend(live_scores);
                 } else {
-                    return Err(cal::Error::UnqualifiedEntrant {
-                        series: data.series,
-                        event: data.event.to_string(),
-                        racetime_id,
-                    })
+                    // Player might only have async results — ensure they have an entry
+                    scores.entry(MemberUser::MidosHouse(user)).or_default();
                 }
             }
             if worst_case_extrapolation.is_none() && data.is_started(&mut *transaction).await? {
@@ -391,7 +479,9 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 });
             }
             let mut signups = Vec::with_capacity(scores.len());
-            for (user, mut scores) in scores {
+            for (user, mut timestamped_scores) in scores {
+                // Sort by timestamp so truncation respects chronological order
+                timestamped_scores.sort_by_key(|(ts, _)| *ts);
                 signups.push(SignupsTeam {
                     team: match &user {
                         MemberUser::MidosHouse(user) => user_teams.remove(&user.id),
@@ -422,50 +512,71 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                         qualifier_vod: None,
                         user,
                     }],
-                    qualification: match score_kind {
-                        QualifierScoreKind::Standard => {
-                            scores.truncate(8); // only count the first 8 qualifiers chronologically
-                            let num_entered = scores.len();
-                            scores.retain(|&score| score != 0.0); // only count finished races
-                            let num_finished = scores.len();
-                            scores.sort_unstable();
-                            if num_entered >= 2 {
-                                scores.pop(); // remove best score
+                    qualification: {
+                        // Extract score values after timestamp-based ordering
+                        let mut scores: Vec<R64> = timestamped_scores.into_iter().map(|(_, s)| s).collect();
+                        match score_kind {
+                            QualifierScoreKind::Standard => {
+                                scores.truncate(8); // only count the first 8 qualifiers chronologically
+                                let round_scores = scores.clone();
+                                let num_entered = scores.len();
+                                scores.retain(|&score| score != 0.0); // only count finished races
+                                let num_finished = scores.len();
+                                scores.sort_unstable();
+                                if num_entered >= 2 {
+                                    scores.pop(); // remove best score
+                                }
+                                scores.reverse();
+                                scores.truncate(4); // remove up to 3 worst scores
+                                Qualification::Multiple {
+                                    score: scores.iter().copied().sum::<R64>(), // overall score is sum of remaining scores
+                                    num_entered, num_finished, round_scores,
+                                }
                             }
-                            scores.reverse();
-                            scores.truncate(4); // remove up to 3 worst scores
-                            Qualification::Multiple {
-                                score: scores.iter().copied().sum::<R64>(), // overall score is sum of remaining scores
-                                num_entered, num_finished,
+                            QualifierScoreKind::Sgl2023Online => {
+                                scores.truncate(5); // only count the first 5 qualifiers chronologically
+                                let round_scores = scores.clone();
+                                let num_entered = scores.len();
+                                scores.sort_unstable();
+                                if num_entered >= 4 {
+                                    scores.pop(); // remove best score
+                                }
+                                if num_entered >= 5 {
+                                    scores.swap_remove(0); // remove worst score
+                                }
+                                Qualification::Multiple {
+                                    num_finished: scores.iter().filter(|score| **score != 0.0).count(),
+                                    score: scores.iter().copied().sum::<R64>() / r64(scores.len().max(3) as f64), // overall score is average of remaining scores
+                                    num_entered, round_scores,
+                                }
                             }
-                        }
-                        QualifierScoreKind::Sgl2023Online => {
-                            scores.truncate(5); // only count the first 5 qualifiers chronologically
-                            let num_entered = scores.len();
-                            scores.sort_unstable();
-                            if num_entered >= 4 {
-                                scores.pop(); // remove best score
+                            QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => {
+                                scores.truncate(6); // only count the first 6 qualifiers chronologically
+                                let round_scores = scores.clone();
+                                let num_entered = scores.len();
+                                scores.sort_unstable();
+                                if num_entered >= 4 {
+                                    scores.swap_remove(0); // remove worst score
+                                }
+                                Qualification::Multiple {
+                                    num_finished: scores.iter().filter(|score| **score != 0.0).count(),
+                                    score: scores.iter().copied().sum::<R64>() / r64(scores.len().max(3) as f64), // overall score is average of remaining scores
+                                    num_entered, round_scores,
+                                }
                             }
-                            if num_entered >= 5 {
-                                scores.swap_remove(0); // remove worst score
-                            }
-                            Qualification::Multiple {
-                                num_finished: scores.iter().filter(|score| **score != 0.0).count(),
-                                score: scores.iter().copied().sum::<R64>() / r64(scores.len().max(3) as f64), // overall score is average of remaining scores
-                                num_entered,
-                            }
-                        }
-                        QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => {
-                            scores.truncate(6); // only count the first 6 qualifiers chronologically
-                            let num_entered = scores.len();
-                            scores.sort_unstable();
-                            if num_entered >= 4 {
-                                scores.swap_remove(0); // remove worst score
-                            }
-                            Qualification::Multiple {
-                                num_finished: scores.iter().filter(|score| **score != 0.0).count(),
-                                score: scores.iter().copied().sum::<R64>() / r64(scores.len().max(3) as f64), // overall score is average of remaining scores
-                                num_entered,
+                            QualifierScoreKind::TwwrMiniblins26 => {
+                                scores.truncate(4); // only count the first 4 qualifiers by start time
+                                let round_scores = scores.clone();
+                                let num_entered = scores.len();
+                                scores.retain(|&score| score != 0.0); // forfeits/DNFs don't count
+                                let num_finished = scores.len();
+                                scores.sort_unstable();
+                                scores.reverse(); // highest first
+                                scores.truncate(2); // best 2
+                                Qualification::Multiple {
+                                    score: scores.iter().copied().sum::<R64>(),
+                                    num_entered, num_finished, round_scores,
+                                }
                             }
                         }
                     },
@@ -702,31 +813,37 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     }
                 }
 
-                QualificationOrder::new(*qualification1, members1).cmp(&QualificationOrder::new(*qualification2, members2))
+                QualificationOrder::new(qualification1.clone(), members1).cmp(&QualificationOrder::new(qualification2.clone(), members2))
                 .then_with(|| team1.cmp(&team2))
             }
             QualifierKind::Score(score_kind) => {
-                let (num1, score1) = match *qualification1 {
-                    Qualification::Multiple { num_entered, num_finished, score } => match score_kind { //TODO determine based on enter flow
-                        QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online => (num_finished, score),
-                        QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => (num_entered, score),
-                    },
-                    _ => unreachable!("QualifierKind::Multiple must use Qualification::Multiple"),
-                };
-                let (num2, score2) = match *qualification2 {
-                    Qualification::Multiple { num_entered, num_finished, score } => match score_kind { //TODO determine based on enter flow
-                        QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online => (num_finished, score),
-                        QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => (num_entered, score),
-                    },
-                    _ => unreachable!("QualifierKind::Multiple must use Qualification::Multiple"),
-                };
-                let required_qualifiers = match score_kind { //TODO determine based on enter flow
-                    QualifierScoreKind::Standard => 5,
-                    QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => 3,
-                };
-                num2.min(required_qualifiers).cmp(&num1.min(required_qualifiers)) // list racers closer to reaching the required number of qualifiers first
-                .then_with(|| score2.cmp(&score1)) // list racers with higher scores first
-                .then_with(|| members1.iter().map(|member| &member.user).cmp(members2.iter().map(|member| &member.user)))
+                if matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPoints | QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !data.is_ended() {
+                    // When scores are fully hidden, sort alphabetically to avoid leaking rankings
+                    members1.iter().map(|member| &member.user).cmp(members2.iter().map(|member| &member.user))
+                } else {
+                    let (num1, score1) = match *qualification1 {
+                        Qualification::Multiple { num_entered, num_finished, score, .. } => match score_kind { //TODO determine based on enter flow
+                            QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online | QualifierScoreKind::TwwrMiniblins26 => (num_finished, score),
+                            QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => (num_entered, score),
+                        },
+                        _ => unreachable!("QualifierKind::Multiple must use Qualification::Multiple"),
+                    };
+                    let (num2, score2) = match *qualification2 {
+                        Qualification::Multiple { num_entered, num_finished, score, .. } => match score_kind { //TODO determine based on enter flow
+                            QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online | QualifierScoreKind::TwwrMiniblins26 => (num_finished, score),
+                            QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => (num_entered, score),
+                        },
+                        _ => unreachable!("QualifierKind::Multiple must use Qualification::Multiple"),
+                    };
+                    let required_qualifiers = match score_kind { //TODO determine based on enter flow
+                        QualifierScoreKind::Standard => 5,
+                        QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => 3,
+                        QualifierScoreKind::TwwrMiniblins26 => 2,
+                    };
+                    num2.min(required_qualifiers).cmp(&num1.min(required_qualifiers)) // list racers closer to reaching the required number of qualifiers first
+                    .then_with(|| score2.cmp(&score1)) // list racers with higher scores first
+                    .then_with(|| members1.iter().map(|member| &member.user).cmp(members2.iter().map(|member| &member.user)))
+                }
             }
         }
     });
@@ -814,7 +931,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                 th : "Pieces Found";
             });
         }
-        QualifierKind::Score(QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online) => { //TODO determine based on enter flow
+        QualifierKind::Score(QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online | QualifierScoreKind::TwwrMiniblins26) => { //TODO determine based on enter flow
             column_headers.push(html! {
                 th : "Qualifiers Entered";
             });
@@ -878,6 +995,11 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
     }
     let content = html! {
         : header;
+        @if data.qualifier_score_hiding == QualifierScoreHiding::FullComplete && !data.is_ended() {
+            p {
+                i : "Standings will not be published until after the qualifier stage has ended.";
+            }
+        } else {
         table {
             thead {
                 tr {
@@ -911,6 +1033,10 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                 let Qualification::Multiple { num_finished, .. } = qualification else { unreachable!("qualification kind mismatch") };
                                 num_finished < 3
                             }
+                            QualifierKind::Score(QualifierScoreKind::TwwrMiniblins26) => {
+                                let Qualification::Multiple { num_finished, .. } = qualification else { unreachable!("qualification kind mismatch") };
+                                num_finished < 2
+                            }
                             QualifierKind::SongsOfHope => false, //TODO
                         };
                         tr(class? = is_dimmed.then_some("dimmed")) {
@@ -924,7 +1050,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                     @if let Some(ref team) = team {
                                         : team.to_html(&mut transaction, false).await?;
                                     }
-                                    @if let (QualifierKind::Single { show_times: true }, Qualification::Single { qualified: true } | Qualification::TriforceBlitz { qualified: true, .. }) = (qualifier_kind, qualification) {
+                                    @if let (QualifierKind::Single { show_times: true }, Qualification::Single { qualified: true } | Qualification::TriforceBlitz { qualified: true, .. }) = (qualifier_kind, &qualification) {
                                         br;
                                         small {
                                             @if let Some(time) = members.iter().try_fold(Duration::default(), |acc, member| Some(acc + member.qualifier_time?)) {
@@ -966,7 +1092,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                     }
                                                 }
                                             }
-                                            @if let (QualifierKind::Single { show_times: true }, Qualification::Single { qualified: true } | Qualification::TriforceBlitz { qualified: true, .. }) = (qualifier_kind, qualification) {
+                                            @if let (QualifierKind::Single { show_times: true }, Qualification::Single { qualified: true } | Qualification::TriforceBlitz { qualified: true, .. }) = (qualifier_kind, &qualification) {
                                                 br;
                                                 small {
                                                     @let time = if let Some(time) = qualifier_time { English.format_duration(*time, false) } else { format!("DNF") };
@@ -1004,12 +1130,47 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                     }
                                 }
                                 (QualifierKind::Single { show_times: true }, Qualification::TriforceBlitz { pieces, .. }) => td : pieces;
-                                (QualifierKind::Score(QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online), Qualification::Multiple { num_entered, num_finished, score }) => { //TODO determine based on enter flow
+                                (QualifierKind::Score(QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online), Qualification::Multiple { num_entered, num_finished, score, .. }) => { //TODO determine based on enter flow
                                     td(style = "text-align: right;") : num_entered;
                                     td(style = "text-align: right;") : num_finished;
                                     td(style = "text-align: right;") : format!("{score:.2}");
                                 }
-                                (QualifierKind::Score(QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online), Qualification::Multiple { num_entered, num_finished: _, score }) => {
+                                (QualifierKind::Score(QualifierScoreKind::TwwrMiniblins26), Qualification::Multiple { num_entered, num_finished, score, round_scores }) => {
+                                    @let hide_counts = matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !data.is_ended();
+                                    @let hide_points = matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPoints | QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !data.is_ended();
+                                    td(style = "text-align: right;") {
+                                        @if hide_counts { : "—"; }
+                                        else { : num_entered; }
+                                    }
+                                    td(style = "text-align: right;") {
+                                        @if hide_counts { : "—"; }
+                                        else { : num_finished; }
+                                    }
+                                    td(style = "text-align: right;") {
+                                        @if hide_points {
+                                            : "—";
+                                        } else if round_scores.is_empty() {
+                                            : format!("{score:.2}");
+                                        } else {
+                                            details(class = "round-breakdown") {
+                                                summary : format!("{score:.2}");
+                                                div(class = "round-scores") {
+                                                    @for (i, round_score) in round_scores.iter().enumerate() {
+                                                        div {
+                                                            : format!("Race {}: ", i + 1);
+                                                            @if *round_score == r64(0.0) {
+                                                                : "DNF";
+                                                            } else {
+                                                                : format!("{round_score:.0}");
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                (QualifierKind::Score(QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online), Qualification::Multiple { num_entered, num_finished: _, score, .. }) => {
                                     td(style = "text-align: right;") : num_entered;
                                     td(style = "text-align: right;") : format!("{score:.2}");
                                 }
@@ -1210,6 +1371,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                     }
                 }
             }
+        }
         }
     };
     Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("{teams_label} — {}", data.display_name), content).await?)

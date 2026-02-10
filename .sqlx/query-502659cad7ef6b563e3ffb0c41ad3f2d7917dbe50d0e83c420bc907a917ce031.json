@@ -1,0 +1,60 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    SELECT\n                        ap.player AS \"player: Id<Users>\",\n                        ap.time,\n                        ap.kind AS \"kind: AsyncKind\",\n                        at.start_time,\n                        a.end_time AS async_end_time\n                    FROM async_players ap\n                    INNER JOIN team_members tm ON tm.member = ap.player\n                    INNER JOIN teams t ON t.id = tm.team AND t.series = $1 AND t.event = $2\n                    INNER JOIN async_teams at ON at.team = t.id AND at.kind = ap.kind\n                    INNER JOIN asyncs a ON a.series = $1 AND a.event = $2 AND a.kind = ap.kind\n                    WHERE ap.series = $1 AND ap.event = $2\n                    AND ap.time IS NOT NULL\n                    AND at.submitted IS NOT NULL\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "player: Id<Users>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "time",
+        "type_info": "Interval"
+      },
+      {
+        "ordinal": 2,
+        "name": "kind: AsyncKind",
+        "type_info": {
+          "Custom": {
+            "name": "async_kind",
+            "kind": {
+              "Enum": [
+                "qualifier",
+                "qualifier2",
+                "qualifier3",
+                "tiebreaker1",
+                "tiebreaker2"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "start_time",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "async_end_time",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "502659cad7ef6b563e3ffb0c41ad3f2d7917dbe50d0e83c420bc907a917ce031"
+}

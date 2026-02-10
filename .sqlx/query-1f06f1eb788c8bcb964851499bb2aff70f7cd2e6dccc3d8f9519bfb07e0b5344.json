@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                                        SELECT a.web_id, a.tfb_uuid, a.xkeys_uuid, a.file_stem, \n                                               a.hash1, a.hash2, a.hash3, a.hash4, a.hash5, a.seed_password,\n                                               t.series AS \"series: Series\", t.event\n                                        FROM async_teams at\n                                        JOIN teams t ON at.team = t.id\n                                        JOIN asyncs a ON t.series = a.series AND t.event = a.event AND at.kind = a.kind\n                                        WHERE at.team = $1 AND at.kind = $2\n                                        ",
+  "query": "\n                                        SELECT a.web_id, a.tfb_uuid, a.xkeys_uuid, a.file_stem,\n                                               a.hash1, a.hash2, a.hash3, a.hash4, a.hash5, a.seed_password,\n                                               a.seed_data,\n                                               t.series AS \"series: Series\", t.event\n                                        FROM async_teams at\n                                        JOIN teams t ON at.team = t.id\n                                        JOIN asyncs a ON t.series = a.series AND t.event = a.event AND at.kind = a.kind\n                                        WHERE at.team = $1 AND at.kind = $2\n                                        ",
   "describe": {
     "columns": [
       {
@@ -55,11 +55,16 @@
       },
       {
         "ordinal": 10,
+        "name": "seed_data",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 11,
         "name": "series: Series",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "event",
         "type_info": "Varchar"
       }
@@ -94,9 +99,10 @@
       true,
       true,
       true,
+      true,
       false,
       false
     ]
   },
-  "hash": "3c7d2c54db487166892f4922da105e73736e6637b2177ef6a63504f01b82d3c8"
+  "hash": "1f06f1eb788c8bcb964851499bb2aff70f7cd2e6dccc3d8f9519bfb07e0b5344"
 }
