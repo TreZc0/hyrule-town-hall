@@ -345,15 +345,24 @@ impl AsyncRaceManager {
         content.mention_user(&player);
         content.push(", ");
         content.push_line("");
-        content.push("Your seed is ready! Please use this URL: ");
-        content.push(seed_url);
-        
-        // Add hash if available
-        if let Some(file_hash) = race.seed.file_hash.as_ref() {
-            content.push_line("");
-            content.push("The hash for this seed is: ");
-            content.push(format!("{}, {}, {}, {}, {}", 
-                file_hash[0], file_hash[1], file_hash[2], file_hash[3], file_hash[4]));
+        match &race.seed.files {
+            Some(seed::Files::TwwrPermalink { permalink, seed_hash }) => {
+                content.push(format!("Your seed is ready! Permalink: {permalink}"));
+                if !seed_hash.is_empty() {
+                    content.push_line("");
+                    content.push(format!("Seed Hash: {seed_hash}"));
+                }
+            }
+            _ => {
+                content.push("Your seed is ready! Please use this URL: ");
+                content.push(&seed_url);
+                if let Some(file_hash) = race.seed.file_hash.as_ref() {
+                    content.push_line("");
+                    content.push("The hash for this seed is: ");
+                    content.push(format!("{}, {}, {}, {}, {}",
+                        file_hash[0], file_hash[1], file_hash[2], file_hash[3], file_hash[4]));
+                }
+            }
         }
         
         // Get thread ID from database
@@ -464,6 +473,9 @@ impl AsyncRaceManager {
                     let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html")?;
                     patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{uuid}.bps", base_uri()));
                     Ok(patcher_url.to_string())
+                }
+                seed::Files::TwwrPermalink { permalink, .. } => {
+                    Ok(format!("Permalink: {permalink}"))
                 }
                 _ => Err(Error::UnsupportedSeedType),
             }

@@ -3487,6 +3487,11 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
             racetime_bot::Goal::MysteryD20 => {
                 global_state.clone().roll_mysteryd20_seed()
             }
+            racetime_bot::Goal::TwwrMainWeekly | racetime_bot::Goal::TwwrMainMiniblins26 => {
+                let settings_string = event.settings_string.clone().expect("TWWR event missing settings string");
+                let version = goal.rando_version(Some(&event));
+                global_state.clone().roll_twwr_seed(Some(version), settings_string, UnlockSpoilerLog::Never)
+            }
             _ => unimplemented!("async seed rolling not implemented for this event"),
         };
 
@@ -3500,17 +3505,19 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
             }
         };
 
-        let uuid = match seed.files {
-            Some(seed::Files::AlttprDoorRando { uuid}) => uuid,
-            _ => unimplemented!("handle what happens here?")
-        };
-
-        let (hash1, hash2, hash3, hash4, hash5) = match seed.file_hash {
-            Some([hash1, hash2, hash3, hash4, hash5]) => (Some(hash1), Some(hash2), Some(hash3), Some(hash4), Some(hash5)),
-            None => (None, None, None, None, None)
-        };
-
-        sqlx::query!("UPDATE races SET xkeys_uuid = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7",uuid, hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,).execute(&mut *transaction).await?;
+        match seed.files {
+            Some(seed::Files::AlttprDoorRando { ref uuid }) => {
+                let (hash1, hash2, hash3, hash4, hash5) = match seed.file_hash {
+                    Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) => (Some(hash1), Some(hash2), Some(hash3), Some(hash4), Some(hash5)),
+                    None => (None, None, None, None, None)
+                };
+                sqlx::query!("UPDATE races SET xkeys_uuid = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7", uuid, hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,).execute(&mut *transaction).await?;
+            }
+            Some(seed::Files::TwwrPermalink { ref permalink, ref seed_hash }) => {
+                sqlx::query!("UPDATE races SET seed_data = $1 WHERE id = $2", serde_json::json!({ "permalink": permalink, "seed_hash": seed_hash }), cal_event.race.id as _,).execute(&mut *transaction).await?;
+            }
+            _ => unimplemented!("unexpected seed type for async rolling"),
+        }
     }
 
     for team in cal_event.active_teams() {
