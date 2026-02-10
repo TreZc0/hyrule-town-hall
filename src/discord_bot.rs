@@ -3143,7 +3143,6 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
     // If the race is the second half, remind admin in the message to post the race result when it's over and report it on start.gg
     // Set "notified" on the race to avoid this being called again.
 
-    // This explicitly only handles asyncs for the crosskeys tournament. This should be remoed and replaced with something generic.
     let discord_ctx = discord_ctx.clone();
     let cal_event = cal_event.clone();
     let event = event.clone();
@@ -3155,13 +3154,26 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
 
     // Check if this is the second part of an async (seed already exists)
     let is_second_part = cal_event.race.seed.files.is_some();
-    
+
     // If no seed exists, roll a new one
     if !is_second_part {
         let discord_data = discord_ctx.data.read().await;
         let global_state = discord_data.get::<GlobalState>().expect("Global State missing from Discord context");
-        let crosskeys_options = CrosskeysRaceOptions::for_race(&global_state.db_pool, &cal_event.race).await;
-        let mut updates = global_state.clone().roll_crosskeys2025_seed(crosskeys_options);
+        let goal = racetime_bot::Goal::for_event(cal_event.race.series, &cal_event.race.event).expect("Goal not found for event");
+        let mut updates = match goal {
+            racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB => {
+                let alttprde_options = AlttprDeRaceOptions::for_race(&global_state.db_pool, &cal_event.race, event.round_modes.as_ref()).await;
+                global_state.clone().roll_alttprde9_seed(alttprde_options)
+            }
+            racetime_bot::Goal::Crosskeys2025 => {
+                let crosskeys_options = CrosskeysRaceOptions::for_race(&global_state.db_pool, &cal_event.race).await;
+                global_state.clone().roll_crosskeys2025_seed(crosskeys_options)
+            }
+            racetime_bot::Goal::MysteryD20 => {
+                global_state.clone().roll_mysteryd20_seed()
+            }
+            _ => unimplemented!("async seed rolling not implemented for this event"),
+        };
 
         // Loop until we get an update saying the seed data is done rolling.
         let seed = loop {
