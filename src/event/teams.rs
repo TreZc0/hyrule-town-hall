@@ -232,7 +232,7 @@ impl Cache {
     }
 }
 
-pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, cache: &mut Cache, me: Option<&User>, data: &Data<'_>, is_organizer: bool, qualifier_kind: QualifierKind, worst_case_extrapolation: Option<&MemberUser>) -> Result<Vec<SignupsTeam>, cal::Error> {
+pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, cache: &mut Cache, me: Option<&User>, data: &Data<'_>, is_organizer: bool, qualifier_kind: QualifierKind, worst_case_extrapolation: Option<&MemberUser>, all_qualifiers_ended: bool) -> Result<Vec<SignupsTeam>, cal::Error> {
     let now = Utc::now();
     let mut signups = match qualifier_kind {
         QualifierKind::Score(score_kind) => {
@@ -817,7 +817,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 .then_with(|| team1.cmp(&team2))
             }
             QualifierKind::Score(score_kind) => {
-                if matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPoints | QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !data.is_ended() {
+                if matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPoints | QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !all_qualifiers_ended {
                     // When scores are fully hidden, sort alphabetically to avoid leaking rankings
                     members1.iter().map(|member| &member.user).cmp(members2.iter().map(|member| &member.user))
                 } else {
@@ -887,6 +887,20 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
         false
     };
     let qualifier_kind = data.qualifier_kind(&mut transaction, me.as_ref()).await?;
+    let all_qualifiers_ended = if let QualifierKind::Score(_) = qualifier_kind {
+        let all_races_ended = Race::for_event(&mut transaction, http_client, &data).await?.into_iter().all(|race| race.phase.as_ref().is_none_or(|phase| phase != "Qualifier") || race.is_ended());
+        let all_asyncs_ended = sqlx::query_scalar!(r#"
+            SELECT NOT EXISTS(
+                SELECT 1 FROM asyncs
+                WHERE series = $1 AND event = $2
+                AND kind IN ('qualifier', 'qualifier2', 'qualifier3')
+                AND (end_time IS NULL OR end_time > NOW())
+            ) AS "all_ended!"
+        "#, data.series as _, &data.event).fetch_one(&mut *transaction).await?;
+        all_races_ended && all_asyncs_ended
+    } else {
+        true
+    };
     if let QualifierKind::Score(_) = qualifier_kind {
         if !data.is_started(&mut transaction).await? {
             if Race::for_event(&mut transaction, http_client, &data).await?.into_iter().all(|race| race.phase.as_ref().is_none_or(|phase| phase != "Qualifier") || race.is_ended()) { //TODO also show if anyone is already eligible to sign up
@@ -902,7 +916,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
         false
     };
     let roles = data.team_config.roles();
-    let signups = signups_sorted(&mut transaction, &mut Cache::new(http_client.clone()), me.as_ref(), &data, is_organizer, qualifier_kind, None).await?;
+    let signups = signups_sorted(&mut transaction, &mut Cache::new(http_client.clone()), me.as_ref(), &data, is_organizer, qualifier_kind, None, all_qualifiers_ended).await?;
     let mut footnotes = Vec::default();
     let teams_label = if let TeamConfig::Solo = data.team_config { "Entrants" } else { "Teams" };
     let mut column_headers = Vec::default();
@@ -995,7 +1009,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
     }
     let content = html! {
         : header;
-        @if data.qualifier_score_hiding == QualifierScoreHiding::FullComplete && !data.is_ended() {
+        @if data.qualifier_score_hiding == QualifierScoreHiding::FullComplete && !all_qualifiers_ended {
             p {
                 i : "Standings will not be published until after the qualifier stage has ended.";
             }
@@ -1136,8 +1150,8 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                     td(style = "text-align: right;") : format!("{score:.2}");
                                 }
                                 (QualifierKind::Score(QualifierScoreKind::TwwrMiniblins26), Qualification::Multiple { num_entered, num_finished, score, round_scores }) => {
-                                    @let hide_counts = matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !data.is_ended();
-                                    @let hide_points = matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPoints | QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !data.is_ended();
+                                    @let hide_counts = matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !all_qualifiers_ended;
+                                    @let hide_points = matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPoints | QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !all_qualifiers_ended;
                                     td(style = "text-align: right;") {
                                         @if hide_counts { : "—"; }
                                         else { : num_entered; }
@@ -1218,7 +1232,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                                 &data
                                                             };
                                                             let qualifier_kind = data.qualifier_kind(&mut transaction, None).await?;
-                                                            let teams = signups_sorted(&mut transaction, &mut cache, None, data, is_organizer, qualifier_kind, Some(&entrant.user)).await?;
+                                                            let teams = signups_sorted(&mut transaction, &mut cache, None, data, is_organizer, qualifier_kind, Some(&entrant.user), all_qualifiers_ended).await?;
                                                             if let Some((placement, team)) = teams.iter().enumerate().find(|(_, team)| team.members.iter().any(|member| member.user == entrant.user));
                                                             if let Qualification::Multiple { num_entered, num_finished, .. } = team.qualification;
                                                             let num_qualifiers = if *need_finish { num_finished } else { num_entered };

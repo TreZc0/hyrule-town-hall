@@ -262,7 +262,7 @@ impl Requirement {
                 };
                 let qualifier_kind = data.qualifier_kind(&mut *transaction, None).await?;
                 // call signups_sorted with worst_case_extrapolation = true to calculate whether the player has secured a spot ahead of time
-                let teams = teams::signups_sorted(transaction, &mut cache, None, data, false, qualifier_kind, Some(&teams::MemberUser::MidosHouse(me.clone()))).await?;
+                let teams = teams::signups_sorted(transaction, &mut cache, None, data, false, qualifier_kind, Some(&teams::MemberUser::MidosHouse(me.clone())), true).await?;
                 if let Some((placement, team)) = teams.iter().enumerate().find(|(_, team)| team.members.iter().any(|member| member.user == *me));
                 if let teams::Qualification::Multiple { num_entered, num_finished, .. } = team.qualification;
                 then {

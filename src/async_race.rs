@@ -526,10 +526,10 @@ impl AsyncRaceManager {
         // - discord_thread IS NULL (no thread created yet)
         // - event has automated_asyncs = true
         // - event has discord_async_channel configured
-        // - async has a seed available (web_id, tfb_uuid, xkeys_uuid, or file_stem)
+        // - async has a seed available (web_id, tfb_uuid, xkeys_uuid, file_stem, or seed_data)
         let teams_needing_threads = sqlx::query!(
             r#"
-            SELECT 
+            SELECT
                 at.team AS "team_id: Id<Teams>",
                 at.kind AS "async_kind: event::AsyncKind",
                 t.series AS "series: Series",
@@ -543,7 +543,7 @@ impl AsyncRaceManager {
               AND at.discord_thread IS NULL
               AND e.automated_asyncs = true
               AND e.discord_async_channel IS NOT NULL
-              AND (a.web_id IS NOT NULL OR a.tfb_uuid IS NOT NULL OR a.xkeys_uuid IS NOT NULL OR a.file_stem IS NOT NULL)
+              AND (a.web_id IS NOT NULL OR a.tfb_uuid IS NOT NULL OR a.xkeys_uuid IS NOT NULL OR a.file_stem IS NOT NULL OR a.seed_data IS NOT NULL)
             "#
         ).fetch_all(&mut **transaction).await?;
 

@@ -10,18 +10,18 @@ async fn asyncs_form(mut transaction: Transaction<'_, Postgres>, me: User, uri: 
         kind: AsyncKind,
         file_stem: Option<String>,
         web_id: Option<i64>,
+        tfb_uuid: Option<Uuid>,
+        xkeys_uuid: Option<Uuid>,
         seed_data: Option<serde_json::Value>,
         start: Option<DateTime<Utc>>,
         end_time: Option<DateTime<Utc>>,
     }
     let asyncs = sqlx::query_as!(AsyncRow,
-        r#"SELECT kind AS "kind: AsyncKind", file_stem, web_id, seed_data, start, end_time FROM asyncs WHERE series = $1 AND event = $2 ORDER BY kind"#,
+        r#"SELECT kind AS "kind: AsyncKind", file_stem, web_id, tfb_uuid, xkeys_uuid, seed_data, start, end_time FROM asyncs WHERE series = $1 AND event = $2 ORDER BY kind"#,
         event.series as _, &event.event
     )
     .fetch_all(&mut *transaction)
     .await?;
-
-    let is_twwr = matches!(event.series, Series::TwwrMain);
 
     Ok(page(transaction, &Some(me), &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Asyncs — {}", event.display_name), html! {
         : header;
@@ -34,13 +34,21 @@ async fn asyncs_form(mut transaction: Transaction<'_, Postgres>, me: User, uri: 
                     thead {
                         tr {
                             th : "Kind";
-                            th : "File Stem";
-                            th : "Web ID";
-                            @if is_twwr {
-                                th : "Permalink";
-                                th : "Seed Hash";
-                            } else {
-                                th : "Seed Data";
+                            @match event.series {
+                                Series::TwwrMain => {
+                                    th : "Permalink";
+                                    th : "Seed Hash";
+                                }
+                                Series::TriforceBlitz => {
+                                    th : "TFB UUID";
+                                }
+                                Series::Crosskeys => {
+                                    th : "Crosskeys UUID";
+                                }
+                                _ => {
+                                    th : "File Stem";
+                                    th : "Web ID";
+                                }
                             }
                             th : "Start";
                             th : "End";
@@ -50,13 +58,21 @@ async fn asyncs_form(mut transaction: Transaction<'_, Postgres>, me: User, uri: 
                         @for row in asyncs {
                             tr {
                                 td : format!("{:?}", row.kind);
-                                td : row.file_stem.unwrap_or_default();
-                                td : row.web_id.map(|id| id.to_string()).unwrap_or_default();
-                                @if is_twwr {
-                                    td : row.seed_data.as_ref().and_then(|d| d.get("permalink")).and_then(|v| v.as_str()).unwrap_or("").to_owned();
-                                    td : row.seed_data.as_ref().and_then(|d| d.get("seed_hash")).and_then(|v| v.as_str()).unwrap_or("").to_owned();
-                                } else {
-                                    td : row.seed_data.as_ref().map(|data| data.to_string()).unwrap_or_default();
+                                @match event.series {
+                                    Series::TwwrMain => {
+                                        td : row.seed_data.as_ref().and_then(|d| d.get("permalink")).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                                        td : row.seed_data.as_ref().and_then(|d| d.get("seed_hash")).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                                    }
+                                    Series::TriforceBlitz => {
+                                        td : row.tfb_uuid.map(|u| u.to_string()).unwrap_or_default();
+                                    }
+                                    Series::Crosskeys => {
+                                        td : row.xkeys_uuid.map(|u| u.to_string()).unwrap_or_default();
+                                    }
+                                    _ => {
+                                        td : row.file_stem.unwrap_or_default();
+                                        td : row.web_id.map(|id| id.to_string()).unwrap_or_default();
+                                    }
                                 }
                                 td : row.start.map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_default();
                                 td : row.end_time.map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_default();
@@ -76,28 +92,39 @@ async fn asyncs_form(mut transaction: Transaction<'_, Postgres>, me: User, uri: 
                         }
                     }
                 });
-                : form_field("file_stem", &mut ctx.errors().collect_vec(), html! {
-                    label(for = "file_stem") : "File Stem";
-                    input(type = "text", name = "file_stem", id = "file_stem", value = ctx.field_value("file_stem").unwrap_or(""));
-                });
-                : form_field("web_id", &mut ctx.errors().collect_vec(), html! {
-                    label(for = "web_id") : "Web ID (optional)";
-                    input(type = "number", name = "web_id", id = "web_id", value = ctx.field_value("web_id").unwrap_or(""));
-                });
-                @if is_twwr {
-                    : form_field("permalink", &mut ctx.errors().collect_vec(), html! {
-                        label(for = "permalink") : "Permalink";
-                        input(type = "text", name = "permalink", id = "permalink", value = ctx.field_value("permalink").unwrap_or(""), style = "width: 100%; max-width: 600px;");
-                    });
-                    : form_field("seed_hash", &mut ctx.errors().collect_vec(), html! {
-                        label(for = "seed_hash") : "Seed Hash";
-                        input(type = "text", name = "seed_hash", id = "seed_hash", value = ctx.field_value("seed_hash").unwrap_or(""));
-                    });
-                } else {
-                    : form_field("seed_data", &mut ctx.errors().collect_vec(), html! {
-                        label(for = "seed_data") : "Seed Data (JSON)";
-                        textarea(name = "seed_data", id = "seed_data", rows = "3", style = "width: 100%; max-width: 600px;") : ctx.field_value("seed_data").unwrap_or("");
-                    });
+                @match event.series {
+                    Series::TwwrMain => {
+                        : form_field("permalink", &mut ctx.errors().collect_vec(), html! {
+                            label(for = "permalink") : "Permalink";
+                            input(type = "text", name = "permalink", id = "permalink", value = ctx.field_value("permalink").unwrap_or(""), style = "width: 100%; max-width: 600px;");
+                        });
+                        : form_field("seed_hash", &mut ctx.errors().collect_vec(), html! {
+                            label(for = "seed_hash") : "Seed Hash";
+                            input(type = "text", name = "seed_hash", id = "seed_hash", value = ctx.field_value("seed_hash").unwrap_or(""));
+                        });
+                    }
+                    Series::TriforceBlitz => {
+                        : form_field("tfb_uuid", &mut ctx.errors().collect_vec(), html! {
+                            label(for = "tfb_uuid") : "TFB UUID";
+                            input(type = "text", name = "tfb_uuid", id = "tfb_uuid", value = ctx.field_value("tfb_uuid").unwrap_or(""));
+                        });
+                    }
+                    Series::Crosskeys => {
+                        : form_field("xkeys_uuid", &mut ctx.errors().collect_vec(), html! {
+                            label(for = "xkeys_uuid") : "Crosskeys UUID";
+                            input(type = "text", name = "xkeys_uuid", id = "xkeys_uuid", value = ctx.field_value("xkeys_uuid").unwrap_or(""));
+                        });
+                    }
+                    _ => {
+                        : form_field("file_stem", &mut ctx.errors().collect_vec(), html! {
+                            label(for = "file_stem") : "File Stem";
+                            input(type = "text", name = "file_stem", id = "file_stem", value = ctx.field_value("file_stem").unwrap_or(""));
+                        });
+                        : form_field("web_id", &mut ctx.errors().collect_vec(), html! {
+                            label(for = "web_id") : "Web ID (optional)";
+                            input(type = "number", name = "web_id", id = "web_id", value = ctx.field_value("web_id").unwrap_or(""));
+                        });
+                    }
                 }
                 : form_field("start", &mut ctx.errors().collect_vec(), html! {
                     label(for = "start") : "Start Time (UTC)";
@@ -130,14 +157,18 @@ pub(crate) struct AsyncForm {
     #[field(default = String::new())]
     csrf: String,
     kind: AsyncKind,
-    file_stem: String,
+    #[field(default = None)]
+    file_stem: Option<String>,
+    #[field(default = None)]
     web_id: Option<i64>,
+    #[field(default = None)]
+    tfb_uuid: Option<String>,
+    #[field(default = None)]
+    xkeys_uuid: Option<String>,
     #[field(default = None)]
     permalink: Option<String>,
     #[field(default = None)]
     seed_hash: Option<String>,
-    #[field(default = None)]
-    seed_data: Option<String>,
     #[field(default = None)]
     start: Option<String>,
     #[field(default = None)]
@@ -162,7 +193,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
         if form.context.errors().next().is_some() {
              RedirectOrContent::Content(asyncs_form(transaction, me, uri, csrf.as_ref(), event_data, form.context).await?)
         } else {
-            // Build seed_data JSON
+            // Build seed_data JSON for TWWR
             let seed_data = if matches!(event_data.series, Series::TwwrMain) {
                 let permalink = value.permalink.as_deref().unwrap_or("").trim();
                 let seed_hash = value.seed_hash.as_deref().unwrap_or("").trim();
@@ -174,13 +205,18 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 } else {
                     None
                 }
-            } else if let Some(ref raw_json) = value.seed_data {
-                let trimmed = raw_json.trim();
+            } else {
+                None
+            };
+
+            // Parse UUIDs for TFB/Crosskeys
+            let tfb_uuid = if let Some(ref s) = value.tfb_uuid {
+                let trimmed = s.trim();
                 if !trimmed.is_empty() {
-                    match serde_json::from_str::<serde_json::Value>(trimmed) {
-                        Ok(parsed) => Some(parsed),
+                    match trimmed.parse::<Uuid>() {
+                        Ok(uuid) => Some(uuid),
                         Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid JSON for seed data").with_name("seed_data"));
+                            form.context.push_error(form::Error::validation("Invalid UUID").with_name("tfb_uuid"));
                             return Ok(RedirectOrContent::Content(asyncs_form(transaction, me, uri, csrf.as_ref(), event_data, form.context).await?));
                         }
                     }
@@ -190,6 +226,24 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             } else {
                 None
             };
+            let xkeys_uuid = if let Some(ref s) = value.xkeys_uuid {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    match trimmed.parse::<Uuid>() {
+                        Ok(uuid) => Some(uuid),
+                        Err(_) => {
+                            form.context.push_error(form::Error::validation("Invalid UUID").with_name("xkeys_uuid"));
+                            return Ok(RedirectOrContent::Content(asyncs_form(transaction, me, uri, csrf.as_ref(), event_data, form.context).await?));
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let file_stem = value.file_stem.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
 
             // Parse start/end times
             let start = if let Some(ref start_str) = value.start {
@@ -225,16 +279,18 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             };
 
             sqlx::query!(
-                r#"INSERT INTO asyncs (series, event, kind, file_stem, web_id, seed_data, start, end_time)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                r#"INSERT INTO asyncs (series, event, kind, file_stem, web_id, tfb_uuid, xkeys_uuid, seed_data, start, end_time)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                    ON CONFLICT (series, event, kind) DO UPDATE SET
                        file_stem = EXCLUDED.file_stem,
                        web_id = EXCLUDED.web_id,
+                       tfb_uuid = EXCLUDED.tfb_uuid,
+                       xkeys_uuid = EXCLUDED.xkeys_uuid,
                        seed_data = EXCLUDED.seed_data,
                        start = EXCLUDED.start,
                        end_time = EXCLUDED.end_time"#,
-                event_data.series as _, &event_data.event, value.kind as _, value.file_stem, value.web_id,
-                seed_data, start, end_time
+                event_data.series as _, &event_data.event, value.kind as _, file_stem, value.web_id,
+                tfb_uuid, xkeys_uuid, seed_data, start, end_time
             ).execute(&mut *transaction).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))

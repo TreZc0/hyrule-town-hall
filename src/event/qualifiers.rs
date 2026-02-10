@@ -5,7 +5,7 @@ use crate::{
     seed,
 };
 
-async fn qualifiers_form(mut transaction: Transaction<'_, Postgres>, me: User, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
+async fn qualifiers_form(mut transaction: Transaction<'_, Postgres>, me: User, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, is_started: bool, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
     let header = event.header(&mut transaction, Some(&me), Tab::Qualifiers, false).await?;
 
     struct RaceRow {
@@ -51,21 +51,25 @@ async fn qualifiers_form(mut transaction: Transaction<'_, Postgres>, me: User, u
                 }
             }
 
-            h3 : "Create Live Qualifier Race";
-            : full_form(uri!(post_race(event.series, &*event.event)), csrf, html! {
-                : form_field("race_round", &mut ctx.errors().collect_vec(), html! {
-                    label(for = "race_round") : "Round";
-                    input(type = "text", name = "race_round", id = "race_round", value = ctx.field_value("race_round").unwrap_or(""), placeholder = "e.g. Live 1");
-                });
-                : form_field("race_start", &mut ctx.errors().collect_vec(), html! {
-                    label(for = "race_start") : "Start Time (UTC)";
-                    input(type = "datetime-local", name = "race_start", id = "race_start", value = ctx.field_value("race_start").unwrap_or(""));
-                });
-                : form_field("race_room", &mut ctx.errors().collect_vec(), html! {
-                    label(for = "race_room") : "Racetime.gg Room URL (optional)";
-                    input(type = "text", name = "race_room", id = "race_room", value = ctx.field_value("race_room").unwrap_or(""), placeholder = "https://racetime.gg/...", style = "width: 100%; max-width: 600px;");
-                });
-            }, ctx.errors().collect_vec(), "Create Race");
+            @if is_started {
+                p : "The event has started. New qualifier races cannot be created.";
+            } else {
+                h3 : "Create Live Qualifier Race";
+                : full_form(uri!(post_race(event.series, &*event.event)), csrf, html! {
+                    : form_field("race_round", &mut ctx.errors().collect_vec(), html! {
+                        label(for = "race_round") : "Round";
+                        input(type = "text", name = "race_round", id = "race_round", value = ctx.field_value("race_round").unwrap_or(""), placeholder = "e.g. Live 1");
+                    });
+                    : form_field("race_start", &mut ctx.errors().collect_vec(), html! {
+                        label(for = "race_start") : "Start Time (UTC)";
+                        input(type = "datetime-local", name = "race_start", id = "race_start", value = ctx.field_value("race_start").unwrap_or(""));
+                    });
+                    : form_field("race_room", &mut ctx.errors().collect_vec(), html! {
+                        label(for = "race_room") : "Racetime.gg Room URL (optional)";
+                        input(type = "text", name = "race_room", id = "race_room", value = ctx.field_value("race_room").unwrap_or(""), placeholder = "https://racetime.gg/...", style = "width: 100%; max-width: 600px;");
+                    });
+                }, ctx.errors().collect_vec(), "Create Race");
+            }
         }
     }).await?)
 }
@@ -74,13 +78,11 @@ async fn qualifiers_form(mut transaction: Transaction<'_, Postgres>, me: User, u
 pub(crate) async fn get(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let event_data = Data::new(&mut transaction, series, &event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    if !event_data.asyncs_active {
-        return Err(StatusOrError::Status(Status::NotFound));
-    }
     if !me.is_global_admin() && !event_data.organizers(&mut transaction).await?.contains(&me) {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
-    Ok(qualifiers_form(transaction, me, uri, csrf.as_ref(), event_data, Context::default()).await?)
+    let is_started = event_data.is_started(&mut transaction).await?;
+    Ok(qualifiers_form(transaction, me, uri, csrf.as_ref(), event_data, is_started, Context::default()).await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -100,22 +102,23 @@ pub(crate) async fn post_race(pool: &State<PgPool>, me: User, uri: Origin<'_>, c
     let mut form = form.into_inner();
     form.verify(&csrf);
 
-    if !event_data.asyncs_active {
-        return Err(StatusOrError::Status(Status::NotFound));
-    }
     if !me.is_global_admin() && !event_data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+    let is_started = event_data.is_started(&mut transaction).await?;
+    if is_started {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
 
     Ok(if let Some(ref value) = form.value {
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(qualifiers_form(transaction, me, uri, csrf.as_ref(), event_data, form.context).await?)
+            RedirectOrContent::Content(qualifiers_form(transaction, me, uri, csrf.as_ref(), event_data, false, form.context).await?)
         } else {
             let start = match NaiveDateTime::parse_from_str(&value.race_start, "%Y-%m-%dT%H:%M") {
                 Ok(naive_dt) => DateTime::<Utc>::from_naive_utc_and_offset(naive_dt, Utc),
                 Err(_) => {
                     form.context.push_error(form::Error::validation("Invalid start time format").with_name("race_start"));
-                    return Ok(RedirectOrContent::Content(qualifiers_form(transaction, me, uri, csrf.as_ref(), event_data, form.context).await?));
+                    return Ok(RedirectOrContent::Content(qualifiers_form(transaction, me, uri, csrf.as_ref(), event_data, false, form.context).await?));
                 }
             };
 
@@ -126,7 +129,7 @@ pub(crate) async fn post_race(pool: &State<PgPool>, me: User, uri: Origin<'_>, c
                         Ok(url) => Some(url),
                         Err(_) => {
                             form.context.push_error(form::Error::validation("Invalid room URL").with_name("race_room"));
-                            return Ok(RedirectOrContent::Content(qualifiers_form(transaction, me, uri, csrf.as_ref(), event_data, form.context).await?));
+                            return Ok(RedirectOrContent::Content(qualifiers_form(transaction, me, uri, csrf.as_ref(), event_data, false, form.context).await?));
                         }
                     }
                 } else {
@@ -174,6 +177,6 @@ pub(crate) async fn post_race(pool: &State<PgPool>, me: User, uri: Origin<'_>, c
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
         }
     } else {
-        RedirectOrContent::Content(qualifiers_form(transaction, me, uri, csrf.as_ref(), event_data, form.context).await?)
+        RedirectOrContent::Content(qualifiers_form(transaction, me, uri, csrf.as_ref(), event_data, false, form.context).await?)
     })
 }

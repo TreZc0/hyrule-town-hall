@@ -889,11 +889,11 @@ impl<'a> Data<'a> {
                             } else {
                                 a(class = "button", href = uri!(asyncs::get(self.series, &*self.event))) : "Asyncs";
                             }
-                            @if let Tab::Qualifiers = tab {
-                                a(class = "button selected", href? = is_subpage.then(|| uri!(qualifiers::get(self.series, &*self.event)))) : "Qualifiers";
-                            } else {
-                                a(class = "button", href = uri!(qualifiers::get(self.series, &*self.event))) : "Qualifiers";
-                            }
+                        }
+                        @if let Tab::Qualifiers = tab {
+                            a(class = "button selected", href? = is_subpage.then(|| uri!(qualifiers::get(self.series, &*self.event)))) : "Qualifiers";
+                        } else {
+                            a(class = "button", href = uri!(qualifiers::get(self.series, &*self.event))) : "Qualifiers";
                         }
                     }
                     @if !self.is_ended() && me.is_global_admin() {
@@ -1419,7 +1419,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             let ctx = ctx.take_request_async();
                             let mut errors = ctx.errors().collect_vec();
                             let qualifier_kind = data.qualifier_kind(&mut transaction, Some(me)).await?;
-                            let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.clone()), None, &data, false, qualifier_kind, None).await?;
+                            let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.clone()), None, &data, false, qualifier_kind, None, true).await?;
                             let qualified = if let Some(teams::SignupsTeam { qualification, .. }) = signups.iter().find(|teams::SignupsTeam { team, .. }| team.as_ref().is_some_and(|team| team.id == row.id)) {
                                 match qualification {
                                     teams::Qualification::Single { qualified } | teams::Qualification::TriforceBlitz { qualified, .. } => *qualified,
