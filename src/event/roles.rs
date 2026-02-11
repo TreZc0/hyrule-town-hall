@@ -2237,21 +2237,29 @@ async fn volunteer_page(
                                     }, errors, "Forfeit Role", "Are you sure you want to forfeit this role?");
                                 }
                             } else {
-                                @let mut errors = ctx.errors().collect::<Vec<_>>();
-                                @let button_text = if binding.auto_approve {
-                                    format!("Volunteer for {} role", binding.role_type_name)
-                                } else {
-                                    format!("Apply for {} role", binding.role_type_name)
-                                };
-                                : full_form(uri!(apply_for_role(data.series, &*data.event)), csrf.as_ref(), html! {
-                                    input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                    @if !binding.auto_approve {
-                                        : form_field("notes", &mut errors, html! {
-                                            label(for = "notes") : "Notes (optional):";
-                                            textarea(name = "notes", id = "notes", rows = "3") : "";
-                                        });
+                                @if binding.is_game_binding {
+                                    p(class = "game-role-link") {
+                                        : "To apply for this game-level role, visit the ";
+                                        a(href = uri!(crate::games::get(data.series.slug(), _))) : "game volunteer page";
+                                        : ".";
                                     }
-                                }, errors, button_text.as_str());
+                                } else {
+                                    @let mut errors = ctx.errors().collect::<Vec<_>>();
+                                    @let button_text = if binding.auto_approve {
+                                        format!("Volunteer for {} role", binding.role_type_name)
+                                    } else {
+                                        format!("Apply for {} role", binding.role_type_name)
+                                    };
+                                    : full_form(uri!(apply_for_role(data.series, &*data.event)), csrf.as_ref(), html! {
+                                        input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                        @if !binding.auto_approve {
+                                            : form_field("notes", &mut errors, html! {
+                                                label(for = "notes") : "Notes (optional):";
+                                                textarea(name = "notes", id = "notes", rows = "3") : "";
+                                            });
+                                        }
+                                    }, errors, button_text.as_str());
+                                }
                             }
                         }
                     }
