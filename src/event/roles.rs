@@ -2063,9 +2063,6 @@ async fn volunteer_page(
         .await?;
 
     let content = if let Some(ref me) = me {
-        // Check if user has access to view volunteer signups
-        let is_organizer = data.organizers(&mut transaction).await?.contains(me);
-        let is_restreamer = data.restreamers(&mut transaction).await?.contains(me);
         // Check if event uses custom role bindings
         let uses_custom_bindings = sqlx::query_scalar!(
             r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,
@@ -2076,41 +2073,7 @@ async fn volunteer_page(
         .await?
         .unwrap_or(Some(true)).unwrap_or(true);
 
-        let has_confirmed_roles = if uses_custom_bindings {
-            // Check for event-specific role requests
-            let my_requests = RoleRequest::for_user(&mut transaction, me.id).await?;
-            my_requests.iter().any(|req| {
-                matches!(req.status, RoleRequestStatus::Approved)
-                    && req.series == Some(data.series)
-                    && req.event == Some(data.event.to_string())
-            })
-        } else {
-            // Check for game role requests
-            let game = game::Game::from_series(&mut transaction, data.series).await.map_err(Error::from)?;
-            if let Some(_game) = game {
-                let my_requests = RoleRequest::for_user(&mut transaction, me.id).await?;
-                my_requests.iter().any(|req| {
-                    matches!(req.status, RoleRequestStatus::Approved)
-                        && u64::from(req.role_binding_id) > 0 // Valid role binding ID
-                })
-            } else {
-                false
-            }
-        };
-
-        if !is_organizer && !is_restreamer && !has_confirmed_roles {
-            // User doesn't have access - show appropriate message
-            html! {
-                article {
-                    h2 : "Volunteer Signups";
-                    p : "You need to be an organizer, restreamer, or have confirmed roles for this event to view volunteer signups.";
-                    p {
-                        a(href = uri!(volunteer_page_get(data.series, &*data.event, _))) : "Apply for volunteer roles";
-                    }
-                }
-            }
-        } else {
-            // User has access - show the full volunteer interface
+        {
             let effective_role_bindings = EffectiveRoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
             let my_requests = RoleRequest::for_user(&mut transaction, me.id).await?;
             let my_approved_roles = if uses_custom_bindings {
@@ -2124,11 +2087,13 @@ async fn volunteer_page(
                     })
                     .collect::<Vec<_>>()
             } else {
-                // For game bindings, show all approved roles for the game
+                // For game bindings, show approved game-level roles (not event-specific)
                 my_requests
                     .iter()
                     .filter(|req| {
                         matches!(req.status, RoleRequestStatus::Approved)
+                            && req.series.is_none()
+                            && req.event.is_none()
                     })
                     .collect::<Vec<_>>()
             };
