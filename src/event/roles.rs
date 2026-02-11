@@ -2073,6 +2073,9 @@ async fn volunteer_page(
         .await?
         .unwrap_or(Some(true)).unwrap_or(true);
 
+        // Get the game for this series (needed for game role binding links)
+        let game = game::Game::from_series(&mut transaction, data.series).await.map_err(Error::from)?;
+
         {
             let effective_role_bindings = EffectiveRoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
             let my_requests = RoleRequest::for_user(&mut transaction, me.id).await?;
@@ -2119,10 +2122,12 @@ async fn volunteer_page(
                     div(class = "game-binding-notice") {
                         h3 : "Game Role Bindings";
                         p : "This event uses game-level role bindings. To volunteer for roles, you need to apply for game roles instead of event-specific roles.";
-                        p {
-                            : "Please visit the ";
-                            a(href = uri!(crate::games::get(data.series.slug(), _))) : "game volunteer page";
-                            : " to apply for roles that will be available across all events for this game.";
+                        @if let Some(ref game) = game {
+                            p {
+                                : "Please visit the ";
+                                a(href = uri!(crate::games::get(&game.name, _))) : "game volunteer page";
+                                : " to apply for roles that will be available across all events for this game.";
+                            }
                         }
                     }
                 } else {
@@ -2225,10 +2230,12 @@ async fn volunteer_page(
                                     }
                                 }
                                 @if binding.is_game_binding {
-                                    p(class = "game-role-link") {
-                                        : "To forfeit this game-level role, visit the ";
-                                        a(href = uri!(crate::games::get(data.series.slug(), _))) : "game volunteer page";
-                                        : ".";
+                                    @if let Some(ref game) = game {
+                                        p(class = "game-role-link") {
+                                            : "To forfeit this game-level role, visit the ";
+                                            a(href = uri!(crate::games::get(&game.name, _))) : "game volunteer page";
+                                            : ".";
+                                        }
                                     }
                                 } else {
                                     @let errors = ctx.errors().collect::<Vec<_>>();
@@ -2238,10 +2245,12 @@ async fn volunteer_page(
                                 }
                             } else {
                                 @if binding.is_game_binding {
-                                    p(class = "game-role-link") {
-                                        : "To apply for this game-level role, visit the ";
-                                        a(href = uri!(crate::games::get(data.series.slug(), _))) : "game volunteer page";
-                                        : ".";
+                                    @if let Some(ref game) = game {
+                                        p(class = "game-role-link") {
+                                            : "To apply for this game-level role, visit the ";
+                                            a(href = uri!(crate::games::get(&game.name, _))) : "game volunteer page";
+                                            : ".";
+                                        }
                                     }
                                 } else {
                                     @let mut errors = ctx.errors().collect::<Vec<_>>();
