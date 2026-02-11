@@ -2192,15 +2192,6 @@ async fn volunteer_page(
         .await?;
 
     let content = if let Some(ref me) = me {
-        // Check if user has access to view volunteer signups
-        let is_organizer = data.organizers(&mut transaction).await?.contains(me);
-        let mut is_restreamer = data.restreamers(&mut transaction).await?.contains(me);
-        // Also check game-level restreamers
-        if !is_restreamer {
-            if let Some(game) = game::Game::from_series(&mut transaction, data.series).await.map_err(Error::from)? {
-                is_restreamer = game.is_restreamer_any_language(&mut transaction, me).await.map_err(Error::from)?;
-            }
-        }
         // Check if event uses custom role bindings
         let uses_custom_bindings = sqlx::query_scalar!(
             r#"SELECT force_custom_role_binding FROM events WHERE series = $1 AND event = $2"#,
@@ -2211,41 +2202,10 @@ async fn volunteer_page(
         .await?
         .unwrap_or(Some(true)).unwrap_or(true);
 
-        let has_confirmed_roles = if uses_custom_bindings {
-            // Check for event-specific role requests
-            let my_requests = RoleRequest::for_user(&mut transaction, me.id).await?;
-            my_requests.iter().any(|req| {
-                matches!(req.status, RoleRequestStatus::Approved)
-                    && req.series == Some(data.series)
-                    && req.event == Some(data.event.to_string())
-            })
-        } else {
-            // Check for game role requests
-            let game = game::Game::from_series(&mut transaction, data.series).await.map_err(Error::from)?;
-            if let Some(_game) = game {
-                let my_requests = RoleRequest::for_user(&mut transaction, me.id).await?;
-                my_requests.iter().any(|req| {
-                    matches!(req.status, RoleRequestStatus::Approved)
-                        && u64::from(req.role_binding_id) > 0 // Valid role binding ID
-                })
-            } else {
-                false
-            }
-        };
+        // Get the game for this series (needed for game role binding links)
+        let game = game::Game::from_series(&mut transaction, data.series).await.map_err(Error::from)?;
 
-        if !is_organizer && !is_restreamer && !has_confirmed_roles {
-            // User doesn't have access - show appropriate message
-            html! {
-                article {
-                    h2 : "Volunteer Signups";
-                    p : "You need to be an organizer, restreamer, or have confirmed roles for this event to view volunteer signups.";
-                    p {
-                        a(href = uri!(volunteer_page_get(data.series, &*data.event, _))) : "Apply for volunteer roles";
-                    }
-                }
-            }
-        } else {
-            // User has access - show the full volunteer interface
+        {
             let effective_role_bindings = EffectiveRoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
             let my_requests = RoleRequest::for_user(&mut transaction, me.id).await?;
             let my_approved_roles = if uses_custom_bindings {
@@ -2259,11 +2219,13 @@ async fn volunteer_page(
                     })
                     .collect::<Vec<_>>()
             } else {
-                // For game bindings, show all approved roles for the game
+                // For game bindings, show approved game-level roles (not event-specific)
                 my_requests
                     .iter()
                     .filter(|req| {
                         matches!(req.status, RoleRequestStatus::Approved)
+                            && req.series.is_none()
+                            && req.event.is_none()
                     })
                     .collect::<Vec<_>>()
             };
@@ -2289,10 +2251,12 @@ async fn volunteer_page(
                     div(class = "game-binding-notice") {
                         h3 : "Game Role Bindings";
                         p : "This event uses game-level role bindings. To volunteer for roles, you need to apply for game roles instead of event-specific roles.";
-                        p {
-                            : "Please visit the ";
-                            a(href = uri!(crate::games::get(data.series.slug(), _))) : "game volunteer page";
-                            : " to apply for roles that will be available across all events for this game.";
+                        @if let Some(ref game) = game {
+                            p {
+                                : "Please visit the ";
+                                a(href = uri!(crate::games::get(&game.name, _))) : "game volunteer page";
+                                : " to apply for roles that will be available across all events for this game.";
+                            }
                         }
                     }
                 } else {
@@ -2395,10 +2359,12 @@ async fn volunteer_page(
                                     }
                                 }
                                 @if binding.is_game_binding {
-                                    p(class = "game-role-link") {
-                                        : "To forfeit this game-level role, visit the ";
-                                        a(href = uri!(crate::games::get(data.series.slug(), _))) : "game volunteer page";
-                                        : ".";
+                                    @if let Some(ref game) = game {
+                                        p(class = "game-role-link") {
+                                            : "To forfeit this game-level role, visit the ";
+                                            a(href = uri!(crate::games::get(&game.name, _))) : "game volunteer page";
+                                            : ".";
+                                        }
                                     }
                                 } else {
                                     @let errors = ctx.errors().collect::<Vec<_>>();
@@ -2407,21 +2373,31 @@ async fn volunteer_page(
                                     }, errors, "Forfeit Role", "Are you sure you want to forfeit this role?");
                                 }
                             } else {
-                                @let mut errors = ctx.errors().collect::<Vec<_>>();
-                                @let button_text = if binding.auto_approve {
-                                    format!("Volunteer for {} role", binding.role_type_name)
-                                } else {
-                                    format!("Apply for {} role", binding.role_type_name)
-                                };
-                                : full_form(uri!(apply_for_role(data.series, &*data.event)), csrf.as_ref(), html! {
-                                    input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                    @if !binding.auto_approve {
-                                        : form_field("notes", &mut errors, html! {
-                                            label(for = "notes") : "Notes (optional):";
-                                            textarea(name = "notes", id = "notes", rows = "3") : "";
-                                        });
+                                @if binding.is_game_binding {
+                                    @if let Some(ref game) = game {
+                                        p(class = "game-role-link") {
+                                            : "To apply for this game-level role, visit the ";
+                                            a(href = uri!(crate::games::get(&game.name, _))) : "game volunteer page";
+                                            : ".";
+                                        }
                                     }
-                                }, errors, button_text.as_str());
+                                } else {
+                                    @let mut errors = ctx.errors().collect::<Vec<_>>();
+                                    @let button_text = if binding.auto_approve {
+                                        format!("Volunteer for {} role", binding.role_type_name)
+                                    } else {
+                                        format!("Apply for {} role", binding.role_type_name)
+                                    };
+                                    : full_form(uri!(apply_for_role(data.series, &*data.event)), csrf.as_ref(), html! {
+                                        input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                        @if !binding.auto_approve {
+                                            : form_field("notes", &mut errors, html! {
+                                                label(for = "notes") : "Notes (optional):";
+                                                textarea(name = "notes", id = "notes", rows = "3") : "";
+                                            });
+                                        }
+                                    }, errors, button_text.as_str());
+                                }
                             }
                         }
                     }
