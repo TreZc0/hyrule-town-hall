@@ -284,9 +284,51 @@ impl AsyncRaceManager {
             content.push_line("");
             content.push("---");
         }
+
+        // Add round mode and settings information for AlttprDe events (9swissX and 9bracket)
+        if race.series == Series::AlttprDe {
+            let alttprde_options = racetime_bot::AlttprDeRaceOptions::for_race(db_pool, race, event.round_modes.as_ref()).await;
+
+            content.push_line("");
+            content.push_line("");
+            content.push("---");
+            content.push_line("");
+
+            // Display round mode for swiss events (9swissX)
+            if let Some(ref round) = race.round {
+                if event.round_modes.is_some() {
+                    // This is a swiss event with fixed round modes
+                    if let Some(mode_display) = alttprde_options.mode_display() {
+                        content.push(format!("**Round Mode:** {} - {}", round, mode_display));
+                    } else {
+                        content.push(format!("**Round Mode:** {} - not yet set", round));
+                    }
+                    content.push_line("");
+                }
+            }
+
+            // Display mode and custom settings for bracket events (9bracket)
+            if event.event == "9bracket" {
+                if let Some(mode_display) = alttprde_options.mode_display() {
+                    content.push(format!("**Mode:** {}", mode_display));
+                    content.push_line("");
+                }
+
+                // Display custom settings picked by both runners
+                if !alttprde_options.custom_choices.is_empty() {
+                    content.push("**Settings chosen by both runners:** ");
+                    let choices: Vec<String> = alttprde_options.custom_choices
+                        .keys()
+                        .map(|k| k.clone())
+                        .collect();
+                    content.push(choices.join(", "));
+                    content.push_line("");
+                }
+            }
+
+            content.push("---");
+        }
         
-        content.push_line("");
-        content.push("**IMPORTANT:** To prevent seed leaks, you must signal that you are ready before the seed will be distributed.");
         content.push_line("");
         content.push("Click the **READY!** button below when you are ready to receive your seed. Once you click ready:");
         content.push_line("");
@@ -294,9 +336,9 @@ impl AsyncRaceManager {
         content.push_line("");
         content.push("• Organizers will be notified that you are starting");
         content.push_line("");
-        content.push("• You can then start a 5-second countdown when you're ready to begin");
+        content.push("• You will see a button to start a 5-second countdown for your seed.");
         content.push_line("");
-        content.push("• After the countdown, you can finish your run and report your time");
+        content.push("• After the countdown, start to play. Once done, press the Finish button.");
         content.push_line("");
         content.push("To maintain fairness, the final match results will only be shared after both players have completed the seed and organizers have confirmed the results.");
         
