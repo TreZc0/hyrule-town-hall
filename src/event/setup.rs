@@ -7,7 +7,20 @@ use rocket::response::content::RawText;
 
 async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
     let header = event.header(&mut transaction, me.as_ref(), Tab::Setup, false).await?;
+
+    // Load enter_flow as raw JSON for display in form
+    let enter_flow_json = sqlx::query_scalar!(r#"
+        SELECT enter_flow AS "enter_flow: serde_json::Value"
+        FROM events WHERE series = $1 AND event = $2
+    "#, event.series as _, &*event.event)
+    .fetch_one(&mut *transaction).await?;
     
+    // Format enter_flow JSON for display
+    let enter_flow_string = match &enter_flow_json {
+        Some(json) => serde_json::to_string_pretty(json).unwrap_or_default(),
+        None => String::new(),
+    };
+
     let content = if event.is_ended() {
         html! {
             article {
@@ -252,20 +265,15 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                         : form_field("enter_flow_json", &mut errors, html! {
                             label(for = "enter_flow_json") : "Enter Flow JSON";
                             textarea(id = "enter_flow_json", name = "enter_flow_json", rows = "10", style = "font-family: monospace; width: 100%; max-width: 800px;") {
-                                : ctx.field_value("enter_flow_json").unwrap_or_else(|| {
-                                    match &event.enter_flow {
-                                        Some(_flow) => "{}", // Placeholder since we can't easily serialize the complex Flow
-                                        None => "",
-                                    }
-                                });
+                                : ctx.field_value("enter_flow_json").unwrap_or(&enter_flow_string);
                             }
                             p(class = "help") : "Configure the signup requirements as JSON. Leave empty for no requirements.";
                             
                             details {
                                 summary : "Example enter_flow configurations";
-                                div(style = "margin-top: 10px; padding: 15px; background: #f8f9fa; border-radius: 6px; border: 1px solid #e9ecef;") {
-                                    h4(style = "margin-top: 0; color: #495057;") : "Basic Discord Account Requirement:";
-                                    pre(style = "font-size: 14px; line-height: 1.4; background: #ffffff; padding: 12px; border-radius: 4px; border: 1px solid #dee2e6; overflow-x: auto;") {
+                                div(style = "margin-top: 10px; padding: 15px; background: #f5f5f5; border-radius: 6px; border: 1px solid #ddd;") {
+                                    h4(style = "margin-top: 0; color: #333;") : "Basic Discord Account Requirement:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
                                         : r#"{
   "requirements": [
     {
@@ -275,8 +283,8 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
 }"#;
                                     }
                                     
-                                    h4(style = "margin-top: 20px; color: #495057;") : "Multiple Requirements with Deadline:";
-                                    pre(style = "font-size: 14px; line-height: 1.4; background: #ffffff; padding: 12px; border-radius: 4px; border: 1px solid #dee2e6; overflow-x: auto;") {
+                                    h4(style = "margin-top: 20px; color: #333;") : "Multiple Requirements with Deadline:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
                                         : r#"{
   "requirements": [
     {
@@ -293,8 +301,8 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
 }"#;
                                     }
                                     
-                                    h4(style = "margin-top: 20px; color: #495057;") : "Custom Text Field Requirement:";
-                                    pre(style = "font-size: 14px; line-height: 1.4; background: #ffffff; padding: 12px; border-radius: 4px; border: 1px solid #dee2e6; overflow-x: auto;") {
+                                    h4(style = "margin-top: 20px; color: #333;") : "Custom Text Field Requirement:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
                                         : r#"{
   "requirements": [
     {
