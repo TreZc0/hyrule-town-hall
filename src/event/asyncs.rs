@@ -91,6 +91,10 @@ async fn asyncs_form(mut transaction: Transaction<'_, Postgres>, me: User, uri: 
             };
             @let mut errors = ctx.errors().filter(|e| !hidden_fields.iter().any(|f| e.is_for(f))).collect_vec();
             : full_form(uri!(post(event.series, &*event.event)), csrf, html! {
+                // Hidden inputs for fields not used by this series
+                @for field in hidden_fields {
+                    input(type = "hidden", name = *field, value = "");
+                }
                 : form_field("kind", &mut errors, html! {
                     label(for = "kind") : "Kind";
                     select(name = "kind", id = "kind") {
@@ -197,7 +201,14 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
     }
 
     Ok(if let Some(ref value) = form.value {
-        if form.context.errors().next().is_some() {
+        let hidden_fields = match event_data.series {
+            Series::TwwrMain => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid"].as_slice(),
+            Series::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid"].as_slice(),
+            Series::Crosskeys => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid"].as_slice(),
+            _ => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid"].as_slice(),
+        };
+        let has_relevant_errors = form.context.errors().any(|e| !hidden_fields.iter().any(|f| e.is_for(f)));
+        if has_relevant_errors {
              RedirectOrContent::Content(asyncs_form(transaction, me, uri, csrf.as_ref(), event_data, form.context).await?)
         } else {
             // Build seed_data JSON for TWWR
