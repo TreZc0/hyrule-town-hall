@@ -659,7 +659,7 @@ impl AsyncRaceManager {
         // Store thread ID in async_teams
         let thread_id = thread.id.get() as i64;
         sqlx::query!(
-            "UPDATE async_teams SET discord_thread = $1 WHERE team = $2 AND kind = $3",
+            "UPDATE async_teams SET discord_thread = $1 WHERE team = $2 AND kind = ($3)::async_kind",
             thread_id,
             team.id as _,
             async_kind as _
@@ -727,14 +727,14 @@ impl AsyncRaceManager {
 
         content.push("This thread is for your **");
         content.push(match async_kind {
-            AsyncKind::Qualifier1 => "Qualifier",
-            AsyncKind::Qualifier2 => "Qualifier 2",
-            AsyncKind::Qualifier3 => "Qualifier 3",
-            AsyncKind::Seeding => "Seeding Async",
+            AsyncKind::Qualifier1 => "1st qualifier",
+            AsyncKind::Qualifier2 => "2nd qualifier",
+            AsyncKind::Qualifier3 => "3rd qualifier",
+            AsyncKind::Seeding => "Seeding",
             AsyncKind::Tiebreaker1 => "Tiebreaker",
             AsyncKind::Tiebreaker2 => "Tiebreaker 2",
         });
-        content.push("** submission for ");
+        content.push("** async request for ");
         content.push_safe(event.display_name.clone());
         content.push(".");
         content.push_line("");

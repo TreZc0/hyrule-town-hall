@@ -2683,7 +2683,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         FROM async_teams at
                                         JOIN teams t ON at.team = t.id
                                         JOIN asyncs a ON t.series = a.series AND t.event = a.event AND at.kind = a.kind
-                                        WHERE at.team = $1 AND at.kind = $2
+                                        WHERE at.team = $1 AND at.kind = ($2)::async_kind
                                         "#,
                                         team_id as i64,
                                         async_kind_int as i16
@@ -2790,7 +2790,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 } else {
                                     // Check if already started
                                     let already_started = sqlx::query_scalar!(
-                                        r#"SELECT start_time IS NOT NULL AS "started!" FROM async_teams WHERE team = $1 AND kind = $2"#,
+                                        r#"SELECT start_time IS NOT NULL AS "started!" FROM async_teams WHERE team = $1 AND kind = ($2)::async_kind"#,
                                         team_id as i64,
                                         async_kind_int as i16
                                     ).fetch_optional(&mut *transaction).await?.unwrap_or(false);
@@ -2820,7 +2820,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         // Record start time
                                         let now = Utc::now();
                                         sqlx::query!(
-                                            "UPDATE async_teams SET start_time = $1 WHERE team = $2 AND kind = $3",
+                                            "UPDATE async_teams SET start_time = $1 WHERE team = $2 AND kind = ($3)::async_kind",
                                             now,
                                             team_id as i64,
                                             async_kind_int as i16
@@ -2876,7 +2876,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 } else {
                                     // Get start time and check state
                                     let async_team = sqlx::query!(
-                                        r#"SELECT start_time, finish_time FROM async_teams WHERE team = $1 AND kind = $2"#,
+                                        r#"SELECT start_time, finish_time FROM async_teams WHERE team = $1 AND kind = ($2)::async_kind"#,
                                         team_id as i64,
                                         async_kind_int as i16
                                     ).fetch_optional(&mut *transaction).await?;
