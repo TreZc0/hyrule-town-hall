@@ -1429,7 +1429,8 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                 false
                             };
                             Some(html! {
-                                div(class = "info") {
+                                h3 : "Async";
+                                div(class = "bg-surface") {
                                     @match async_kind {
                                         AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 => @if qualified {
                                             p : "You are already qualified, but if you would like to async the ";

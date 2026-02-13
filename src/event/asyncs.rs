@@ -36,8 +36,7 @@ async fn asyncs_form(mut transaction: Transaction<'_, Postgres>, me: User, uri: 
                             th : "Kind";
                             @match event.series {
                                 Series::TwwrMain => {
-                                    th : "Permalink";
-                                    th : "Seed Hash";
+                                    th(colspan = "2") : "Seed";
                                 }
                                 Series::TriforceBlitz => {
                                     th : "TFB UUID";
@@ -60,8 +59,29 @@ async fn asyncs_form(mut transaction: Transaction<'_, Postgres>, me: User, uri: 
                                 td : format!("{:?}", row.kind);
                                 @match event.series {
                                     Series::TwwrMain => {
-                                        td : row.seed_data.as_ref().and_then(|d| d.get("permalink")).and_then(|v| v.as_str()).unwrap_or("").to_owned();
-                                        td : row.seed_data.as_ref().and_then(|d| d.get("seed_hash")).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                                        td(colspan = "2") {
+                                            @let permalink = row.seed_data.as_ref().and_then(|d| d.get("permalink")).and_then(|v| v.as_str()).unwrap_or("");
+                                            @let seed_hash = row.seed_data.as_ref().and_then(|d| d.get("seed_hash")).and_then(|v| v.as_str()).unwrap_or("");
+                                            @if !permalink.is_empty() || !seed_hash.is_empty() {
+                                                span(class = "settings-link twwr-seed-link") {
+                                                    : "Hover for Seed";
+                                                    span(class = "tooltip-content") {
+                                                        @if !permalink.is_empty() {
+                                                            div {
+                                                                strong : "Permalink: ";
+                                                                code(style = "user-select: all") : permalink;
+                                                            }
+                                                        }
+                                                        @if !seed_hash.is_empty() {
+                                                            div {
+                                                                strong : "Seed Hash: ";
+                                                                : seed_hash;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                     Series::TriforceBlitz => {
                                         td : row.tfb_uuid.map(|u| u.to_string()).unwrap_or_default();
