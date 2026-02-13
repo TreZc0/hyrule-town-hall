@@ -3861,7 +3861,7 @@ async fn handle_async_command(
                                 team.event,
                                 member.id as _,
                                 async_kind as _,
-                                milliseconds as _,
+                                pg_interval,
                                 link
                             ).execute(&mut *transaction).await?;
                         }
