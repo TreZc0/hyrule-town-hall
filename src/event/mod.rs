@@ -2225,6 +2225,20 @@ pub(crate) enum AsyncKind {
     Tiebreaker2,
 }
 
+impl AsyncKind {
+    pub(crate) fn from_i32(value: i32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Qualifier1),
+            1 => Some(Self::Qualifier2),
+            2 => Some(Self::Qualifier3),
+            3 => Some(Self::Seeding),
+            4 => Some(Self::Tiebreaker1),
+            5 => Some(Self::Tiebreaker2),
+            _ => None,
+        }
+    }
+}
+
 #[derive(FromForm, CsrfForm)]
 pub(crate) struct RequestAsyncForm {
     #[field(default = String::new())]

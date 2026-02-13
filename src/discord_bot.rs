@@ -1475,19 +1475,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             volunteer_request_sent: race.volunteer_request_sent,
                                         };
                                         race.save(&mut transaction).await?;
-                                        
+
                                         // Reset async fields in database when resetting schedule
                                         if reset_schedule {
                                             sqlx::query!(
                                                 "UPDATE races SET async_thread1 = NULL, async_thread2 = NULL, async_thread3 = NULL, async_seed1 = FALSE, async_seed2 = FALSE, async_seed3 = FALSE, async_ready1 = FALSE, async_ready2 = FALSE, async_ready3 = FALSE WHERE id = $1",
                                                 race.id as _
                                             ).execute(&mut *transaction).await?;
-                                            
+
                                             // Delete async_times records when resetting schedule
                                             sqlx::query!("DELETE FROM async_times WHERE race_id = $1", race.id as _)
                                                 .execute(&mut *transaction).await?;
                                         }
-                                        
+
                                         transaction.commit().await?;
                                         let verb = if aspects_reset.len() == NonZero::<usize>::MIN { " has" } else { " have" };
                                         let response_content = MessageBuilder::default()
@@ -1521,12 +1521,12 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 CommandDataOptionValue::Integer(game) => i16::try_from(game).expect("game number out of range"),
                                 _ => panic!("unexpected slash command option type"),
                             });
-                            
+
                             // Defer the response immediately to prevent timeout
                             interaction.create_response(ctx, CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()
                                 .ephemeral(false)
                             )).await?;
-                            
+
                             if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, false, None, true).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
@@ -2225,28 +2225,28 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             let discord_data = ctx.data.read().await;
                             discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
                         };
-                        
+
                         // Extract race_id and async_part from the button's custom_id
                         // We'll need to encode this in the button's custom_id
                         // For now, we'll need to find the race by thread ID
                         let thread_id = interaction.channel_id.get() as i64;
-                        
+
                         // Find the race and async part for this thread
                         let race_info = sqlx::query!(
                             r#"
-                            SELECT id, 
-                                   CASE 
+                            SELECT id,
+                                   CASE
                                        WHEN async_thread1 = $1 THEN 1
                                        WHEN async_thread2 = $1 THEN 2
                                        WHEN async_thread3 = $1 THEN 3
                                        ELSE NULL
                                    END as async_part
-                            FROM races 
+                            FROM races
                             WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
                             "#,
                             thread_id
                         ).fetch_optional(&mut *transaction).await?;
-                        
+
                         if let Some(race_info) = race_info {
                             if let Some(async_part) = race_info.async_part {
                                 match AsyncRaceManager::handle_ready_button(
@@ -2293,7 +2293,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     .content("This thread is not associated with an async race.")
                             )).await?;
                         }
-                        
+
                         transaction.rollback().await?;
                     }
                     "async_start_countdown" => {
@@ -2302,30 +2302,30 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             let discord_data = ctx.data.read().await;
                             discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
                         };
-                        
+
                         let thread_id = interaction.channel_id.get() as i64;
-                        
+
                         // Find the race and async part for this thread
                         let race_info = sqlx::query!(
                             r#"
-                            SELECT id, 
-                                   CASE 
+                            SELECT id,
+                                   CASE
                                        WHEN async_thread1 = $1 THEN 1
                                        WHEN async_thread2 = $1 THEN 2
                                        WHEN async_thread3 = $1 THEN 3
                                        ELSE NULL
                                    END as async_part
-                            FROM races 
+                            FROM races
                             WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
                             "#,
                             thread_id
                         ).fetch_optional(&mut *transaction).await?;
-                        
+
                         if let Some(race_info) = race_info {
                             if let Some(async_part) = race_info.async_part {
                                 // Defer the interaction to prevent timeout
                                 interaction.defer(&ctx.http).await?;
-                                
+
                                 match AsyncRaceManager::handle_start_countdown_button(
                                     &ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"),
                                     ctx,
@@ -2367,7 +2367,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     .content("This thread is not associated with an async race.")
                             )).await?;
                         }
-                        
+
                         transaction.rollback().await?;
                     }
                     "async_finish" => {
@@ -2376,30 +2376,30 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             let discord_data = ctx.data.read().await;
                             discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
                         };
-                        
+
                         let thread_id = interaction.channel_id.get() as i64;
-                        
+
                         // Find the race and async part for this thread
                         let race_info = sqlx::query!(
                             r#"
-                            SELECT id, 
-                                   CASE 
+                            SELECT id,
+                                   CASE
                                        WHEN async_thread1 = $1 THEN 1
                                        WHEN async_thread2 = $1 THEN 2
                                        WHEN async_thread3 = $1 THEN 3
                                        ELSE NULL
                                    END as async_part
-                            FROM races 
+                            FROM races
                             WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
                             "#,
                             thread_id
                         ).fetch_optional(&mut *transaction).await?;
-                        
+
                         if let Some(race_info) = race_info {
                             if let Some(async_part) = race_info.async_part {
                                 // Defer the interaction to prevent timeout
                                 interaction.defer(&ctx.http).await?;
-                                
+
                                 match AsyncRaceManager::handle_finish_button(
                                     &ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"),
                                     ctx,
@@ -2442,7 +2442,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     .content("This thread is not associated with an async race.")
                             )).await?;
                         }
-                        
+
                         transaction.rollback().await?;
                     }
                     "pronouns_he" => {
@@ -2652,9 +2652,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         // Handle qualifier READY button: format is "async_ready_qualifier_{team_id}_{async_kind}"
                         if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
                             if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
+                                let Some(async_kind) = event::AsyncKind::from_i32(async_kind_int) else { continue };
                                 let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
                                 let mut transaction = pool.begin().await?;
-                                
+
                                 // Verify user is a member of the team
                                 let is_team_member = sqlx::query_scalar!(
                                     r#"SELECT EXISTS (
@@ -2665,7 +2666,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     team_id as i64,
                                     interaction.user.id.get() as i64
                                 ).fetch_one(&mut *transaction).await?;
-                                
+
                                 if !is_team_member {
                                     interaction.create_response(ctx, CreateInteractionResponse::Message(
                                         CreateInteractionResponseMessage::new()
@@ -2683,17 +2684,17 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         FROM async_teams at
                                         JOIN teams t ON at.team = t.id
                                         JOIN asyncs a ON t.series = a.series AND t.event = a.event AND at.kind = a.kind
-                                        WHERE at.team = $1 AND at.kind = ($2)::async_kind
+                                        WHERE at.team = $1 AND at.kind = $2
                                         "#,
                                         team_id as i64,
-                                        async_kind_int as i16
+                                        async_kind as _
                                     ).fetch_optional(&mut *transaction).await?;
-                                    
+
                                     if let Some(seed) = seed_info {
                                         // Build seed message
                                         let mut seed_msg = MessageBuilder::default();
                                         seed_msg.push("**Your seed is ready!**\n\n");
-                                        
+
                                         if let Some(web_id) = seed.web_id {
                                             seed_msg.push(format!("Seed URL: https://ootrandomizer.com/seed/get?id={}\n", web_id));
                                         }
@@ -2708,7 +2709,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         if let Some(file_stem) = &seed.file_stem {
                                             seed_msg.push(format!("Seed file: {}/seed/{}.zpfz\n", base_uri(), file_stem));
                                         }
-                                        
+
                                         // Add hash if available
                                         if seed.hash1.is_some() {
                                             seed_msg.push("\nHash: ");
@@ -2716,7 +2717,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                 seed_msg.push(format!("{}, {}, {}, {}, {}\n", h1, h2, h3, h4, h5));
                                             }
                                         }
-                                        
+
                                         if let Some(ref seed_data) = seed.seed_data {
                                             if let Some(permalink) = seed_data.get("permalink").and_then(|v| v.as_str()) {
                                                 if !permalink.is_empty() {
@@ -2733,19 +2734,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         if let Some(password) = &seed.seed_password {
                                             seed_msg.push(format!("\nPassword: {}\n", password));
                                         }
-                                        
+
                                         // Send seed message and START button
                                         let start_button = CreateActionRow::Buttons(vec![
-                                            CreateButton::new(format!("async_start_qualifier_{}_{}", team_id, async_kind_int))
+                                            CreateButton::new(format!("async_start_qualifier_{}_{}", team_id, async_kind as i32))
                                                 .label("START COUNTDOWN")
                                                 .style(ButtonStyle::Success)
                                         ]);
-                                        
+
                                         interaction.channel_id.send_message(ctx, CreateMessage::new()
                                             .content(seed_msg.build())
                                             .components(vec![start_button])
                                         ).await?;
-                                        
+
                                         // Remove the READY button
                                         interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                             CreateInteractionResponseMessage::new()
@@ -2766,9 +2767,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         // Handle qualifier START COUNTDOWN button
                         if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
                             if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
+                                let Some(async_kind) = event::AsyncKind::from_i32(async_kind_int) else { continue };
                                 let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
                                 let mut transaction = pool.begin().await?;
-                                
+
                                 // Verify user is a member of the team
                                 let is_team_member = sqlx::query_scalar!(
                                     r#"SELECT EXISTS (
@@ -2779,7 +2781,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     team_id as i64,
                                     interaction.user.id.get() as i64
                                 ).fetch_one(&mut *transaction).await?;
-                                
+
                                 if !is_team_member {
                                     interaction.create_response(ctx, CreateInteractionResponse::Message(
                                         CreateInteractionResponseMessage::new()
@@ -2790,11 +2792,11 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 } else {
                                     // Check if already started
                                     let already_started = sqlx::query_scalar!(
-                                        r#"SELECT start_time IS NOT NULL AS "started!" FROM async_teams WHERE team = $1 AND kind = ($2)::async_kind"#,
+                                        r#"SELECT start_time IS NOT NULL AS "started!" FROM async_teams WHERE team = $1 AND kind = $2"#,
                                         team_id as i64,
-                                        async_kind_int as i16
+                                        async_kind as _
                                     ).fetch_optional(&mut *transaction).await?.unwrap_or(false);
-                                    
+
                                     if already_started {
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(
                                             CreateInteractionResponseMessage::new()
@@ -2805,44 +2807,44 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     } else {
                                         // Defer interaction for countdown
                                         interaction.defer(&ctx.http).await?;
-                                        
+
                                         // Send countdown messages
                                         interaction.channel_id.say(ctx, "**Your async is about to start!**").await?;
                                         sleep(Duration::from_secs(1)).await;
-                                        
+
                                         for i in (1..=5).rev() {
                                             interaction.channel_id.say(ctx, format!("**{}**", i)).await?;
                                             sleep(Duration::from_secs(1)).await;
                                         }
-                                        
+
                                         interaction.channel_id.say(ctx, "**GO!** 🏃‍♂️").await?;
-                                        
+
                                         // Record start time
                                         let now = Utc::now();
                                         sqlx::query!(
-                                            "UPDATE async_teams SET start_time = $1 WHERE team = $2 AND kind = ($3)::async_kind",
+                                            "UPDATE async_teams SET start_time = $1 WHERE team = $2 AND kind = $3",
                                             now,
                                             team_id as i64,
-                                            async_kind_int as i16
+                                            async_kind as _
                                         ).execute(&mut *transaction).await?;
-                                        
+
                                         // Send FINISH button
                                         let finish_button = CreateActionRow::Buttons(vec![
-                                            CreateButton::new(format!("async_finish_qualifier_{}_{}", team_id, async_kind_int))
+                                            CreateButton::new(format!("async_finish_qualifier_{}_{}", team_id, async_kind as i32))
                                                 .label("FINISH")
                                                 .style(ButtonStyle::Danger)
                                         ]);
-                                        
+
                                         interaction.channel_id.send_message(ctx, CreateMessage::new()
                                             .content("**Good luck!** Click the FINISH button once you have completed your run.")
                                             .components(vec![finish_button])
                                         ).await?;
-                                        
+
                                         // Remove the START button
                                         interaction.edit_response(ctx, EditInteractionResponse::new()
                                             .components(vec![])
                                         ).await?;
-                                        
+
                                         transaction.commit().await?;
                                     }
                                 }
@@ -2852,6 +2854,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         // Handle qualifier FINISH button
                         if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
                             if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
+                                let Some(async_kind) = event::AsyncKind::from_i32(async_kind_int) else { continue };
                                 let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
                                 let mut transaction = pool.begin().await?;
 
@@ -2876,9 +2879,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 } else {
                                     // Get start time and check state
                                     let async_team = sqlx::query!(
-                                        r#"SELECT start_time, finish_time FROM async_teams WHERE team = $1 AND kind = ($2)::async_kind"#,
+                                        r#"SELECT start_time, finish_time FROM async_teams WHERE team = $1 AND kind = $2"#,
                                         team_id as i64,
-                                        async_kind_int as i16
+                                        async_kind as _
                                     ).fetch_optional(&mut *transaction).await?;
 
                                     if let Some(record) = async_team {
@@ -3256,7 +3259,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
         }))
         .task(|ctx_fut, _| async move {
             let db_pool = ctx_fut.read().await.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-            
+
             let mut shutdown = shutdown;
             // Clean up expired invites every hour
             let mut interval = tokio::time::interval(Duration::from_secs(3600));
@@ -3450,11 +3453,11 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
 }
 
 pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, event: event::Data<'_>) -> Result<(),Error > {
-    // This is a temporary implementation. It checks the race and sees if a seed is rolled. 
+    // This is a temporary implementation. It checks the race and sees if a seed is rolled.
     // If it is not, it rolls a seed and adds it to the database.
     // If it is, it pulls the seed from the database instead.
     // It posts in the event.discord_organizer_channel channel a link to the seed, the player who is playing in the async, and gives admin instructions.
-    // Use previous mechanisms (async channels/etc) to manage race manually. 
+    // Use previous mechanisms (async channels/etc) to manage race manually.
     // If the race is the second half, remind admin in the message to post the race result when it's over and report it on start.gg
     // Set "notified" on the race to avoid this being called again.
 
@@ -3524,13 +3527,13 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         let mut content = MessageBuilder::default();
         content.push("Async starting for ");
         content.mention_team(&mut transaction, event.discord_guild, team).await?;
-        
+
         if is_second_part {
             content.push(". **This is the second part of the async.** The runner will receive the previously generated seed as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
         } else {
             content.push(". A Seed has been generated and will be distributed to the runner as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
         }
-        
+
         let msg = content.build();
         if let Some(channel) = event.discord_organizer_channel {
             channel.say(&discord_ctx, msg).await?;
@@ -3549,7 +3552,7 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         },
         cal::EventKind::Normal => panic!("Why are we having a normal race in an async"),
     };
-    
+
     transaction.commit().await?;
     Ok(())
 }
@@ -3562,19 +3565,19 @@ async fn find_race_from_thread(
     // Check each async thread column to find which one matches
     let race_row = sqlx::query!(
         r#"
-        SELECT id, 
-               CASE 
+        SELECT id,
+               CASE
                    WHEN async_thread1 = $1 THEN 1
                    WHEN async_thread2 = $1 THEN 2
                    WHEN async_thread3 = $1 THEN 3
                    ELSE NULL
                END as async_part
-        FROM races 
+        FROM races
         WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
         "#,
         thread_id
     ).fetch_optional(&mut **transaction).await?;
-    
+
     Ok(race_row.map(|row| (row.id, row.async_part.unwrap_or(0))))
 }
 
@@ -3585,7 +3588,7 @@ async fn find_qualifier_from_thread(
 ) -> Result<Option<(Id<Teams>, AsyncKind)>, sqlx::Error> {
     sqlx::query!(
         r#"SELECT team AS "team: Id<Teams>", kind AS "kind: event::AsyncKind"
-           FROM async_teams 
+           FROM async_teams
            WHERE discord_thread = $1"#,
         thread_id
     ).fetch_optional(&mut **transaction).await
@@ -3735,10 +3738,10 @@ fn get_display_order(race: &Race, async_part: i32) -> i32 {
             if let Some(time) = start1 { scheduled_times.push((1, *time)); }
             if let Some(time) = start2 { scheduled_times.push((2, *time)); }
             if let Some(time) = start3 { scheduled_times.push((3, *time)); }
-            
+
             // Sort by start time
             scheduled_times.sort_by_key(|&(_, time)| time);
-            
+
             // Find the position of this async part in the sorted list
             if let Some(position) = scheduled_times.iter().position(|&(part, _)| part == async_part as u8) {
                 (position + 1) as i32 // Convert to 1-based display order
@@ -3760,7 +3763,7 @@ async fn handle_async_command(
     interaction.create_response(ctx, CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()
         .ephemeral(false)
     )).await?;
-    
+
     let mut transaction = ctx.data.read().await.get::<DbPool>().as_ref().expect("database connection pool missing from Discord context").begin().await?;
 
     // Check if user is an organizer
@@ -3817,7 +3820,7 @@ async fn handle_async_command(
 
                     if is_forfeit {
                         sqlx::query!("UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND kind = $2", team_id as _, async_kind as _).execute(&mut *transaction).await?;
-                        
+
                         interaction.edit_response(ctx, EditInteractionResponse::new()
                             .content(format!("Forfeit recorded for {}.", team_name))
                         ).await?;
@@ -3849,7 +3852,7 @@ async fn handle_async_command(
                         };
 
                         sqlx::query!("UPDATE async_teams SET submitted = NOW(), finish_time = $1 WHERE team = $2 AND kind = $3", pg_interval, team_id as _, async_kind as _).execute(&mut *transaction).await?;
-                        
+
                         let members = team.members(&mut transaction).await?;
                         for member in members {
                              sqlx::query!(
@@ -3858,7 +3861,7 @@ async fn handle_async_command(
                                 team.event,
                                 member.id as _,
                                 async_kind as _,
-                                milliseconds as _, 
+                                milliseconds as _,
                                 link
                             ).execute(&mut *transaction).await?;
                         }
@@ -3867,7 +3870,7 @@ async fn handle_async_command(
                             .content(format!("Time recorded for {}: {}", team_name, time_str))
                         ).await?;
                     }
-                    
+
                     transaction.commit().await?;
                     return Ok(());
                 }
@@ -3915,13 +3918,13 @@ async fn handle_async_command(
         let display_order = get_display_order(&race, async_part as i32);
         let ordinal = match display_order {
             1 => "1st",
-            2 => "2nd", 
+            2 => "2nd",
             3 => "3rd",
             n => &format!("{}th", n),
         };
-        
+
         let content = format!("Forfeit recorded for {} half of this async.", ordinal);
-        
+
         interaction.edit_response(ctx, EditInteractionResponse::new()
             .content(content)
         ).await?;
@@ -3976,13 +3979,13 @@ async fn handle_async_command(
         let display_order = get_display_order(&race, async_part as i32);
         let ordinal = match display_order {
             1 => "1st",
-            2 => "2nd", 
+            2 => "2nd",
             3 => "3rd",
             n => &format!("{}th", n),
         };
-        
+
         let content = format!("Time recorded for {} half of this async: {}", ordinal, time_str);
-        
+
         interaction.edit_response(ctx, EditInteractionResponse::new()
             .content(content)
         ).await?;
@@ -3997,7 +4000,7 @@ async fn handle_async_command(
         "#,
         race_id
     ).fetch_all(&mut *transaction).await?;
-    
+
     let expected_parts = race.teams().count();
     if async_times.len() >= expected_parts {
         // All parts are complete, finalize the race
@@ -4014,16 +4017,16 @@ async fn handle_async_command(
                 3 => sqlx::query_scalar!("SELECT async_start3 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
                 _ => continue,
             };
-            
+
             if let Some(start_time) = start_time {
                 // Calculate finish time in seconds
                 if let Some(finish_time) = &async_time.finish_time {
                     let finish_seconds = finish_time.microseconds / 1_000_000
                         + (finish_time.days as i64) * 86400
                         + (finish_time.months as i64) * 30 * 86400;
-                    
+
                     let end_time = start_time + chrono::Duration::seconds(finish_seconds);
-                    
+
                     match async_time.async_part {
                         1 => sqlx::query!("UPDATE races SET async_end1 = $1 WHERE id = $2", end_time, race_id).execute(&mut *transaction).await?,
                         2 => sqlx::query!("UPDATE races SET async_end2 = $1 WHERE id = $2", end_time, race_id).execute(&mut *transaction).await?,
@@ -4059,7 +4062,7 @@ async fn handle_async_command(
                 (*part, Some(*time), team.unwrap())
             })
             .collect();
-        
+
         // Add forfeiting players with None time
         for async_time in &async_times {
             if async_time.finish_time.is_none() {
@@ -4074,7 +4077,7 @@ async fn handle_async_command(
                 }
             }
         }
-        
+
         total_times.sort_by(|a, b| {
             // Sort by finish time, with None (forfeits) coming last
             match (a.1, b.1) {
@@ -4084,20 +4087,20 @@ async fn handle_async_command(
                 (None, None) => Equal,
             }
         });
-        
+
         let (_winner_part, winner_time, winner_team) = &total_times[0];
         let (_loser_part, loser_time, loser_team) = &total_times[1];
-        
+
         // Get player names
         let winner_player = winner_team.members(&mut transaction).await?.into_iter().next()
             .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
         let loser_player = loser_team.members(&mut transaction).await?.into_iter().next()
             .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
-        
+
         // Format the results message like live races
         let mut content = MessageBuilder::default();
         content.push("Async results for ");
-        
+
         if let Some(phase) = &race.phase {
             content.push_safe(phase.clone());
             content.push(' ');
@@ -4106,11 +4109,11 @@ async fn handle_async_command(
             content.push_safe(round.clone());
             content.push(' ');
         }
-        
+
         content.mention_user(&winner_player);
         content.push(" (");
         if let Some(winner_time) = winner_time {
-            content.push(format!("{:02}:{:02}:{:02}", 
+            content.push(format!("{:02}:{:02}:{:02}",
                 winner_time.as_secs() / 3600,
                 (winner_time.as_secs() % 3600) / 60,
                 winner_time.as_secs() % 60
@@ -4122,7 +4125,7 @@ async fn handle_async_command(
         content.mention_user(&loser_player);
         content.push(" (");
         if let Some(loser_time) = loser_time {
-            content.push(format!("{:02}:{:02}:{:02}", 
+            content.push(format!("{:02}:{:02}:{:02}",
                 loser_time.as_secs() / 3600,
                 (loser_time.as_secs() % 3600) / 60,
                 loser_time.as_secs() % 60
@@ -4131,11 +4134,11 @@ async fn handle_async_command(
             content.push("DNF");
         }
         content.push(")");
-        
+
         // Add links if available
         let mut links_content = MessageBuilder::default();
         let mut has_links = false;
-        
+
         for async_time in &async_times {
             if let Some(link) = &async_time.link {
                 if !has_links {
@@ -4159,16 +4162,16 @@ async fn handle_async_command(
                 }
             }
         }
-        
+
         if has_links {
             content.push(links_content.build());
         }
-        
+
         // Send to race results channel
         if let Some(results_channel) = event.discord_race_results_channel {
             results_channel.say(ctx, content.build()).await?;
         }
-        
+
         // Send to scheduling thread
         if let Some(scheduling_thread) = race.scheduling_thread {
             scheduling_thread.say(ctx, content.build()).await?;
@@ -4178,7 +4181,7 @@ async fn handle_async_command(
         let async_times_parsed: Vec<(i32, Option<PgInterval>)> = async_times.iter()
             .map(|at| (at.async_part, at.finish_time.clone()))
             .collect();
-        
+
         if let Err(e) = report_async_race_to_external_platforms(ctx, &race, &async_times_parsed, &results).await {
             transaction.rollback().await?;
             return Err(e);

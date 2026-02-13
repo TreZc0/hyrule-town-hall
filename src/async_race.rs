@@ -659,7 +659,7 @@ impl AsyncRaceManager {
         // Store thread ID in async_teams
         let thread_id = thread.id.get() as i64;
         sqlx::query!(
-            "UPDATE async_teams SET discord_thread = $1 WHERE team = $2 AND kind = ($3)::async_kind",
+            "UPDATE async_teams SET discord_thread = $1 WHERE team = $2 AND kind = $3",
             thread_id,
             team.id as _,
             async_kind as _
