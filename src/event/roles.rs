@@ -3235,8 +3235,20 @@ async fn match_signup_page(
                         p : "You requested this role — please wait for approval.";
                     } else {
                         p : "You need to be approved for this role before you can sign up.";
-                        p {
-                            a(href = uri!(volunteer_page_get(data.series, &*data.event, _))) : "Request this role";
+                        @if binding.has_event_override {
+                            p {
+                                a(href = uri!(volunteer_page_get(data.series, &*data.event, _))) : "Request this role";
+                            }
+                        } else {
+                            @if let Some(ref game) = game::Game::from_series(&mut transaction, data.series).await.map_err(Error::from)? {
+                                p {
+                                    : "Please request this role on the ";
+                                    a(href = uri!(crate::games::manage_roles(&*game.name, _, _))) : "game page";
+                                    : ".";
+                                }
+                            } else {
+                                p : "Unable to request this role (game not found).";
+                            }
                         }
                     }
 
