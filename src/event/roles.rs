@@ -3243,7 +3243,7 @@ async fn match_signup_page(
                             @if let Some(ref game) = game::Game::from_series(&mut transaction, data.series).await.map_err(Error::from)? {
                                 p {
                                     : "Please request this role on the ";
-                                    a(href = uri!(crate::games::manage_roles(&*game.name, _, _))) : "game page";
+                                    a(href = uri!(crate::games::get(&*game.name, _))) : "game page";
                                     : ".";
                                 }
                             } else {
