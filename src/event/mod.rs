@@ -1420,29 +1420,34 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             let mut errors = ctx.errors().collect_vec();
                             let qualifier_kind = data.qualifier_kind(&mut transaction, Some(me)).await?;
                             let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.clone()), None, &data, false, qualifier_kind, None, true).await?;
-                            let qualified = if let Some(teams::SignupsTeam { qualification, .. }) = signups.iter().find(|teams::SignupsTeam { team, .. }| team.as_ref().is_some_and(|team| team.id == row.id)) {
+                            let (qualified, maxed_out, num_finished, required) = if let Some(teams::SignupsTeam { qualification, .. }) = signups.iter().find(|teams::SignupsTeam { team, .. }| team.as_ref().is_some_and(|team| team.id == row.id)) {
                                 match qualification {
-                                    teams::Qualification::Single { qualified } | teams::Qualification::TriforceBlitz { qualified, .. } => *qualified,
-                                    teams::Qualification::Multiple { .. } => false, //TODO
+                                    teams::Qualification::Single { qualified } | teams::Qualification::TriforceBlitz { qualified, .. } => (*qualified, false, 0, 1),
+                                    teams::Qualification::Multiple { num_entered, num_finished, .. } => {
+                                        if let teams::QualifierKind::Score(score_kind) = qualifier_kind {
+                                            let required = score_kind.required_qualifiers();
+                                            (*num_finished >= required, *num_entered >= score_kind.max_qualifiers_that_count(), *num_finished, required)
+                                        } else {
+                                            (*num_finished >= 2, false, *num_finished, 2) // fallback
+                                        }
+                                    }
                                 }
                             } else {
-                                false
+                                (false, false, 0, 2)
                             };
                             Some(html! {
                                 h3 : "Async";
                                 div(class = "bg-surface") {
                                     @match async_kind {
-                                        AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 => @if qualified {
-                                            p : "You are already qualified, but if you would like to async the ";
-                                            @match async_kind {
-                                                AsyncKind::Qualifier1 => : "first";
-                                                AsyncKind::Qualifier2 => : "second";
-                                                AsyncKind::Qualifier3 => : "third";
-                                                _ => @unreachable
-                                            }
-                                            : " qualifier as well, you can request it here.";
+                                        AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 => @if maxed_out {
+                                            p : "You have already entered the maximum number of qualifiers that count.";
+                                        } else if qualified {
+                                            p : "You are already qualified, but you can play this async to improve your seeding.";
                                         } else {
-                                            p : "Play the qualifier async to qualify for the tournament.";
+                                            p {
+                                                : format!("You have finished {} out of {} required qualifiers. ", num_finished, required);
+                                                : "Play this async to qualify for the tournament.";
+                                            }
                                         }
                                         AsyncKind::Seeding => p : "If you would like to play the seeding async, you can request it here.";
                                         AsyncKind::Tiebreaker1 | AsyncKind::Tiebreaker2 => p : "Play the tiebreaker async to qualify for the bracket stage of the tournament.";

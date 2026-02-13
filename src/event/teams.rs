@@ -42,6 +42,23 @@ pub(crate) enum QualifierScoreKind {
     TwwrMiniblins26,
 }
 
+impl QualifierScoreKind {
+    pub(crate) fn required_qualifiers(self) -> usize {
+        match self {
+            Self::Standard => 5,
+            Self::Sgl2023Online | Self::Sgl2024Online | Self::Sgl2025Online => 3,
+            Self::TwwrMiniblins26 => 2,
+        }
+    }
+
+    pub(crate) fn max_qualifiers_that_count(self) -> usize {
+        match self {
+            Self::TwwrMiniblins26 => 4,
+            _ => usize::MAX,
+        }
+    }
+}
+
 pub(crate) enum MemberUser {
     MidosHouse(User),
     RaceTime {
@@ -565,14 +582,14 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                 }
                             }
                             QualifierScoreKind::TwwrMiniblins26 => {
-                                scores.truncate(4); // only count the first 4 qualifiers by start time
+                                scores.truncate(score_kind.max_qualifiers_that_count()); // only count the first N qualifiers by start time
                                 let round_scores = scores.clone();
                                 let num_entered = scores.len();
                                 scores.retain(|&score| score != 0.0); // forfeits/DNFs don't count
                                 let num_finished = scores.len();
                                 scores.sort_unstable();
                                 scores.reverse(); // highest first
-                                scores.truncate(2); // best 2
+                                scores.truncate(score_kind.required_qualifiers()); // best N
                                 Qualification::Multiple {
                                     score: scores.iter().copied().sum::<R64>(),
                                     num_entered, num_finished, round_scores,
@@ -835,11 +852,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                         },
                         _ => unreachable!("QualifierKind::Multiple must use Qualification::Multiple"),
                     };
-                    let required_qualifiers = match score_kind { //TODO determine based on enter flow
-                        QualifierScoreKind::Standard => 5,
-                        QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => 3,
-                        QualifierScoreKind::TwwrMiniblins26 => 2,
-                    };
+                    let required_qualifiers = score_kind.required_qualifiers();
                     num2.min(required_qualifiers).cmp(&num1.min(required_qualifiers)) // list racers closer to reaching the required number of qualifiers first
                     .then_with(|| score2.cmp(&score1)) // list racers with higher scores first
                     .then_with(|| members1.iter().map(|member| &member.user).cmp(members2.iter().map(|member| &member.user)))
