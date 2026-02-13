@@ -83,8 +83,15 @@ async fn asyncs_form(mut transaction: Transaction<'_, Postgres>, me: User, uri: 
             }
 
             h3 : "Add/Update Async";
+            @let hidden_fields = match event.series {
+                Series::TwwrMain => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid"].as_slice(),
+                Series::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid"].as_slice(),
+                Series::Crosskeys => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid"].as_slice(),
+                _ => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid"].as_slice(),
+            };
+            @let mut errors = ctx.errors().filter(|e| !hidden_fields.iter().any(|f| e.is_for(f))).collect_vec();
             : full_form(uri!(post(event.series, &*event.event)), csrf, html! {
-                : form_field("kind", &mut ctx.errors().collect_vec(), html! {
+                : form_field("kind", &mut errors, html! {
                     label(for = "kind") : "Kind";
                     select(name = "kind", id = "kind") {
                         @for kind in all::<AsyncKind>() {
@@ -94,47 +101,47 @@ async fn asyncs_form(mut transaction: Transaction<'_, Postgres>, me: User, uri: 
                 });
                 @match event.series {
                     Series::TwwrMain => {
-                        : form_field("permalink", &mut ctx.errors().collect_vec(), html! {
+                        : form_field("permalink", &mut errors, html! {
                             label(for = "permalink") : "Permalink";
                             input(type = "text", name = "permalink", id = "permalink", value = ctx.field_value("permalink").unwrap_or(""), style = "width: 100%; max-width: 600px;");
                         });
-                        : form_field("seed_hash", &mut ctx.errors().collect_vec(), html! {
+                        : form_field("seed_hash", &mut errors, html! {
                             label(for = "seed_hash") : "Seed Hash";
                             input(type = "text", name = "seed_hash", id = "seed_hash", value = ctx.field_value("seed_hash").unwrap_or(""));
                         });
                     }
                     Series::TriforceBlitz => {
-                        : form_field("tfb_uuid", &mut ctx.errors().collect_vec(), html! {
+                        : form_field("tfb_uuid", &mut errors, html! {
                             label(for = "tfb_uuid") : "TFB UUID";
                             input(type = "text", name = "tfb_uuid", id = "tfb_uuid", value = ctx.field_value("tfb_uuid").unwrap_or(""));
                         });
                     }
                     Series::Crosskeys => {
-                        : form_field("xkeys_uuid", &mut ctx.errors().collect_vec(), html! {
+                        : form_field("xkeys_uuid", &mut errors, html! {
                             label(for = "xkeys_uuid") : "Crosskeys UUID";
                             input(type = "text", name = "xkeys_uuid", id = "xkeys_uuid", value = ctx.field_value("xkeys_uuid").unwrap_or(""));
                         });
                     }
                     _ => {
-                        : form_field("file_stem", &mut ctx.errors().collect_vec(), html! {
+                        : form_field("file_stem", &mut errors, html! {
                             label(for = "file_stem") : "File Stem";
                             input(type = "text", name = "file_stem", id = "file_stem", value = ctx.field_value("file_stem").unwrap_or(""));
                         });
-                        : form_field("web_id", &mut ctx.errors().collect_vec(), html! {
+                        : form_field("web_id", &mut errors, html! {
                             label(for = "web_id") : "Web ID (optional)";
                             input(type = "number", name = "web_id", id = "web_id", value = ctx.field_value("web_id").unwrap_or(""));
                         });
                     }
                 }
-                : form_field("start", &mut ctx.errors().collect_vec(), html! {
+                : form_field("start", &mut errors, html! {
                     label(for = "start") : "Start Time (UTC)";
                     input(type = "datetime-local", name = "start", id = "start", value = ctx.field_value("start").unwrap_or(""));
                 });
-                : form_field("end_time", &mut ctx.errors().collect_vec(), html! {
+                : form_field("end_time", &mut errors, html! {
                     label(for = "end_time") : "End Time (UTC)";
                     input(type = "datetime-local", name = "end_time", id = "end_time", value = ctx.field_value("end_time").unwrap_or(""));
                 });
-            }, ctx.errors().collect_vec(), "Save Async");
+            }, errors, "Save Async");
         }
     }).await?)
 }
