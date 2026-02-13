@@ -236,6 +236,12 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             label(for = "show_qualifier_times") : "Show Qualifier Times";
                         });
 
+                        : form_field("automated_asyncs", &mut errors, html! {
+                            input(type = "checkbox", id = "automated_asyncs", name = "automated_asyncs", checked? = ctx.field_value("automated_asyncs").map_or(event.automated_asyncs, |value| value == "on"));
+                            label(for = "automated_asyncs") : "Use automated Discord threads for qualifier asyncs";
+                            label(class = "help") : " (When enabled, qualifier requests create private Discord threads with READY/countdown/FINISH buttons)";
+                        });
+
                         : form_field("qualifier_score_hiding", &mut errors, html! {
                             label(for = "qualifier_score_hiding") : "Qualifier Score Hiding";
                             select(id = "qualifier_score_hiding", name = "qualifier_score_hiding", style = "width: 100%; max-width: 600px;") {
@@ -417,6 +423,7 @@ pub(crate) struct SetupForm {
     hide_teams_tab: bool,
     hide_races_tab: bool,
     show_qualifier_times: bool,
+    automated_asyncs: bool,
     qualifier_score_hiding: String,
     show_opt_out: bool,
     force_custom_role_binding: bool,
@@ -744,9 +751,9 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                     challonge_community = $21, team_config = $22, language = $23,
                     default_game_count = $24, open_stream_delay = $25, invitational_stream_delay = $26,
                     hide_teams_tab = $27, hide_races_tab = $28, show_qualifier_times = $29,
-                    show_opt_out = $30, force_custom_role_binding = $31,
-                    qualifier_score_hiding = $34
-                WHERE series = $32 AND event = $33
+                    automated_asyncs = $30, show_opt_out = $31, force_custom_role_binding = $32,
+                    qualifier_score_hiding = $35
+                WHERE series = $33 AND event = $34
             "#,
                 value.display_name,
                 start,
@@ -777,6 +784,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 value.hide_teams_tab,
                 value.hide_races_tab,
                 value.show_qualifier_times,
+                value.automated_asyncs,
                 value.show_opt_out,
                 value.force_custom_role_binding,
                 event_data.series as _,

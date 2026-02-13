@@ -1243,7 +1243,8 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                 None
                             } else if let Some(thread_id) = team_row.discord_thread {
                                 Some(html! {
-                                    div(class = "info") {
+                                    h3 : "Async";
+                                    div(class = "bg-surface") {
                                         p {
                                             : "You requested an async on ";
                                             : format_datetime(team_row.requested, DateTimeFormat { long: true, running_text: true });
@@ -1259,7 +1260,8 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                 })
                             } else if data.automated_asyncs {
                                 Some(html! {
-                                    div(class = "info") {
+                                    h3 : "Async";
+                                    div(class = "bg-surface") {
                                         p : "Your async request has been received. A Discord thread will be created for you shortly.";
                                     }
                                 })
@@ -1304,7 +1306,8 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                 let ctx = ctx.take_submit_async();
                                 let mut errors = ctx.errors().collect_vec();
                                 Some(html! {
-                                    div(class = "info") {
+                                    h3 : "Async";
+                                    div(class = "bg-surface") {
                                         p {
                                             : "You requested an async on ";
                                             : format_datetime(team_row.requested, DateTimeFormat { long: true, running_text: true });
