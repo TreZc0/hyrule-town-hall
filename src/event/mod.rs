@@ -1424,7 +1424,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                 match qualification {
                                     teams::Qualification::Single { qualified } | teams::Qualification::TriforceBlitz { qualified, .. } => (*qualified, false, 0, 1),
                                     teams::Qualification::Multiple { num_entered, num_finished, .. } => {
-                                        if let teams::QualifierKind::Score(score_kind) = qualifier_kind {
+                                        if let QualifierKind::Score(score_kind) = qualifier_kind {
                                             let required = score_kind.required_qualifiers();
                                             (*num_finished >= required, *num_entered >= score_kind.max_qualifiers_that_count(), *num_finished, required)
                                         } else {
