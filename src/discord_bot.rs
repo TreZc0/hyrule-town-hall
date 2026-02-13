@@ -2652,7 +2652,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         // Handle qualifier READY button: format is "async_ready_qualifier_{team_id}_{async_kind}"
                         if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
                             if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
-                                let Some(async_kind) = event::AsyncKind::from_i32(async_kind_int) else { continue };
+                                let Some(async_kind) = AsyncKind::from_i32(async_kind_int) else { return Ok(()) };
                                 let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
                                 let mut transaction = pool.begin().await?;
 
@@ -2767,7 +2767,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         // Handle qualifier START COUNTDOWN button
                         if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
                             if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
-                                let Some(async_kind) = event::AsyncKind::from_i32(async_kind_int) else { continue };
+                                let Some(async_kind) = AsyncKind::from_i32(async_kind_int) else { return Ok(()) };
                                 let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
                                 let mut transaction = pool.begin().await?;
 
@@ -2854,7 +2854,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         // Handle qualifier FINISH button
                         if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
                             if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
-                                let Some(async_kind) = event::AsyncKind::from_i32(async_kind_int) else { continue };
+                                let Some(async_kind) = AsyncKind::from_i32(async_kind_int) else { return Ok(()) };
                                 let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
                                 let mut transaction = pool.begin().await?;
 
