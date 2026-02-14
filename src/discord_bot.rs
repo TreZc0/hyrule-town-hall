@@ -3033,27 +3033,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 }
                             }
                         }
-                    } else if let Some(params) = custom_id.strip_prefix("async_forfeit_qualifier_") {
-                        // Handle qualifier FORFEIT button - show confirmation
-                        if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
-                            if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
-                                let confirm_button = CreateActionRow::Buttons(vec![
-                                    CreateButton::new(format!("async_forfeit_qualifier_confirm_{}_{}", team_id, async_kind_int))
-                                        .label("Yes, forfeit")
-                                        .style(ButtonStyle::Danger),
-                                    CreateButton::new("async_forfeit_qualifier_cancel")
-                                        .label("Cancel")
-                                        .style(ButtonStyle::Secondary),
-                                ]);
-
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("⚠️ **Are you sure you want to forfeit?**\n\nThis will notify the organizers that you are forfeiting this qualifier.")
-                                        .components(vec![confirm_button])
-                                )).await?;
-                            }
-                        }
                     } else if custom_id == "async_forfeit_qualifier_cancel" {
                         // Cancel the qualifier forfeit
                         interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
@@ -3099,12 +3078,33 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     // Update the ephemeral response to confirm
                                     interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                         CreateInteractionResponseMessage::new()
-                                            .content("✅ Forfeit request sent. An organizer will confirm it shortly.")
+                                            .content("Forfeit request sent. An organizer will confirm it shortly.")
                                             .components(vec![])
                                     )).await?;
 
                                     transaction.rollback().await?;
                                 }
+                            }
+                        }
+                    } else if let Some(params) = custom_id.strip_prefix("async_forfeit_qualifier_") {
+                        // Handle qualifier FORFEIT button - show confirmation
+                        if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
+                            if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
+                                let confirm_button = CreateActionRow::Buttons(vec![
+                                    CreateButton::new(format!("async_forfeit_qualifier_confirm_{}_{}", team_id, async_kind_int))
+                                        .label("Yes, forfeit")
+                                        .style(ButtonStyle::Danger),
+                                    CreateButton::new("async_forfeit_qualifier_cancel")
+                                        .label("Cancel")
+                                        .style(ButtonStyle::Secondary),
+                                ]);
+
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("**Are you sure you want to forfeit?**\n\nThis will notify the organizers that you are forfeiting this qualifier.")
+                                        .components(vec![confirm_button])
+                                )).await?;
                             }
                         }
                     } else if let Some(race_id_str) = custom_id.strip_prefix("volunteer_signup_") {

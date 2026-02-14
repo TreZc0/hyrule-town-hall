@@ -98,11 +98,12 @@ nav h1 {
 a,
 a.nav,
 .button,
-input[type="submit"] {
+input[type="submit"],
+button[type="submit"] {
   color: var(--accent);
 }
 
-input[type="submit"],
+input[type="submit"], button[type="submit"],
 .button {
   display: inline-flex;
   align-items: center;
@@ -115,9 +116,14 @@ input[type="submit"],
   border: 1px solid var(--border);
 }
 
+.event-nav .button {
+  border-radius: 0 !important;
+}
+
 a:hover,
 input[type="submit"]:hover,
 .button:hover,
+button[type="submit"]:hover,
 .button.selected {
   background-color: var(--hover-bg);
   color: var(--hover-text);

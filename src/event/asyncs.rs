@@ -165,7 +165,7 @@ async fn asyncs_form(
                                         td : row.end_time.map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_default();
                                         td {
                                             @let kind_name = format!("{:?}", row.kind);
-                                            a(href = uri!(get(event.series, &*event.event, Some(kind_name.clone())))) : "Edit";
+                                            a(class = "button", href = uri!(get(event.series, &*event.event, Some(kind_name.clone())))) : "Edit";
                                             : " | ";
                                             form(action = uri!(delete(event.series, &*event.event, kind_name)).to_string(), method = "post", style = "display: inline;") {
                                                 input(type = "hidden", name = "csrf", value? = csrf.map(|token| token.authenticity_token()));

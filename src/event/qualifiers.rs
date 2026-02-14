@@ -51,7 +51,7 @@ async fn qualifiers_form(mut transaction: Transaction<'_, Postgres>, me: User, u
                                 }
                                 @if !is_started {
                                     td {
-                                        a(href = uri!(get_edit(event.series, &*event.event, row.id)).to_string()) : "Edit";
+                                        a(class = "button", href = uri!(get_edit(event.series, &*event.event, row.id)).to_string()) : "Edit";
                                         : " | ";
                                         form(action = uri!(delete_race(event.series, &*event.event, row.id)).to_string(), method = "post", style = "display: inline;") {
                                             input(type = "hidden", name = "csrf", value? = csrf.map(|token| token.authenticity_token()));

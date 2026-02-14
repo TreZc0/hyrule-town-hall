@@ -735,7 +735,7 @@ impl<'a> Data<'a> {
                     : timezone_info_html();
                 }
             }
-            div(class = "button-row") {
+            div(class = "button-row event-nav") {
                 @if let Tab::Info = tab {
                     a(class = "button selected", href? = is_subpage.then(|| uri!(info(self.series, &*self.event)))) : "Info";
                 } else {

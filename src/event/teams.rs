@@ -520,11 +520,6 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 // Count forfeits/DNFs as entered (score 0) even though they have no time
                 for row in &async_results {
                     if row.time.is_some() { continue } // finishers already handled above
-                    if data.qualifier_score_hiding == QualifierScoreHiding::AsyncOnly {
-                        if row.async_end_time.is_none_or(|end| end > now) {
-                            continue;
-                        }
-                    }
                     let start_time = row.start_time.unwrap_or(now);
                     let user = User::from_id(&mut **transaction, row.player).await?.expect("async player not found");
                     scores.entry(MemberUser::MidosHouse(user)).or_default().push((start_time, r64(0.0), RoundSource::Async(row.kind)));
@@ -917,23 +912,24 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     // When scores are fully hidden, sort alphabetically to avoid leaking rankings (except for organizers)
                     members1.iter().map(|member| &member.user).cmp(members2.iter().map(|member| &member.user))
                 } else {
-                    let (num1, score1) = match *qualification1 {
+                    let (num1, score1, entered1) = match *qualification1 {
                         Qualification::Multiple { num_entered, num_finished, score, .. } => match score_kind { //TODO determine based on enter flow
-                            QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online | QualifierScoreKind::TwwrMiniblins26 => (num_finished, score),
-                            QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => (num_entered, score),
+                            QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online | QualifierScoreKind::TwwrMiniblins26 => (num_finished, score, num_entered),
+                            QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => (num_entered, score, num_entered),
                         },
                         _ => unreachable!("QualifierKind::Multiple must use Qualification::Multiple"),
                     };
-                    let (num2, score2) = match *qualification2 {
+                    let (num2, score2, entered2) = match *qualification2 {
                         Qualification::Multiple { num_entered, num_finished, score, .. } => match score_kind { //TODO determine based on enter flow
-                            QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online | QualifierScoreKind::TwwrMiniblins26 => (num_finished, score),
-                            QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => (num_entered, score),
+                            QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online | QualifierScoreKind::TwwrMiniblins26 => (num_finished, score, num_entered),
+                            QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => (num_entered, score, num_entered),
                         },
                         _ => unreachable!("QualifierKind::Multiple must use Qualification::Multiple"),
                     };
                     let required_qualifiers = score_kind.required_qualifiers();
                     num2.min(required_qualifiers).cmp(&num1.min(required_qualifiers)) // list racers closer to reaching the required number of qualifiers first
                     .then_with(|| score2.cmp(&score1)) // list racers with higher scores first
+                    .then_with(|| entered2.cmp(&entered1)) // list racers with more qualifiers entered first
                     .then_with(|| members1.iter().map(|member| &member.user).cmp(members2.iter().map(|member| &member.user)))
                 }
             }
@@ -1124,7 +1120,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                     div(class = "bg-surface") {
                         p {
                             strong : "Organizer View: ";
-                            : "Regular users see \"—\" for qualifier points.";
+                            : "Regular users will not see points based on the current event settings.";
                         }
                     }
                 }
@@ -1132,7 +1128,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                     div(class = "bg-surface") {
                         p {
                             strong : "Organizer View: ";
-                            : "Regular users see \"—\" for qualifier counts and points.";
+                            : "Regular users will not see entered counts or points based on the current event settings.";
                         }
                     }
                 }
@@ -1140,7 +1136,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                     div(class = "bg-surface") {
                         p {
                             strong : "Organizer View: ";
-                            : "Regular users cannot see this table at all. They see: \"Standings will not be published until after the qualifier stage has ended.\"";
+                            : "Regular users cannot see this table at all based on the current event settings.";
                         }
                     }
                 }
