@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                    SELECT\n                        ap.player AS \"player: Id<Users>\",\n                        ap.time,\n                        ap.kind AS \"kind: AsyncKind\",\n                        at.start_time,\n                        a.end_time AS async_end_time\n                    FROM async_players ap\n                    INNER JOIN team_members tm ON tm.member = ap.player\n                    INNER JOIN teams t ON t.id = tm.team AND t.series = $1 AND t.event = $2\n                    INNER JOIN async_teams at ON at.team = t.id AND at.kind = ap.kind\n                    INNER JOIN asyncs a ON a.series = $1 AND a.event = $2 AND a.kind = ap.kind\n                    WHERE ap.series = $1 AND ap.event = $2\n                    AND ap.time IS NOT NULL\n                    AND at.submitted IS NOT NULL\n                ",
+  "query": "\n                    SELECT\n                        ap.player AS \"player: Id<Users>\",\n                        ap.time,\n                        ap.kind AS \"kind: AsyncKind\",\n                        at.start_time,\n                        a.end_time AS async_end_time\n                    FROM async_players ap\n                    INNER JOIN team_members tm ON tm.member = ap.player\n                    INNER JOIN teams t ON t.id = tm.team AND t.series = $1 AND t.event = $2\n                    INNER JOIN async_teams at ON at.team = t.id AND at.kind = ap.kind\n                    INNER JOIN asyncs a ON a.series = $1 AND a.event = $2 AND a.kind = ap.kind\n                    WHERE ap.series = $1 AND ap.event = $2\n                    AND at.submitted IS NOT NULL\n                ",
   "describe": {
     "columns": [
       {
@@ -56,5 +56,5 @@
       true
     ]
   },
-  "hash": "502659cad7ef6b563e3ffb0c41ad3f2d7917dbe50d0e83c420bc907a917ce031"
+  "hash": "329d96f3360de5f16948d6f3bf0e744e211b4ad7a3a876240751881cc9f29e74"
 }

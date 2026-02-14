@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT team AS \"team: Id<Teams>\", kind AS \"kind: event::AsyncKind\"\n           FROM async_teams \n           WHERE discord_thread = $1",
+  "query": "SELECT team AS \"team: Id<Teams>\", kind AS \"kind: event::AsyncKind\"\n           FROM async_teams\n           WHERE discord_thread = $1",
   "describe": {
     "columns": [
       {
@@ -37,5 +37,5 @@
       false
     ]
   },
-  "hash": "8909fef5d62a20ba3b426e7e1a36f36eb15f6ecc832c1078b749312b3052399b"
+  "hash": "8247b434b529da4d7e4a059787bfb3927c755cd86eaeadc6e9f8f07007358ca7"
 }

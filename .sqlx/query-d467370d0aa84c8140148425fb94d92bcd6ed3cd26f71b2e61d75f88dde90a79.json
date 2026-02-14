@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(SELECT 1 FROM races WHERE id = $1 AND (team1 IS NOT NULL OR team2 IS NOT NULL))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d467370d0aa84c8140148425fb94d92bcd6ed3cd26f71b2e61d75f88dde90a79"
+}

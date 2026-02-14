@@ -1,20 +1,25 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT round, start, room FROM races WHERE series = $1 AND event = $2 AND phase = 'Qualifier' ORDER BY start NULLS LAST, round",
+  "query": "SELECT id AS \"id: Id<Races>\", round, start, room FROM races WHERE series = $1 AND event = $2 AND phase = 'Qualifier' ORDER BY start NULLS LAST, round",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
+        "name": "id: Id<Races>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
         "name": "round",
         "type_info": "Text"
       },
       {
-        "ordinal": 1,
+        "ordinal": 2,
         "name": "start",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
         "name": "room",
         "type_info": "Text"
       }
@@ -26,10 +31,11 @@
       ]
     },
     "nullable": [
+      false,
       true,
       true,
       true
     ]
   },
-  "hash": "0414d2a8574668fb73b8272ea2ebaa435f9c6d3cde8446faf74648dd7122e041"
+  "hash": "3e613630335a04da19ec167923536caea7ad6790f29d60660266a2f05755ae9b"
 }

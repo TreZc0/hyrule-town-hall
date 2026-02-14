@@ -1,0 +1,51 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                at.team AS \"team_id: Id<Teams>\",\n                at.kind AS \"async_kind: event::AsyncKind\",\n                t.series AS \"series: Series\",\n                t.event\n            FROM async_teams at\n            JOIN teams t ON at.team = t.id\n            JOIN events e ON t.series = e.series AND t.event = e.event\n            JOIN asyncs a ON t.series = a.series AND t.event = a.event AND at.kind = a.kind\n            WHERE at.requested IS NOT NULL\n              AND at.submitted IS NULL\n              AND at.discord_thread IS NULL\n              AND e.automated_asyncs = true\n              AND e.discord_async_channel IS NOT NULL\n              AND (a.web_id IS NOT NULL OR a.tfb_uuid IS NOT NULL OR a.xkeys_uuid IS NOT NULL OR a.file_stem IS NOT NULL OR a.seed_data IS NOT NULL)\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id: Id<Teams>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "async_kind: event::AsyncKind",
+        "type_info": {
+          "Custom": {
+            "name": "async_kind",
+            "kind": {
+              "Enum": [
+                "qualifier",
+                "qualifier2",
+                "qualifier3",
+                "tiebreaker1",
+                "tiebreaker2"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "series: Series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "event",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e1c88d28a8121522cf53dc0d8102b00e8fbc02f8e16daf6bc4c6cc90860d95dd"
+}

@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM async_teams WHERE team = $1 AND kind = $2 AND submitted IS NOT NULL) AS \"submitted!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "submitted!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        {
+          "Custom": {
+            "name": "async_kind",
+            "kind": {
+              "Enum": [
+                "qualifier",
+                "qualifier2",
+                "qualifier3",
+                "tiebreaker1",
+                "tiebreaker2"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a035897893ed92cead33eb9b25620459aee35dd30142a6be29526f5f4f8b0c57"
+}

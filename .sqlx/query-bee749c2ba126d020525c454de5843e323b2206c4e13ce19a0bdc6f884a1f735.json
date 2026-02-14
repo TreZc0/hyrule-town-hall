@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                UPDATE events\n                SET display_name = $1, start = $2, end_time = $3, url = $4, video_url = $5,\n                    discord_invite_url = $6, discord_guild = $7, discord_race_room_channel = $8,\n                    discord_race_results_channel = $9, discord_volunteer_info_channel = $10,\n                    discord_organizer_channel = $11, discord_scheduling_channel = $12,\n                    discord_async_channel = $13, short_name = $14, speedgaming_slug = $15,\n                    listed = $16, emulator_settings_reminder = $17,\n                    prevent_late_joins = $18, enter_url = $19, teams_url = $20,\n                    challonge_community = $21, team_config = $22, language = $23,\n                    default_game_count = $24, open_stream_delay = $25, invitational_stream_delay = $26,\n                    hide_teams_tab = $27, hide_races_tab = $28, show_qualifier_times = $29,\n                    show_opt_out = $30, force_custom_role_binding = $31,\n                    qualifier_score_hiding = $34\n                WHERE series = $32 AND event = $33\n            ",
+  "query": "\n                UPDATE events\n                SET display_name = $1, start = $2, end_time = $3, url = $4, video_url = $5,\n                    discord_invite_url = $6, discord_guild = $7, discord_race_room_channel = $8,\n                    discord_race_results_channel = $9, discord_volunteer_info_channel = $10,\n                    discord_organizer_channel = $11, discord_scheduling_channel = $12,\n                    discord_async_channel = $13, short_name = $14, speedgaming_slug = $15,\n                    listed = $16, emulator_settings_reminder = $17,\n                    prevent_late_joins = $18, enter_url = $19, teams_url = $20,\n                    challonge_community = $21, team_config = $22, language = $23,\n                    default_game_count = $24, open_stream_delay = $25, invitational_stream_delay = $26,\n                    hide_teams_tab = $27, hide_races_tab = $28, show_qualifier_times = $29,\n                    automated_asyncs = $30, show_opt_out = $31, force_custom_role_binding = $32,\n                    qualifier_score_hiding = $35\n                WHERE series = $33 AND event = $34\n            ",
   "describe": {
     "columns": [],
     "parameters": {
@@ -61,6 +61,7 @@
         "Bool",
         "Bool",
         "Bool",
+        "Bool",
         "Text",
         "Text",
         {
@@ -81,5 +82,5 @@
     },
     "nullable": []
   },
-  "hash": "4608400f873f4ed79478fc332d3465850e10dfdbc3ad652a6c910dc573ba1467"
+  "hash": "bee749c2ba126d020525c454de5843e323b2206c4e13ce19a0bdc6f884a1f735"
 }

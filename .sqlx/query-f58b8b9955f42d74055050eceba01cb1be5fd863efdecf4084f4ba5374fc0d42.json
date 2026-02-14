@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT enter_flow AS \"enter_flow: serde_json::Value\"\n        FROM events WHERE series = $1 AND event = $2\n    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "enter_flow: serde_json::Value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "f58b8b9955f42d74055050eceba01cb1be5fd863efdecf4084f4ba5374fc0d42"
+}
