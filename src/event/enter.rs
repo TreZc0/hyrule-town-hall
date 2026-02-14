@@ -1518,6 +1518,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                     AND series = $1
                     AND event = $2
                     AND member = $3
+                    AND NOT resigned
                     AND NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')
                 ) AS "exists!""#, series as _, event, me.id as _).fetch_one(&mut *transaction).await? {
                     form.context.push_error(form::Error::validation("You are already signed up for this event."));
@@ -1624,6 +1625,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                             AND series = $1
                             AND event = $2
                             AND member = $3
+                            AND NOT resigned
                             AND EXISTS (SELECT 1 FROM team_members WHERE team = id AND member = $4)
                         ) AS "exists!""#, series as _, event, me.id as _, teammate as _).fetch_one(&mut *transaction).await? {
                             form.context.push_error(form::Error::validation("A team with these members is already proposed for this race. Check your notifications to accept the invite, or ask your teammate to do so.")); //TODO linkify notifications? More specific message based on whether viewer has confirmed?
@@ -1633,6 +1635,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                             AND series = $1
                             AND event = $2
                             AND member = $3
+                            AND NOT resigned
                             AND NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')
                         ) AS "exists!""#, series as _, event, me.id as _).fetch_one(&mut *transaction).await? {
                             form.context.push_error(form::Error::validation("You are already signed up for this race."));
@@ -1641,6 +1644,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                             series = $1
                             AND event = $2
                             AND name = $3
+                            AND NOT resigned
                             AND NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')
                         ) AS "exists!""#, series as _, event, value.team_name).fetch_one(&mut *transaction).await? {
                             form.context.push_error(form::Error::validation("A team with this name is already signed up for this race.").with_name("team_name"));
@@ -1659,6 +1663,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                             AND series = $1
                             AND event = $2
                             AND member = $3
+                            AND NOT resigned
                             AND NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')
                         ) AS "exists!""#, series as _, event, teammate as _).fetch_one(&mut *transaction).await? {
                             form.context.push_error(form::Error::validation("This user is already signed up for this race.").with_name("teammate"));
@@ -1774,6 +1779,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                     AND series = $1
                                     AND event = $2
                                     AND member = $3
+                                    AND NOT resigned
                                     AND NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')
                                 ) AS "exists!""#, series as _, event, user.id as _).fetch_one(&mut *transaction).await? {
                                     form.context.push_error(form::Error::validation("This user is already signed up for this tournament."));
@@ -1807,6 +1813,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                 [u1, u2] => if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams WHERE
                                     series = $1
                                     AND event = $2
+                                    AND NOT resigned
                                     AND EXISTS (SELECT 1 FROM team_members WHERE team = id AND member = $3)
                                     AND EXISTS (SELECT 1 FROM team_members WHERE team = id AND member = $4)
                                 ) AS "exists!""#, series as _, event, u1.id as _, u2.id as _).fetch_one(&mut *transaction).await? {
@@ -1815,6 +1822,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                 [u1, u2, u3] => if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams WHERE
                                     series = $1
                                     AND event = $2
+                                    AND NOT resigned
                                     AND EXISTS (SELECT 1 FROM team_members WHERE team = id AND member = $3)
                                     AND EXISTS (SELECT 1 FROM team_members WHERE team = id AND member = $4)
                                     AND EXISTS (SELECT 1 FROM team_members WHERE team = id AND member = $5)

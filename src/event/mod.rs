@@ -1856,6 +1856,7 @@ pub(crate) async fn find_team_post(pool: &State<PgPool>, me: User, uri: Origin<'
             AND series = $1
             AND event = $2
             AND member = $3
+            AND NOT resigned
             AND NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')
         ) AS "exists!""#, series as _, event, me.id as _).fetch_one(&mut *transaction).await? {
             form.context.push_error(form::Error::validation("You are already signed up for this event."));

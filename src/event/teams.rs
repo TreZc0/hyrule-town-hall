@@ -409,7 +409,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                         a.end_time AS async_end_time
                     FROM async_players ap
                     INNER JOIN team_members tm ON tm.member = ap.player
-                    INNER JOIN teams t ON t.id = tm.team AND t.series = $1 AND t.event = $2
+                    INNER JOIN teams t ON t.id = tm.team AND t.series = $1 AND t.event = $2 AND NOT t.resigned
                     INNER JOIN async_teams at ON at.team = t.id AND at.kind = ap.kind
                     INNER JOIN asyncs a ON a.series = $1 AND a.event = $2 AND a.kind = ap.kind
                     WHERE ap.series = $1 AND ap.event = $2
