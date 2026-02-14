@@ -321,8 +321,10 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                     : full_form(uri!(add_organizer(event.series, &*event.event)), csrf, html! {
                         : form_field("organizer", &mut errors, html! {
                             label(for = "organizer") : "Add Organizer";
-                            input(type = "text", id = "organizer", name = "organizer", autocomplete = "off", style = "width: 100%; max-width: 600px;");
-                            div(id = "organizer-suggestions", class = "suggestions");
+                            div(class = "autocomplete-container", style = "width: 100%; max-width: 600px;") {
+                                input(type = "text", id = "organizer", name = "organizer", autocomplete = "off", style = "width: 100%;");
+                                div(id = "organizer-suggestions", class = "suggestions", style = "display: none;") {}
+                            }
                         });
                     }, errors.clone(), "Add Organizer");
                     
