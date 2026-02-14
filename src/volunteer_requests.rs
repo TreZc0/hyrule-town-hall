@@ -258,13 +258,17 @@ async fn get_races_needing_announcements(
         };
 
         // Check restream consent - all teams must have consented
-        if let Some(mut teams) = race.teams_opt() {
-            if !teams.all(|team| team.restream_consent) {
+        // Skip this check for qualifier races since they're open to all entrants
+        let is_qualifier = race.phase.as_ref().is_some_and(|p| p == "Qualifier");
+        if !is_qualifier {
+            if let Some(mut teams) = race.teams_opt() {
+                if !teams.all(|team| team.restream_consent) {
+                    continue;
+                }
+            } else {
+                // Not all entrants are Mido's House teams, skip
                 continue;
             }
-        } else {
-            // Not all entrants are Mido's House teams, skip
-            continue;
         }
 
         // Get matchup description
@@ -341,6 +345,11 @@ async fn get_matchup_description(
     transaction: &mut Transaction<'_, Postgres>,
     race: &Race,
 ) -> Result<String, Error> {
+    // For qualifier races, just use the round name (e.g., "Live 1")
+    if race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
+        return Ok(race.round.clone().unwrap_or_else(|| "Qualifier".to_string()));
+    }
+
     let matchup = match &race.entrants {
         Entrants::Two([e1, e2]) => {
             let name1 = get_entrant_name(transaction, e1).await?;
