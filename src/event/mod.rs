@@ -1257,7 +1257,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             ).fetch_one(&mut *transaction).await?.unwrap_or(0)).unwrap_or_default();
                             let mut qualifier_data = data.clone();
                             qualifier_data.qualifier_score_hiding = QualifierScoreHiding::None;
-                            let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.clone()), None, &qualifier_data, false, qualifier_kind, None, true).await?;
+                            let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.clone()), None, &qualifier_data, false, qualifier_kind, None, true, false).await?;
                             signups.iter().find_map(|teams::SignupsTeam { team, qualification, .. }| {
                                 if team.as_ref().is_some_and(|team| team.id == row.id) {
                                     if let teams::Qualification::Multiple { num_entered, num_finished, score, .. } = qualification {
@@ -1511,7 +1511,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             let ctx = ctx.take_request_async();
                             let mut errors = ctx.errors().collect_vec();
                             let qualifier_kind = data.qualifier_kind(&mut transaction, Some(me)).await?;
-                            let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.clone()), None, &data, false, qualifier_kind, None, true).await?;
+                            let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.clone()), None, &data, false, qualifier_kind, None, true, false).await?;
                             let (qualified, maxed_out, num_finished, required) = if let Some(teams::SignupsTeam { qualification, .. }) = signups.iter().find(|teams::SignupsTeam { team, .. }| team.as_ref().is_some_and(|team| team.id == row.id)) {
                                 match qualification {
                                     teams::Qualification::Single { qualified } | teams::Qualification::TriforceBlitz { qualified, .. } => (*qualified, false, 0, 1),
@@ -1534,11 +1534,11 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                         AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 => @if maxed_out {
                                             p : "You have already entered the maximum number of qualifiers that count.";
                                         } else if qualified {
-                                            p : "You are already qualified, but you can play this async to improve your seeding.";
+                                            p : "You are already qualified, but you can play another async to improve your seeding.";
                                         } else {
                                             p {
                                                 : format!("You have finished {} out of {} required qualifiers. ", num_finished, required);
-                                                : "Play this async to qualify for the tournament.";
+                                                : "Play another async to qualify for the tournament.";
                                             }
                                         }
                                         AsyncKind::Seeding => p : "If you would like to play the seeding async, you can request it here.";
@@ -2296,6 +2296,233 @@ pub(crate) async fn opt_out_post(pool: &State<PgPool>, discord_ctx: &State<RwFut
         })
     } else {
         Err(StatusOrError::Err(ResignError::FormValue))
+    }
+}
+
+/// Action to take when an organizer manages a team/player
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromFormField)]
+pub(crate) enum ManageAction {
+    Remove,
+    RemoveAndBlock,
+    OptOut,
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct ManageTeamForm {
+    #[field(default = String::new())]
+    csrf: String,
+    action: ManageAction,
+    #[field(default = None)]
+    reason: Option<String>,
+}
+
+#[derive(Debug, thiserror::Error, rocket_util::Error)]
+pub(crate) enum ManageTeamError {
+    #[error(transparent)] Data(#[from] DataError),
+    #[error(transparent)] Discord(#[from] serenity::Error),
+    #[error(transparent)] Event(#[from] Error),
+    #[error(transparent)] Sql(#[from] sqlx::Error),
+    #[error(transparent)] Teams(#[from] teams::Error),
+    #[error("invalid form data")]
+    FormValue,
+}
+
+impl<E: Into<ManageTeamError>> From<E> for StatusOrError<ManageTeamError> {
+    fn from(e: E) -> Self {
+        Self::Err(e.into())
+    }
+}
+
+async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, ctx: Context<'_>, series: Series, event: &str, team: Id<Teams>) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let me = me.ok_or(StatusOrError::Status(Status::Unauthorized))?;
+    if !data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden))
+    }
+    let team_obj = Team::from_id(&mut transaction, team).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let team_display = team_obj.to_html(&mut transaction, true).await?;
+    let members = team_obj.members(&mut transaction).await?;
+    let qualifier_kind = data.qualifier_kind(&mut transaction, None).await?;
+    let has_qualifiers = !matches!(qualifier_kind, QualifierKind::None);
+
+    Ok(page(transaction, &Some(me), &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Manage — {}", data.display_name), html! {
+        h2 {
+            : "Manage ";
+            : team_display;
+        }
+        p {
+            : "Members: ";
+            @for (i, member) in members.iter().enumerate() {
+                @if i > 0 {
+                    : ", ";
+                }
+                : member.to_html();
+            }
+        }
+        @if !has_qualifiers {
+            p {
+                i : "Note: This event does not have qualifiers, so the Opt-out option is not available.";
+            }
+        }
+        form(action = uri!(manage_team_post(series, event, team)).to_string(), method = "post") {
+            : csrf.as_ref();
+            fieldset {
+                legend : "Select an action:";
+                div {
+                    input(type = "radio", name = "action", value = "remove", id = "action-remove", checked);
+                    label(for = "action-remove") {
+                        strong : "Remove";
+                        : " — Remove from event (they can re-enter)";
+                    }
+                }
+                div {
+                    input(type = "radio", name = "action", value = "remove_and_block", id = "action-block");
+                    label(for = "action-block") {
+                        strong : "Remove and Block";
+                        : " — Remove AND prevent re-entry to this event";
+                    }
+                }
+                @if has_qualifiers {
+                    div {
+                        input(type = "radio", name = "action", value = "opt_out", id = "action-optout");
+                        label(for = "action-optout") {
+                            strong : "Opt-out";
+                            : " — Mark as opted-out from qualifier standings (shows \"—\" for placement)";
+                        }
+                    }
+                }
+            }
+            fieldset {
+                label(for = "reason") : "Reason (optional, for audit log):";
+                br;
+                textarea(name = "reason", id = "reason", rows = "3", cols = "50");
+            }
+            @for error in ctx.errors() {
+                div(class = "error") : error.to_string();
+            }
+            fieldset {
+                input(type = "submit", value = "Confirm");
+            }
+        }
+    }).await?)
+}
+
+#[rocket::get("/event/<series>/<event>/manage/<team>")]
+pub(crate) async fn manage_team(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, team: Id<Teams>) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    manage_team_page(pool, me, uri, csrf, Context::default(), series, event, team).await
+}
+
+#[rocket::post("/event/<series>/<event>/manage/<team>", data = "<form>")]
+pub(crate) async fn manage_team_post(pool: &State<PgPool>, _http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, team: Id<Teams>, form: Form<Contextual<'_, ManageTeamForm>>) -> Result<RedirectOrContent, StatusOrError<ManageTeamError>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    if !data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden))
+    }
+    let team_obj = Team::from_id(&mut transaction, team).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if let Some(ref value) = form.value {
+        if data.is_ended() {
+            form.context.push_error(form::Error::validation("This event has already ended."));
+        }
+
+        let team_members = team_obj.members(&mut transaction).await?;
+
+        Ok(if form.context.errors().next().is_some() {
+            transaction.rollback().await?;
+            RedirectOrContent::Content(manage_team_page(pool, Some(me), uri, csrf, form.context, series, event, team).await.map_err(|e| match e {
+                StatusOrError::Status(status) => StatusOrError::Status(status),
+                StatusOrError::Err(e) => e.into(),
+            })?)
+        } else {
+            let action_desc = match value.action {
+                ManageAction::Remove => "removed",
+                ManageAction::RemoveAndBlock => "removed and blocked",
+                ManageAction::OptOut => "marked as opted-out",
+            };
+
+            // Perform the action
+            match value.action {
+                ManageAction::Remove | ManageAction::RemoveAndBlock => {
+                    // Similar to resign logic
+                    let keep_record = data.is_started(&mut transaction).await?
+                        || sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM async_teams WHERE team = $1) AS "exists!""#, team as _).fetch_one(&mut *transaction).await?;
+
+                    if keep_record {
+                        sqlx::query!("UPDATE teams SET resigned = TRUE WHERE id = $1", team as _).execute(&mut *transaction).await?;
+                    } else {
+                        sqlx::query!("DELETE FROM team_members WHERE team = $1", team as _).execute(&mut *transaction).await?;
+                        sqlx::query!("DELETE FROM teams WHERE id = $1", team as _).execute(&mut *transaction).await?;
+                    }
+
+                    // Remove Discord role if applicable
+                    if let (Some(discord_guild), Some(PgSnowflake(participant_role))) = (data.discord_guild, sqlx::query_scalar!(r#"SELECT id AS "id: PgSnowflake<RoleId>" FROM discord_roles WHERE guild = $1 AND series = $2 AND event = $3"#, PgSnowflake(data.discord_guild.unwrap()) as _, series as _, event).fetch_optional(&mut *transaction).await?) {
+                        let discord_ctx = discord_ctx.read().await;
+                        for user in &team_members {
+                            if let Some(discord_user) = user.discord.as_ref() {
+                                if let Ok(member) = discord_guild.member(&*discord_ctx, discord_user.id).await {
+                                    let _ = member.remove_role(&*discord_ctx, participant_role).await;
+                                }
+                            }
+                        }
+                    }
+
+                    // For RemoveAndBlock, also add to event_blocks
+                    if value.action == ManageAction::RemoveAndBlock {
+                        for user in &team_members {
+                            if let Some(racetime) = user.racetime.as_ref() {
+                                sqlx::query!(
+                                    "INSERT INTO event_blocks (series, event, racetime_id, user_id, blocked_by, reason) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
+                                    series as _, event, racetime.id, user.id as _, me.id as _, value.reason.as_deref()
+                                ).execute(&mut *transaction).await?;
+                            }
+                        }
+                    }
+                }
+                ManageAction::OptOut => {
+                    // Add to opt_outs for each member
+                    for user in &team_members {
+                        if let Some(racetime) = user.racetime.as_ref() {
+                            sqlx::query!(
+                                "INSERT INTO opt_outs (series, event, racetime_id, user_id, opted_out_by, is_organizer_action) VALUES ($1, $2, $3, $4, $5, TRUE) ON CONFLICT DO NOTHING",
+                                series as _, event, racetime.id, user.id as _, me.id as _
+                            ).execute(&mut *transaction).await?;
+                        }
+                    }
+                }
+            }
+
+            // Post to organizer channel
+            if let Some(organizer_channel) = data.discord_organizer_channel {
+                let mut msg = MessageBuilder::default();
+                msg.mention_user(&me)
+                    .push(" has ")
+                    .push(action_desc)
+                    .push(" ");
+                for (i, user) in team_members.iter().enumerate() {
+                    if i > 0 {
+                        msg.push(", ");
+                    }
+                    msg.mention_user(user);
+                }
+                msg.push(" from ").push_safe(&data.display_name);
+                if let Some(ref reason) = value.reason {
+                    if !reason.is_empty() {
+                        msg.push(". Reason: ").push_safe(reason);
+                    }
+                }
+                msg.push(".");
+                organizer_channel.say(&*discord_ctx.read().await, msg.build()).await?;
+            }
+
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(teams::get(series, event))))
+        })
+    } else {
+        Err(StatusOrError::Err(ManageTeamError::FormValue))
     }
 }
 

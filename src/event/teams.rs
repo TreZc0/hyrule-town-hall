@@ -222,6 +222,7 @@ pub(crate) struct SignupsTeam {
     pub(crate) members: Vec<SignupsMember>,
     pub(crate) qualification: Qualification,
     pub(crate) custom_choices: HashMap<String, String>,
+    pub(crate) is_opted_out: bool,
 }
 
 pub(crate) struct Cache {
@@ -249,7 +250,7 @@ impl Cache {
     }
 }
 
-pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, cache: &mut Cache, me: Option<&User>, data: &Data<'_>, is_organizer: bool, qualifier_kind: QualifierKind, worst_case_extrapolation: Option<&MemberUser>, all_qualifiers_ended: bool) -> Result<Vec<SignupsTeam>, cal::Error> {
+pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, cache: &mut Cache, me: Option<&User>, data: &Data<'_>, is_organizer: bool, qualifier_kind: QualifierKind, worst_case_extrapolation: Option<&MemberUser>, all_qualifiers_ended: bool, include_opted_out: bool) -> Result<Vec<SignupsTeam>, cal::Error> {
     let now = Utc::now();
     let mut signups = match qualifier_kind {
         QualifierKind::Score(score_kind) => {
@@ -506,19 +507,30 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     scores.entry(MemberUser::MidosHouse(user)).or_default();
                 }
             }
+            // Query opt_outs for both racetime_id and user_id
+            let opt_out_racetime_ids: Vec<String> = sqlx::query_scalar!("SELECT racetime_id FROM opt_outs WHERE series = $1 AND event = $2", data.series as _, &data.event).fetch_all(&mut **transaction).await?;
+            let opt_out_user_ids: Vec<i64> = sqlx::query_scalar!(r#"SELECT user_id AS "user_id!" FROM opt_outs WHERE series = $1 AND event = $2 AND user_id IS NOT NULL"#, data.series as _, &data.event).fetch_all(&mut **transaction).await?;
+
+            // Helper to check if a user is opted out
+            let is_user_opted_out = |user: &MemberUser| -> bool {
+                match user {
+                    MemberUser::RaceTime { id, .. } => opt_out_racetime_ids.contains(id),
+                    MemberUser::MidosHouse(u) => opt_out_user_ids.contains(&i64::from(u.id)),
+                    MemberUser::Newcomer | MemberUser::Deleted => false,
+                }
+            };
+
             if worst_case_extrapolation.is_none() && data.is_started(&mut *transaction).await? {
                 scores.retain(|user, _| matches!(user, MemberUser::MidosHouse(_)));
-            } else {
-                let opt_outs = sqlx::query_scalar!("SELECT racetime_id FROM opt_outs WHERE series = $1 AND event = $2", data.series as _, &data.event).fetch_all(&mut **transaction).await?;
-                scores.retain(move |user, _| match user {
-                    MemberUser::RaceTime { id, .. } => !opt_outs.contains(id),
-                    MemberUser::MidosHouse(_) | MemberUser::Newcomer | MemberUser::Deleted => true,
-                });
+            } else if !include_opted_out {
+                // Only filter out opted-out users when not including them for display
+                scores.retain(|user, _| !is_user_opted_out(user));
             }
             let mut signups = Vec::with_capacity(scores.len());
             for (user, mut timestamped_scores) in scores {
                 // Sort by timestamp so truncation respects chronological order
                 timestamped_scores.sort_by_key(|(ts, _)| *ts);
+                let user_opted_out = is_user_opted_out(&user);
                 signups.push(SignupsTeam {
                     team: match &user {
                         MemberUser::MidosHouse(user) => user_teams.remove(&user.id),
@@ -618,6 +630,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                         }
                     },
                     custom_choices: HashMap::default(),
+                    is_opted_out: user_opted_out,
                 });
             }
             signups
@@ -695,6 +708,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     }],
                     qualification: Qualification::Single { qualified: qualification_level == QualificationLevel::Qualified },
                     custom_choices: HashMap::default(),
+                    is_opted_out: false,
                 }).collect()
         }
         QualifierKind::None | QualifierKind::Rank | QualifierKind::Single { .. } => {
@@ -796,6 +810,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     },
                     custom_choices: team.custom_choices.0,
                     members,
+                    is_opted_out: false,
                 });
             }
             signups
@@ -854,8 +869,8 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 .then_with(|| team1.cmp(&team2))
             }
             QualifierKind::Score(score_kind) => {
-                if matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPoints | QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !all_qualifiers_ended {
-                    // When scores are fully hidden, sort alphabetically to avoid leaking rankings
+                if !is_organizer && matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPoints | QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !all_qualifiers_ended {
+                    // When scores are fully hidden, sort alphabetically to avoid leaking rankings (except for organizers)
                     members1.iter().map(|member| &member.user).cmp(members2.iter().map(|member| &member.user))
                 } else {
                     let (num1, score1) = match *qualification1 {
@@ -949,7 +964,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
         false
     };
     let roles = data.team_config.roles();
-    let signups = signups_sorted(&mut transaction, &mut Cache::new(http_client.clone()), me.as_ref(), &data, is_organizer, qualifier_kind, None, all_qualifiers_ended).await?;
+    let signups = signups_sorted(&mut transaction, &mut Cache::new(http_client.clone()), me.as_ref(), &data, is_organizer, qualifier_kind, None, all_qualifiers_ended, true).await?;
     let mut footnotes = Vec::default();
     let teams_label = if let TeamConfig::Solo = data.team_config { "Entrants" } else { "Teams" };
     let mut column_headers = Vec::default();
@@ -1040,9 +1055,54 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
             });
         }
     }
+    // Add Actions column for organizers when event has qualifiers
+    let show_organizer_actions = is_organizer && !matches!(qualifier_kind, QualifierKind::None);
+    if show_organizer_actions {
+        column_headers.push(html! {
+            th : "Actions";
+        });
+    }
     let content = html! {
         : header;
-        @if data.qualifier_score_hiding == QualifierScoreHiding::FullComplete && !all_qualifiers_ended {
+        // Organizer info box showing what's hidden for regular users
+        @if is_organizer && !all_qualifiers_ended {
+            @match data.qualifier_score_hiding {
+                QualifierScoreHiding::None => {}
+                QualifierScoreHiding::AsyncOnly => {
+                    div(class = "bg-surface") {
+                        p {
+                            strong : "Organizer View: ";
+                            : "Regular users cannot see async results until the async window closes.";
+                        }
+                    }
+                }
+                QualifierScoreHiding::FullPoints => {
+                    div(class = "bg-surface") {
+                        p {
+                            strong : "Organizer View: ";
+                            : "Regular users see \"—\" for qualifier points.";
+                        }
+                    }
+                }
+                QualifierScoreHiding::FullPointsCounts => {
+                    div(class = "bg-surface") {
+                        p {
+                            strong : "Organizer View: ";
+                            : "Regular users see \"—\" for qualifier counts and points.";
+                        }
+                    }
+                }
+                QualifierScoreHiding::FullComplete => {
+                    div(class = "bg-surface") {
+                        p {
+                            strong : "Organizer View: ";
+                            : "Regular users cannot see this table at all. They see: \"Standings will not be published until after the qualifier stage has ended.\"";
+                        }
+                    }
+                }
+            }
+        }
+        @if !is_organizer && data.qualifier_score_hiding == QualifierScoreHiding::FullComplete && !all_qualifiers_ended {
             p {
                 i : "Standings will not be published until after the qualifier stage has ended.";
             }
@@ -1063,7 +1123,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                         }
                     }
                 } else {
-                    @for (signup_idx, SignupsTeam { team, members, qualification, custom_choices, .. }) in signups.into_iter().enumerate() {
+                    @for (signup_idx, SignupsTeam { team, members, qualification, custom_choices, is_opted_out }) in signups.into_iter().enumerate() {
                         @let is_dimmed = match qualifier_kind {
                             QualifierKind::None => false,
                             QualifierKind::Rank => false, // unknown cutoff
@@ -1088,8 +1148,20 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                         };
                         tr(class? = is_dimmed.then_some("dimmed")) {
                             @match qualifier_kind {
-                                QualifierKind::Rank => td : team.as_ref().and_then(|team| team.qualifier_rank);
-                                QualifierKind::Score(_) => td : signup_idx + 1;
+                                QualifierKind::Rank => td {
+                                    @if is_opted_out {
+                                        : "—";
+                                    } else {
+                                        : team.as_ref().and_then(|team| team.qualifier_rank);
+                                    }
+                                }
+                                QualifierKind::Score(_) => td {
+                                    @if is_opted_out {
+                                        : "—";
+                                    } else {
+                                        : signup_idx + 1;
+                                    }
+                                }
                                 _ => {}
                             }
                             @if !matches!(data.team_config, TeamConfig::Solo) {
@@ -1183,8 +1255,8 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                     td(style = "text-align: right;") : format!("{score:.2}");
                                 }
                                 (QualifierKind::Score(QualifierScoreKind::TwwrMiniblins26), Qualification::Multiple { num_entered, num_finished, score, round_scores }) => {
-                                    @let hide_counts = matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !all_qualifiers_ended;
-                                    @let hide_points = matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPoints | QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !all_qualifiers_ended;
+                                    @let hide_counts = !is_organizer && matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !all_qualifiers_ended;
+                                    @let hide_points = !is_organizer && matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPoints | QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !all_qualifiers_ended;
                                     td(style = "text-align: right;") {
                                         @if hide_counts { : "—"; }
                                         else { : num_entered; }
@@ -1273,7 +1345,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                                 &data
                                                             };
                                                             let qualifier_kind = data.qualifier_kind(&mut transaction, None).await?;
-                                                            let teams = signups_sorted(&mut transaction, &mut cache, None, data, is_organizer, qualifier_kind, Some(&entrant.user), all_qualifiers_ended).await?;
+                                                            let teams = signups_sorted(&mut transaction, &mut cache, None, data, is_organizer, qualifier_kind, Some(&entrant.user), all_qualifiers_ended, false).await?;
                                                             if let Some((placement, team)) = teams.iter().enumerate().find(|(_, team)| team.members.iter().any(|member| member.user == entrant.user));
                                                             if let Qualification::Multiple { num_entered, num_finished, .. } = team.qualification;
                                                             let num_qualifiers = if *need_finish { num_finished } else { num_entered };
@@ -1397,13 +1469,20 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                 }
                                 @if let TeamConfig::Multiworld = data.team_config {
                                     td {
-                                        @if let Some(team) = team {
+                                        @if let Some(ref team) = team {
                                             @match team.mw_impl {
                                                 None => : "?";
                                                 Some(mw::Impl::BizHawkCoOp) => : "bizhawk-co-op";
                                                 Some(mw::Impl::MidosHouse) => : "MH MW";
                                             }
                                         }
+                                    }
+                                }
+                            }
+                            @if show_organizer_actions {
+                                td {
+                                    @if let Some(ref team) = team {
+                                        a(class = "button", href = uri!(crate::event::manage_team(series, event, team.id)).to_string()) : "Manage";
                                     }
                                 }
                             }

@@ -663,7 +663,7 @@ pub(crate) async fn entrants_csv(db_pool: &State<PgPool>, http_client: &State<re
         return Err(StatusOrError::Status(Status::Forbidden))
     }
     let qualifier_kind = event.qualifier_kind(&mut transaction, Some(&me)).await?;
-    let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.inner().clone()), None, &event, is_organizer, qualifier_kind, None, true).await?;
+    let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.inner().clone()), None, &event, is_organizer, qualifier_kind, None, true, true).await?;
     let mut csv = csv::Writer::from_writer(Vec::default());
     for (i, teams::SignupsTeam { team, .. }) in signups.into_iter().enumerate() {
         if let Some(team) = team {

@@ -262,7 +262,7 @@ impl Requirement {
                 };
                 let qualifier_kind = data.qualifier_kind(&mut *transaction, None).await?;
                 // call signups_sorted with worst_case_extrapolation = true to calculate whether the player has secured a spot ahead of time
-                let teams = teams::signups_sorted(transaction, &mut cache, None, data, false, qualifier_kind, Some(&teams::MemberUser::MidosHouse(me.clone())), true).await?;
+                let teams = teams::signups_sorted(transaction, &mut cache, None, data, false, qualifier_kind, Some(&teams::MemberUser::MidosHouse(me.clone())), true, false).await?;
                 if let Some((placement, team)) = teams.iter().enumerate().find(|(_, team)| team.members.iter().any(|member| member.user == *me));
                 if let teams::Qualification::Multiple { num_entered, num_finished, .. } = team.qualification;
                 then {
@@ -1209,7 +1209,18 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                         } else {
                             false
                         };
-                        if opted_out {
+                        let is_blocked = if let Some(racetime) = me.as_ref().and_then(|me| me.racetime.as_ref()) {
+                            sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM event_blocks WHERE series = $1 AND event = $2 AND racetime_id = $3) AS "exists!""#, data.series as _, &data.event, racetime.id).fetch_one(&mut *transaction).await?
+                        } else {
+                            false
+                        };
+                        if is_blocked {
+                            html! {
+                                article {
+                                    p : "You have been blocked from entering this event. Please contact the organizers if you believe this is an error.";
+                                }
+                            }
+                        } else if opted_out {
                             html! {
                                 article {
                                     p : "You can no longer enter this event since you have already opted out.";
