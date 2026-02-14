@@ -1524,7 +1524,16 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                     form.context.push_error(form::Error::validation("You are already signed up for this event."));
                 }
                 if form.context.errors().next().is_none() {
-                    let id = Id::<Teams>::new(&mut transaction).await?;
+                    // Check if there's an existing resigned team to reactivate
+                    let existing_resigned_team = sqlx::query_scalar!(r#"SELECT id AS "id: Id<Teams>" FROM teams, team_members WHERE
+                        id = team
+                        AND series = $1
+                        AND event = $2
+                        AND member = $3
+                        AND resigned
+                        AND NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')
+                    "#, series as _, event, me.id as _).fetch_optional(&mut *transaction).await?;
+
                     // Merge old-style boolean choices into custom_choices
                     let mut custom_choices = value.custom_choices.clone();
                     if value.all_dungeons_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("all_dungeons")).or_insert(format!("yes")); }
@@ -1539,21 +1548,41 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                     if value.no_delay_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("no_delay")).or_insert(format!("yes")); }
                     if value.pb_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("pseudoboots")).or_insert(format!("yes")); }
                     if value.zw_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("zw")).or_insert(format!("yes")); }
-                    sqlx::query!(
-                        "INSERT INTO teams (id, series, event, plural_name, restream_consent, text_field, text_field2, yes_no, mw_impl, custom_choices) VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9)",
-                        id as _,
-                        series as _,
-                        event,
-                        value.restream_consent || value.restream_consent_radio == Some(BoolRadio::Yes),
-                        value.text_field,
-                        value.text_field2,
-                        value.yes_no == Some(BoolRadio::Yes),
-                        value.mw_impl as _,
-                        sqlx::types::Json(&custom_choices) as _,
-                    ).execute(&mut *transaction).await?;
-                    sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'created', 'none')", id as _, me.id as _).execute(&mut *transaction).await?;
+
+                    let id = if let Some(existing_id) = existing_resigned_team {
+                        // Reactivate the existing resigned team
+                        sqlx::query!(
+                            "UPDATE teams SET resigned = FALSE, restream_consent = $2, text_field = $3, text_field2 = $4, yes_no = $5, mw_impl = $6, custom_choices = $7 WHERE id = $1",
+                            existing_id as _,
+                            value.restream_consent || value.restream_consent_radio == Some(BoolRadio::Yes),
+                            value.text_field,
+                            value.text_field2,
+                            value.yes_no == Some(BoolRadio::Yes),
+                            value.mw_impl as _,
+                            sqlx::types::Json(&custom_choices) as _,
+                        ).execute(&mut *transaction).await?;
+                        existing_id
+                    } else {
+                        // Create a new team
+                        let id = Id::<Teams>::new(&mut transaction).await?;
+                        sqlx::query!(
+                            "INSERT INTO teams (id, series, event, plural_name, restream_consent, text_field, text_field2, yes_no, mw_impl, custom_choices) VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9)",
+                            id as _,
+                            series as _,
+                            event,
+                            value.restream_consent || value.restream_consent_radio == Some(BoolRadio::Yes),
+                            value.text_field,
+                            value.text_field2,
+                            value.yes_no == Some(BoolRadio::Yes),
+                            value.mw_impl as _,
+                            sqlx::types::Json(&custom_choices) as _,
+                        ).execute(&mut *transaction).await?;
+                        sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'created', 'none')", id as _, me.id as _).execute(&mut *transaction).await?;
+                        id
+                    };
                     if let Some(async_kind) = request_qualifier {
-                        sqlx::query!("INSERT INTO async_teams (team, kind, requested) VALUES ($1, $2, NOW())", id as _, async_kind as _).execute(&mut *transaction).await?;
+                        // Only insert if not already requested for this team
+                        sqlx::query!("INSERT INTO async_teams (team, kind, requested) VALUES ($1, $2, NOW()) ON CONFLICT DO NOTHING", id as _, async_kind as _).execute(&mut *transaction).await?;
                     }
                     if let (Some(discord_user), Some(discord_guild)) = (me.discord.as_ref(), data.discord_guild) {
                         let discord_ctx = discord_ctx.read().await;
