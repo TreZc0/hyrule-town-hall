@@ -412,7 +412,6 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     INNER JOIN async_teams at ON at.team = t.id AND at.kind = ap.kind
                     INNER JOIN asyncs a ON a.series = $1 AND a.event = $2 AND a.kind = ap.kind
                     WHERE ap.series = $1 AND ap.event = $2
-                    AND ap.time IS NOT NULL
                     AND at.submitted IS NOT NULL
                 "#, data.series as _, &data.event).fetch_all(&mut **transaction).await?;
 
@@ -443,7 +442,16 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                         QualifierScoreKind::TwwrMiniblins26 => 3,
                     };
                     if finish_times.len() < par_cutoff {
-                        continue // not enough finishers to calculate par
+                        if matches!(score_kind, QualifierScoreKind::TwwrMiniblins26) {
+                            // Not enough finishers for par — record entries with a
+                            // sentinel score of -1 so participation counts are accurate.
+                            // Scores will be recalculated when enough finishers exist.
+                            for (player_id, _finish_time, start_time) in &results {
+                                let user = User::from_id(&mut **transaction, *player_id).await?.expect("async player not found");
+                                scores.entry(MemberUser::MidosHouse(user)).or_default().push((*start_time, r64(-1.0)));
+                            }
+                        }
+                        continue;
                     }
 
                     for (player_id, finish_time, start_time) in &results {
@@ -471,6 +479,18 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                         let user = User::from_id(&mut **transaction, *player_id).await?.expect("async player not found");
                         scores.entry(MemberUser::MidosHouse(user)).or_default().push((*start_time, r64(score)));
                     }
+                }
+                // Count forfeits/DNFs as entered (score 0) even though they have no time
+                for row in &async_results {
+                    if row.time.is_some() { continue } // finishers already handled above
+                    if data.qualifier_score_hiding == QualifierScoreHiding::AsyncOnly {
+                        if row.async_end_time.is_none_or(|end| end > now) {
+                            continue;
+                        }
+                    }
+                    let start_time = row.start_time.unwrap_or(now);
+                    let user = User::from_id(&mut **transaction, row.player).await?.expect("async player not found");
+                    scores.entry(MemberUser::MidosHouse(user)).or_default().push((start_time, r64(0.0)));
                 }
             }
             let teams = Team::for_event(&mut *transaction, data.series, &data.event).await?;
@@ -585,8 +605,8 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                 scores.truncate(score_kind.max_qualifiers_that_count()); // only count the first N qualifiers by start time
                                 let round_scores = scores.clone();
                                 let num_entered = scores.len();
-                                scores.retain(|&score| score != 0.0); // forfeits/DNFs don't count
-                                let num_finished = scores.len();
+                                let num_finished = scores.iter().filter(|&&score| score != 0.0).count(); // -1 sentinel counts as finished
+                                scores.retain(|&score| score > 0.0); // only keep properly scored entries
                                 scores.sort_unstable();
                                 scores.reverse(); // highest first
                                 scores.truncate(score_kind.required_qualifiers()); // best N
@@ -1179,13 +1199,21 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                         } else if round_scores.is_empty() {
                                             : format!("{score:.2}");
                                         } else {
+                                            @let has_pending = round_scores.iter().any(|&s| s < r64(0.0));
                                             details(class = "round-breakdown") {
-                                                summary : format!("{score:.2}");
+                                                summary {
+                                                    : format!("{score:.2}");
+                                                    @if has_pending {
+                                                        : "*";
+                                                    }
+                                                }
                                                 div(class = "round-scores") {
                                                     @for (i, round_score) in round_scores.iter().enumerate() {
                                                         div {
                                                             : format!("Race {}: ", i + 1);
-                                                            @if *round_score == r64(0.0) {
+                                                            @if *round_score < r64(0.0) {
+                                                                : "(pending)";
+                                                            } else if *round_score == r64(0.0) {
                                                                 : "DNF";
                                                             } else {
                                                                 : format!("{round_score:.0}");
