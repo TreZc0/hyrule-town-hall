@@ -891,9 +891,9 @@ impl<'a> Data<'a> {
                         }
                         @if self.asyncs_active {
                             @if let Tab::Asyncs = tab {
-                                a(class = "button selected", href? = is_subpage.then(|| uri!(asyncs::get(self.series, &*self.event)))) : "Asyncs";
+                                a(class = "button selected", href? = is_subpage.then(|| uri!(asyncs::get(self.series, &*self.event, None::<String>)))) : "Asyncs";
                             } else {
-                                a(class = "button", href = uri!(asyncs::get(self.series, &*self.event))) : "Asyncs";
+                                a(class = "button", href = uri!(asyncs::get(self.series, &*self.event, None::<String>))) : "Asyncs";
                             }
                         }
                         @if let Tab::Qualifiers = tab {
@@ -1242,6 +1242,49 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                 @if row.resigned {
                     p : "You have resigned from this event.";
                 } else {
+                    @let qualifier_progress = {
+                        let qualifier_kind = data.qualifier_kind(&mut transaction, Some(me)).await?;
+                        if let QualifierKind::Score(score_kind) = qualifier_kind {
+                            let mut qualifier_data = data.clone();
+                            qualifier_data.qualifier_score_hiding = QualifierScoreHiding::None;
+                            let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.clone()), None, &qualifier_data, false, qualifier_kind, None, true).await?;
+                            signups.iter().find_map(|teams::SignupsTeam { team, qualification, .. }| {
+                                if team.as_ref().is_some_and(|team| team.id == row.id) {
+                                    if let teams::Qualification::Multiple { num_entered, num_finished, score, .. } = qualification {
+                                        Some((*num_entered, *num_finished, score_kind.max_qualifiers_that_count(), score_kind.required_qualifiers(), *score))
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            })
+                        } else {
+                            None
+                        }
+                    };
+                    @if let Some((num_entered, num_finished, max_qualifiers, required_qualifiers, score)) = qualifier_progress {
+                        h3 : "Qualifier Progress";
+                        div(class = "bg-surface") {
+                            p {
+                                : "Qualifiers entered: ";
+                                : num_entered;
+                                @if max_qualifiers != usize::MAX {
+                                    : " / ";
+                                    : max_qualifiers;
+                                }
+                            }
+                            p {
+                                : "Qualifiers finished: ";
+                                : num_finished;
+                                : " / ";
+                                : required_qualifiers;
+                            }
+                            @if data.qualifier_score_hiding == QualifierScoreHiding::None {
+                                p : format!("Qualifier points: {score:.2}");
+                            }
+                        }
+                    }
                     @let async_info = if let Some(async_kind) = data.active_async(&mut transaction, Some(row.id)).await? {
                         let async_row = sqlx::query!(r#"SELECT is_tfb_dev, tfb_uuid, xkeys_uuid, web_id, web_gen_time, file_stem, hash1, hash2, hash3, hash4, hash5, seed_password, seed_data FROM asyncs WHERE series = $1 AND event = $2 AND kind = $3"#, data.series as _, &data.event, async_kind as _).fetch_one(&mut *transaction).await?;
                         if let Some(team_row) = sqlx::query!(r#"SELECT requested AS "requested!", submitted, discord_thread FROM async_teams WHERE team = $1 AND KIND = $2 AND requested IS NOT NULL"#, row.id as _, async_kind as _).fetch_optional(&mut *transaction).await? {
