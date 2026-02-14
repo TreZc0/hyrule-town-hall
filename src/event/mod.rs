@@ -1245,13 +1245,31 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                     @let qualifier_progress = {
                         let qualifier_kind = data.qualifier_kind(&mut transaction, Some(me)).await?;
                         if let QualifierKind::Score(score_kind) = qualifier_kind {
+                            let live_qualifier_count = usize::try_from(sqlx::query_scalar!(
+                                r#"SELECT COUNT(*) FROM races WHERE series = $1 AND event = $2 AND phase = 'Qualifier'"#,
+                                data.series as _,
+                                &data.event
+                            ).fetch_one(&mut *transaction).await?.unwrap_or(0)).unwrap_or_default();
+                            let async_qualifier_count = usize::try_from(sqlx::query_scalar!(
+                                r#"SELECT COUNT(*) FROM asyncs WHERE series = $1 AND event = $2 AND kind IN ('qualifier', 'qualifier2', 'qualifier3')"#,
+                                data.series as _,
+                                &data.event
+                            ).fetch_one(&mut *transaction).await?.unwrap_or(0)).unwrap_or_default();
                             let mut qualifier_data = data.clone();
                             qualifier_data.qualifier_score_hiding = QualifierScoreHiding::None;
                             let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.clone()), None, &qualifier_data, false, qualifier_kind, None, true).await?;
                             signups.iter().find_map(|teams::SignupsTeam { team, qualification, .. }| {
                                 if team.as_ref().is_some_and(|team| team.id == row.id) {
                                     if let teams::Qualification::Multiple { num_entered, num_finished, score, .. } = qualification {
-                                        Some((*num_entered, *num_finished, score_kind.max_qualifiers_that_count(), score_kind.required_qualifiers(), *score))
+                                        Some((
+                                            *num_entered,
+                                            *num_finished,
+                                            score_kind.max_qualifiers_that_count(),
+                                            score_kind.required_qualifiers(),
+                                            *score,
+                                            live_qualifier_count,
+                                            async_qualifier_count,
+                                        ))
                                     } else {
                                         None
                                     }
@@ -1263,9 +1281,31 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             None
                         }
                     };
-                    @if let Some((num_entered, num_finished, max_qualifiers, required_qualifiers, score)) = qualifier_progress {
+                    @if let Some((num_entered, num_finished, max_qualifiers, required_qualifiers, score, live_qualifier_count, async_qualifier_count)) = qualifier_progress {
                         h3 : "Qualifier Progress";
+                        @let total_qualifier_count = live_qualifier_count + async_qualifier_count;
                         div(class = "bg-surface") {
+                            p {
+                                : "You need to finish at least ";
+                                : required_qualifiers;
+                                : " qualifiers to qualify. ";
+                                @if max_qualifiers == usize::MAX {
+                                    : "All entered qualifiers count toward scoring.";
+                                } else {
+                                    : "Only your first ";
+                                    : max_qualifiers;
+                                    : " entered qualifiers count toward scoring.";
+                                }
+                            }
+                            p {
+                                : "Qualifier opportunities: ";
+                                : total_qualifier_count;
+                                : " total (";
+                                : live_qualifier_count;
+                                : " live/sync, ";
+                                : async_qualifier_count;
+                                : " async).";
+                            }
                             p {
                                 : "Qualifiers entered: ";
                                 : num_entered;
@@ -1275,7 +1315,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                 }
                             }
                             p {
-                                : "Qualifiers finished: ";
+                                : "Required Qualifiers finished: ";
                                 : num_finished;
                                 : " / ";
                                 : required_qualifiers;
