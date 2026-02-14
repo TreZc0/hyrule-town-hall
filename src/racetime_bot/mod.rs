@@ -2783,9 +2783,9 @@ impl SeedRollUpdate {
 
                 if let Some(VersionedBranch::Tww { identifier, github_url }) = version {
                     ctx.say(if let French = language {
-                        format!("Cette course utilise la version '{identifier}' du randomizer TWW ({github_url}).")
+                        format!("Cette course utilise la version '{identifier}' du randomizer TWW: {github_url}")
                     } else {
-                        format!("This race uses TWW randomizer build '{identifier}' ({github_url}).")
+                        format!("This race uses TWW randomizer build '{identifier}': {github_url}")
                     }).await?;
                 }
                 match unlock_spoiler_log {

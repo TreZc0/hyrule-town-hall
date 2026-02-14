@@ -4,6 +4,7 @@ use {
         discord_bot::PgSnowflake,
         event::{
             Data,
+            QualifierScoreHiding,
             Tab,
         },
         prelude::*,
@@ -175,6 +176,17 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                                 label(class = "help") : "(When enabled, qualifier requests create private Discord threads with READY/countdown/FINISH buttons. Staff validate results via /result-async command.)";
                             });
                         }
+                        : form_field("qualifier_score_hiding", &mut errors, html! {
+                            label(for = "qualifier_score_hiding") : "Qualifier Score Hiding";
+                            select(id = "qualifier_score_hiding", name = "qualifier_score_hiding", style = "width: 100%; max-width: 600px;") {
+                                option(value = "none", selected? = ctx.field_value("qualifier_score_hiding").map_or(matches!(event.qualifier_score_hiding, QualifierScoreHiding::None), |v| v == "none")) : "None (all scores visible)";
+                                option(value = "async_only", selected? = ctx.field_value("qualifier_score_hiding").map_or(matches!(event.qualifier_score_hiding, QualifierScoreHiding::AsyncOnly), |v| v == "async_only")) : "Async Only (async scores hidden until window closes)";
+                                option(value = "full_points", selected? = ctx.field_value("qualifier_score_hiding").map_or(matches!(event.qualifier_score_hiding, QualifierScoreHiding::FullPoints), |v| v == "full_points")) : "Hide Points (names and counts visible)";
+                                option(value = "full_points_counts", selected? = ctx.field_value("qualifier_score_hiding").map_or(matches!(event.qualifier_score_hiding, QualifierScoreHiding::FullPointsCounts), |v| v == "full_points_counts")) : "Hide Points & Counts (names visible)";
+                                option(value = "full_complete", selected? = ctx.field_value("qualifier_score_hiding").map_or(matches!(event.qualifier_score_hiding, QualifierScoreHiding::FullComplete), |v| v == "full_complete")) : "Hide Everything (table hidden until quals end)";
+                            }
+                            label(class = "help") : "(Controls what qualifier information is visible to non-organizers before all qualifiers have ended)";
+                        });
                     }, errors, "Save");
                 }
                 h2 : "More options";
@@ -242,6 +254,7 @@ pub(crate) struct ConfigureForm {
     discord_events_require_restream: bool,
     automated_asyncs: bool,
     settings_string: Option<String>,
+    qualifier_score_hiding: String,
 }
 
 #[rocket::post("/event/<series>/<event>/configure", data = "<form>")]
@@ -332,6 +345,18 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             }
             if value.automated_asyncs != data.automated_asyncs {
                 sqlx::query!("UPDATE events SET automated_asyncs = $1 WHERE series = $2 AND event = $3", value.automated_asyncs, data.series as _, &data.event).execute(&mut *transaction).await?;
+            }
+            // Parse and update qualifier_score_hiding
+            let qualifier_score_hiding = match value.qualifier_score_hiding.as_str() {
+                "none" => QualifierScoreHiding::None,
+                "async_only" => QualifierScoreHiding::AsyncOnly,
+                "full_points" => QualifierScoreHiding::FullPoints,
+                "full_points_counts" => QualifierScoreHiding::FullPointsCounts,
+                "full_complete" => QualifierScoreHiding::FullComplete,
+                _ => QualifierScoreHiding::None,
+            };
+            if qualifier_score_hiding != data.qualifier_score_hiding {
+                sqlx::query!("UPDATE events SET qualifier_score_hiding = $1 WHERE series = $2 AND event = $3", qualifier_score_hiding as _, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
             if matches!(data.rando_version, Some(VersionedBranch::Tww { .. })) {
                 let new_settings_string = value.settings_string.as_deref().filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_owned());

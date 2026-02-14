@@ -1192,7 +1192,8 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                     }
                                 }
                                 QualifierKind::Score(_) => td {
-                                    @if is_opted_out {
+                                    @let hide_rank = !is_organizer && data.qualifier_score_hiding != QualifierScoreHiding::None && !all_qualifiers_ended;
+                                    @if is_opted_out || hide_rank {
                                         : "—";
                                     } else {
                                         : signup_idx + 1;

@@ -1,5 +1,5 @@
 use crate::{
-    event::{Data, QualifierScoreHiding, Tab},
+    event::{Data, Tab},
     prelude::*,
     user::DisplaySource
 };
@@ -242,17 +242,6 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             label(class = "help") : " (When enabled, qualifier requests create private Discord threads with READY/countdown/FINISH buttons)";
                         });
 
-                        : form_field("qualifier_score_hiding", &mut errors, html! {
-                            label(for = "qualifier_score_hiding") : "Qualifier Score Hiding";
-                            select(id = "qualifier_score_hiding", name = "qualifier_score_hiding", style = "width: 100%; max-width: 600px;") {
-                                option(value = "none", selected? = ctx.field_value("qualifier_score_hiding").map_or(matches!(event.qualifier_score_hiding, QualifierScoreHiding::None), |v| v == "none")) : "None (all scores visible)";
-                                option(value = "async_only", selected? = ctx.field_value("qualifier_score_hiding").map_or(matches!(event.qualifier_score_hiding, QualifierScoreHiding::AsyncOnly), |v| v == "async_only")) : "Async Only (async scores hidden until window closes)";
-                                option(value = "full_points", selected? = ctx.field_value("qualifier_score_hiding").map_or(matches!(event.qualifier_score_hiding, QualifierScoreHiding::FullPoints), |v| v == "full_points")) : "Hide Points (names and counts visible)";
-                                option(value = "full_points_counts", selected? = ctx.field_value("qualifier_score_hiding").map_or(matches!(event.qualifier_score_hiding, QualifierScoreHiding::FullPointsCounts), |v| v == "full_points_counts")) : "Hide Points & Counts (names visible)";
-                                option(value = "full_complete", selected? = ctx.field_value("qualifier_score_hiding").map_or(matches!(event.qualifier_score_hiding, QualifierScoreHiding::FullComplete), |v| v == "full_complete")) : "Hide Everything (table hidden until quals end)";
-                            }
-                        });
-
                         : form_field("show_opt_out", &mut errors, html! {
                             input(type = "checkbox", id = "show_opt_out", name = "show_opt_out", checked? = ctx.field_value("show_opt_out").map_or(event.show_opt_out, |value| value == "on"));
                             label(for = "show_opt_out") : "Show Opt-Out";
@@ -424,7 +413,6 @@ pub(crate) struct SetupForm {
     hide_races_tab: bool,
     show_qualifier_times: bool,
     automated_asyncs: bool,
-    qualifier_score_hiding: String,
     show_opt_out: bool,
     force_custom_role_binding: bool,
 }
@@ -706,19 +694,6 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 }
             };
 
-            // Parse qualifier_score_hiding enum
-            let qualifier_score_hiding = match value.qualifier_score_hiding.as_str() {
-                "none" => QualifierScoreHiding::None,
-                "async_only" => QualifierScoreHiding::AsyncOnly,
-                "full_points" => QualifierScoreHiding::FullPoints,
-                "full_points_counts" => QualifierScoreHiding::FullPointsCounts,
-                "full_complete" => QualifierScoreHiding::FullComplete,
-                _ => {
-                    form.context.push_error(form::Error::validation("Invalid qualifier score hiding"));
-                    QualifierScoreHiding::None // default fallback
-                }
-            };
-
             // Parse durations
             let open_stream_delay = if let Some(time) = parse_duration(&value.open_stream_delay, None) {
                 Some(time)
@@ -751,8 +726,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                     challonge_community = $21, team_config = $22, language = $23,
                     default_game_count = $24, open_stream_delay = $25, invitational_stream_delay = $26,
                     hide_teams_tab = $27, hide_races_tab = $28, show_qualifier_times = $29,
-                    automated_asyncs = $30, show_opt_out = $31, force_custom_role_binding = $32,
-                    qualifier_score_hiding = $35
+                    automated_asyncs = $30, show_opt_out = $31, force_custom_role_binding = $32
                 WHERE series = $33 AND event = $34
             "#,
                 value.display_name,
@@ -789,7 +763,6 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 value.force_custom_role_binding,
                 event_data.series as _,
                 &event_data.event,
-                qualifier_score_hiding as _
             ).execute(&mut *transaction).await?;
             
             transaction.commit().await?;
