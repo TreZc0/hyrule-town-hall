@@ -1273,7 +1273,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.clone()), None, &qualifier_data, false, qualifier_kind, None, true, false).await?;
                             signups.into_iter().find_map(|teams::SignupsTeam { team, qualification, .. }| {
                                 if team.as_ref().is_some_and(|team| team.id == row.id) {
-                                    if let teams::Qualification::Multiple { num_entered, num_finished, score, round_scores } = qualification {
+                                    if let teams::Qualification::Multiple { num_entered, num_finished, score, round_scores, .. } = qualification {
                                         Some((
                                             num_entered,
                                             num_finished,

@@ -1473,6 +1473,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             schedule_locked: race.schedule_locked,
                                             discord_scheduled_event_id: race.discord_scheduled_event_id,
                                             volunteer_request_sent: race.volunteer_request_sent,
+                                            volunteer_request_message_id: race.volunteer_request_message_id,
                                         };
                                         race.save(&mut transaction).await?;
 
@@ -2445,6 +2446,95 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
 
                         transaction.rollback().await?;
                     }
+                    "async_forfeit" => {
+                        // Show confirmation for bracket async forfeit
+                        let confirm_button = CreateActionRow::Buttons(vec![
+                            CreateButton::new("async_forfeit_confirm")
+                                .label("Yes, forfeit")
+                                .style(ButtonStyle::Danger),
+                            CreateButton::new("async_forfeit_cancel")
+                                .label("Cancel")
+                                .style(ButtonStyle::Secondary),
+                        ]);
+
+                        interaction.create_response(ctx, CreateInteractionResponse::Message(
+                            CreateInteractionResponseMessage::new()
+                                .ephemeral(true)
+                                .content("⚠️ **Are you sure you want to forfeit?**\n\nThis will notify the organizers that you are forfeiting this async race.")
+                                .components(vec![confirm_button])
+                        )).await?;
+                    }
+                    "async_forfeit_confirm" => {
+                        // Handle confirmed bracket async forfeit
+                        let mut transaction = {
+                            let discord_data = ctx.data.read().await;
+                            discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
+                        };
+
+                        let thread_id = interaction.channel_id.get() as i64;
+
+                        // Find the race for this thread
+                        let race_info = sqlx::query!(
+                            r#"
+                            SELECT id, async_thread1, async_thread2, async_thread3
+                            FROM races
+                            WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
+                            "#,
+                            thread_id
+                        ).fetch_optional(&mut *transaction).await?;
+
+                        if let Some(race_info) = race_info {
+                            let async_part = if race_info.async_thread1 == Some(thread_id) {
+                                1
+                            } else if race_info.async_thread2 == Some(thread_id) {
+                                2
+                            } else if race_info.async_thread3 == Some(thread_id) {
+                                3
+                            } else {
+                                0
+                            };
+
+                            if async_part > 0 {
+                                // Send @here ping to the thread informing of forfeit
+                                let mut msg = MessageBuilder::default();
+                                msg.push("@here - ");
+                                msg.mention(&interaction.user);
+                                msg.push(" has indicated they want to **forfeit** this async race.\n\n");
+                                msg.push("**Organizers:** To confirm this forfeit, use the `/forfeit-async` command in this thread.");
+
+                                interaction.channel_id.say(ctx, msg.build()).await?;
+
+                                // Update the ephemeral response to confirm
+                                interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                    CreateInteractionResponseMessage::new()
+                                        .content("✅ Forfeit request sent. An organizer will confirm it shortly.")
+                                        .components(vec![])
+                                )).await?;
+                            } else {
+                                interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                    CreateInteractionResponseMessage::new()
+                                        .content("Could not determine which async part this thread is for.")
+                                        .components(vec![])
+                                )).await?;
+                            }
+                        } else {
+                            interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                CreateInteractionResponseMessage::new()
+                                    .content("This thread is not associated with an async race.")
+                                    .components(vec![])
+                            )).await?;
+                        }
+
+                        transaction.rollback().await?;
+                    }
+                    "async_forfeit_cancel" => {
+                        // Cancel the forfeit
+                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                            CreateInteractionResponseMessage::new()
+                                .content("Forfeit cancelled.")
+                                .components(vec![])
+                        )).await?;
+                    }
                     "pronouns_he" => {
                         let member = interaction.member.clone().expect("/pronoun-roles called outside of a guild");
                         let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "he/him").expect("missing 'he/him' role");
@@ -2828,16 +2918,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             async_kind as _
                                         ).execute(&mut *transaction).await?;
 
-                                        // Send FINISH button
-                                        let finish_button = CreateActionRow::Buttons(vec![
+                                        // Send FINISH and FORFEIT buttons
+                                        let race_buttons = CreateActionRow::Buttons(vec![
                                             CreateButton::new(format!("async_finish_qualifier_{}_{}", team_id, async_kind as i32))
                                                 .label("FINISH")
-                                                .style(ButtonStyle::Danger)
+                                                .style(ButtonStyle::Danger),
+                                            CreateButton::new(format!("async_forfeit_qualifier_{}_{}", team_id, async_kind as i32))
+                                                .label("FORFEIT")
+                                                .style(ButtonStyle::Secondary),
                                         ]);
 
                                         interaction.channel_id.send_message(ctx, CreateMessage::new()
-                                            .content("**Good luck!** Click the FINISH button once you have completed your run.")
-                                            .components(vec![finish_button])
+                                            .content("**Good luck!** Click the FINISH button once you have completed your run.\nIf you need to forfeit, click the FORFEIT button.")
+                                            .components(vec![race_buttons])
                                         ).await?;
 
                                         // Remove the START button
@@ -2937,6 +3030,80 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         )).await?;
                                         transaction.rollback().await?;
                                     }
+                                }
+                            }
+                        }
+                    } else if let Some(params) = custom_id.strip_prefix("async_forfeit_qualifier_") {
+                        // Handle qualifier FORFEIT button - show confirmation
+                        if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
+                            if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
+                                let confirm_button = CreateActionRow::Buttons(vec![
+                                    CreateButton::new(format!("async_forfeit_qualifier_confirm_{}_{}", team_id, async_kind_int))
+                                        .label("Yes, forfeit")
+                                        .style(ButtonStyle::Danger),
+                                    CreateButton::new("async_forfeit_qualifier_cancel")
+                                        .label("Cancel")
+                                        .style(ButtonStyle::Secondary),
+                                ]);
+
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("⚠️ **Are you sure you want to forfeit?**\n\nThis will notify the organizers that you are forfeiting this qualifier.")
+                                        .components(vec![confirm_button])
+                                )).await?;
+                            }
+                        }
+                    } else if custom_id == "async_forfeit_qualifier_cancel" {
+                        // Cancel the qualifier forfeit
+                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                            CreateInteractionResponseMessage::new()
+                                .content("Forfeit cancelled.")
+                                .components(vec![])
+                        )).await?;
+                    } else if let Some(params) = custom_id.strip_prefix("async_forfeit_qualifier_confirm_") {
+                        // Handle confirmed qualifier forfeit
+                        if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
+                            if let (Ok(team_id), Ok(_async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
+                                let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+                                let mut transaction = pool.begin().await?;
+
+                                // Verify user is a member of the team
+                                let is_team_member = sqlx::query_scalar!(
+                                    r#"SELECT EXISTS (
+                                        SELECT 1 FROM team_members tm
+                                        JOIN users u ON tm.member = u.id
+                                        WHERE tm.team = $1 AND u.discord_id = $2
+                                    ) AS "exists!""#,
+                                    team_id as i64,
+                                    interaction.user.id.get() as i64
+                                ).fetch_one(&mut *transaction).await?;
+
+                                if !is_team_member {
+                                    interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                        CreateInteractionResponseMessage::new()
+                                            .content("You are not authorized to forfeit for this team.")
+                                            .components(vec![])
+                                    )).await?;
+                                    transaction.rollback().await?;
+                                } else {
+                                    // Send @here ping informing of forfeit
+                                    let mut msg = MessageBuilder::default();
+                                    msg.push("@here - ");
+                                    msg.mention(&interaction.user);
+                                    msg.push(" has indicated they want to **forfeit** this qualifier.\n\n");
+                                    msg.push("**Organizers:** To confirm this forfeit, use the `/forfeit-async` command in this thread.");
+
+                                    interaction.channel_id.say(ctx, msg.build()).await?;
+
+                                    // Update the ephemeral response to confirm
+                                    interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                        CreateInteractionResponseMessage::new()
+                                            .content("✅ Forfeit request sent. An organizer will confirm it shortly.")
+                                            .components(vec![])
+                                    )).await?;
+
+                                    transaction.rollback().await?;
                                 }
                             }
                         }
@@ -3163,8 +3330,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             }
                         };
 
-                        // Get the race
-                        let race = match Race::from_id(&mut transaction, &http_client, race_id).await {
+                        // Get the race (validates it exists)
+                        let _race = match Race::from_id(&mut transaction, &http_client, race_id).await {
                             Ok(r) => r,
                             Err(_) => {
                                 interaction.create_response(ctx, CreateInteractionResponse::Message(
@@ -3223,13 +3390,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         // Confirm success - update the original message to remove buttons
                         interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                             CreateInteractionResponseMessage::new()
-                                .content(format!(
-                                    "You've signed up! Check the race details at: <{}/event/{}/{}/races/{}>",
-                                    base_uri(),
-                                    race.series.slug(),
-                                    race.event,
-                                    u64::from(race_id)
-                                ))
+                                .content("Thank you for signing up. You will be informed once your signup has been processed by the team.")
                                 .components(vec![])
                         )).await?;
                     } else {
@@ -3820,6 +3981,18 @@ async fn handle_async_command(
 
                     if is_forfeit {
                         sqlx::query!("UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND kind = $2", team_id as _, async_kind as _).execute(&mut *transaction).await?;
+
+                        // Insert forfeit records into async_players so they're counted
+                        let members = team.members(&mut transaction).await?;
+                        for member in members {
+                            sqlx::query!(
+                                "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, NULL, NULL) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = EXCLUDED.vod",
+                                team.series as _,
+                                team.event,
+                                member.id as _,
+                                async_kind as _
+                            ).execute(&mut *transaction).await?;
+                        }
 
                         interaction.edit_response(ctx, EditInteractionResponse::new()
                             .content(format!("Forfeit recorded for {}.", team_name))

@@ -185,6 +185,7 @@ pub(crate) async fn post_race(pool: &State<PgPool>, me: User, uri: Origin<'_>, c
                 async_notified_3: false,
                 discord_scheduled_event_id: None,
                 volunteer_request_sent: false,
+                volunteer_request_message_id: None,
             };
             race.save(&mut transaction).await?;
             transaction.commit().await?;

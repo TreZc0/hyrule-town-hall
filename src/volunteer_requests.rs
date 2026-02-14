@@ -1,14 +1,17 @@
 use {
-    chrono::{Duration, Utc},
-    serenity::all::{ButtonStyle, CreateActionRow, CreateButton, CreateMessage},
-    serenity::model::id::{ChannelId, RoleId},
+    chrono::{DateTime, Duration, Utc},
+    serenity::all::{ButtonStyle, CreateActionRow, CreateButton, CreateMessage, EditMessage},
+    serenity::model::id::{ChannelId, MessageId, RoleId},
     serenity_utils::message::TimestampStyle,
     sqlx::{PgPool, Postgres, Transaction},
-    std::{collections::HashMap, mem},
+    std::collections::{BTreeMap, HashMap},
+    std::mem,
     crate::{
         cal::{Entrant, Entrants, Race, RaceSchedule},
         discord_bot::PgSnowflake,
         event::{self, roles::{EffectiveRoleBinding, Signup, VolunteerSignupStatus}},
+        id::{Id, Races},
+        lang::Language,
         prelude::*,
         series::Series,
     },
@@ -33,6 +36,7 @@ struct RoleNeed {
     min_count: i32,
     max_count: i32,
     needs_ping: bool,
+    language: Language,
 }
 
 /// Represents a match that needs volunteers, with details about which roles need filling.
@@ -175,6 +179,9 @@ async fn post_volunteer_requests_for_event(
     lead_time: Duration,
     ping_enabled: bool,
 ) -> Result<CheckResult, Error> {
+    let now = Utc::now();
+    let cutoff = now + lead_time;
+
     // Find races needing volunteer announcements
     let races_needing_volunteers = get_races_needing_announcements(
         transaction,
@@ -189,29 +196,161 @@ async fn post_volunteer_requests_for_event(
 
     let count = races_needing_volunteers.len();
 
-    // Build and post the message
-    let message = build_announcement_message(
-        &races_needing_volunteers,
-        event_data,
-        ping_enabled,
-    );
+    // Check if there's an existing active post we can add to
+    // Find a message ID from a race that hasn't started yet in this event
+    let existing_message = sqlx::query_scalar!(
+        r#"SELECT volunteer_request_message_id AS "volunteer_request_message_id: PgSnowflake<MessageId>"
+        FROM races
+        WHERE series = $1
+          AND event = $2
+          AND volunteer_request_message_id IS NOT NULL
+          AND start > $3
+          AND ignored = false
+        ORDER BY start ASC
+        LIMIT 1"#,
+        event_data.series as _,
+        &*event_data.event,
+        now
+    )
+    .fetch_optional(&mut **transaction)
+    .await?
+    .flatten();
 
-    // Post to Discord
-    if let Err(e) = channel_id.send_message(discord_ctx, message).await {
-        eprintln!("Failed to post volunteer request to Discord: {}", e);
-        return Err(e.into());
-    }
+    let message_id = if let Some(PgSnowflake(existing_id)) = existing_message {
+        // Add new races to the existing post
+        // First, mark them as notified with the existing message ID
+        for need in &races_needing_volunteers {
+            sqlx::query!(
+                "UPDATE races SET volunteer_request_sent = true, volunteer_request_message_id = $2 WHERE id = $1",
+                need.race.id as _,
+                PgSnowflake(existing_id) as _
+            )
+            .execute(&mut **transaction)
+            .await?;
+        }
 
-    // Mark all races as notified
-    for need in &races_needing_volunteers {
-        sqlx::query!(
-            "UPDATE races SET volunteer_request_sent = true WHERE id = $1",
-            need.race.id as _
+        // Now update the post using the existing update logic
+        // Get all races that share this message ID
+        let http_client = reqwest::Client::new();
+        let all_race_ids = sqlx::query_scalar!(
+            r#"SELECT id AS "id: Id<Races>"
+            FROM races
+            WHERE volunteer_request_message_id = $1
+              AND ignored = false
+            ORDER BY start ASC NULLS LAST"#,
+            PgSnowflake(existing_id) as _
         )
-        .execute(&mut **transaction)
+        .fetch_all(&mut **transaction)
         .await?;
-    }
 
+        // Build volunteer needs for all races in this post
+        let mut all_needs = Vec::new();
+        for rid in &all_race_ids {
+            let race = Race::from_id(&mut *transaction, &http_client, *rid).await?;
+
+            let matchup = get_matchup_description(&mut *transaction, &race).await?;
+            let role_bindings = EffectiveRoleBinding::for_event(&mut *transaction, event_data.series, &event_data.event).await?;
+            let signups = Signup::for_race(&mut *transaction, *rid).await?;
+
+            let mut role_needs = Vec::new();
+            for binding in &role_bindings {
+                if binding.is_disabled {
+                    continue;
+                }
+
+                let confirmed_signups: Vec<_> = signups.iter()
+                    .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Confirmed))
+                    .collect();
+                let confirmed_count = confirmed_signups.len() as i32;
+
+                let mut confirmed_names = Vec::new();
+                for signup in &confirmed_signups {
+                    if let Ok(Some(user)) = User::from_id(&mut **transaction, signup.user_id).await {
+                        confirmed_names.push(user.display_name().to_owned());
+                    }
+                }
+
+                let pending_count = signups.iter()
+                    .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Pending))
+                    .count() as i32;
+
+                if confirmed_count < binding.max_count || pending_count > 0 {
+                    role_needs.push(RoleNeed {
+                        role_name: binding.role_type_name.clone(),
+                        discord_role_id: binding.discord_role_id,
+                        confirmed_names,
+                        confirmed_count,
+                        pending_count,
+                        min_count: binding.min_count,
+                        max_count: binding.max_count,
+                        needs_ping: confirmed_count < binding.min_count,
+                        language: binding.language,
+                    });
+                }
+            }
+
+            if !role_needs.is_empty() {
+                all_needs.push(RaceVolunteerNeed {
+                    race,
+                    matchup,
+                    role_needs,
+                });
+            }
+        }
+
+        // Build and edit the message (ping only for new races)
+        let (content, components) = build_announcement_content(
+            &all_needs,
+            event_data,
+            ping_enabled,
+            now,
+            cutoff,
+        );
+
+        if let Err(e) = channel_id.edit_message(
+            discord_ctx,
+            existing_id,
+            EditMessage::new()
+                .content(content)
+                .components(components)
+        ).await {
+            eprintln!("Failed to update volunteer request message with new races: {}", e);
+        }
+
+        existing_id
+    } else {
+        // Create a new post
+        let message = build_announcement_message(
+            &races_needing_volunteers,
+            event_data,
+            ping_enabled,
+            now,
+            cutoff,
+        );
+
+        let posted_message = match channel_id.send_message(discord_ctx, message).await {
+            Ok(msg) => msg,
+            Err(e) => {
+                eprintln!("Failed to post volunteer request to Discord: {}", e);
+                return Err(e.into());
+            }
+        };
+
+        // Mark all races as notified and store the message ID
+        for need in &races_needing_volunteers {
+            sqlx::query!(
+                "UPDATE races SET volunteer_request_sent = true, volunteer_request_message_id = $2 WHERE id = $1",
+                need.race.id as _,
+                PgSnowflake(posted_message.id) as _
+            )
+            .execute(&mut **transaction)
+            .await?;
+        }
+
+        posted_message.id
+    };
+
+    let _ = message_id; // Suppress unused warning
     Ok(CheckResult::Posted(count))
 }
 
@@ -317,6 +456,7 @@ async fn get_races_needing_announcements(
                     min_count: binding.min_count,
                     max_count: binding.max_count,
                     needs_ping,
+                    language: binding.language,
                 });
                 has_any_need = true;
             }
@@ -365,13 +505,12 @@ async fn get_matchup_description(
         _ => "Unknown matchup".to_string(),
     };
 
-    // Add round info if available
-    if let Some(round) = &race.round {
-        Ok(format!("{} ({})", matchup, round))
-    } else if let Some(phase) = &race.phase {
-        Ok(format!("{} ({})", matchup, phase))
-    } else {
-        Ok(matchup)
+    // Add round and/or phase info if available
+    match (&race.round, &race.phase) {
+        (Some(round), Some(phase)) => Ok(format!("{} ({}, {})", matchup, round, phase)),
+        (Some(round), None) => Ok(format!("{} ({})", matchup, round)),
+        (None, Some(phase)) => Ok(format!("{} ({})", matchup, phase)),
+        (None, None) => Ok(matchup),
     }
 }
 
@@ -406,12 +545,26 @@ fn truncate_string(s: &str, max_len: usize) -> String {
     }
 }
 
-/// Builds the Discord announcement message with signup buttons.
-fn build_announcement_message(
+/// Formats a date range for display in Discord.
+fn format_date_range(start: DateTime<Utc>, end: DateTime<Utc>) -> String {
+    if start.month() != end.month() {
+        format!("{} - {}", start.format("%b %-d"), end.format("%b %-d"))
+    } else if start.day() != end.day() {
+        format!("{} - {}", start.format("%b %-d"), end.format("%-d"))
+    } else {
+        start.format("%b %-d").to_string()
+    }
+}
+
+/// Builds the content and components for a volunteer announcement message.
+/// Returns (content_string, components_vec).
+fn build_announcement_content(
     needs: &[RaceVolunteerNeed],
     event_data: &event::Data<'_>,
     ping_enabled: bool,
-) -> CreateMessage {
+    time_window_start: DateTime<Utc>,
+    time_window_end: DateTime<Utc>,
+) -> (String, Vec<CreateActionRow>) {
     let mut msg = MessageBuilder::default();
 
     // Collect all roles that need pinging
@@ -437,9 +590,11 @@ fn build_announcement_message(
         msg.push("\n\n");
     }
 
-    msg.push("**Volunteers Needed for ");
+    msg.push("**Open Races for ");
     msg.push(&event_data.display_name);
-    msg.push("**\n\n");
+    msg.push(" (");
+    msg.push(&format_date_range(time_window_start, time_window_end));
+    msg.push(")**\n\n");
 
     for need in needs {
         // Race matchup and time
@@ -452,40 +607,79 @@ fn build_announcement_message(
         }
         msg.push("\n");
 
-        // Role needs
+        // Restream info
+        if need.race.video_urls.is_empty() {
+            msg.push("Restream TBD\n");
+        } else {
+            for (language, video_url) in &need.race.video_urls {
+                msg.push("Restream (");
+                msg.push(&language.to_string());
+                msg.push("): <");
+                msg.push(&video_url.to_string());
+                msg.push(">\n");
+            }
+        }
+
+        // Group role needs by language
+        let mut roles_by_language: BTreeMap<Language, Vec<&RoleNeed>> = BTreeMap::new();
         for role_need in &need.role_needs {
-            msg.push("  - ");
-            msg.push(&role_need.role_name);
-            msg.push(": ");
-            if !role_need.confirmed_names.is_empty() {
-                msg.push(&role_need.confirmed_names.join(", "));
-                msg.push(" ");
-            } else {
-                msg.push("none yet ");
+            roles_by_language
+                .entry(role_need.language)
+                .or_default()
+                .push(role_need);
+        }
+
+        // Display roles grouped by language
+        for (language, roles) in &roles_by_language {
+            msg.push("**");
+            msg.push(&language.to_string());
+            msg.push(":**\n");
+
+            for role_need in roles {
+                msg.push("- ");
+                msg.push(&role_need.role_name);
+                msg.push(": ");
+                if !role_need.confirmed_names.is_empty() {
+                    msg.push(&role_need.confirmed_names.join(", "));
+                    msg.push(" ");
+                } else {
+                    msg.push("none yet ");
+                }
+                msg.push("(");
+                msg.push(&role_need.confirmed_count.to_string());
+                msg.push("/");
+                msg.push(&role_need.max_count.to_string());
+                msg.push(")");
+                if role_need.pending_count > 0 {
+                    msg.push(" (");
+                    msg.push(&role_need.pending_count.to_string());
+                    msg.push(" pending)");
+                }
+                msg.push("\n");
             }
-            msg.push("(");
-            msg.push(&role_need.confirmed_count.to_string());
-            msg.push("/");
-            msg.push(&role_need.max_count.to_string());
-            msg.push(")");
-            if role_need.pending_count > 0 {
-                msg.push(" (");
-                msg.push(&role_need.pending_count.to_string());
-                msg.push(" pending)");
-            }
-            msg.push("\n");
         }
         msg.push("\n");
     }
 
     // Add signup link
-    msg.push(format!("Sign up: <{}/event/{}/{}/volunteer-roles>", base_uri(), event_data.series.slug(), &*event_data.event));
+    msg.push(format!("Sign up through the website or the buttons below: <{}/event/{}/{}/volunteer-roles>", base_uri(), event_data.series.slug(), &*event_data.event));
 
     // Build buttons for each race (max 5 buttons per row, max 5 rows = 25 buttons)
+    // Skip races that have already started
+    let now = Utc::now();
     let mut components = Vec::new();
     let mut current_row = Vec::new();
 
     for need in needs {
+        // Skip races that have already started - no signup button needed
+        let race_started = match need.race.schedule {
+            RaceSchedule::Live { start, .. } => start <= now,
+            _ => false,
+        };
+        if race_started {
+            continue;
+        }
+
         // Button label: truncate matchup to fit Discord's 80 char limit
         let label = format!("Sign up: {}", truncate_string(&need.matchup, 60));
         let button = CreateButton::new(format!("volunteer_signup_{}", u64::from(need.race.id)))
@@ -509,7 +703,191 @@ fn build_announcement_message(
         components.push(CreateActionRow::Buttons(current_row));
     }
 
+    (msg.build(), components)
+}
+
+/// Builds the Discord announcement message with signup buttons.
+fn build_announcement_message(
+    needs: &[RaceVolunteerNeed],
+    event_data: &event::Data<'_>,
+    ping_enabled: bool,
+    time_window_start: DateTime<Utc>,
+    time_window_end: DateTime<Utc>,
+) -> CreateMessage {
+    let (content, components) = build_announcement_content(
+        needs,
+        event_data,
+        ping_enabled,
+        time_window_start,
+        time_window_end,
+    );
     CreateMessage::new()
-        .content(msg.build())
+        .content(content)
         .components(components)
+}
+
+/// Updates the volunteer request post for a race when signups change.
+/// This will update the entire post since one post can contain multiple races.
+pub(crate) async fn update_volunteer_post_for_race(
+    pool: &PgPool,
+    discord_ctx: &DiscordCtx,
+    race_id: Id<Races>,
+) -> Result<(), Error> {
+    let mut transaction = pool.begin().await?;
+    let http_client = reqwest::Client::new();
+
+    // Get the race's message ID and event info
+    let race_info = sqlx::query!(
+        r#"SELECT
+            r.series AS "series: Series",
+            r.event,
+            r.volunteer_request_message_id AS "volunteer_request_message_id: PgSnowflake<MessageId>",
+            e.discord_volunteer_info_channel AS "discord_volunteer_info_channel: PgSnowflake<ChannelId>",
+            e.volunteer_request_lead_time_hours
+        FROM races r
+        JOIN events e ON r.series = e.series AND r.event = e.event
+        WHERE r.id = $1"#,
+        race_id as _
+    )
+    .fetch_optional(&mut *transaction)
+    .await?;
+
+    let race_info = match race_info {
+        Some(info) => info,
+        None => return Ok(()), // Race not found
+    };
+
+    // If no message ID, the post wasn't sent yet - nothing to update
+    let message_id = match race_info.volunteer_request_message_id {
+        Some(PgSnowflake(id)) => id,
+        None => return Ok(()),
+    };
+
+    let channel_id = match race_info.discord_volunteer_info_channel {
+        Some(PgSnowflake(id)) => id,
+        None => return Ok(()), // No channel configured
+    };
+
+    // Find ALL races that share the same message ID
+    let race_ids = sqlx::query_scalar!(
+        r#"SELECT id AS "id: Id<Races>"
+        FROM races
+        WHERE volunteer_request_message_id = $1
+          AND ignored = false
+        ORDER BY start ASC NULLS LAST"#,
+        PgSnowflake(message_id) as _
+    )
+    .fetch_all(&mut *transaction)
+    .await?;
+
+    if race_ids.is_empty() {
+        return Ok(());
+    }
+
+    // Get event data for display name
+    let event_data = match event::Data::new(&mut transaction, race_info.series, &race_info.event).await? {
+        Some(data) => data,
+        None => return Ok(()),
+    };
+
+    // Build volunteer needs for all races in this post
+    let mut needs = Vec::new();
+    for rid in &race_ids {
+        let race = Race::from_id(&mut transaction, &http_client, *rid).await?;
+
+        // Get matchup description
+        let matchup = get_matchup_description(&mut transaction, &race).await?;
+
+        // Get role bindings and check volunteer counts
+        let role_bindings = EffectiveRoleBinding::for_event(&mut transaction, race_info.series, &race_info.event).await?;
+        let signups = Signup::for_race(&mut transaction, *rid).await?;
+
+        let mut role_needs = Vec::new();
+        let mut has_any_need = false;
+
+        for binding in &role_bindings {
+            if binding.is_disabled {
+                continue;
+            }
+
+            // Get confirmed signups for this role
+            let confirmed_signups: Vec<_> = signups.iter()
+                .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Confirmed))
+                .collect();
+            let confirmed_count = confirmed_signups.len() as i32;
+
+            // Get names of confirmed volunteers
+            let mut confirmed_names = Vec::new();
+            for signup in &confirmed_signups {
+                if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
+                    confirmed_names.push(user.display_name().to_owned());
+                }
+            }
+
+            // Count pending volunteers for this role
+            let pending_count = signups.iter()
+                .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Pending))
+                .count() as i32;
+
+            // Check if volunteers are needed (or if there are any signups to show)
+            if confirmed_count < binding.max_count || pending_count > 0 {
+                let needs_ping = confirmed_count < binding.min_count;
+                role_needs.push(RoleNeed {
+                    role_name: binding.role_type_name.clone(),
+                    discord_role_id: binding.discord_role_id,
+                    confirmed_names,
+                    confirmed_count,
+                    pending_count,
+                    min_count: binding.min_count,
+                    max_count: binding.max_count,
+                    needs_ping,
+                    language: binding.language,
+                });
+                has_any_need = true;
+            }
+        }
+
+        if has_any_need || !role_needs.is_empty() {
+            needs.push(RaceVolunteerNeed {
+                race,
+                matchup,
+                role_needs,
+            });
+        }
+    }
+
+    // If no needs remain, we still want to show the races with their filled status
+    // But if there are truly no races, just return
+    if needs.is_empty() {
+        return Ok(());
+    }
+
+    // Calculate time window (use lead time from event)
+    let now = Utc::now();
+    let lead_time = Duration::hours(race_info.volunteer_request_lead_time_hours as i64);
+    let cutoff = now + lead_time;
+
+    // Build the updated message content (without pings on updates)
+    let (content, components) = build_announcement_content(
+        &needs,
+        &event_data,
+        false, // Don't ping on updates
+        now,
+        cutoff,
+    );
+
+    // Edit the message
+    if let Err(e) = channel_id.edit_message(
+        discord_ctx,
+        message_id,
+        EditMessage::new()
+            .content(content)
+            .components(components)
+    ).await {
+        eprintln!("Failed to update volunteer request message: {}", e);
+        // Don't return error - this is a best-effort update
+    }
+
+    transaction.commit().await?;
+    Ok(())
 }

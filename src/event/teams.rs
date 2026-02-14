@@ -243,6 +243,8 @@ pub(crate) enum Qualification {
     Multiple {
         num_entered: usize,
         num_finished: usize,
+        /// Number of forfeited/DQ races (entered but not finished with a valid time)
+        num_forfeited: usize,
         score: R64,
         /// Per-round scores in chronological order, for expandable breakdown display.
         round_scores: Vec<RoundScore>,
@@ -614,6 +616,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                 scores.truncate(4); // remove up to 3 worst scores
                                 Qualification::Multiple {
                                     score: scores.iter().copied().sum::<R64>(), // overall score is sum of remaining scores
+                                    num_forfeited: num_entered - num_finished,
                                     num_entered, num_finished, round_scores,
                                 }
                             }
@@ -628,8 +631,10 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                 if num_entered >= 5 {
                                     scores.swap_remove(0); // remove worst score
                                 }
+                                let num_finished = scores.iter().filter(|score| **score != 0.0).count();
                                 Qualification::Multiple {
-                                    num_finished: scores.iter().filter(|score| **score != 0.0).count(),
+                                    num_finished,
+                                    num_forfeited: num_entered - num_finished,
                                     score: scores.iter().copied().sum::<R64>() / r64(scores.len().max(3) as f64), // overall score is average of remaining scores
                                     num_entered, round_scores,
                                 }
@@ -642,8 +647,10 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                 if num_entered >= 4 {
                                     scores.swap_remove(0); // remove worst score
                                 }
+                                let num_finished = scores.iter().filter(|score| **score != 0.0).count();
                                 Qualification::Multiple {
-                                    num_finished: scores.iter().filter(|score| **score != 0.0).count(),
+                                    num_finished,
+                                    num_forfeited: num_entered - num_finished,
                                     score: scores.iter().copied().sum::<R64>() / r64(scores.len().max(3) as f64), // overall score is average of remaining scores
                                     num_entered, round_scores,
                                 }
@@ -660,6 +667,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                 scores.truncate(score_kind.required_qualifiers()); // best N
                                 Qualification::Multiple {
                                     score: scores.iter().copied().sum::<R64>(),
+                                    num_forfeited: num_entered - num_finished,
                                     num_entered, num_finished, round_scores,
                                 }
                             }
@@ -1034,7 +1042,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                 th : "Qualifiers Entered";
             });
             column_headers.push(html! {
-                th : "Qualifiers Finished";
+                th : "Qualifiers Finished (FF/DQ)";
             });
             column_headers.push(html! {
                 th : "Qualifier Points";
@@ -1286,12 +1294,17 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                     }
                                 }
                                 (QualifierKind::Single { show_times: true }, Qualification::TriforceBlitz { pieces, .. }) => td : pieces;
-                                (QualifierKind::Score(QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online), Qualification::Multiple { num_entered, num_finished, score, .. }) => { //TODO determine based on enter flow
+                                (QualifierKind::Score(QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online), Qualification::Multiple { num_entered, num_finished, num_forfeited, score, .. }) => { //TODO determine based on enter flow
                                     td(style = "text-align: right;") : num_entered;
-                                    td(style = "text-align: right;") : num_finished;
+                                    td(style = "text-align: right;") {
+                                        : num_finished;
+                                        @if num_forfeited > 0 {
+                                            : format!(" ({})", num_forfeited);
+                                        }
+                                    }
                                     td(style = "text-align: right;") : format!("{score:.2}");
                                 }
-                                (QualifierKind::Score(QualifierScoreKind::TwwrMiniblins26), Qualification::Multiple { num_entered, num_finished, score, round_scores }) => {
+                                (QualifierKind::Score(QualifierScoreKind::TwwrMiniblins26), Qualification::Multiple { num_entered, num_finished, num_forfeited, score, round_scores }) => {
                                     @let hide_counts = !is_organizer && matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !all_qualifiers_ended;
                                     @let hide_points = !is_organizer && matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPoints | QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !all_qualifiers_ended;
                                     td(style = "text-align: right;") {
@@ -1300,7 +1313,12 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                     }
                                     td(style = "text-align: right;") {
                                         @if hide_counts { : "—"; }
-                                        else { : num_finished; }
+                                        else {
+                                            : num_finished;
+                                            @if num_forfeited > 0 {
+                                                : format!(" ({})", num_forfeited);
+                                            }
+                                        }
                                     }
                                     td(style = "text-align: right;") {
                                         @if hide_points {

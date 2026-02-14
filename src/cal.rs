@@ -385,6 +385,7 @@ pub(crate) struct Race {
     pub(crate) async_notified_3: bool,
     pub(crate) discord_scheduled_event_id: Option<PgSnowflake<ScheduledEventId>>,
     pub(crate) volunteer_request_sent: bool,
+    pub(crate) volunteer_request_message_id: Option<PgSnowflake<MessageId>>,
 }
 
 impl Race {
@@ -463,7 +464,8 @@ impl Race {
             async_notified_2,
             async_notified_3,
             discord_scheduled_event_id AS "discord_scheduled_event_id: PgSnowflake<ScheduledEventId>",
-            volunteer_request_sent
+            volunteer_request_sent,
+            volunteer_request_message_id AS "volunteer_request_message_id: PgSnowflake<MessageId>"
         FROM races WHERE id = $1"#, id as _).fetch_one(&mut **transaction).await?;
         let source = if let Some(id) = row.challonge_match {
             Source::Challonge { id }
@@ -619,6 +621,7 @@ impl Race {
             async_notified_3: row.async_notified_3,
             discord_scheduled_event_id: row.discord_scheduled_event_id.map(|PgSnowflake(id)| PgSnowflake(id)),
             volunteer_request_sent: row.volunteer_request_sent,
+            volunteer_request_message_id: row.volunteer_request_message_id.map(|PgSnowflake(id)| PgSnowflake(id)),
             id, source, entrants,
         })
     }
@@ -689,6 +692,7 @@ impl Race {
                     async_notified_3: false,
                     discord_scheduled_event_id: None,
                     volunteer_request_sent: false,
+                    volunteer_request_message_id: None,
                 });
                 races.last_mut().expect("just pushed")
             }.save(&mut *transaction).await?,
@@ -1984,6 +1988,7 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
                     async_notified_3: false,
                     discord_scheduled_event_id: None,
                     volunteer_request_sent: false,
+                    volunteer_request_message_id: None,
                     scheduling_thread,
                 };
                 if game == 1 {
@@ -2298,7 +2303,10 @@ pub(crate) async fn race_table(
                             td {
                                 @if race.show_seed() {
                                     @let game_id = event.game(&mut *transaction).await?.map(|g| g.id).unwrap_or(1);
-                                    : seed::table_cell(now, &race.seed, true, options.can_edit.then(|| uri!(cal::add_file_hash(race.series, &*race.event, race.id))), &mut *transaction, game_id).await?;
+                                    // Only show "Add Hash" for games that support hashes (not TWWR)
+                                    @let supports_hash = !matches!(event.rando_version, Some(racetime_bot::VersionedBranch::Tww { .. }));
+                                    @let add_hash_url = options.can_edit.then(|| uri!(cal::add_file_hash(race.series, &*race.event, race.id))).filter(|_| supports_hash);
+                                    : seed::table_cell(now, &race.seed, true, add_hash_url, &mut *transaction, game_id).await?;
                                 } else {
                                     // hide seed if unfinished async
                                     //TODO show to the team that played the 1st async half
@@ -2908,6 +2916,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                     async_notified_3: false,
                                     discord_scheduled_event_id: None,
                                     volunteer_request_sent: false,
+                                    volunteer_request_message_id: None,
                                 };
                                 if let Some(race) = races.iter_mut().find(|race| if let Source::League { id } = race.source { id == match_data.id } else { false }) {
                                     if !race.schedule_locked {
@@ -3148,6 +3157,7 @@ pub(crate) async fn ensure_weekly_races(
                     async_notified_3: false,
                     discord_scheduled_event_id: None,
                     volunteer_request_sent: false,
+                    volunteer_request_message_id: None,
                     schedule,
                 };
                 race.save(&mut *transaction).await?;
@@ -4131,81 +4141,113 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 }
             }
 
-            // Send Discord notification if restream URLs were newly assigned or changed
+            // Send DM notifications to confirmed volunteers when restream URLs are newly assigned
             if !race.video_urls.is_empty() && race.video_urls != original_video_urls {
-                if let Some(discord_volunteer_info_channel) = event.discord_volunteer_info_channel {
+                // Find newly added languages
+                let new_languages: Vec<_> = race.video_urls.keys()
+                    .filter(|lang| !original_video_urls.contains_key(*lang))
+                    .collect();
+
+                if !new_languages.is_empty() {
                     // Build race description
-                    let race_description = match &race.entrants {
-                        Entrants::Two([team1, team2]) => format!("{} vs {}",
-                            match team1 {
-                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                Entrant::Named { name, .. } => name.clone(),
-                                Entrant::Discord { .. } => "Discord User".to_string(),
-                            },
-                            match team2 {
-                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                Entrant::Named { name, .. } => name.clone(),
-                                Entrant::Discord { .. } => "Discord User".to_string(),
-                            }
-                        ),
-                        Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
-                            match team1 {
-                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                Entrant::Named { name, .. } => name.clone(),
-                                Entrant::Discord { .. } => "Discord User".to_string(),
-                            },
-                            match team2 {
-                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                Entrant::Named { name, .. } => name.clone(),
-                                Entrant::Discord { .. } => "Discord User".to_string(),
-                            },
-                            match team3 {
-                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                Entrant::Named { name, .. } => name.clone(),
-                                Entrant::Discord { .. } => "Discord User".to_string(),
-                            }
-                        ),
-                        _ => "Unknown entrants".to_string(),
+                    let race_description = if race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
+                        match (&race.round, &race.phase) {
+                            (Some(round), _) => round.clone(),
+                            (None, Some(phase)) => phase.clone(),
+                            (None, None) => "Qualifier".to_string(),
+                        }
+                    } else {
+                        match &race.entrants {
+                            Entrants::Two([team1, team2]) => format!("{} vs {}",
+                                match team1 {
+                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                    Entrant::Named { name, .. } => name.clone(),
+                                    Entrant::Discord { .. } => "Discord User".to_string(),
+                                },
+                                match team2 {
+                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                    Entrant::Named { name, .. } => name.clone(),
+                                    Entrant::Discord { .. } => "Discord User".to_string(),
+                                }
+                            ),
+                            Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                                match team1 {
+                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                    Entrant::Named { name, .. } => name.clone(),
+                                    Entrant::Discord { .. } => "Discord User".to_string(),
+                                },
+                                match team2 {
+                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                    Entrant::Named { name, .. } => name.clone(),
+                                    Entrant::Discord { .. } => "Discord User".to_string(),
+                                },
+                                match team3 {
+                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                    Entrant::Named { name, .. } => name.clone(),
+                                    Entrant::Discord { .. } => "Discord User".to_string(),
+                                }
+                            ),
+                            _ => race.round.clone().or_else(|| race.phase.clone()).unwrap_or_else(|| "Race".to_string()),
+                        }
                     };
-                    
+
                     // Get race start time for timestamp
-                    let race_start_time = match race.schedule {
-                        RaceSchedule::Live { start, .. } => start,
-                        _ => return Ok(RedirectOrContent::Redirect(Redirect::to(redirect_to.map(|Origin(uri)| uri.into_owned()).unwrap_or_else(|| uri!(event::races(event.series, &*event.event)))))),
-                    };
-                    
-                    // Build Discord message
-                    let mut msg = MessageBuilder::default();
-                    msg.push("Restream channel assigned for race ");
-                    msg.push_mono(&race_description);
-                    if let Some(phase) = &race.phase {
-                        msg.push(" (");
-                        msg.push(phase);
-                        msg.push(")");
-                    }
-                    msg.push(" at ");
-                    msg.push_timestamp(race_start_time, serenity_utils::message::TimestampStyle::LongDateTime);
-                    msg.push(":\n");
-                    
-                    // Add restream URLs
-                    for (language, video_url) in &race.video_urls {
-                        msg.push("**");
-                        msg.push(&language.to_string());
-                        msg.push(":** ");
-                        msg.push("<");
-                        msg.push(&video_url.to_string());
-                        msg.push(">");
-                        msg.push("\n");
-                    }
-                    
-                    // Send the message to Discord
-                    let discord_ctx = discord_ctx.read().await;
-                    if let Err(e) = discord_volunteer_info_channel.say(&*discord_ctx, msg.build()).await {
-                        eprintln!("Failed to send restream notification to Discord: {}", e);
+                    if let RaceSchedule::Live { start: race_start_time, .. } = race.schedule {
+                        // Get confirmed volunteers and their role bindings
+                        let signups = Signup::for_race(&mut transaction, race.id).await?;
+                        let role_bindings = event::roles::EffectiveRoleBinding::for_event(&mut transaction, event.series, &event.event).await?;
+
+                        let discord_ctx = discord_ctx.read().await;
+
+                        for signup in signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)) {
+                            // Get the language for this signup's role binding
+                            if let Some(binding) = role_bindings.iter().find(|b| b.id == signup.role_binding_id) {
+                                // Check if the restream for this language was newly added
+                                if new_languages.contains(&&binding.language) {
+                                    if let Some(video_url) = race.video_urls.get(&binding.language) {
+                                        // Get user and send DM
+                                        if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
+                                            if let Some(discord) = user.discord {
+                                                let discord_user_id = UserId::new(discord.id.get());
+
+                                                let mut msg = MessageBuilder::default();
+                                                msg.push("A restream channel has been assigned for ");
+                                                msg.push_mono(&race_description);
+                                                msg.push(" in ");
+                                                msg.push(&event.display_name);
+                                                msg.push("!\n\n");
+                                                msg.push("**Restream (");
+                                                msg.push(&binding.language.to_string());
+                                                msg.push("):** <");
+                                                msg.push(&video_url.to_string());
+                                                msg.push(">\n");
+                                                msg.push("**When:** ");
+                                                msg.push_timestamp(race_start_time, serenity_utils::message::TimestampStyle::LongDateTime);
+
+                                                if let Ok(dm_channel) = discord_user_id.create_dm_channel(&*discord_ctx).await {
+                                                    if let Err(e) = dm_channel.say(&*discord_ctx, msg.build()).await {
+                                                        eprintln!("Failed to send restream notification DM: {}", e);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
-            
+
+            // Update the volunteer info post to reflect restream changes
+            if race.video_urls != original_video_urls {
+                let _ = crate::volunteer_requests::update_volunteer_post_for_race(
+                    pool,
+                    &*discord_ctx.read().await,
+                    race.id,
+                ).await;
+            }
+
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(redirect_to.map(|Origin(uri)| uri.into_owned()).unwrap_or_else(|| uri!(event::races(event.series, &*event.event)))))
         }

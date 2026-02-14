@@ -977,19 +977,24 @@ impl AsyncRaceManager {
                 async_part as i32,
             ).execute(&mut *transaction).await?;
 
-            // Send the FINISH button
-            let finish_button = CreateActionRow::Buttons(vec![
+            // Send the FINISH and FORFEIT buttons
+            let race_buttons = CreateActionRow::Buttons(vec![
                 CreateButton::new("async_finish")
                     .label("FINISH")
-                    .style(ButtonStyle::Danger)
+                    .style(ButtonStyle::Danger),
+                CreateButton::new("async_forfeit")
+                    .label("FORFEIT")
+                    .style(ButtonStyle::Secondary),
             ]);
-            
+
             let mut content = MessageBuilder::default();
             content.push("**Good luck!** Click the FINISH button once you have completed your run.");
-            
+            content.push_line("");
+            content.push("If you need to forfeit, click the FORFEIT button.");
+
             thread.send_message(discord_ctx, CreateMessage::new()
                 .content(content.build())
-                .components(vec![finish_button])
+                .components(vec![race_buttons])
             ).await?;
         }
         

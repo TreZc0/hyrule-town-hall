@@ -2522,6 +2522,7 @@ pub(crate) struct SignupForMatchForm {
 #[rocket::post("/event/<series>/<event>/races/<race_id>/signup", data = "<form>")]
 pub(crate) async fn signup_for_match(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     series: Series,
     event: &str,
@@ -2577,6 +2578,14 @@ pub(crate) async fn signup_for_match(
             };
             Signup::create(&mut transaction, race_id, value.role_binding_id, me.id, notes).await?;
             transaction.commit().await?;
+
+            // Update the volunteer info post to reflect the new signup
+            let _ = volunteer_requests::update_volunteer_post_for_race(
+                pool,
+                &*discord_ctx.read().await,
+                race_id,
+            ).await;
+
             RedirectOrContent::Redirect(match value.lang {
                 Some(lang) => Redirect::to(format!("/event/{}/{}/races/{}/signups?lang={}", series.slug(), event, race_id, lang.short_code())),
                 None => Redirect::to(format!("/event/{}/{}/races/{}/signups", series.slug(), event, race_id)),
@@ -2698,16 +2707,12 @@ pub(crate) async fn manage_roster(
                 
                 Signup::auto_reject_overlapping_signups(&mut transaction, value.signup_id, signup.user_id).await?;
                 
-                // Send Discord notification to volunteer info channel
-                if let Some(discord_volunteer_info_channel) = data.discord_volunteer_info_channel {
+                // Send DM notification to the selected volunteer
+                {
                     // Get race details for the notification
                     let race = Race::from_id(&mut transaction, &reqwest::Client::new(), race_id).await?;
                     let user = User::from_id(&mut *transaction, signup.user_id).await?;
-                    
-                    // Get all confirmed volunteers for this race
-                    let all_signups = Signup::for_race(&mut transaction, race_id).await?;
-                    let confirmed_signups = all_signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
-                    
+
                     // Format race description with round info
                     // For qualifier races, use the round name directly
                     let race_description = if race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
@@ -2757,95 +2762,73 @@ pub(crate) async fn manage_roster(
                                     matchup
                                 }
                             },
-                            _ => "Unknown entrants".to_string(),
+                            _ => race.round.clone().unwrap_or_else(|| "Race".to_string()),
                         }
                     };
-                    
+
                     // Get race start time for timestamp
                     let race_start_time = match race.schedule {
                         cal::RaceSchedule::Live { start, .. } => start,
                         _ => return Err(StatusOrError::Status(Status::BadRequest)), // Volunteers can't sign up for unscheduled races
                     };
-                    
-                    // Build Discord message
-                    let mut msg = MessageBuilder::default();
-                    msg.push("Volunteers selected for race ");
-                    msg.push_mono(&race_description);
-                    msg.push(" at ");
-                    msg.push_timestamp(race_start_time, serenity_utils::message::TimestampStyle::LongDateTime);
-                    msg.push("\n\n");
-                    
-                    // Add role and user information for the newly selected volunteer
-                    msg.push("**Role:** ");
-                    msg.push_mono(&signup.role_type_name);
-                    msg.push("\n**Selected:** ");
-                    
-                    if let Some(user) = user {
-                        // Check if user has Discord connected
-                        if let Some(discord) = user.discord {
-                            // Ping the user using their Discord ID
-                            msg.mention(&UserId::new(discord.id.get()));
-                        } else {
-                            // Just mention by display name
-                            msg.push(&user.to_string());
-                        }
-                    } else {
-                        // Fallback to user ID if user not found
-                        msg.push(&signup.user_id.to_string());
-                    }
-                    
-                    // Add all confirmed volunteers section
-                    if confirmed_signups.len() > 1 {
-                        msg.push("\n\n**Confirmed volunteers for this race:**\n");
-                        
-                        // Group by role type
-                        let role_bindings = RoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
-                        for binding in role_bindings {
-                            let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
-                            if !binding_signups.is_empty() {
-                                msg.push("**");
-                                msg.push(&binding.role_type_name);
-                                msg.push(":** ");
-                                
-                                for (i, signup) in binding_signups.iter().enumerate() {
-                                    if i > 0 { msg.push(", "); }
-                                    let volunteer_user = User::from_id(&mut *transaction, signup.user_id).await?;
-                                    if let Some(volunteer_user) = volunteer_user {
-                                        msg.push(&volunteer_user.to_string());
-                                    } else {
-                                        msg.push(&signup.user_id.to_string());
+
+                    if let Some(ref user) = user {
+                        if let Some(ref discord) = user.discord {
+                            let discord_ctx = discord_ctx.read().await;
+                            let discord_user_id = UserId::new(discord.id.get());
+
+                            // Build DM message
+                            let mut msg = MessageBuilder::default();
+                            msg.push("You have been selected to volunteer for ");
+                            msg.push_mono(&race_description);
+                            msg.push(" in ");
+                            msg.push(&data.display_name);
+                            msg.push("!\n\n");
+                            msg.push("**Role:** ");
+                            msg.push_mono(&signup.role_type_name);
+                            msg.push("\n**When:** ");
+                            msg.push_timestamp(race_start_time, serenity_utils::message::TimestampStyle::LongDateTime);
+
+                            // Add restream information if the race has restream URLs for the volunteer's language
+                            if !race.video_urls.is_empty() {
+                                // Check if there's a restream for the volunteer's language
+                                let binding = EffectiveRoleBinding::for_event(&mut transaction, data.series, &data.event).await?
+                                    .into_iter()
+                                    .find(|b| b.id == signup.role_binding_id);
+
+                                if let Some(binding) = binding {
+                                    if let Some(video_url) = race.video_urls.get(&binding.language) {
+                                        msg.push("\n**Restream (");
+                                        msg.push(&binding.language.to_string());
+                                        msg.push("):** <");
+                                        msg.push(&video_url.to_string());
+                                        msg.push(">");
                                     }
                                 }
-                                msg.push("\n");
+                            } else {
+                                msg.push("\n\nNo restream channel has been assigned yet. You will be notified when one is available.");
+                            }
+
+                            // Send DM
+                            if let Ok(dm_channel) = discord_user_id.create_dm_channel(&*discord_ctx).await {
+                                if let Err(e) = dm_channel.say(&*discord_ctx, msg.build()).await {
+                                    eprintln!("Failed to send volunteer selection DM: {}", e);
+                                }
                             }
                         }
-                    }
-                    
-                    // Add restream information if the race has restream URLs
-                    if !race.video_urls.is_empty() {
-                        msg.push("\n**The race will be restreamed on:**\n");
-                        for (language, video_url) in &race.video_urls {
-                            msg.push("**");
-                            msg.push(&language.to_string());
-                            msg.push(":** ");
-                            msg.push("<");
-                            msg.push(&video_url.to_string());
-                            msg.push(">");
-                            msg.push("\n");
-                        }
-                    } else {
-                        msg.push("\nNo restream has been scheduled for this race so far.");
-                    }
-                    
-                    // Send the message to Discord
-                    let discord_ctx = discord_ctx.read().await;
-                    if let Err(e) = discord_volunteer_info_channel.say(&*discord_ctx, msg.build()).await {
-                        eprintln!("Failed to send volunteer notification to Discord: {}", e);
                     }
                 }
             }
 
             transaction.commit().await?;
+
+            // Update the volunteer info post to reflect the status change
+            let _ = volunteer_requests::update_volunteer_post_for_race(
+                pool,
+                &*discord_ctx.read().await,
+                race_id,
+            ).await;
+
             RedirectOrContent::Redirect(match value.lang {
                 Some(lang) => Redirect::to(format!("/event/{}/{}/races/{}/signups?lang={}", series.slug(), event, race_id, lang.short_code())),
                 None => Redirect::to(format!("/event/{}/{}/races/{}/signups", series.slug(), event, race_id)),
@@ -2960,7 +2943,14 @@ async fn match_signup_page(
                                 Entrant::Discord { .. } => "Discord User".to_string(),
                             }
                         ),
-                        _ => "Unknown entrants".to_string(),
+                        _ => {
+                            // For qualifier races without fixed entrants, show round/phase instead of "Unknown entrants"
+                            if race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
+                                race.round.clone().unwrap_or_else(|| "Qualifier".to_string())
+                            } else {
+                                String::new()
+                            }
+                        }
                     }
                 );
             }
@@ -3340,6 +3330,7 @@ pub(crate) struct RevokeSignupForm {
 #[rocket::post("/event/<series>/<event>/races/<race_id>/withdraw-signup", data = "<form>")]
 pub(crate) async fn withdraw_signup(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     series: Series,
     event: &str,
@@ -3396,6 +3387,14 @@ pub(crate) async fn withdraw_signup(
             // Update the signup status to Aborted
             Signup::update_status(&mut transaction, value.signup_id, VolunteerSignupStatus::Aborted).await?;
             transaction.commit().await?;
+
+            // Update the volunteer info post to reflect the withdrawal
+            let _ = volunteer_requests::update_volunteer_post_for_race(
+                pool,
+                &*discord_ctx.read().await,
+                race_id,
+            ).await;
+
             RedirectOrContent::Redirect(match value.lang {
                 Some(lang) => Redirect::to(format!("/event/{}/{}/races/{}/signups?lang={}", series.slug(), event, race_id, lang.short_code())),
                 None => Redirect::to(format!("/event/{}/{}/races/{}/signups", series.slug(), event, race_id)),
@@ -3421,6 +3420,7 @@ pub(crate) async fn withdraw_signup(
 #[rocket::post("/event/<series>/<event>/races/<race_id>/revoke-signup", data = "<form>")]
 pub(crate) async fn revoke_signup(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     series: Series,
     event: &str,
@@ -3491,6 +3491,14 @@ pub(crate) async fn revoke_signup(
             // Update the signup status back to Pending
             Signup::update_status(&mut transaction, value.signup_id, VolunteerSignupStatus::Pending).await?;
             transaction.commit().await?;
+
+            // Update the volunteer info post to reflect the revocation
+            let _ = volunteer_requests::update_volunteer_post_for_race(
+                pool,
+                &*discord_ctx.read().await,
+                race_id,
+            ).await;
+
             RedirectOrContent::Redirect(match value.lang {
                 Some(lang) => Redirect::to(format!("/event/{}/{}/races/{}/signups?lang={}", series.slug(), event, race_id, lang.short_code())),
                 None => Redirect::to(format!("/event/{}/{}/races/{}/signups", series.slug(), event, race_id)),
