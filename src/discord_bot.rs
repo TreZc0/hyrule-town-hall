@@ -2372,7 +2372,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         transaction.rollback().await?;
                     }
                     "async_finish" => {
-                        // Handle async finish button
+                        // Handle async finish button - start revert period
                         let mut transaction = {
                             let discord_data = ctx.data.read().await;
                             discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
@@ -2408,11 +2408,49 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     async_part as u8,
                                     interaction.user.id,
                                 ).await {
-                                    Ok(()) => {
-                                        // Remove the button completely by editing the original message
+                                    Ok(formatted_time) => {
+                                        // Replace FINISH/FORFEIT buttons with REVERT button
+                                        let revert_button = CreateActionRow::Buttons(vec![
+                                            CreateButton::new("async_revert")
+                                                .label("REVERT")
+                                                .style(ButtonStyle::Secondary)
+                                        ]);
+
                                         interaction.edit_response(ctx, EditInteractionResponse::new()
-                                            .components(vec![]) // Empty components removes all buttons
+                                            .content(format!("✅ **Finished in {}**\nYou have 30 seconds to revert if needed.", formatted_time))
+                                            .components(vec![revert_button])
                                         ).await?;
+
+                                        // Spawn a background task to finalize after 30 seconds
+                                        let ctx_clone = ctx.clone();
+                                        let pool_clone = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+                                        let race_id = race_info.id;
+                                        let async_part = async_part as u8;
+                                        let channel_id = interaction.channel_id;
+                                        let message_id = interaction.get_response(&ctx.http).await?.id;
+
+                                        tokio::spawn(async move {
+                                            sleep(Duration::from_secs(30)).await;
+
+                                            // Check if the message still has the REVERT button (wasn't clicked)
+                                            if let Ok(message) = channel_id.message(&ctx_clone, message_id).await {
+                                                if message.components.iter().any(|_| message.content.contains("30 seconds to revert")) {
+                                                    // Finalize the finish
+                                                    let _ = AsyncRaceManager::finalize_finish(
+                                                        &pool_clone,
+                                                        &ctx_clone,
+                                                        race_id,
+                                                        async_part,
+                                                        formatted_time.clone(),
+                                                    ).await;
+
+                                                    // Remove the REVERT button
+                                                    let _ = channel_id.edit_message(&ctx_clone, message_id, serenity::all::EditMessage::new()
+                                                        .components(vec![])
+                                                    ).await;
+                                                }
+                                            }
+                                        });
                                     }
                                     Err(e) => {
                                         let error_msg = match e {
@@ -2445,6 +2483,25 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         }
 
                         transaction.rollback().await?;
+                    }
+                    "async_revert" => {
+                        // Handle REVERT button - restore FINISH/FORFEIT buttons
+                        interaction.defer(&ctx.http).await?;
+
+                        // Restore the original FINISH/FORFEIT buttons
+                        let race_buttons = CreateActionRow::Buttons(vec![
+                            CreateButton::new("async_finish")
+                                .label("FINISH")
+                                .style(ButtonStyle::Danger),
+                            CreateButton::new("async_forfeit")
+                                .label("FORFEIT")
+                                .style(ButtonStyle::Secondary),
+                        ]);
+
+                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                            .content("**Finish reverted!** Continue playing an dclick the FINISH button once you have completed your run.\nIf you need to forfeit, click the FORFEIT button.")
+                            .components(vec![race_buttons])
+                        ).await?;
                     }
                     "async_forfeit" => {
                         // Show confirmation for bracket async forfeit
@@ -2503,6 +2560,21 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 msg.push("**Organizers:** To confirm this forfeit, use the `/forfeit-async` command in this thread.");
 
                                 interaction.channel_id.say(ctx, msg.build()).await?;
+
+                                // Find and edit the message with FINISH/FORFEIT buttons to remove them
+                                // Get messages from the channel and find the one with the buttons
+                                // We look for the message that contains the text "Good luck!" which is sent with the FINISH/FORFEIT buttons
+                                let messages = interaction.channel_id.messages(ctx, serenity::all::GetMessages::new().limit(50)).await?;
+                                for mut message in messages {
+                                    // Check if this message contains "Good luck!" and has components
+                                    if !message.components.is_empty() && message.content.contains("Good luck!") {
+                                        // Edit this message to remove the buttons
+                                        let mut edit_msg = serenity::all::EditMessage::new();
+                                        edit_msg = edit_msg.components(vec![]);
+                                        let _ = message.edit(ctx, edit_msg).await;
+                                        break;
+                                    }
+                                }
 
                                 // Update the ephemeral response to confirm
                                 interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
@@ -3066,7 +3138,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     )).await?;
                                     transaction.rollback().await?;
                                 } else {
-                                    // Send @here ping informing of forfeit
                                     let mut msg = MessageBuilder::default();
                                     msg.push("@here - ");
                                     msg.mention(&interaction.user);
@@ -3075,7 +3146,20 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
 
                                     interaction.channel_id.say(ctx, msg.build()).await?;
 
-                                    // Update the ephemeral response to confirm
+                                    // Find and edit the message with FINISH/FORFEIT buttons to remove them
+                                    // Look for the message that contains "Good luck!" which is sent with the FINISH/FORFEIT buttons
+                                    let messages = interaction.channel_id.messages(ctx, serenity::all::GetMessages::new().limit(50)).await?;
+                                    for mut message in messages {
+                                        // Check if this message contains "Good luck!" and has components
+                                        if !message.components.is_empty() && message.content.contains("Good luck!") {
+                                            // Edit this message to remove the buttons
+                                            let mut edit_msg = serenity::all::EditMessage::new();
+                                            edit_msg = edit_msg.components(vec![]);
+                                            let _ = message.edit(ctx, edit_msg).await;
+                                            break;
+                                        }
+                                    }
+
                                     interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                         CreateInteractionResponseMessage::new()
                                             .content("Forfeit request sent. An organizer will confirm it shortly.")

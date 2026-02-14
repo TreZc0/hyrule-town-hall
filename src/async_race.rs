@@ -1003,23 +1003,24 @@ impl AsyncRaceManager {
     }
 
     /// Handles the FINISH button click for async races
+    /// Returns the formatted time string for display
     pub(crate) async fn handle_finish_button(
         pool: &PgPool,
-        discord_ctx: &DiscordCtx,
+        _discord_ctx: &DiscordCtx,
         race_id: i64,
         async_part: u8,
         user_id: UserId,
-    ) -> Result<(), Error> {
+    ) -> Result<String, Error> {
         let mut transaction = pool.begin().await?;
-        
+
         // Load the race
         let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await?;
-        
+
         // Verify the user is the correct player for this async part
         let team = Self::get_team_for_async_part(&race, async_part)?;
         let player = team.members(&mut transaction).await?.into_iter().next()
             .ok_or(Error::NoTeamMembers)?;
-        
+
         if let Some(discord) = &player.discord {
             if discord.id != user_id {
                 return Err(Error::UnauthorizedUser);
@@ -1027,14 +1028,14 @@ impl AsyncRaceManager {
         } else {
             return Err(Error::NoTeamMembers);
         }
-        
+
         // Get the async_times record
         let async_time_record = sqlx::query!(
             "SELECT start_time, finish_time FROM async_times WHERE race_id = $1 AND async_part = $2",
             race_id,
             async_part as i32
         ).fetch_optional(&mut *transaction).await?;
-        
+
         if let Some(ref record) = async_time_record {
             if record.start_time.is_none() {
                 return Err(Error::NotStarted);
@@ -1048,26 +1049,41 @@ impl AsyncRaceManager {
         } else {
             return Err(Error::NotStarted);
         }
-        
+
         // Calculate finish time and duration
         let now = Utc::now();
         let start_time = async_time_record.unwrap().start_time.unwrap();
         let duration = now.signed_duration_since(start_time);
-        
+
         // Format duration as hh:mm:ss
         let total_seconds = duration.num_seconds();
         let hours = total_seconds / 3600;
         let minutes = (total_seconds % 3600) / 60;
         let seconds = total_seconds % 60;
-        //merely used for display purposes, not stored in the database.
         let formatted_time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
-        
-        // Load event data for organizer notification
-        let _event = EventData::new(&mut transaction, race.series, &race.event)
-            .await
-            .map_err(|e| Error::Event(event::Error::Data(e)))?
-            .ok_or(Error::EventNotFound)?;
-        
+
+        transaction.commit().await?;
+        Ok(formatted_time)
+    }
+
+    /// Finalizes the finish after the revert period expires
+    pub(crate) async fn finalize_finish(
+        pool: &PgPool,
+        discord_ctx: &DiscordCtx,
+        race_id: i64,
+        async_part: u8,
+        formatted_time: String,
+    ) -> Result<(), Error> {
+        let mut transaction = pool.begin().await?;
+
+        // Load the race
+        let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await?;
+
+        // Get the player
+        let team = Self::get_team_for_async_part(&race, async_part)?;
+        let player = team.members(&mut transaction).await?.into_iter().next()
+            .ok_or(Error::NoTeamMembers)?;
+
         // Get thread ID
         let thread_id = match async_part {
             1 => sqlx::query_scalar!("SELECT async_thread1 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
@@ -1075,10 +1091,10 @@ impl AsyncRaceManager {
             3 => sqlx::query_scalar!("SELECT async_thread3 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
             _ => return Err(Error::InvalidAsyncPart),
         };
-        
+
         if let Some(thread_id) = thread_id {
             let thread = ChannelId::new(thread_id as u64);
-            
+
             // Send finish notification to thread with @here ping
             let mut content = MessageBuilder::default();
             content.push("@here - **This part of the async race is complete!** ");
@@ -1088,13 +1104,12 @@ impl AsyncRaceManager {
             content.push_line("");
             content.push_line("");
             content.mention_user(&player);
-            content.push(", please provide a screenshot of the collection rate end screen and a link to the recording or VoD here as soon as you can. ");
+            content.push(", please provide a link to the recording or VoD here as soon as you can. If the game has a collection end screen, please also provide a screenshot of that screen.");
             content.push("Organizers will then verify and record your final time.");
 
-            
             thread.say(discord_ctx, content.build()).await?;
         }
-        
+
         transaction.commit().await?;
         Ok(())
     }

@@ -1361,6 +1361,9 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                                     : format!("{:.0} points", round_score.score);
                                                 }
                                             }
+                                            @if max_qualifiers != usize::MAX && i >= max_qualifiers {
+                                                : " (not counted)";
+                                            }
                                         }
                                     }
                                 }

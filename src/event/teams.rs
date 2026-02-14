@@ -652,10 +652,10 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                             }
                             QualifierScoreKind::TwwrMiniblins26 => {
                                 let max_count = score_kind.max_qualifiers_that_count();
-                                scores.truncate(max_count); // only count the first N qualifiers by start time
-                                let round_scores: Vec<RoundScore> = round_scores_with_source.into_iter().take(max_count).collect();
                                 let num_entered = scores.len();
                                 let num_finished = scores.iter().filter(|&&score| score != 0.0).count(); // -1 sentinel counts as finished
+                                scores.truncate(max_count); // only first N qualifiers contribute to score
+                                let round_scores: Vec<RoundScore> = round_scores_with_source;
                                 scores.retain(|&score| score > 0.0); // only keep properly scored entries
                                 scores.sort_unstable();
                                 scores.reverse(); // highest first
@@ -914,14 +914,22 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 } else {
                     let (num1, score1, entered1) = match *qualification1 {
                         Qualification::Multiple { num_entered, num_finished, score, .. } => match score_kind { //TODO determine based on enter flow
-                            QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online | QualifierScoreKind::TwwrMiniblins26 => (num_finished, score, num_entered),
+                            QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online => (num_finished, score, num_entered),
+                            QualifierScoreKind::TwwrMiniblins26 => {
+                                let max_count = score_kind.max_qualifiers_that_count();
+                                (num_finished.min(max_count), score, num_entered.min(max_count))
+                            }
                             QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => (num_entered, score, num_entered),
                         },
                         _ => unreachable!("QualifierKind::Multiple must use Qualification::Multiple"),
                     };
                     let (num2, score2, entered2) = match *qualification2 {
                         Qualification::Multiple { num_entered, num_finished, score, .. } => match score_kind { //TODO determine based on enter flow
-                            QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online | QualifierScoreKind::TwwrMiniblins26 => (num_finished, score, num_entered),
+                            QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online => (num_finished, score, num_entered),
+                            QualifierScoreKind::TwwrMiniblins26 => {
+                                let max_count = score_kind.max_qualifiers_that_count();
+                                (num_finished.min(max_count), score, num_entered.min(max_count))
+                            }
                             QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online => (num_entered, score, num_entered),
                         },
                         _ => unreachable!("QualifierKind::Multiple must use Qualification::Multiple"),
@@ -1322,7 +1330,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                         } else if round_scores.is_empty() {
                                             : format!("{score:.2}");
                                         } else {
-                                            @let has_pending = round_scores.iter().any(|rs| rs.score < r64(0.0));
+                                            @let has_pending = round_scores.iter().take(QualifierScoreKind::TwwrMiniblins26.max_qualifiers_that_count()).any(|rs| rs.score < r64(0.0));
                                             details(class = "round-breakdown") {
                                                 summary {
                                                     : format!("{score:.2}");
@@ -1340,6 +1348,9 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                                 : "DNF";
                                                             } else {
                                                                 : format!("{:.0}", round_score.score);
+                                                            }
+                                                            @if i >= QualifierScoreKind::TwwrMiniblins26.max_qualifiers_that_count() {
+                                                                : " (not counted)";
                                                             }
                                                         }
                                                     }
