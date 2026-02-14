@@ -2799,7 +2799,8 @@ impl SeedRollUpdate {
                         } else {
                             unimplemented!("distant future Triforce Blitz SotD")
                         }
-                    } else {
+                    } else if matches!(seed.files, Some(seed::Files::OotrWeb { .. }) | Some(seed::Files::MidosHouse { .. })) {
+                        // Only show spoiler log message for OOTR seeds
                         ctx.say(if let French = language {
                             "Le spoiler log sera disponible sur le lien de la seed après la seed."
                         } else {
@@ -3744,11 +3745,14 @@ impl Handler {
         self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_tfb_dev_seed(delay_until, coop, Some(format!("https://{}{}", racetime_host(), ctx.data().await.url)), unlock_spoiler_log), language, article, description).await;
     }
 
-    async fn queue_existing_seed(&self, ctx: &RaceContext<GlobalState>, seed: seed::Data, language: Language, article: &'static str, description: String) {
+    async fn queue_existing_seed(&self, ctx: &RaceContext<GlobalState>, goal: Goal, seed: seed::Data, language: Language, article: &'static str, description: String) {
         let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
+        let event = self.official_data.as_ref().map(|OfficialRaceData { event, .. }| event);
+        let version = Some(goal.rando_version(event));
+        let unlock_spoiler_log = goal.unlock_spoiler_log(self.is_official(), false);
         let (tx, rx) = mpsc::channel(1);
-        tx.send(SeedRollUpdate::Done { rsl_preset: None, version: None, unlock_spoiler_log: UnlockSpoilerLog::After, seed }).await.unwrap();
+        tx.send(SeedRollUpdate::Done { rsl_preset: None, version, unlock_spoiler_log, seed }).await.unwrap();
         self.roll_seed_inner(ctx, delay_until, rx, language, article, description).await;
     }
 
@@ -4888,7 +4892,7 @@ impl RaceHandler<GlobalState> for Handler {
             }
             lock!(@read state = this.race_state; {
                 if existing_seed.files.is_some() {
-                    this.queue_existing_seed(ctx, existing_seed, English, "a", format!("seed")).await; //TODO better article/description
+                    this.queue_existing_seed(ctx, goal, existing_seed, English, "a", format!("seed")).await; //TODO better article/description
                 } else if goal.requires_seed() {
                     // Only roll seeds for goals that require them
                     let event_id = Some((event.series, &*event.event));
@@ -5395,7 +5399,7 @@ impl RaceHandler<GlobalState> for Handler {
                             SeedCommandParseResult::Tfb { version, unlock_spoiler_log, language, article, description } => self.roll_tfb_seed(ctx, version, unlock_spoiler_log, language, article, description).await,
                             SeedCommandParseResult::TfbDev { coop, unlock_spoiler_log, language, article, description } => self.roll_tfb_dev_seed(ctx, coop, unlock_spoiler_log, language, article, description).await,
                             SeedCommandParseResult::Twwr { permalink, unlock_spoiler_log, language, article, description } => self.roll_twwr_seed(ctx, permalink, unlock_spoiler_log, language, article, description).await,
-                            SeedCommandParseResult::QueueExisting { data, language, article, description } => self.queue_existing_seed(ctx, data, language, article, description).await,
+                            SeedCommandParseResult::QueueExisting { data, language, article, description } => self.queue_existing_seed(ctx, goal, data, language, article, description).await,
                             SeedCommandParseResult::SendPresets { language, msg } => {
                                 ctx.say(if let French = language {
                                     format!("Désolé {reply_to}, {msg}. Veuillez utiliser un des suivants :")

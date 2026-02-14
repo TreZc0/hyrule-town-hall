@@ -561,6 +561,12 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
             for (user, mut timestamped_scores) in scores {
                 // Sort by timestamp so truncation respects chronological order
                 timestamped_scores.sort_by_key(|(ts, _, _)| *ts);
+                // For async_only hiding, filter out forfeited asyncs for non-organizers
+                if !is_organizer && data.qualifier_score_hiding == QualifierScoreHiding::AsyncOnly {
+                    timestamped_scores.retain(|(_, score, source)| {
+                        !matches!(source, RoundSource::Async(_)) || *score != 0.0
+                    });
+                }
                 let user_opted_out = is_user_opted_out(&user);
                 signups.push(SignupsTeam {
                     team: match &user {
@@ -1339,7 +1345,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                     }
                                                 }
                                                 div(class = "round-scores") {
-                                                    @for (i, round_score) in round_scores.iter().enumerate() {
+                                                    @for (i, round_score) in round_scores.iter().take(QualifierScoreKind::TwwrMiniblins26.max_qualifiers_that_count()).enumerate() {
                                                         div(style = "font-size: 0.85em;") {
                                                             : format!("Race {} ({}): ", i + 1, round_score.source);
                                                             @if round_score.score < r64(0.0) {
@@ -1348,9 +1354,6 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                                 : "DNF";
                                                             } else {
                                                                 : format!("{:.0}", round_score.score);
-                                                            }
-                                                            @if i >= QualifierScoreKind::TwwrMiniblins26.max_qualifiers_that_count() {
-                                                                : " (not counted)";
                                                             }
                                                         }
                                                     }
