@@ -1240,7 +1240,20 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                     }
                 }
                 @if row.resigned {
-                    p : "You have resigned from this event.";
+                    @let is_blocked = if let Some(racetime) = me.racetime.as_ref() {
+                        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM event_blocks WHERE series = $1 AND event = $2 AND racetime_id = $3) AS "exists!""#, data.series as _, &data.event, racetime.id).fetch_one(&mut *transaction).await?
+                    } else {
+                        false
+                    };
+                    @let can_reenter = !is_blocked && !data.is_started(&mut transaction).await? && data.enter_flow.is_some();
+                    p {
+                        : "You have resigned from this event.";
+                        @if can_reenter {
+                            : " You can ";
+                            a(href = uri!(enter::get(data.series, &*data.event, _, _))) : "re-enter";
+                            : " if you wish.";
+                        }
+                    }
                 } else {
                     @let qualifier_progress = {
                         let qualifier_kind = data.qualifier_kind(&mut transaction, Some(me)).await?;
@@ -1258,17 +1271,18 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             let mut qualifier_data = data.clone();
                             qualifier_data.qualifier_score_hiding = QualifierScoreHiding::None;
                             let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.clone()), None, &qualifier_data, false, qualifier_kind, None, true, false).await?;
-                            signups.iter().find_map(|teams::SignupsTeam { team, qualification, .. }| {
+                            signups.into_iter().find_map(|teams::SignupsTeam { team, qualification, .. }| {
                                 if team.as_ref().is_some_and(|team| team.id == row.id) {
-                                    if let teams::Qualification::Multiple { num_entered, num_finished, score, .. } = qualification {
+                                    if let teams::Qualification::Multiple { num_entered, num_finished, score, round_scores } = qualification {
                                         Some((
-                                            *num_entered,
-                                            *num_finished,
+                                            num_entered,
+                                            num_finished,
                                             score_kind.max_qualifiers_that_count(),
                                             score_kind.required_qualifiers(),
-                                            *score,
+                                            score,
                                             live_qualifier_count,
                                             async_qualifier_count,
+                                            round_scores,
                                         ))
                                     } else {
                                         None
@@ -1281,7 +1295,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             None
                         }
                     };
-                    @if let Some((num_entered, num_finished, max_qualifiers, required_qualifiers, score, live_qualifier_count, async_qualifier_count)) = qualifier_progress {
+                    @if let Some((num_entered, num_finished, max_qualifiers, required_qualifiers, score, live_qualifier_count, async_qualifier_count, round_scores)) = qualifier_progress {
                         h3 : "Qualifier Progress";
                         @let total_qualifier_count = live_qualifier_count + async_qualifier_count;
                         div(class = "bg-surface") {
@@ -1322,6 +1336,34 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             }
                             @if data.qualifier_score_hiding == QualifierScoreHiding::None {
                                 p : format!("Qualifier points: {score:.2}");
+                            }
+                            @if !round_scores.is_empty() {
+                                h4(style = "margin-top: 1em;") : "Your Qualifier Results";
+                                @let hide_points = data.qualifier_score_hiding != QualifierScoreHiding::None;
+                                div(style = "font-size: 0.9em;") {
+                                    @for (i, round_score) in round_scores.iter().enumerate() {
+                                        div {
+                                            : format!("Race {} ({}): ", i + 1, round_score.source);
+                                            @if hide_points {
+                                                @if round_score.score < noisy_float::prelude::r64(0.0) {
+                                                    : "(pending)";
+                                                } else if round_score.score == noisy_float::prelude::r64(0.0) {
+                                                    : "DNF";
+                                                } else {
+                                                    : "Finished";
+                                                }
+                                            } else {
+                                                @if round_score.score < noisy_float::prelude::r64(0.0) {
+                                                    : "(pending)";
+                                                } else if round_score.score == noisy_float::prelude::r64(0.0) {
+                                                    : "DNF";
+                                                } else {
+                                                    : format!("{:.0} points", round_score.score);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

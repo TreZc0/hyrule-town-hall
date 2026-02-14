@@ -133,6 +133,13 @@ a.nav,
   text-decoration: none;
 }
 
+/* Logo link hover effect - subtle growth instead of color change */
+nav > a.nav:hover {
+  background-color: transparent;
+  color: inherit;
+  transform: scale(1.02);
+}
+
 .section-list {
   display: flex;
   flex-wrap: wrap;

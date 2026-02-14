@@ -199,6 +199,38 @@ pub(crate) struct SignupsMember {
     qualifier_vod: Option<String>,
 }
 
+/// Source of a qualifier score (live race or async).
+#[derive(Clone, Copy)]
+pub(crate) enum RoundSource {
+    /// Live qualifier race, with the race number (1-indexed).
+    Live(usize),
+    /// Async qualifier, with the async kind.
+    Async(AsyncKind),
+}
+
+impl fmt::Display for RoundSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RoundSource::Live(n) => write!(f, "Live {n}"),
+            RoundSource::Async(kind) => match kind {
+                AsyncKind::Qualifier1 => write!(f, "Async 1"),
+                AsyncKind::Qualifier2 => write!(f, "Async 2"),
+                AsyncKind::Qualifier3 => write!(f, "Async 3"),
+                AsyncKind::Seeding => write!(f, "Seeding"),
+                AsyncKind::Tiebreaker1 => write!(f, "Tiebreaker 1"),
+                AsyncKind::Tiebreaker2 => write!(f, "Tiebreaker 2"),
+            },
+        }
+    }
+}
+
+/// A single round's score with its source information.
+#[derive(Clone)]
+pub(crate) struct RoundScore {
+    pub(crate) score: R64,
+    pub(crate) source: RoundSource,
+}
+
 #[derive(Clone)]
 pub(crate) enum Qualification {
     Single {
@@ -213,7 +245,7 @@ pub(crate) enum Qualification {
         num_finished: usize,
         score: R64,
         /// Per-round scores in chronological order, for expandable breakdown display.
-        round_scores: Vec<R64>,
+        round_scores: Vec<RoundScore>,
     },
 }
 
@@ -254,9 +286,11 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
     let now = Utc::now();
     let mut signups = match qualifier_kind {
         QualifierKind::Score(score_kind) => {
-            let mut scores = HashMap::<_, Vec<(DateTime<Utc>, R64)>>::default();
+            let mut scores = HashMap::<_, Vec<(DateTime<Utc>, R64, RoundSource)>>::default();
+            let mut live_race_num = 0usize;
             for race in Race::for_event(transaction, &cache.http_client, data).await? {
                 if race.phase.as_ref().is_none_or(|phase| phase != "Qualifier") { continue }
+                live_race_num += 1;
                 let Ok(room) = race.rooms().exactly_one() else {
                     if let Some(extrapolate_for) = worst_case_extrapolation {
                         scores.entry(MemberUser::Newcomer).or_default();
@@ -269,7 +303,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                     QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => 110.0,
                                     QualifierScoreKind::TwwrMiniblins26 => 5000.0,
                                 }
-                            })));
+                            }), RoundSource::Live(live_race_num)));
                         }
                     }
                     continue
@@ -288,7 +322,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                     QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => 110.0,
                                     QualifierScoreKind::TwwrMiniblins26 => 5000.0,
                                 }
-                            })));
+                            }), RoundSource::Live(live_race_num)));
                         }
                     }
                 } else {
@@ -304,7 +338,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                         QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => 110.0,
                                         QualifierScoreKind::TwwrMiniblins26 => 5000.0,
                                     }
-                                })));
+                                }), RoundSource::Live(live_race_num)));
                             }
                         },
                         RaceStatusValue::Cancelled => {}
@@ -392,7 +426,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                     }
                                 } else {
                                     0.0
-                                })));
+                                }), RoundSource::Live(live_race_num)));
                             }
                         }
                     }
@@ -433,7 +467,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     }
                 }
 
-                for (_kind, mut results) in async_by_kind {
+                for (async_kind, mut results) in async_by_kind {
                     results.sort_by_key(|(_, time, _)| *time);
                     let finish_times: Vec<Duration> = results.iter().map(|(_, t, _)| *t).collect();
                     let num_entrants = results.len();
@@ -449,7 +483,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                             // Scores will be recalculated when enough finishers exist.
                             for (player_id, _finish_time, start_time) in &results {
                                 let user = User::from_id(&mut **transaction, *player_id).await?.expect("async player not found");
-                                scores.entry(MemberUser::MidosHouse(user)).or_default().push((*start_time, r64(-1.0)));
+                                scores.entry(MemberUser::MidosHouse(user)).or_default().push((*start_time, r64(-1.0), RoundSource::Async(async_kind)));
                             }
                         }
                         continue;
@@ -478,7 +512,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                             }
                         };
                         let user = User::from_id(&mut **transaction, *player_id).await?.expect("async player not found");
-                        scores.entry(MemberUser::MidosHouse(user)).or_default().push((*start_time, r64(score)));
+                        scores.entry(MemberUser::MidosHouse(user)).or_default().push((*start_time, r64(score), RoundSource::Async(async_kind)));
                     }
                 }
                 // Count forfeits/DNFs as entered (score 0) even though they have no time
@@ -491,7 +525,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     }
                     let start_time = row.start_time.unwrap_or(now);
                     let user = User::from_id(&mut **transaction, row.player).await?.expect("async player not found");
-                    scores.entry(MemberUser::MidosHouse(user)).or_default().push((start_time, r64(0.0)));
+                    scores.entry(MemberUser::MidosHouse(user)).or_default().push((start_time, r64(0.0), RoundSource::Async(row.kind)));
                 }
             }
             let teams = Team::for_event(&mut *transaction, data.series, &data.event).await?;
@@ -529,7 +563,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
             let mut signups = Vec::with_capacity(scores.len());
             for (user, mut timestamped_scores) in scores {
                 // Sort by timestamp so truncation respects chronological order
-                timestamped_scores.sort_by_key(|(ts, _)| *ts);
+                timestamped_scores.sort_by_key(|(ts, _, _)| *ts);
                 let user_opted_out = is_user_opted_out(&user);
                 signups.push(SignupsTeam {
                     team: match &user {
@@ -562,12 +596,13 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                         user,
                     }],
                     qualification: {
-                        // Extract score values after timestamp-based ordering
-                        let mut scores: Vec<R64> = timestamped_scores.into_iter().map(|(_, s)| s).collect();
+                        // Extract score values and sources after timestamp-based ordering
+                        let round_scores_with_source: Vec<RoundScore> = timestamped_scores.iter().map(|(_, s, src)| RoundScore { score: *s, source: *src }).collect();
+                        let mut scores: Vec<R64> = timestamped_scores.into_iter().map(|(_, s, _)| s).collect();
                         match score_kind {
                             QualifierScoreKind::Standard => {
                                 scores.truncate(8); // only count the first 8 qualifiers chronologically
-                                let round_scores = scores.clone();
+                                let round_scores: Vec<RoundScore> = round_scores_with_source.into_iter().take(8).collect();
                                 let num_entered = scores.len();
                                 scores.retain(|&score| score != 0.0); // only count finished races
                                 let num_finished = scores.len();
@@ -584,7 +619,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                             }
                             QualifierScoreKind::Sgl2023Online => {
                                 scores.truncate(5); // only count the first 5 qualifiers chronologically
-                                let round_scores = scores.clone();
+                                let round_scores: Vec<RoundScore> = round_scores_with_source.into_iter().take(5).collect();
                                 let num_entered = scores.len();
                                 scores.sort_unstable();
                                 if num_entered >= 4 {
@@ -601,7 +636,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                             }
                             QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => {
                                 scores.truncate(6); // only count the first 6 qualifiers chronologically
-                                let round_scores = scores.clone();
+                                let round_scores: Vec<RoundScore> = round_scores_with_source.into_iter().take(6).collect();
                                 let num_entered = scores.len();
                                 scores.sort_unstable();
                                 if num_entered >= 4 {
@@ -614,8 +649,9 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                 }
                             }
                             QualifierScoreKind::TwwrMiniblins26 => {
-                                scores.truncate(score_kind.max_qualifiers_that_count()); // only count the first N qualifiers by start time
-                                let round_scores = scores.clone();
+                                let max_count = score_kind.max_qualifiers_that_count();
+                                scores.truncate(max_count); // only count the first N qualifiers by start time
+                                let round_scores: Vec<RoundScore> = round_scores_with_source.into_iter().take(max_count).collect();
                                 let num_entered = scores.len();
                                 let num_finished = scores.iter().filter(|&&score| score != 0.0).count(); // -1 sentinel counts as finished
                                 scores.retain(|&score| score > 0.0); // only keep properly scored entries
@@ -1271,7 +1307,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                         } else if round_scores.is_empty() {
                                             : format!("{score:.2}");
                                         } else {
-                                            @let has_pending = round_scores.iter().any(|&s| s < r64(0.0));
+                                            @let has_pending = round_scores.iter().any(|rs| rs.score < r64(0.0));
                                             details(class = "round-breakdown") {
                                                 summary {
                                                     : format!("{score:.2}");
@@ -1281,14 +1317,14 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                 }
                                                 div(class = "round-scores") {
                                                     @for (i, round_score) in round_scores.iter().enumerate() {
-                                                        div {
-                                                            : format!("Race {}: ", i + 1);
-                                                            @if *round_score < r64(0.0) {
+                                                        div(style = "font-size: 0.85em;") {
+                                                            : format!("Race {} ({}): ", i + 1, round_score.source);
+                                                            @if round_score.score < r64(0.0) {
                                                                 : "(pending)";
-                                                            } else if *round_score == r64(0.0) {
+                                                            } else if round_score.score == r64(0.0) {
                                                                 : "DNF";
                                                             } else {
-                                                                : format!("{round_score:.0}");
+                                                                : format!("{:.0}", round_score.score);
                                                             }
                                                         }
                                                     }
