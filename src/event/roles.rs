@@ -2421,10 +2421,13 @@ async fn volunteer_page(
                                 : binding.language;
                                 : ")";
                             }
+                            @let now = chrono::Utc::now();
                             @let available_races = upcoming_races.iter().filter(|race| {
-                                // Filter races that need this role type
-                                // This is a simplified check - you might want more sophisticated logic
-                                true
+                                // Filter out races that have already started
+                                match race.schedule {
+                                    RaceSchedule::Live { start, .. } => start > now,
+                                    _ => false,
+                                }
                             }).collect::<Vec<_>>();
 
                             @if available_races.is_empty() {
@@ -2806,7 +2809,7 @@ pub(crate) async fn manage_roster(
                                     }
                                 }
                             } else {
-                                msg.push("\n\nNo restream channel has been assigned yet. You will be notified when one is available.");
+                                msg.push("\n\nNo restream channel has been assigned yet. A restreamer will reach out before the race to inform you of the next steps.");
                             }
 
                             // Send DM

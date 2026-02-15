@@ -856,6 +856,17 @@ pub(crate) async fn update_volunteer_post_for_race(
         }
     }
 
+    // Calculate current time
+    let now = Utc::now();
+
+    // Filter out races that have already started
+    needs.retain(|need| {
+        match need.race.schedule {
+            RaceSchedule::Live { start, .. } => start > now,
+            _ => false,
+        }
+    });
+
     // If no needs remain, we still want to show the races with their filled status
     // But if there are truly no races, just return
     if needs.is_empty() {
@@ -863,7 +874,6 @@ pub(crate) async fn update_volunteer_post_for_race(
     }
 
     // Calculate time window (use lead time from event)
-    let now = Utc::now();
     let lead_time = Duration::hours(race_info.volunteer_request_lead_time_hours as i64);
     let cutoff = now + lead_time;
 

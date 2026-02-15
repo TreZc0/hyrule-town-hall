@@ -268,6 +268,9 @@ async fn game_page<'a>(
                                 };
                                 : full_form(uri!(apply_for_game_role(&game.name)), csrf.as_ref(), html! {
                                     input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                    @if let Some(language) = lang {
+                                        input(type = "hidden", name = "lang", value = language.short_code());
+                                    }
                                     @if !binding.auto_approve {
                                         : form_field("notes", &mut errors, html! {
                                             label(for = "notes") : "Notes:";
@@ -750,6 +753,7 @@ pub(crate) struct ApplyForGameRoleForm {
     role_binding_id: Id<RoleBindings>,
     #[field(default = String::new())]
     notes: String,
+    lang: Option<Language>,
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -773,6 +777,9 @@ pub(crate) async fn apply_for_game_role(
     let mut form = form.into_inner();
     form.verify(&csrf);
 
+    // Extract lang from form to preserve it across redirects and error pages
+    let lang = form.value.as_ref().and_then(|v| v.lang);
+
     Ok(if let Some(ref value) = form.value {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
 
@@ -782,7 +789,11 @@ pub(crate) async fn apply_for_game_role(
 
         // Check if user already has an active request for this role binding
         if RoleRequest::active_for_user(&mut transaction, value.role_binding_id, me.id).await.map_err(Error::from)? {
-            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(game_name, _)))));
+            let redirect_path = match lang {
+                Some(language) => format!("/games/{}?lang={}", game_name, language.short_code()),
+                None => format!("/games/{}", game_name),
+            };
+            return Ok(RedirectOrContent::Redirect(Redirect::to(redirect_path)));
         }
 
         // Look up the role binding to check auto_approve and language
@@ -838,7 +849,11 @@ pub(crate) async fn apply_for_game_role(
         }
 
         transaction.commit().await.map_err(Error::from)?;
-        RedirectOrContent::Redirect(Redirect::to(uri!(get(game_name, _))))
+        let redirect_path = match lang {
+            Some(language) => format!("/games/{}?lang={}", game_name, language.short_code()),
+            None => format!("/games/{}", game_name),
+        };
+        RedirectOrContent::Redirect(Redirect::to(redirect_path))
     } else {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
@@ -846,7 +861,7 @@ pub(crate) async fn apply_for_game_role(
             .ok_or(StatusOrError::Status(Status::NotFound))?;
         let errors = form.context.errors().map(|e| e.clone()).collect::<Vec<_>>();
         RedirectOrContent::Content(
-            game_page(transaction, Some(me), &uri, game, errors, csrf, None).await.map_err(Error::from)?
+            game_page(transaction, Some(me), &uri, game, errors, csrf, lang).await.map_err(Error::from)?
         )
     })
 }

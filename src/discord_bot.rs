@@ -1637,7 +1637,20 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         ).await?;
                                                     }
                                                     transaction.commit().await?;
-                                                })
+                                                });
+
+                                                // Update volunteer post if this was a reschedule
+                                                if was_scheduled {
+                                                    let pool = {
+                                                        let data = ctx.data.read().await;
+                                                        data.get::<DbPool>().expect("database connection pool missing from Discord context").clone()
+                                                    };
+                                                    let _ = volunteer_requests::update_volunteer_post_for_race(
+                                                        &pool,
+                                                        ctx,
+                                                        cal_event.race.id,
+                                                    ).await;
+                                                }
                                             } else {
                                                 // Create Discord scheduled event for races scheduled > 30 minutes in advance
                                                 let http_client = {
@@ -1658,6 +1671,20 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     Vec::default()
                                                 };
                                                 transaction.commit().await?;
+
+                                                // Update volunteer post if this was a reschedule
+                                                if was_scheduled {
+                                                    let pool = {
+                                                        let data = ctx.data.read().await;
+                                                        data.get::<DbPool>().expect("database connection pool missing from Discord context").clone()
+                                                    };
+                                                    let _ = volunteer_requests::update_volunteer_post_for_race(
+                                                        &pool,
+                                                        ctx,
+                                                        cal_event.race.id,
+                                                    ).await;
+                                                }
+
                                                 let response_content = if_chain! {
                                                     if let French = event.language;
                                                     if cal_event.race.game.is_none();
@@ -1880,6 +1907,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     }
                                                     transaction.commit().await?;
                                                 });
+
+                                                // Update volunteer post if this was a reschedule
+                                                if was_scheduled {
+                                                    let pool = {
+                                                        let data = ctx.data.read().await;
+                                                        data.get::<DbPool>().expect("database connection pool missing from Discord context").clone()
+                                                    };
+                                                    let _ = volunteer_requests::update_volunteer_post_for_race(
+                                                        &pool,
+                                                        ctx,
+                                                        cal_event.race.id,
+                                                    ).await;
+                                                }
                                             } else {
                                                 cal_event.race.save(&mut transaction).await?;
                                                 let overlapping_maintenance_windows = if let RaceHandleMode::RaceTime = cal_event.should_create_room(&mut transaction, &event).await? {
@@ -1888,6 +1928,20 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     Vec::default()
                                                 };
                                                 transaction.commit().await?;
+
+                                                // Update volunteer post if this was a reschedule
+                                                if was_scheduled {
+                                                    let pool = {
+                                                        let data = ctx.data.read().await;
+                                                        data.get::<DbPool>().expect("database connection pool missing from Discord context").clone()
+                                                    };
+                                                    let _ = volunteer_requests::update_volunteer_post_for_race(
+                                                        &pool,
+                                                        ctx,
+                                                        cal_event.race.id,
+                                                    ).await;
+                                                }
+
                                                 let response_content = if_chain! {
                                                     if let French = event.language;
                                                     if cal_event.race.game.is_none();
@@ -3274,14 +3328,20 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         };
 
                         if approved_requests.is_empty() {
+                            let apply_url = if uses_custom_bindings {
+                                // Event uses custom role bindings - send to event volunteer page
+                                format!("{}/event/{}/{}/volunteer-roles", base_uri(), race.series.slug(), race.event)
+                            } else {
+                                // Event uses game-level bindings - send to game page
+                                format!("{}/games/{}", base_uri(), race.series.slug())
+                            };
+
                             interaction.create_response(ctx, CreateInteractionResponse::Message(
                                 CreateInteractionResponseMessage::new()
                                     .ephemeral(true)
                                     .content(format!(
-                                        "You don't have any confirmed volunteer roles for this event.\nApply at: <{}/event/{}/{}/volunteer-roles>",
-                                        base_uri(),
-                                        race.series.slug(),
-                                        race.event
+                                        "You don't have any confirmed volunteer roles for this event.\nApply at: <{}>",
+                                        apply_url
                                     ))
                             )).await?;
                             return Ok(());
