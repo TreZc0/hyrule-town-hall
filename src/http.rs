@@ -242,17 +242,13 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                         : "hosted by ";
                         : admin_user;
                         : " • ";
+                        a(href = "https://discord.gg/zsr", target = "_blank") : "ZSR Discord";
+                        : " • ";
                         a(href = uri!(legal::legal_disclaimer)) : "Legal";
                         : " • ";
                         a(href = uri!(api::graphql_playground)) : "API";
                         : " • ";
-                        a(href = "https://github.com/trezc0/hyrule-town-hall", target = "_blank") {
-                            @if style.mw_footer {
-                                : "Website Source Code";
-                            } else {
-                                : "Source Code";
-                            }
-                        }
+                        a(href = "https://github.com/trezc0/hyrule-town-hall", target = "_blank") : "Source Code";
                     }
                 }
             }

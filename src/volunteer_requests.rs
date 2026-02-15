@@ -60,7 +60,7 @@ pub(crate) enum CheckResult {
 }
 
 /// Checks for upcoming races needing volunteers and posts announcements to Discord.
-/// This function is called every 30 minutes from the main loop.
+/// This function is called every 10 minutes from the main loop.
 pub(crate) async fn check_and_post_volunteer_requests(
     pool: &PgPool,
     discord_ctx: &DiscordCtx,

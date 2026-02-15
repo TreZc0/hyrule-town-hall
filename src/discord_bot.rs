@@ -4,6 +4,7 @@ use {
         prelude::*,
         racetime_bot::{AlttprDeRaceOptions, CleanShutdown, CrosskeysRaceOptions, GlobalState},
         async_race::{AsyncRaceManager, Error as AsyncRaceError},
+        volunteer_requests,
     }, serenity::all::{
         CacheHttp,
         CommandDataOptionValue,
@@ -3317,11 +3318,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 }
 
                                 // Add button for this role
-                                let label = if binding.language == English {
-                                    binding.role_type_name.clone()
-                                } else {
-                                    format!("{} ({})", binding.role_type_name, binding.language.short_code())
-                                };
+                                let label = format!("{} [{}]", binding.role_type_name, binding.language.short_code());
                                 buttons.push(
                                     CreateButton::new(format!("volunteer_role_{}_{}", u64::from(race_id), u64::from(binding.id)))
                                         .label(label)
@@ -3470,6 +3467,13 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         ).await?;
 
                         transaction.commit().await?;
+
+                        // Update the volunteer info post to reflect the new signup
+                        let _ = volunteer_requests::update_volunteer_post_for_race(
+                            &pool,
+                            ctx,
+                            race_id,
+                        ).await;
 
                         // Confirm success - update the original message to remove buttons
                         interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(

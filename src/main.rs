@@ -379,7 +379,7 @@ async fn volunteer_request_manager(
     discord_ctx: RwFuture<DiscordCtx>,
     shutdown: rocket::Shutdown,
 ) -> Result<(), Error> {
-    let mut interval = tokio::time::interval(Duration::from_secs(30 * 60)); // Check every 30 minutes
+    let mut interval = tokio::time::interval(Duration::from_secs(10 * 60)); // Check every 10 minutes
 
     loop {
         tokio::select! {
