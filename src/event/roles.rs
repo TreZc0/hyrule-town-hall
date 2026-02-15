@@ -3189,7 +3189,7 @@ async fn match_signup_page(
                     }
 
                     @let is_approved = RoleRequest::approved_for_user(&mut transaction, binding.id, me.id).await?;
-                    @let my_signup = role_signups.iter().find(|s| s.user_id == me.id);
+                    @let my_signup = role_signups.iter().find(|s| s.user_id == me.id && matches!(s.status, VolunteerSignupStatus::Pending | VolunteerSignupStatus::Confirmed));
                     @let has_pending_request = my_requests.as_ref().map(|reqs| {
                         reqs.iter().any(|req| req.role_binding_id == binding.id && matches!(req.status, RoleRequestStatus::Pending))
                     }).unwrap_or(false);
