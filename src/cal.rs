@@ -3298,22 +3298,46 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                                 th : language;
                                 @let field_name = format!("video_urls.{}", language.short_code());
                                 : form_table_cell(&field_name, &mut errors, html! {
-                                    input(type = "text", name = &field_name, value? = if let Some(ref ctx) = ctx {
-                                        ctx.field_value(&*field_name).map(|room| room.to_string())
-                                    } else {
-                                        race.video_urls.get(&language).map(|video_url| video_url.to_string())
-                                    });
+                                    div(class = "autocomplete-container") {
+                                        input(
+                                            type = "text",
+                                            name = &field_name,
+                                            autocomplete = "off",
+                                            value? = if let Some(ref ctx) = ctx {
+                                                ctx.field_value(&*field_name).map(|room| room.to_string())
+                                            } else {
+                                                race.video_urls.get(&language).map(|video_url| video_url.to_string())
+                                            }
+                                        );
+                                        div(
+                                            id = format!("suggestions-{}", field_name.replace(".", "-")),
+                                            class = "suggestions",
+                                            style = "display: none;"
+                                        ) {}
+                                    }
                                 });
                                 //TODO hide restreamers column if the race room exists
                                 @let field_name = format!("restreamers.{}", language.short_code());
                                 : form_table_cell(&field_name, &mut errors, html! {
-                                    input(type = "text", name = &field_name, value? = if let Some(ref ctx) = ctx {
-                                        ctx.field_value(&*field_name)
-                                    } else if me.as_ref().and_then(|me| me.racetime.as_ref()).is_some_and(|racetime| race.restreamers.get(&language).is_some_and(|restreamer| *restreamer == racetime.id)) {
-                                        Some("me")
-                                    } else {
-                                        race.restreamers.get(&language).map(|restreamer| restreamer.as_str()) //TODO display as racetime.gg profile URL
-                                    });
+                                    div(class = "autocomplete-container") {
+                                        input(
+                                            type = "text",
+                                            name = &field_name,
+                                            autocomplete = "off",
+                                            value? = if let Some(ref ctx) = ctx {
+                                                ctx.field_value(&*field_name)
+                                            } else if me.as_ref().and_then(|me| me.racetime.as_ref()).is_some_and(|racetime| race.restreamers.get(&language).is_some_and(|restreamer| *restreamer == racetime.id)) {
+                                                Some("me")
+                                            } else {
+                                                race.restreamers.get(&language).map(|restreamer| restreamer.as_str()) //TODO display as racetime.gg profile URL
+                                            }
+                                        );
+                                        div(
+                                            id = format!("suggestions-{}", field_name.replace(".", "-")),
+                                            class = "suggestions",
+                                            style = "display: none;"
+                                        ) {}
+                                    }
                                 });
                             }
                         }
@@ -3641,6 +3665,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
             }
         }
         : form;
+        script(src = static_url!("restream-autocomplete.js")) {}
     };
     Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Edit Race — {}", event.display_name), content).await?)
 }

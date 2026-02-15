@@ -861,6 +861,60 @@ struct UserSearchRow {
     discord_username: Option<String>,
 }
 
+#[rocket::get("/api/restreamers/suggestions")]
+pub(crate) async fn restreamer_suggestions(
+    pool: &State<PgPool>,
+) -> Result<RawText<String>, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+
+    let restreamers = sqlx::query_scalar!(
+        r#"
+        SELECT DISTINCT restreamer FROM (
+            SELECT restreamer FROM races WHERE restreamer IS NOT NULL AND restreamer != ''
+            UNION
+            SELECT restreamer_fr FROM races WHERE restreamer_fr IS NOT NULL AND restreamer_fr != ''
+            UNION
+            SELECT restreamer_de FROM races WHERE restreamer_de IS NOT NULL AND restreamer_de != ''
+            UNION
+            SELECT restreamer_pt FROM races WHERE restreamer_pt IS NOT NULL AND restreamer_pt != ''
+        ) AS all_restreamers
+        ORDER BY restreamer
+        LIMIT 20
+        "#
+    )
+    .fetch_all(&mut *transaction)
+    .await?;
+
+    Ok(RawText(serde_json::to_string(&restreamers)?))
+}
+
+#[rocket::get("/api/video-urls/suggestions")]
+pub(crate) async fn video_url_suggestions(
+    pool: &State<PgPool>,
+) -> Result<RawText<String>, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+
+    let video_urls = sqlx::query_scalar!(
+        r#"
+        SELECT DISTINCT video_url::TEXT FROM (
+            SELECT video_url FROM races WHERE video_url IS NOT NULL
+            UNION
+            SELECT video_url_fr FROM races WHERE video_url_fr IS NOT NULL
+            UNION
+            SELECT video_url_de FROM races WHERE video_url_de IS NOT NULL
+            UNION
+            SELECT video_url_pt FROM races WHERE video_url_pt IS NOT NULL
+        ) AS all_video_urls
+        ORDER BY video_url::TEXT
+        LIMIT 20
+        "#
+    )
+    .fetch_all(&mut *transaction)
+    .await?;
+
+    Ok(RawText(serde_json::to_string(&video_urls)?))
+}
+
 // Weekly Schedules Management
 
 enum WeeklySchedulesFormDefaults<'v> {

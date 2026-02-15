@@ -641,6 +641,8 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::configure::weekly_schedule_edit_get,
         event::configure::weekly_schedule_edit_post,
         event::configure::search_users,
+        event::configure::restreamer_suggestions,
+        event::configure::video_url_suggestions,
         event::roles::get,
         event::roles::add_role_binding,
         event::roles::edit_role_binding,
