@@ -1667,33 +1667,33 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         }
                                                     } else {
                                                         match &cal_event.race.entrants {
-                                                            cal::Entrants::Two([team1, team2]) => format!("{} vs {}",
+                                                            Entrants::Two([team1, team2]) => format!("{} vs {}",
                                                                 match team1 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 },
                                                                 match team2 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 }
                                                             ),
-                                                            cal::Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                                                            Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
                                                                 match team1 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 },
                                                                 match team2 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 },
                                                                 match team3 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 }
                                                             ),
                                                             _ => cal_event.race.round.clone().or_else(|| cal_event.race.phase.clone()).unwrap_or_else(|| "Race".to_string()),
@@ -1704,9 +1704,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     for signup in affected_signups {
                                                         if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
                                                             if let Some(discord) = user.discord {
-                                                                let discord_user_id = serenity::all::UserId::new(discord.id.get());
+                                                                let discord_user_id = UserId::new(discord.id.get());
 
-                                                                let mut msg = serenity_utils::builder::MessageBuilder::default();
+                                                                let mut msg = MessageBuilder::default();
                                                                 msg.push("**Race Rescheduled**\n\n");
                                                                 msg.push("The race ");
                                                                 msg.push_mono(&race_description);
@@ -1722,15 +1722,15 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                                 msg.push(">");
 
                                                                 // Create withdraw button
-                                                                let button = serenity::all::CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
+                                                                let button = CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
                                                                     .label("Withdraw Signup")
-                                                                    .style(serenity::all::ButtonStyle::Danger);
-                                                                let row = serenity::all::CreateActionRow::Buttons(vec![button]);
+                                                                    .style(ButtonStyle::Danger);
+                                                                let row = CreateActionRow::Buttons(vec![button]);
 
                                                                 // Send DM
                                                                 if let Ok(dm_channel) = discord_user_id.create_dm_channel(ctx).await {
                                                                     if let Err(e) = dm_channel.send_message(ctx,
-                                                                        serenity::all::CreateMessage::new()
+                                                                        CreateMessage::new()
                                                                             .content(msg.build())
                                                                             .components(vec![row])
                                                                     ).await {
@@ -1792,33 +1792,33 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         }
                                                     } else {
                                                         match &cal_event.race.entrants {
-                                                            cal::Entrants::Two([team1, team2]) => format!("{} vs {}",
+                                                            Entrants::Two([team1, team2]) => format!("{} vs {}",
                                                                 match team1 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 },
                                                                 match team2 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 }
                                                             ),
-                                                            cal::Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                                                            Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
                                                                 match team1 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 },
                                                                 match team2 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 },
                                                                 match team3 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 }
                                                             ),
                                                             _ => cal_event.race.round.clone().or_else(|| cal_event.race.phase.clone()).unwrap_or_else(|| "Race".to_string()),
@@ -1829,9 +1829,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     for signup in affected_signups {
                                                         if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
                                                             if let Some(discord) = user.discord {
-                                                                let discord_user_id = serenity::all::UserId::new(discord.id.get());
+                                                                let discord_user_id = UserId::new(discord.id.get());
 
-                                                                let mut msg = serenity_utils::builder::MessageBuilder::default();
+                                                                let mut msg = MessageBuilder::default();
                                                                 msg.push("**Race Rescheduled**\n\n");
                                                                 msg.push("The race ");
                                                                 msg.push_mono(&race_description);
@@ -1847,15 +1847,15 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                                 msg.push(">");
 
                                                                 // Create withdraw button
-                                                                let button = serenity::all::CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
+                                                                let button = CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
                                                                     .label("Withdraw Signup")
-                                                                    .style(serenity::all::ButtonStyle::Danger);
-                                                                let row = serenity::all::CreateActionRow::Buttons(vec![button]);
+                                                                    .style(ButtonStyle::Danger);
+                                                                let row = CreateActionRow::Buttons(vec![button]);
 
                                                                 // Send DM
                                                                 if let Ok(dm_channel) = discord_user_id.create_dm_channel(ctx).await {
                                                                     if let Err(e) = dm_channel.send_message(ctx,
-                                                                        serenity::all::CreateMessage::new()
+                                                                        CreateMessage::new()
                                                                             .content(msg.build())
                                                                             .components(vec![row])
                                                                     ).await {
@@ -2120,33 +2120,33 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         }
                                                     } else {
                                                         match &cal_event.race.entrants {
-                                                            cal::Entrants::Two([team1, team2]) => format!("{} vs {}",
+                                                            Entrants::Two([team1, team2]) => format!("{} vs {}",
                                                                 match team1 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 },
                                                                 match team2 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 }
                                                             ),
-                                                            cal::Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                                                            Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
                                                                 match team1 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 },
                                                                 match team2 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 },
                                                                 match team3 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 }
                                                             ),
                                                             _ => cal_event.race.round.clone().or_else(|| cal_event.race.phase.clone()).unwrap_or_else(|| "Race".to_string()),
@@ -2157,9 +2157,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     for signup in affected_signups {
                                                         if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
                                                             if let Some(discord) = user.discord {
-                                                                let discord_user_id = serenity::all::UserId::new(discord.id.get());
+                                                                let discord_user_id = UserId::new(discord.id.get());
 
-                                                                let mut msg = serenity_utils::builder::MessageBuilder::default();
+                                                                let mut msg = MessageBuilder::default();
                                                                 msg.push("**Race Rescheduled**\n\n");
                                                                 msg.push("The race ");
                                                                 msg.push_mono(&race_description);
@@ -2175,15 +2175,15 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                                 msg.push(">");
 
                                                                 // Create withdraw button
-                                                                let button = serenity::all::CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
+                                                                let button = CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
                                                                     .label("Withdraw Signup")
-                                                                    .style(serenity::all::ButtonStyle::Danger);
-                                                                let row = serenity::all::CreateActionRow::Buttons(vec![button]);
+                                                                    .style(ButtonStyle::Danger);
+                                                                let row = CreateActionRow::Buttons(vec![button]);
 
                                                                 // Send DM
                                                                 if let Ok(dm_channel) = discord_user_id.create_dm_channel(ctx).await {
                                                                     if let Err(e) = dm_channel.send_message(ctx,
-                                                                        serenity::all::CreateMessage::new()
+                                                                        CreateMessage::new()
                                                                             .content(msg.build())
                                                                             .components(vec![row])
                                                                     ).await {
@@ -2233,33 +2233,33 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         }
                                                     } else {
                                                         match &cal_event.race.entrants {
-                                                            cal::Entrants::Two([team1, team2]) => format!("{} vs {}",
+                                                            Entrants::Two([team1, team2]) => format!("{} vs {}",
                                                                 match team1 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 },
                                                                 match team2 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 }
                                                             ),
-                                                            cal::Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                                                            Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
                                                                 match team1 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 },
                                                                 match team2 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 },
                                                                 match team3 {
-                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    cal::Entrant::Named { name, .. } => name.clone(),
-                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
                                                                 }
                                                             ),
                                                             _ => cal_event.race.round.clone().or_else(|| cal_event.race.phase.clone()).unwrap_or_else(|| "Race".to_string()),
@@ -2270,9 +2270,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     for signup in affected_signups {
                                                         if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
                                                             if let Some(discord) = user.discord {
-                                                                let discord_user_id = serenity::all::UserId::new(discord.id.get());
+                                                                let discord_user_id = UserId::new(discord.id.get());
 
-                                                                let mut msg = serenity_utils::builder::MessageBuilder::default();
+                                                                let mut msg = MessageBuilder::default();
                                                                 msg.push("**Race Rescheduled**\n\n");
                                                                 msg.push("The race ");
                                                                 msg.push_mono(&race_description);
@@ -2288,15 +2288,15 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                                 msg.push(">");
 
                                                                 // Create withdraw button
-                                                                let button = serenity::all::CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
+                                                                let button = CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
                                                                     .label("Withdraw Signup")
-                                                                    .style(serenity::all::ButtonStyle::Danger);
-                                                                let row = serenity::all::CreateActionRow::Buttons(vec![button]);
+                                                                    .style(ButtonStyle::Danger);
+                                                                let row = CreateActionRow::Buttons(vec![button]);
 
                                                                 // Send DM
                                                                 if let Ok(dm_channel) = discord_user_id.create_dm_channel(ctx).await {
                                                                     if let Err(e) = dm_channel.send_message(ctx,
-                                                                        serenity::all::CreateMessage::new()
+                                                                        CreateMessage::new()
                                                                             .content(msg.build())
                                                                             .components(vec![row])
                                                                     ).await {
@@ -3934,7 +3934,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         };
 
                         // Get signup from database
-                        let signup = match event::roles::Signup::from_id(&mut *transaction, signup_id).await? {
+                        let signup = match event::roles::Signup::from_id(&mut transaction, signup_id).await? {
                             Some(s) => s,
                             None => {
                                 interaction.create_response(ctx, CreateInteractionResponse::Message(

@@ -238,6 +238,7 @@ pub(crate) use {
             Notifications,
             Races,
             RoleBindings,
+            Signups,
             Teams,
             Users,
         },
