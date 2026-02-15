@@ -3729,9 +3729,11 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     continue;
                                 }
 
-                                // Check if already signed up for this role
+                                // Check if already signed up for this role (only count active signups)
                                 let already_signed = signups.iter().any(|s|
-                                    s.user_id == user.id && s.role_binding_id == binding.id
+                                    s.user_id == user.id &&
+                                    s.role_binding_id == binding.id &&
+                                    matches!(s.status, event::roles::VolunteerSignupStatus::Pending | event::roles::VolunteerSignupStatus::Confirmed)
                                 );
                                 if already_signed {
                                     continue;
