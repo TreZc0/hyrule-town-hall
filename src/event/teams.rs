@@ -455,8 +455,8 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 // Group by kind to calculate per-qualifier par times
                 let mut async_by_kind = HashMap::<AsyncKind, Vec<(Id<Users>, Duration, DateTime<Utc>)>>::new();
                 for row in &async_results {
-                    // For async_only visibility, skip results from async windows that haven't closed yet
-                    if data.qualifier_score_hiding == QualifierScoreHiding::AsyncOnly {
+                    // For async_only visibility, skip results from async windows that haven't closed yet (organizers see all)
+                    if !is_organizer && data.qualifier_score_hiding == QualifierScoreHiding::AsyncOnly {
                         if row.async_end_time.is_none_or(|end| end > now) {
                             continue;
                         }
@@ -520,6 +520,12 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 // Count forfeits/DNFs as entered (score 0) even though they have no time
                 for row in &async_results {
                     if row.time.is_some() { continue } // finishers already handled above
+                    // For async_only visibility, skip forfeits from async windows that haven't closed yet (organizers see all)
+                    if !is_organizer && data.qualifier_score_hiding == QualifierScoreHiding::AsyncOnly {
+                        if row.async_end_time.is_none_or(|end| end > now) {
+                            continue;
+                        }
+                    }
                     let start_time = row.start_time.unwrap_or(now);
                     let user = User::from_id(&mut **transaction, row.player).await?.expect("async player not found");
                     scores.entry(MemberUser::MidosHouse(user)).or_default().push((start_time, r64(0.0), RoundSource::Async(row.kind)));
@@ -561,10 +567,10 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
             for (user, mut timestamped_scores) in scores {
                 // Sort by timestamp so truncation respects chronological order
                 timestamped_scores.sort_by_key(|(ts, _, _)| *ts);
-                // For async_only hiding, filter out forfeited asyncs for non-organizers
+                // For async_only hiding, filter out all asyncs for non-organizers from entered/finished/forfeited counts
                 if !is_organizer && data.qualifier_score_hiding == QualifierScoreHiding::AsyncOnly {
-                    timestamped_scores.retain(|(_, score, source)| {
-                        !matches!(source, RoundSource::Async(_)) || *score != 0.0
+                    timestamped_scores.retain(|(_, _, source)| {
+                        !matches!(source, RoundSource::Async(_))
                     });
                 }
                 let user_opted_out = is_user_opted_out(&user);
