@@ -113,7 +113,6 @@ pub(crate) struct PageStyle {
     pub(crate) kind: PageKind,
     #[allow(unused)] // HTH fork uses different logo
     pub(crate) chests: ChestAppearances,
-    pub(crate) mw_footer: bool,
 }
 
 impl Default for PageStyle {
@@ -121,7 +120,6 @@ impl Default for PageStyle {
         Self {
             kind: PageKind::Other,
             chests: ChestAppearances::random(),
-            mw_footer: false,
         }
     }
 }
