@@ -289,10 +289,13 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
     let mut signups = match qualifier_kind {
         QualifierKind::Score(score_kind) => {
             let mut scores = HashMap::<_, Vec<(DateTime<Utc>, R64, RoundSource)>>::default();
-            let mut live_race_num = 0usize;
             for race in Race::for_event(transaction, &cache.http_client, data).await? {
                 if race.phase.as_ref().is_none_or(|phase| phase != "Qualifier") { continue }
-                live_race_num += 1;
+                // Extract live race number from the round field (e.g., "Live 1" -> 1)
+                let live_race_num = race.round.as_ref()
+                    .and_then(|round| round.split_whitespace().last())
+                    .and_then(|num_str| num_str.parse::<usize>().ok())
+                    .unwrap_or(1); // fallback to 1 if parsing fails
                 let Ok(room) = race.rooms().exactly_one() else {
                     if let Some(extrapolate_for) = worst_case_extrapolation {
                         scores.entry(MemberUser::Newcomer).or_default();
@@ -1343,14 +1346,15 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                 (QualifierKind::Score(QualifierScoreKind::TwwrMiniblins26), Qualification::Multiple { num_entered, num_finished, num_forfeited, score, round_scores }) => {
                                     @let hide_counts = !is_organizer && matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !all_qualifiers_ended;
                                     @let hide_points = !is_organizer && matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPoints | QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !all_qualifiers_ended;
+                                    @let max_count = QualifierScoreKind::TwwrMiniblins26.max_qualifiers_that_count();
                                     td(style = "text-align: right;") {
                                         @if hide_counts { : "—"; }
-                                        else { : num_entered; }
+                                        else { : num_entered.min(max_count); }
                                     }
                                     td(style = "text-align: right;") {
                                         @if hide_counts { : "—"; }
                                         else {
-                                            : num_finished;
+                                            : num_finished.min(max_count);
                                             @if num_forfeited > 0 {
                                                 : format!(" ({})", num_forfeited);
                                             }
