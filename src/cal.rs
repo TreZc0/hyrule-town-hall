@@ -4239,16 +4239,19 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 }
             }
 
+            transaction.commit().await?;
+
             // Update the volunteer info post to reflect restream changes
+            // (Must be done after commit so the new transaction can see the changes)
             if race.video_urls != original_video_urls {
-                let _ = crate::volunteer_requests::update_volunteer_post_for_race(
+                if let Err(e) = crate::volunteer_requests::update_volunteer_post_for_race(
                     pool,
                     &*discord_ctx.read().await,
                     race.id,
-                ).await;
+                ).await {
+                    eprintln!("Failed to update volunteer info post for race {} after restream URL change: {}", race.id, e);
+                }
             }
-
-            transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(redirect_to.map(|Origin(uri)| uri.into_owned()).unwrap_or_else(|| uri!(event::races(event.series, &*event.event)))))
         }
     } else {

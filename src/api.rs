@@ -269,6 +269,17 @@ pub(crate) struct Mutation;
                 if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&*discord_ctx.read().await, &mut *db, &race, &event, http_client).await {
                     eprintln!("Failed to update Discord scheduled event for race {}: {}", race.id, e);
                 }
+
+                // Update volunteer info post if applicable
+                if let Some(pool) = ctx.data_opt::<sqlx::PgPool>() {
+                    if let Err(e) = crate::volunteer_requests::update_volunteer_post_for_race(
+                        pool,
+                        &*discord_ctx.read().await,
+                        race.id,
+                    ).await {
+                        eprintln!("Failed to update volunteer info post for race {} after restream change: {}", race.id, e);
+                    }
+                }
             }
 
             Ok(Race(race))
@@ -297,6 +308,17 @@ pub(crate) struct Mutation;
                 let http_client = ctx.data_unchecked::<reqwest::Client>();
                 if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&*discord_ctx.read().await, &mut *db, &race, &event, http_client).await {
                     eprintln!("Failed to update Discord scheduled event for race {}: {}", race.id, e);
+                }
+
+                // Update volunteer info post if applicable
+                if let Some(pool) = ctx.data_opt::<sqlx::PgPool>() {
+                    if let Err(e) = crate::volunteer_requests::update_volunteer_post_for_race(
+                        pool,
+                        &*discord_ctx.read().await,
+                        race.id,
+                    ).await {
+                        eprintln!("Failed to update volunteer info post for race {} after restream change: {}", race.id, e);
+                    }
                 }
             }
 
