@@ -1025,6 +1025,18 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
     };
     let roles = data.team_config.roles();
     let signups = signups_sorted(&mut transaction, &mut Cache::new(http_client.clone()), me.as_ref(), &data, is_organizer, qualifier_kind, None, all_qualifiers_ended, true).await?;
+
+    // Check if there are ongoing asyncs (for disclaimer)
+    let has_ongoing_asyncs = if !is_organizer && data.qualifier_score_hiding == QualifierScoreHiding::AsyncOnly && !all_qualifiers_ended {
+        let now = Utc::now();
+        sqlx::query_scalar!(
+            "SELECT EXISTS(SELECT 1 FROM asyncs WHERE series = $1 AND event = $2 AND (end_time IS NULL OR end_time > $3))",
+            data.series as _, &data.event, now
+        ).fetch_one(&mut *transaction).await?.unwrap_or(false)
+    } else {
+        false
+    };
+
     let mut footnotes = Vec::default();
     let teams_label = if let TeamConfig::Solo = data.team_config { "Entrants" } else { "Teams" };
     let mut column_headers = Vec::default();
@@ -1159,6 +1171,14 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                             : "Regular users cannot see this table at all based on the current event settings.";
                         }
                     }
+                }
+            }
+        }
+        @if !is_organizer && has_ongoing_asyncs {
+            div(class = "bg-surface") {
+                p {
+                    strong : "Note: ";
+                    : "Async qualifiers are still ongoing. Points from ongoing asyncs are not yet included in the results.";
                 }
             }
         }
