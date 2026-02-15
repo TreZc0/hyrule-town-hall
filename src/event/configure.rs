@@ -861,31 +861,73 @@ struct UserSearchRow {
     discord_username: Option<String>,
 }
 
-#[rocket::get("/api/restreamers/suggestions")]
-pub(crate) async fn restreamer_suggestions(
+#[rocket::get("/api/restreamers/search?<query>")]
+pub(crate) async fn restreamer_search(
     pool: &State<PgPool>,
+    query: Option<&str>,
 ) -> Result<RawText<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
 
-    let restreamers = sqlx::query_scalar!(
+    let query = query.unwrap_or("").trim();
+    if query.is_empty() {
+        return Ok(RawText(serde_json::to_string(&Vec::<UserSearchResult>::new())?));
+    }
+
+    // Search for users with racetime connections by display name, racetime ID, or Discord username
+    let users = sqlx::query_as!(
+        UserSearchRow,
         r#"
-        SELECT DISTINCT restreamer FROM (
-            SELECT restreamer FROM races WHERE restreamer IS NOT NULL AND restreamer != ''
-            UNION
-            SELECT restreamer_fr FROM races WHERE restreamer_fr IS NOT NULL AND restreamer_fr != ''
-            UNION
-            SELECT restreamer_de FROM races WHERE restreamer_de IS NOT NULL AND restreamer_de != ''
-            UNION
-            SELECT restreamer_pt FROM races WHERE restreamer_pt IS NOT NULL AND restreamer_pt != ''
-        ) AS all_restreamers
-        ORDER BY restreamer
+        SELECT
+            id as "id: Id<Users>",
+            display_source as "display_source: DisplaySource",
+            racetime_id,
+            racetime_display_name,
+            discord_display_name,
+            discord_username
+        FROM users
+        WHERE
+            racetime_id IS NOT NULL
+            AND (
+                racetime_display_name ILIKE $1
+                OR discord_display_name ILIKE $1
+                OR discord_username ILIKE $1
+                OR racetime_id ILIKE $1
+            )
+        ORDER BY
+            CASE
+                WHEN racetime_display_name ILIKE $1 THEN 1
+                WHEN discord_display_name ILIKE $1 THEN 2
+                WHEN discord_username ILIKE $1 THEN 3
+                WHEN racetime_id ILIKE $1 THEN 4
+                ELSE 5
+            END,
+            racetime_display_name,
+            discord_display_name
         LIMIT 20
-        "#
+        "#,
+        format!("%{}%", query)
     )
     .fetch_all(&mut *transaction)
     .await?;
 
-    Ok(RawText(serde_json::to_string(&restreamers)?))
+    let results: Vec<UserSearchResult> = users
+        .into_iter()
+        .map(|row| {
+            let display_name = match row.display_source {
+                DisplaySource::RaceTime => row.racetime_display_name.unwrap_or_else(|| "Unknown".to_string()),
+                DisplaySource::Discord => row.discord_display_name.unwrap_or_else(|| "Unknown".to_string()),
+            };
+
+            UserSearchResult {
+                id: row.id,
+                display_name,
+                racetime_id: row.racetime_id,
+                discord_username: row.discord_username,
+            }
+        })
+        .collect();
+
+    Ok(RawText(serde_json::to_string(&results)?))
 }
 
 #[rocket::get("/api/video-urls/suggestions")]

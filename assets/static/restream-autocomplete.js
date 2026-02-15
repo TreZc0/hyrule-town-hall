@@ -1,9 +1,6 @@
 document.addEventListener('DOMContentLoaded', function() {
-    // Cache for storing fetched suggestions
-    const cache = {
-        restreamers: null,
-        videoUrls: null
-    };
+    // Cache for storing fetched video URL suggestions
+    let videoUrlCache = null;
 
     // State for each input field
     const fieldStates = new Map();
@@ -33,7 +30,8 @@ document.addEventListener('DOMContentLoaded', function() {
             currentFocus: -1,
             input: input,
             container: suggestionContainer,
-            fieldType: fieldType
+            fieldType: fieldType,
+            searchTimeout: null
         };
 
         fieldStates.set(input, state);
@@ -41,49 +39,110 @@ document.addEventListener('DOMContentLoaded', function() {
         // Attach event listeners
         input.addEventListener('input', () => handleInput(state));
         input.addEventListener('keydown', (e) => handleKeydown(e, state));
-        input.addEventListener('focus', () => handleFocus(state));
+        if (fieldType === 'videoUrls') {
+            input.addEventListener('focus', () => handleFocus(state));
+        }
     }
 
     async function handleInput(state) {
-        const query = state.input.value.trim().toLowerCase();
+        const query = state.input.value.trim();
 
-        // Load suggestions on first input if not cached
-        if (!cache[state.fieldType]) {
-            await loadSuggestions(state.fieldType);
+        if (state.fieldType === 'restreamers') {
+            // For restreamers: search as you type
+            handleRestreamerSearch(state, query);
+        } else {
+            // For video URLs: filter cached results
+            handleVideoUrlFilter(state, query);
         }
-
-        // Filter and display suggestions
-        filterAndDisplaySuggestions(state, query);
     }
 
     async function handleFocus(state) {
-        // Load suggestions when field is focused if not already loaded
-        if (!cache[state.fieldType]) {
-            await loadSuggestions(state.fieldType);
-        }
+        if (state.fieldType === 'videoUrls') {
+            // Load video URL cache on first focus if not already loaded
+            if (!videoUrlCache) {
+                await loadVideoUrlSuggestions();
+            }
 
-        // Show all suggestions if input is empty
-        const query = state.input.value.trim().toLowerCase();
-        filterAndDisplaySuggestions(state, query);
+            const query = state.input.value.trim().toLowerCase();
+            filterVideoUrls(state, query);
+        }
     }
 
-    async function loadSuggestions(fieldType) {
+    function handleRestreamerSearch(state, query) {
+        // Clear existing timeout
+        if (state.searchTimeout) {
+            clearTimeout(state.searchTimeout);
+        }
+
+        // Minimum query length
+        if (query.length < 2) {
+            state.container.style.display = 'none';
+            return;
+        }
+
+        // Debounce the search
+        state.searchTimeout = setTimeout(() => {
+            searchRestreamers(state, query);
+        }, 300);
+    }
+
+    async function searchRestreamers(state, query) {
         try {
-            const endpoint = fieldType === 'restreamers'
-                ? '/api/restreamers/suggestions'
-                : '/api/video-urls/suggestions';
+            const response = await fetch('/api/restreamers/search?query=' + encodeURIComponent(query));
+            const users = await response.json();
 
-            const response = await fetch(endpoint);
-            const data = await response.json();
-            cache[fieldType] = data;
+            state.container.innerHTML = '';
+            state.currentFocus = -1;
+
+            if (users.length > 0) {
+                users.forEach(user => {
+                    const div = document.createElement('div');
+                    div.className = 'suggestion-item';
+                    div.innerHTML = `
+                        <strong>${user.display_name}</strong>
+                        ${user.racetime_id ? `<small>racetime.gg: ${user.racetime_id}</small>` : ''}
+                        ${user.discord_username ? `<br><small>Discord: ${user.discord_username}</small>` : ''}
+                    `;
+                    div.addEventListener('click', () => {
+                        // Use racetime_id when selecting a user
+                        state.input.value = user.racetime_id || '';
+                        state.container.style.display = 'none';
+                        state.currentFocus = -1;
+                    });
+                    state.container.appendChild(div);
+                });
+                state.container.style.display = 'block';
+            } else {
+                state.container.style.display = 'none';
+            }
         } catch (error) {
-            console.error(`Error loading ${fieldType} suggestions:`, error);
-            cache[fieldType] = [];
+            console.error('Error searching restreamers:', error);
+            state.container.style.display = 'none';
         }
     }
 
-    function filterAndDisplaySuggestions(state, query) {
-        const suggestions = cache[state.fieldType] || [];
+    async function handleVideoUrlFilter(state, query) {
+        // Load cache on first input if not already loaded
+        if (!videoUrlCache) {
+            await loadVideoUrlSuggestions();
+        }
+
+        filterVideoUrls(state, query.toLowerCase());
+    }
+
+    async function loadVideoUrlSuggestions() {
+        try {
+            const response = await fetch('/api/video-urls/suggestions');
+            const data = await response.json();
+            videoUrlCache = data;
+        } catch (error) {
+            console.error('Error loading video URL suggestions:', error);
+            videoUrlCache = [];
+        }
+    }
+
+    function filterVideoUrls(state, query) {
+        const suggestions = videoUrlCache || [];
         const filtered = query
             ? suggestions.filter(item => item && item.toLowerCase().includes(query))
             : suggestions;
@@ -96,19 +155,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 const div = document.createElement('div');
                 div.className = 'suggestion-item';
                 div.textContent = item;
-                div.addEventListener('click', () => selectSuggestion(state, item));
+                div.addEventListener('click', () => {
+                    state.input.value = item;
+                    state.container.style.display = 'none';
+                    state.currentFocus = -1;
+                });
                 state.container.appendChild(div);
             });
             state.container.style.display = 'block';
         } else {
             state.container.style.display = 'none';
         }
-    }
-
-    function selectSuggestion(state, value) {
-        state.input.value = value;
-        state.container.style.display = 'none';
-        state.currentFocus = -1;
     }
 
     function handleKeydown(e, state) {
