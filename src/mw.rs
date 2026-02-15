@@ -3,7 +3,7 @@ use crate::prelude::*;
 #[rocket::get("/mw")]
 pub(crate) async fn index(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
     let transaction = pool.begin().await?;
-    page(transaction, &me, &uri, PageStyle { kind: PageKind::Center, mw_footer: true, ..PageStyle::default() }, "HTH Multiworld", html! {
+    page(transaction, &me, &uri, PageStyle { kind: PageKind::Center, ..PageStyle::default() }, "HTH Multiworld", html! {
         h1 : "HTH Multiworld";
         img(class = "banner icon", src = static_url!("mw.png"));
         p {
@@ -55,7 +55,7 @@ pub(crate) async fn index(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_
 #[rocket::get("/mw/platforms")]
 pub(crate) async fn platforms(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
     let transaction = pool.begin().await?;
-    page(transaction, &me, &uri, PageStyle { kind: PageKind::Center, mw_footer: true, ..PageStyle::default() }, "platform support — HTH Multiworld", html! {
+    page(transaction, &me, &uri, PageStyle { kind: PageKind::Center, ..PageStyle::default() }, "platform support — HTH Multiworld", html! {
         h1 {
             a(href = uri!(index)) : "HTH Multiworld";
             : " platform support status";
@@ -155,7 +155,7 @@ pub(crate) async fn platforms(pool: &State<PgPool>, me: Option<User>, uri: Origi
 #[rocket::get("/mw/install/macos")]
 pub(crate) async fn install_macos(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
     let transaction = pool.begin().await?;
-    page(transaction, &me, &uri, PageStyle { mw_footer: true, ..PageStyle::default() }, "macOS install instructions — HTH Multiworld", html! {
+    page(transaction, &me, &uri, PageStyle { ..PageStyle::default() }, "macOS install instructions — HTH Multiworld", html! {
         h1 {
             a(href = uri!(index)) : "HTH Multiworld";
             : " install instructions for macOS";
