@@ -1650,6 +1650,98 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         ctx,
                                                         cal_event.race.id,
                                                     ).await;
+
+                                                    // Send reschedule notification DMs to volunteers
+                                                    let mut transaction = pool.begin().await?;
+                                                    let signups = event::roles::Signup::for_race(&mut transaction, cal_event.race.id).await?;
+                                                    let affected_signups: Vec<_> = signups.iter()
+                                                        .filter(|s| matches!(s.status, event::roles::VolunteerSignupStatus::Pending | event::roles::VolunteerSignupStatus::Confirmed))
+                                                        .collect();
+
+                                                    // Build race description
+                                                    let race_description = if cal_event.race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
+                                                        match (&cal_event.race.round, &cal_event.race.phase) {
+                                                            (Some(round), _) => round.clone(),
+                                                            (None, Some(phase)) => phase.clone(),
+                                                            (None, None) => "Qualifier".to_string(),
+                                                        }
+                                                    } else {
+                                                        match &cal_event.race.entrants {
+                                                            cal::Entrants::Two([team1, team2]) => format!("{} vs {}",
+                                                                match team1 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                },
+                                                                match team2 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                }
+                                                            ),
+                                                            cal::Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                                                                match team1 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                },
+                                                                match team2 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                },
+                                                                match team3 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                }
+                                                            ),
+                                                            _ => cal_event.race.round.clone().or_else(|| cal_event.race.phase.clone()).unwrap_or_else(|| "Race".to_string()),
+                                                        }
+                                                    };
+
+                                                    // Send DM to each affected volunteer
+                                                    for signup in affected_signups {
+                                                        if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
+                                                            if let Some(discord) = user.discord {
+                                                                let discord_user_id = serenity::all::UserId::new(discord.id.get());
+
+                                                                let mut msg = serenity_utils::builder::MessageBuilder::default();
+                                                                msg.push("**Race Rescheduled**\n\n");
+                                                                msg.push("The race ");
+                                                                msg.push_mono(&race_description);
+                                                                msg.push(" in ");
+                                                                msg.push(&event.display_name);
+                                                                msg.push(" has been rescheduled.\n\n");
+                                                                msg.push("**New time:** ");
+                                                                msg.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
+                                                                msg.push("\n\n");
+                                                                msg.push("If you're no longer available, you can withdraw your signup using the button below or on the website: <");
+                                                                msg.push(&format!("{}/event/{}/{}/races/{}/signups",
+                                                                    base_uri(), cal_event.race.series.slug(), cal_event.race.event, u64::from(cal_event.race.id)));
+                                                                msg.push(">");
+
+                                                                // Create withdraw button
+                                                                let button = serenity::all::CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
+                                                                    .label("Withdraw Signup")
+                                                                    .style(serenity::all::ButtonStyle::Danger);
+                                                                let row = serenity::all::CreateActionRow::Buttons(vec![button]);
+
+                                                                // Send DM
+                                                                if let Ok(dm_channel) = discord_user_id.create_dm_channel(ctx).await {
+                                                                    if let Err(e) = dm_channel.send_message(ctx,
+                                                                        serenity::all::CreateMessage::new()
+                                                                            .content(msg.build())
+                                                                            .components(vec![row])
+                                                                    ).await {
+                                                                        eprintln!("Failed to send reschedule notification DM to user {}: {}", signup.user_id, e);
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
+                                                    transaction.commit().await?;
                                                 }
                                             } else {
                                                 // Create Discord scheduled event for races scheduled > 30 minutes in advance
@@ -1683,6 +1775,98 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         ctx,
                                                         cal_event.race.id,
                                                     ).await;
+
+                                                    // Send reschedule notification DMs to volunteers
+                                                    let mut transaction = pool.begin().await?;
+                                                    let signups = event::roles::Signup::for_race(&mut transaction, cal_event.race.id).await?;
+                                                    let affected_signups: Vec<_> = signups.iter()
+                                                        .filter(|s| matches!(s.status, event::roles::VolunteerSignupStatus::Pending | event::roles::VolunteerSignupStatus::Confirmed))
+                                                        .collect();
+
+                                                    // Build race description
+                                                    let race_description = if cal_event.race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
+                                                        match (&cal_event.race.round, &cal_event.race.phase) {
+                                                            (Some(round), _) => round.clone(),
+                                                            (None, Some(phase)) => phase.clone(),
+                                                            (None, None) => "Qualifier".to_string(),
+                                                        }
+                                                    } else {
+                                                        match &cal_event.race.entrants {
+                                                            cal::Entrants::Two([team1, team2]) => format!("{} vs {}",
+                                                                match team1 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                },
+                                                                match team2 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                }
+                                                            ),
+                                                            cal::Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                                                                match team1 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                },
+                                                                match team2 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                },
+                                                                match team3 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                }
+                                                            ),
+                                                            _ => cal_event.race.round.clone().or_else(|| cal_event.race.phase.clone()).unwrap_or_else(|| "Race".to_string()),
+                                                        }
+                                                    };
+
+                                                    // Send DM to each affected volunteer
+                                                    for signup in affected_signups {
+                                                        if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
+                                                            if let Some(discord) = user.discord {
+                                                                let discord_user_id = serenity::all::UserId::new(discord.id.get());
+
+                                                                let mut msg = serenity_utils::builder::MessageBuilder::default();
+                                                                msg.push("**Race Rescheduled**\n\n");
+                                                                msg.push("The race ");
+                                                                msg.push_mono(&race_description);
+                                                                msg.push(" in ");
+                                                                msg.push(&event.display_name);
+                                                                msg.push(" has been rescheduled.\n\n");
+                                                                msg.push("**New time:** ");
+                                                                msg.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
+                                                                msg.push("\n\n");
+                                                                msg.push("If you're no longer available, you can withdraw your signup using the button below or on the website: <");
+                                                                msg.push(&format!("{}/event/{}/{}/races/{}/signups",
+                                                                    base_uri(), cal_event.race.series.slug(), cal_event.race.event, u64::from(cal_event.race.id)));
+                                                                msg.push(">");
+
+                                                                // Create withdraw button
+                                                                let button = serenity::all::CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
+                                                                    .label("Withdraw Signup")
+                                                                    .style(serenity::all::ButtonStyle::Danger);
+                                                                let row = serenity::all::CreateActionRow::Buttons(vec![button]);
+
+                                                                // Send DM
+                                                                if let Ok(dm_channel) = discord_user_id.create_dm_channel(ctx).await {
+                                                                    if let Err(e) = dm_channel.send_message(ctx,
+                                                                        serenity::all::CreateMessage::new()
+                                                                            .content(msg.build())
+                                                                            .components(vec![row])
+                                                                    ).await {
+                                                                        eprintln!("Failed to send reschedule notification DM to user {}: {}", signup.user_id, e);
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
+                                                    transaction.commit().await?;
                                                 }
 
                                                 let response_content = if_chain! {
@@ -1919,6 +2103,98 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         ctx,
                                                         cal_event.race.id,
                                                     ).await;
+
+                                                    // Send reschedule notification DMs to volunteers
+                                                    let mut transaction = pool.begin().await?;
+                                                    let signups = event::roles::Signup::for_race(&mut transaction, cal_event.race.id).await?;
+                                                    let affected_signups: Vec<_> = signups.iter()
+                                                        .filter(|s| matches!(s.status, event::roles::VolunteerSignupStatus::Pending | event::roles::VolunteerSignupStatus::Confirmed))
+                                                        .collect();
+
+                                                    // Build race description
+                                                    let race_description = if cal_event.race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
+                                                        match (&cal_event.race.round, &cal_event.race.phase) {
+                                                            (Some(round), _) => round.clone(),
+                                                            (None, Some(phase)) => phase.clone(),
+                                                            (None, None) => "Qualifier".to_string(),
+                                                        }
+                                                    } else {
+                                                        match &cal_event.race.entrants {
+                                                            cal::Entrants::Two([team1, team2]) => format!("{} vs {}",
+                                                                match team1 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                },
+                                                                match team2 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                }
+                                                            ),
+                                                            cal::Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                                                                match team1 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                },
+                                                                match team2 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                },
+                                                                match team3 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                }
+                                                            ),
+                                                            _ => cal_event.race.round.clone().or_else(|| cal_event.race.phase.clone()).unwrap_or_else(|| "Race".to_string()),
+                                                        }
+                                                    };
+
+                                                    // Send DM to each affected volunteer
+                                                    for signup in affected_signups {
+                                                        if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
+                                                            if let Some(discord) = user.discord {
+                                                                let discord_user_id = serenity::all::UserId::new(discord.id.get());
+
+                                                                let mut msg = serenity_utils::builder::MessageBuilder::default();
+                                                                msg.push("**Race Rescheduled**\n\n");
+                                                                msg.push("The race ");
+                                                                msg.push_mono(&race_description);
+                                                                msg.push(" in ");
+                                                                msg.push(&event.display_name);
+                                                                msg.push(" has been rescheduled.\n\n");
+                                                                msg.push("**New time:** ");
+                                                                msg.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
+                                                                msg.push("\n\n");
+                                                                msg.push("If you're no longer available, you can withdraw your signup using the button below or on the website: <");
+                                                                msg.push(&format!("{}/event/{}/{}/races/{}/signups",
+                                                                    base_uri(), cal_event.race.series.slug(), cal_event.race.event, u64::from(cal_event.race.id)));
+                                                                msg.push(">");
+
+                                                                // Create withdraw button
+                                                                let button = serenity::all::CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
+                                                                    .label("Withdraw Signup")
+                                                                    .style(serenity::all::ButtonStyle::Danger);
+                                                                let row = serenity::all::CreateActionRow::Buttons(vec![button]);
+
+                                                                // Send DM
+                                                                if let Ok(dm_channel) = discord_user_id.create_dm_channel(ctx).await {
+                                                                    if let Err(e) = dm_channel.send_message(ctx,
+                                                                        serenity::all::CreateMessage::new()
+                                                                            .content(msg.build())
+                                                                            .components(vec![row])
+                                                                    ).await {
+                                                                        eprintln!("Failed to send reschedule notification DM to user {}: {}", signup.user_id, e);
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
+                                                    transaction.commit().await?;
                                                 }
                                             } else {
                                                 cal_event.race.save(&mut transaction).await?;
@@ -1940,6 +2216,98 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         ctx,
                                                         cal_event.race.id,
                                                     ).await;
+
+                                                    // Send reschedule notification DMs to volunteers
+                                                    let mut transaction = pool.begin().await?;
+                                                    let signups = event::roles::Signup::for_race(&mut transaction, cal_event.race.id).await?;
+                                                    let affected_signups: Vec<_> = signups.iter()
+                                                        .filter(|s| matches!(s.status, event::roles::VolunteerSignupStatus::Pending | event::roles::VolunteerSignupStatus::Confirmed))
+                                                        .collect();
+
+                                                    // Build race description
+                                                    let race_description = if cal_event.race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
+                                                        match (&cal_event.race.round, &cal_event.race.phase) {
+                                                            (Some(round), _) => round.clone(),
+                                                            (None, Some(phase)) => phase.clone(),
+                                                            (None, None) => "Qualifier".to_string(),
+                                                        }
+                                                    } else {
+                                                        match &cal_event.race.entrants {
+                                                            cal::Entrants::Two([team1, team2]) => format!("{} vs {}",
+                                                                match team1 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                },
+                                                                match team2 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                }
+                                                            ),
+                                                            cal::Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                                                                match team1 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                },
+                                                                match team2 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                },
+                                                                match team3 {
+                                                                    cal::Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    cal::Entrant::Named { name, .. } => name.clone(),
+                                                                    cal::Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                }
+                                                            ),
+                                                            _ => cal_event.race.round.clone().or_else(|| cal_event.race.phase.clone()).unwrap_or_else(|| "Race".to_string()),
+                                                        }
+                                                    };
+
+                                                    // Send DM to each affected volunteer
+                                                    for signup in affected_signups {
+                                                        if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
+                                                            if let Some(discord) = user.discord {
+                                                                let discord_user_id = serenity::all::UserId::new(discord.id.get());
+
+                                                                let mut msg = serenity_utils::builder::MessageBuilder::default();
+                                                                msg.push("**Race Rescheduled**\n\n");
+                                                                msg.push("The race ");
+                                                                msg.push_mono(&race_description);
+                                                                msg.push(" in ");
+                                                                msg.push(&event.display_name);
+                                                                msg.push(" has been rescheduled.\n\n");
+                                                                msg.push("**New time:** ");
+                                                                msg.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
+                                                                msg.push("\n\n");
+                                                                msg.push("If you're no longer available, you can withdraw your signup using the button below or on the website: <");
+                                                                msg.push(&format!("{}/event/{}/{}/races/{}/signups",
+                                                                    base_uri(), cal_event.race.series.slug(), cal_event.race.event, u64::from(cal_event.race.id)));
+                                                                msg.push(">");
+
+                                                                // Create withdraw button
+                                                                let button = serenity::all::CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
+                                                                    .label("Withdraw Signup")
+                                                                    .style(serenity::all::ButtonStyle::Danger);
+                                                                let row = serenity::all::CreateActionRow::Buttons(vec![button]);
+
+                                                                // Send DM
+                                                                if let Ok(dm_channel) = discord_user_id.create_dm_channel(ctx).await {
+                                                                    if let Err(e) = dm_channel.send_message(ctx,
+                                                                        serenity::all::CreateMessage::new()
+                                                                            .content(msg.build())
+                                                                            .components(vec![row])
+                                                                    ).await {
+                                                                        eprintln!("Failed to send reschedule notification DM to user {}: {}", signup.user_id, e);
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
+                                                    transaction.commit().await?;
                                                 }
 
                                                 let response_content = if_chain! {
@@ -3539,6 +3907,113 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                             CreateInteractionResponseMessage::new()
                                 .content("Thank you for signing up. You will be informed once your signup has been processed by the team.")
+                                .components(vec![])
+                        )).await?;
+                    } else if let Some(signup_id_str) = custom_id.strip_prefix("volunteer_withdraw_") {
+                        // Handle volunteer withdrawal button
+                        let (pool, http_client) = {
+                            let data = ctx.data.read().await;
+                            (
+                                data.get::<DbPool>().expect("database connection pool missing from Discord context").clone(),
+                                data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
+                            )
+                        };
+                        let mut transaction = pool.begin().await?;
+
+                        // Parse signup ID
+                        let signup_id: Id<Signups> = match signup_id_str.parse::<u64>() {
+                            Ok(id) => Id::from(id),
+                            Err(_) => {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("Invalid signup ID.")
+                                )).await?;
+                                return Ok(());
+                            }
+                        };
+
+                        // Get signup from database
+                        let signup = match event::roles::Signup::from_id(&mut *transaction, signup_id).await? {
+                            Some(s) => s,
+                            None => {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("This signup no longer exists.")
+                                )).await?;
+                                return Ok(());
+                            }
+                        };
+
+                        // Verify user owns this signup
+                        let user = match User::from_discord(&mut *transaction, interaction.user.id).await? {
+                            Some(u) => u,
+                            None => {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("You need to link your Discord account first.")
+                                )).await?;
+                                return Ok(());
+                            }
+                        };
+
+                        if signup.user_id != user.id {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content("This signup doesn't belong to you.")
+                            )).await?;
+                            return Ok(());
+                        }
+
+                        // Check if already withdrawn
+                        if matches!(signup.status, event::roles::VolunteerSignupStatus::Aborted) {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content("You have already withdrawn from this race.")
+                            )).await?;
+                            return Ok(());
+                        }
+
+                        // Get race to check if started
+                        let race = Race::from_id(&mut transaction, &http_client, signup.race_id).await?;
+
+                        // Check race hasn't started
+                        let race_started = match race.schedule {
+                            RaceSchedule::Live { start, .. } => start <= Utc::now(),
+                            RaceSchedule::Async { start1, start2, start3, .. } => {
+                                [start1, start2, start3].iter().filter_map(|s| *s).any(|s| s <= Utc::now())
+                            }
+                            _ => false,
+                        };
+
+                        if race_started {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content("Sorry, you cannot withdraw after the race has started.")
+                            )).await?;
+                            return Ok(());
+                        }
+
+                        // Update signup status to Aborted
+                        event::roles::Signup::update_status(&mut transaction, signup_id, event::roles::VolunteerSignupStatus::Aborted).await?;
+                        transaction.commit().await?;
+
+                        // Update the volunteer info post
+                        let _ = volunteer_requests::update_volunteer_post_for_race(
+                            &pool,
+                            ctx,
+                            signup.race_id,
+                        ).await;
+
+                        // Respond with confirmation (update the message to remove button)
+                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                            CreateInteractionResponseMessage::new()
+                                .content("✓ You have successfully withdrawn from this race. Thank you for letting us know!")
                                 .components(vec![])
                         )).await?;
                     } else {

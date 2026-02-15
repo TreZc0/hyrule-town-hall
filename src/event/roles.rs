@@ -2437,9 +2437,9 @@ async fn volunteer_page(
                                     @for race in available_races {
                                         li {
                                             a(href = uri!(match_signup_page_get(data.series, &*data.event, race.id, _))) : {
-                                                // For qualifier races, show the round name (e.g., "Live 1") instead of team names
+                                                // For qualifier races, show the round name (e.g., "Live 1") with "(Qualifier)" indicator
                                                 if race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
-                                                    race.round.clone().unwrap_or_else(|| "Qualifier".to_string())
+                                                    format!("{} (Qualifier)", race.round.clone().unwrap_or_else(|| "Qualifier".to_string()))
                                                 } else {
                                                     match &race.entrants {
                                                         Entrants::Two([team1, team2]) => format!("{} vs {}",
@@ -2913,49 +2913,54 @@ async fn match_signup_page(
             }
 
             h3 {
-                : format!("{} {} {}",
-                    race.phase.as_deref().unwrap_or(""),
-                    race.round.as_deref().unwrap_or(""),
-                    match &race.entrants {
-                        Entrants::Two([team1, team2]) => format!("{} vs {}",
-                            match team1 {
-                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                Entrant::Named { name, .. } => name.clone(),
-                                Entrant::Discord { .. } => "Discord User".to_string(),
-                            },
-                            match team2 {
-                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                Entrant::Named { name, .. } => name.clone(),
-                                Entrant::Discord { .. } => "Discord User".to_string(),
-                            }
-                        ),
-                        Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
-                            match team1 {
-                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                Entrant::Named { name, .. } => name.clone(),
-                                Entrant::Discord { .. } => "Discord User".to_string(),
-                            },
-                            match team2 {
-                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                Entrant::Named { name, .. } => name.clone(),
-                                Entrant::Discord { .. } => "Discord User".to_string(),
-                            },
-                            match team3 {
-                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                Entrant::Named { name, .. } => name.clone(),
-                                Entrant::Discord { .. } => "Discord User".to_string(),
-                            }
-                        ),
-                        _ => {
-                            // For qualifier races without fixed entrants, show round/phase instead of "Unknown entrants"
-                            if race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
-                                race.round.clone().unwrap_or_else(|| "Qualifier".to_string())
-                            } else {
-                                String::new()
-                            }
-                        }
+                // For qualifier races without fixed entrants, show only the round name or "Qualifier"
+                // For other races, show phase/round prefix and team matchup
+                @if matches!(race.entrants, Entrants::Two(_) | Entrants::Three(_)) {
+                    // Show phase and round prefix for team-based races
+                    @if let Some(ref phase) = race.phase {
+                        : phase;
+                        : " ";
                     }
-                );
+                    @if let Some(ref round) = race.round {
+                        : round;
+                        : " ";
+                    }
+                }
+                : match &race.entrants {
+                    Entrants::Two([team1, team2]) => format!("{} vs {}",
+                        match team1 {
+                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                            Entrant::Named { name, .. } => name.clone(),
+                            Entrant::Discord { .. } => "Discord User".to_string(),
+                        },
+                        match team2 {
+                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                            Entrant::Named { name, .. } => name.clone(),
+                            Entrant::Discord { .. } => "Discord User".to_string(),
+                        }
+                    ),
+                    Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                        match team1 {
+                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                            Entrant::Named { name, .. } => name.clone(),
+                            Entrant::Discord { .. } => "Discord User".to_string(),
+                        },
+                        match team2 {
+                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                            Entrant::Named { name, .. } => name.clone(),
+                            Entrant::Discord { .. } => "Discord User".to_string(),
+                        },
+                        match team3 {
+                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                            Entrant::Named { name, .. } => name.clone(),
+                            Entrant::Discord { .. } => "Discord User".to_string(),
+                        }
+                    ),
+                    _ => {
+                        // For qualifier races without fixed entrants, show round or "Qualifier"
+                        race.round.clone().unwrap_or_else(|| "Qualifier".to_string())
+                    }
+                };
             }
             p {
                 @match race.schedule {
@@ -3188,8 +3193,43 @@ async fn match_signup_page(
                     @let has_pending_request = my_requests.as_ref().map(|reqs| {
                         reqs.iter().any(|req| req.role_binding_id == binding.id && matches!(req.status, RoleRequestStatus::Pending))
                     }).unwrap_or(false);
-                    @if my_signup.is_some() {
+                    @if let Some(my_signup) = my_signup {
                         p : "You have already signed up for this role.";
+
+                        // Allow withdrawal if:
+                        // - Status is Pending (always), OR
+                        // - Status is Confirmed AND race hasn't started yet
+                        @let can_withdraw = match my_signup.status {
+                            VolunteerSignupStatus::Pending => true,
+                            VolunteerSignupStatus::Confirmed => {
+                                match race.schedule {
+                                    RaceSchedule::Live { start, .. } => start > chrono::Utc::now(),
+                                    RaceSchedule::Async { start1, start2, start3, .. } => {
+                                        [start1, start2, start3].iter()
+                                            .filter_map(|s| *s)
+                                            .all(|s| s > chrono::Utc::now())
+                                    }
+                                    _ => false,
+                                }
+                            }
+                            _ => false,
+                        };
+
+                        @if can_withdraw {
+                            : full_form_confirm(
+                                uri!(withdraw_signup(data.series, &*data.event, race.id)),
+                                csrf.as_ref(),
+                                html! {
+                                    input(type = "hidden", name = "signup_id", value = my_signup.id.to_string());
+                                    @if active_languages.len() > 1 {
+                                        input(type = "hidden", name = "lang", value = current_language.short_code());
+                                    }
+                                },
+                                Vec::new(),
+                                "Withdraw Signup",
+                                "Are you sure you want to withdraw from this race?"
+                            );
+                        }
                     } else if is_approved {
                         @let errors = Vec::new();
                         @let max_reached = confirmed_signups.len() as i32 >= binding.max_count;
@@ -3365,11 +3405,35 @@ pub(crate) async fn withdraw_signup(
             ));
         }
 
-        // Only allow withdrawing pending signups
-        if !matches!(signup.status, VolunteerSignupStatus::Pending) {
-            form.context.push_error(form::Error::validation(
-                "You can only withdraw pending signups",
-            ));
+        // Check if signup can be withdrawn
+        let can_withdraw = match signup.status {
+            VolunteerSignupStatus::Pending => true,
+            VolunteerSignupStatus::Confirmed => {
+                // Allow confirmed withdrawals only if race hasn't started
+                let race = Race::from_id(&mut transaction, &reqwest::Client::new(), race_id).await?;
+                match race.schedule {
+                    RaceSchedule::Live { start, .. } => start > Utc::now(),
+                    RaceSchedule::Async { start1, start2, start3, .. } => {
+                        [start1, start2, start3].iter()
+                            .filter_map(|s| *s)
+                            .all(|s| s > Utc::now())
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+
+        if !can_withdraw {
+            if matches!(signup.status, VolunteerSignupStatus::Confirmed) {
+                form.context.push_error(form::Error::validation(
+                    "You cannot withdraw after the race has started. Please contact organizers if you need help."
+                ));
+            } else {
+                form.context.push_error(form::Error::validation(
+                    "This signup cannot be withdrawn."
+                ));
+            }
         }
 
         if form.context.errors().next().is_some() {
