@@ -2986,8 +2986,12 @@ async fn match_signup_page(
 
             @if can_manage {
                 h3 : "Manage Signups";
-                @let declined_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Declined)).collect::<Vec<_>>();
-                @let active_signups = signups.iter().filter(|s| !matches!(s.status, VolunteerSignupStatus::Declined)).collect::<Vec<_>>();
+                @let inactive_signups = signups.iter()
+                    .filter(|s| matches!(s.status, VolunteerSignupStatus::Declined | VolunteerSignupStatus::Aborted))
+                    .collect::<Vec<_>>();
+                @let active_signups = signups.iter()
+                    .filter(|s| !matches!(s.status, VolunteerSignupStatus::Declined | VolunteerSignupStatus::Aborted))
+                    .collect::<Vec<_>>();
 
                 @for signup in &active_signups {
                     @if let Some(user) = User::from_id(&mut *transaction, signup.user_id).await? {
@@ -3065,10 +3069,10 @@ async fn match_signup_page(
                     }
                 }
 
-                @if !declined_signups.is_empty() {
+                @if !inactive_signups.is_empty() {
                     details {
-                        summary : format!("Declined Signups ({})", declined_signups.len());
-                        @for signup in &declined_signups {
+                        summary : format!("Declined/Withdrawn Signups ({})", inactive_signups.len());
+                        @for signup in &inactive_signups {
                             @if let Some(user) = User::from_id(&mut *transaction, signup.user_id).await? {
                                 div(class = "signup-item") {
                                     div(class = "signup-item-content") {
@@ -3076,7 +3080,13 @@ async fn match_signup_page(
                                             strong : user.display_name();
                                             : " - ";
                                             : signup.role_type_name;
-                                            : " (Declined)";
+                                            : " (";
+                                            @match signup.status {
+                                                VolunteerSignupStatus::Declined => : "Declined";
+                                                VolunteerSignupStatus::Aborted => : "Withdrawn";
+                                                _ => : "Inactive";
+                                            }
+                                            : ")";
                                         }
                                         @if let Some(ref notes) = signup.notes {
                                             p(class = "signup-notes") : notes;
