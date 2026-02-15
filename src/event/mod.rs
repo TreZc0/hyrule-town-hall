@@ -2348,8 +2348,11 @@ pub(crate) async fn opt_out_post(pool: &State<PgPool>, discord_ctx: &State<RwFut
 /// Action to take when an organizer manages a team/player
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromFormField)]
 pub(crate) enum ManageAction {
+    #[field(value = "remove")]
     Remove,
+    #[field(value = "remove_and_block")]
     RemoveAndBlock,
+    #[field(value = "opt_out")]
     OptOut,
 }
 
