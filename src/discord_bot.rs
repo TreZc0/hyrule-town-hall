@@ -2857,13 +2857,15 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
 
                                             // Check if the message still has the REVERT button (wasn't clicked)
                                             if let Ok(message) = channel_id.message(&ctx_clone, message_id).await {
-                                                // Check if the message still has exactly 1 component row with 1 button (REVERT)
-                                                // and the content still says "30 seconds to revert"
-                                                // If reverted, it will have 2 buttons (FINISH/FORFEIT) and different text
+                                                // Check if the message still has exactly 1 component row with 1 button (REVERT),
+                                                // the content still says "30 seconds to revert", AND the displayed time
+                                                // matches this task's time. The time check prevents a stale task from
+                                                // firing if the user reverted and finished again (which spawns a new task).
                                                 let has_revert_button = message.components.len() == 1
                                                     && message.components.first()
                                                         .map_or(false, |row| row.components.len() == 1)
-                                                    && message.content.contains("30 seconds to revert");
+                                                    && message.content.contains("30 seconds to revert")
+                                                    && message.content.contains(&formatted_time);
 
                                                 if has_revert_button {
                                                     // Finalize the finish
@@ -2916,10 +2918,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         transaction.rollback().await?;
                     }
                     "async_revert" => {
-                        // Handle REVERT button - restore FINISH/FORFEIT buttons
-                        interaction.defer(&ctx.http).await?;
-
-                        // Restore the original FINISH/FORFEIT buttons
+                        // Handle REVERT button - restore FINISH/FORFEIT buttons by editing the ORIGINAL message
+                        // This is important because the spawned task is watching the original message
                         let race_buttons = CreateActionRow::Buttons(vec![
                             CreateButton::new("async_finish")
                                 .label("FINISH")
@@ -2929,10 +2929,12 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 .style(ButtonStyle::Secondary),
                         ]);
 
-                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                            .content("**Finish reverted!** Continue playing an dclick the FINISH button once you have completed your run.\nIf you need to forfeit, click the FORFEIT button.")
-                            .components(vec![race_buttons])
-                        ).await?;
+                        // Update the message that contains the REVERT button (the one the user clicked)
+                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                            CreateInteractionResponseMessage::new()
+                                .content("**Finish reverted!** Continue playing and click the FINISH button once you have completed your run.\nIf you need to forfeit, click the FORFEIT button.")
+                                .components(vec![race_buttons])
+                        )).await?;
                     }
                     "async_forfeit" => {
                         // Show confirmation for bracket async forfeit
@@ -3507,23 +3509,56 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             let seconds = total_seconds % 60;
                                             let formatted_time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
 
-                                            // Remove button and send completion message
+                                            // Replace FINISH/FORFEIT buttons with REVERT button
+                                            let revert_button = CreateActionRow::Buttons(vec![
+                                                CreateButton::new(format!("async_revert_qualifier_{}_{}", team_id, async_kind as i32))
+                                                    .label("REVERT")
+                                                    .style(ButtonStyle::Secondary)
+                                            ]);
+
                                             interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                                 CreateInteractionResponseMessage::new()
-                                                    .components(vec![])
+                                                    .content(format!("✅ **Finished in {}**\nYou have 30 seconds to revert if needed.", formatted_time))
+                                                    .components(vec![revert_button])
                                             )).await?;
 
-                                            let mut msg = MessageBuilder::default();
-                                            msg.push("@here - **Qualifier run complete!**\n\n");
-                                            msg.push(format!("**Estimated finish time:** {}\n\n", formatted_time));
-                                            msg.push("Please provide:\n");
-                                            msg.push("• A link to your VOD/recording\n");
-                                            msg.push("• A screenshot of your final time/collection rate\n\n");
-                                            msg.push("Staff will verify and record your official time using `/result-async`.");
+                                            // Spawn a background task to finalize after 30 seconds
+                                            let ctx_clone = ctx.clone();
+                                            let channel_id = interaction.channel_id;
+                                            let message_id = interaction.message.id;
 
-                                            interaction.channel_id.say(ctx, msg.build()).await?;
+                                            tokio::spawn(async move {
+                                                sleep(Duration::from_secs(30)).await;
 
-                                            transaction.commit().await?;
+                                                // Check if the message still has the REVERT button (wasn't clicked)
+                                                if let Ok(message) = channel_id.message(&ctx_clone, message_id).await {
+                                                    let has_revert_button = message.components.len() == 1
+                                                        && message.components.first()
+                                                            .map_or(false, |row| row.components.len() == 1)
+                                                        && message.content.contains("30 seconds to revert")
+                                                        && message.content.contains(&formatted_time);
+
+                                                    if has_revert_button {
+                                                        // Remove the REVERT button
+                                                        let _ = channel_id.edit_message(&ctx_clone, message_id, serenity::all::EditMessage::new()
+                                                            .components(vec![])
+                                                        ).await;
+
+                                                        // Send completion message
+                                                        let mut msg = MessageBuilder::default();
+                                                        msg.push("@here - **Qualifier run complete!**\n\n");
+                                                        msg.push(format!("**Estimated finish time:** {}\n\n", formatted_time));
+                                                        msg.push("Please provide:\n");
+                                                        msg.push("• A link to your VOD/recording\n");
+                                                        msg.push("• A screenshot of your final time/collection rate\n\n");
+                                                        msg.push("Staff will verify and record your official time using `/result-async`.");
+
+                                                        let _ = channel_id.say(&ctx_clone, msg.build()).await;
+                                                    }
+                                                }
+                                            });
+
+                                            transaction.rollback().await?;
                                         }
                                     } else {
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(
@@ -3534,6 +3569,26 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         transaction.rollback().await?;
                                     }
                                 }
+                            }
+                        }
+                    } else if let Some(params) = custom_id.strip_prefix("async_revert_qualifier_") {
+                        // Handle qualifier REVERT button - restore FINISH/FORFEIT buttons
+                        if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
+                            if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
+                                let race_buttons = CreateActionRow::Buttons(vec![
+                                    CreateButton::new(format!("async_finish_qualifier_{}_{}", team_id, async_kind_int))
+                                        .label("FINISH")
+                                        .style(ButtonStyle::Danger),
+                                    CreateButton::new(format!("async_forfeit_qualifier_{}_{}", team_id, async_kind_int))
+                                        .label("FORFEIT")
+                                        .style(ButtonStyle::Secondary),
+                                ]);
+
+                                interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                    CreateInteractionResponseMessage::new()
+                                        .content("**Finish reverted!** Continue playing and click the FINISH button once you have completed your run.\nIf you need to forfeit, click the FORFEIT button.")
+                                        .components(vec![race_buttons])
+                                )).await?;
                             }
                         }
                     } else if custom_id == "async_forfeit_qualifier_cancel" {
