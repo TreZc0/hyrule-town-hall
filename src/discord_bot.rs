@@ -2832,9 +2832,13 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     interaction.user.id,
                                 ).await {
                                     Ok(formatted_time) => {
-                                        // Replace FINISH/FORFEIT buttons with REVERT button
+                                        // Replace FINISH/FORFEIT buttons with REVERT button.
+                                        // Include a nonce in the button ID so the background task can verify
+                                        // it's still the same finish (not a stale task from a reverted finish).
+                                        let revert_nonce = Utc::now().timestamp_millis();
+                                        let revert_button_id = format!("async_revert_bracket_{}", revert_nonce);
                                         let revert_button = CreateActionRow::Buttons(vec![
-                                            CreateButton::new("async_revert")
+                                            CreateButton::new(&revert_button_id)
                                                 .label("REVERT")
                                                 .style(ButtonStyle::Secondary)
                                         ]);
@@ -2857,15 +2861,14 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
 
                                             // Check if the message still has the REVERT button (wasn't clicked)
                                             if let Ok(message) = channel_id.message(&ctx_clone, message_id).await {
-                                                // Check if the message still has exactly 1 component row with 1 button (REVERT),
-                                                // the content still says "30 seconds to revert", AND the displayed time
-                                                // matches this task's time. The time check prevents a stale task from
-                                                // firing if the user reverted and finished again (which spawns a new task).
-                                                let has_revert_button = message.components.len() == 1
-                                                    && message.components.first()
-                                                        .map_or(false, |row| row.components.len() == 1)
-                                                    && message.content.contains("30 seconds to revert")
-                                                    && message.content.contains(&formatted_time);
+                                                // Verify the button's custom_id matches this task's nonce.
+                                                // If the user reverted and finished again, a new nonce is generated,
+                                                // so only the latest task will match.
+                                                let has_revert_button = message.components.first()
+                                                    .map_or(false, |row| row.components.iter().any(|c| {
+                                                        matches!(c, ActionRowComponent::Button(b)
+                                                            if matches!(&b.data, ButtonKind::NonLink { custom_id, .. } if custom_id == &revert_button_id))
+                                                    }));
 
                                                 if has_revert_button {
                                                     // Finalize the finish
@@ -2916,25 +2919,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         }
 
                         transaction.rollback().await?;
-                    }
-                    "async_revert" => {
-                        // Handle REVERT button - restore FINISH/FORFEIT buttons by editing the ORIGINAL message
-                        // This is important because the spawned task is watching the original message
-                        let race_buttons = CreateActionRow::Buttons(vec![
-                            CreateButton::new("async_finish")
-                                .label("FINISH")
-                                .style(ButtonStyle::Danger),
-                            CreateButton::new("async_forfeit")
-                                .label("FORFEIT")
-                                .style(ButtonStyle::Secondary),
-                        ]);
-
-                        // Update the message that contains the REVERT button (the one the user clicked)
-                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                            CreateInteractionResponseMessage::new()
-                                .content("**Finish reverted!** Continue playing and click the FINISH button once you have completed your run.\nIf you need to forfeit, click the FORFEIT button.")
-                                .components(vec![race_buttons])
-                        )).await?;
                     }
                     "async_forfeit" => {
                         // Show confirmation for bracket async forfeit
@@ -3243,6 +3227,23 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         restream.update_race(&mut race, speedgaming_id)?;
                         race.save(&mut transaction).await?;
                         transaction.commit().await?;
+                    } else if let Some(_nonce) = custom_id.strip_prefix("async_revert_bracket_") {
+                        // Handle bracket REVERT button - restore FINISH/FORFEIT buttons
+                        // The nonce is only used by the background task to identify stale finishes
+                        let race_buttons = CreateActionRow::Buttons(vec![
+                            CreateButton::new("async_finish")
+                                .label("FINISH")
+                                .style(ButtonStyle::Danger),
+                            CreateButton::new("async_forfeit")
+                                .label("FORFEIT")
+                                .style(ButtonStyle::Secondary),
+                        ]);
+
+                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                            CreateInteractionResponseMessage::new()
+                                .content("**Finish reverted!** Continue playing and click the FINISH button once you have completed your run.\nIf you need to forfeit, click the FORFEIT button.")
+                                .components(vec![race_buttons])
+                        )).await?;
                     } else if let Some(params) = custom_id.strip_prefix("async_ready_qualifier_") {
                         // Handle qualifier READY button: format is "async_ready_qualifier_{team_id}_{async_kind}"
                         if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
@@ -3509,9 +3510,12 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             let seconds = total_seconds % 60;
                                             let formatted_time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
 
-                                            // Replace FINISH/FORFEIT buttons with REVERT button
+                                            // Replace FINISH/FORFEIT buttons with REVERT button.
+                                            // Include a nonce so the background task can verify it's the same finish.
+                                            let revert_nonce = Utc::now().timestamp_millis();
+                                            let revert_button_id = format!("async_revert_qualifier_{}_{}_{}", team_id, async_kind as i32, revert_nonce);
                                             let revert_button = CreateActionRow::Buttons(vec![
-                                                CreateButton::new(format!("async_revert_qualifier_{}_{}", team_id, async_kind as i32))
+                                                CreateButton::new(&revert_button_id)
                                                     .label("REVERT")
                                                     .style(ButtonStyle::Secondary)
                                             ]);
@@ -3530,13 +3534,13 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             tokio::spawn(async move {
                                                 sleep(Duration::from_secs(30)).await;
 
-                                                // Check if the message still has the REVERT button (wasn't clicked)
+                                                // Check if the message still has the REVERT button with matching nonce
                                                 if let Ok(message) = channel_id.message(&ctx_clone, message_id).await {
-                                                    let has_revert_button = message.components.len() == 1
-                                                        && message.components.first()
-                                                            .map_or(false, |row| row.components.len() == 1)
-                                                        && message.content.contains("30 seconds to revert")
-                                                        && message.content.contains(&formatted_time);
+                                                    let has_revert_button = message.components.first()
+                                                        .map_or(false, |row| row.components.iter().any(|c| {
+                                                            matches!(c, ActionRowComponent::Button(b)
+                                                                if matches!(&b.data, ButtonKind::NonLink { custom_id, .. } if custom_id == &revert_button_id))
+                                                        }));
 
                                                     if has_revert_button {
                                                         // Remove the REVERT button
@@ -3573,7 +3577,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         }
                     } else if let Some(params) = custom_id.strip_prefix("async_revert_qualifier_") {
                         // Handle qualifier REVERT button - restore FINISH/FORFEIT buttons
-                        if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
+                        // Format: {team_id}_{async_kind}_{nonce} (nonce is ignored here)
+                        let parts: Vec<&str> = params.splitn(3, '_').collect();
+                        if let (Some(team_id_str), Some(async_kind_str)) = (parts.first(), parts.get(1)) {
                             if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
                                 let race_buttons = CreateActionRow::Buttons(vec![
                                     CreateButton::new(format!("async_finish_qualifier_{}_{}", team_id, async_kind_int))
