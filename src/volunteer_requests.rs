@@ -611,7 +611,17 @@ fn build_announcement_content(
         if need.race.video_urls.is_empty() {
             msg.push("Restream TBD\n");
         } else {
-            for (language, video_url) in &need.race.video_urls {
+            // Sort restreams so the event's default language appears first
+            let mut sorted_urls: Vec<_> = need.race.video_urls.iter().collect();
+            sorted_urls.sort_by_key(|(lang, _)| {
+                if **lang == event_data.default_volunteer_language {
+                    0 // Default language first
+                } else {
+                    1 // Others after (order doesn't matter)
+                }
+            });
+
+            for (language, video_url) in sorted_urls {
                 msg.push("Restream (");
                 msg.push(&language.to_string());
                 msg.push("): <");
