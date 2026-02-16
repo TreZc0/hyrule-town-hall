@@ -901,3 +901,50 @@ pub(crate) async fn update_volunteer_post_for_race(
     transaction.commit().await?;
     Ok(())
 }
+
+/// Updates all volunteer posts for an event (call when role bindings change)
+pub(crate) async fn update_volunteer_posts_for_event(
+    pool: &PgPool,
+    discord_ctx: &DiscordCtx,
+    series: Series,
+    event: &str,
+) -> Result<(), Error> {
+    let mut transaction = pool.begin().await?;
+
+    // Find all unique message IDs for races in this event
+    let message_ids = sqlx::query_scalar!(
+        r#"SELECT DISTINCT volunteer_request_message_id AS "message_id: PgSnowflake<MessageId>"
+        FROM races
+        WHERE series = $1
+          AND event = $2
+          AND volunteer_request_message_id IS NOT NULL
+          AND ignored = false"#,
+        series as _,
+        event
+    )
+    .fetch_all(&mut *transaction)
+    .await?;
+
+    transaction.commit().await?;
+
+    // Update each unique message (which may contain multiple races)
+    for message_id in message_ids {
+        // Find any race with this message ID to trigger the update
+        let race_id = sqlx::query_scalar!(
+            r#"SELECT id AS "id: Id<Races>"
+            FROM races
+            WHERE volunteer_request_message_id = $1
+            LIMIT 1"#,
+            message_id as _
+        )
+        .fetch_optional(pool)
+        .await?;
+
+        if let Some(race_id) = race_id {
+            // Update the message (this will update all races sharing the same message)
+            let _ = update_volunteer_post_for_race(pool, discord_ctx, race_id).await;
+        }
+    }
+
+    Ok(())
+}

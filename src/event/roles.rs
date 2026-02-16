@@ -211,7 +211,7 @@ pub(crate) struct EventDisabledRoleBinding {
     pub(crate) id: Id<EventDisabledRoleBindings>,
     pub(crate) series: Series,
     pub(crate) event: String,
-    pub(crate) role_type_id: Id<RoleTypes>,
+    pub(crate) role_binding_id: Id<RoleBindings>,
     pub(crate) created_at: DateTime<Utc>,
 }
 
@@ -238,16 +238,6 @@ impl RoleType {
             r#"SELECT id AS "id: Id<RoleTypes>", name FROM role_types ORDER BY name"#
         )
         .fetch_all(&mut **pool)
-        .await
-    }
-
-    pub(crate) async fn from_name(pool: &mut Transaction<'_, Postgres>, name: &str) -> sqlx::Result<Option<Self>> {
-        sqlx::query_as!(
-            Self,
-            r#"SELECT id AS "id: Id<RoleTypes>", name FROM role_types WHERE name = $1"#,
-            name
-        )
-        .fetch_optional(&mut **pool)
         .await
     }
 }
@@ -1125,11 +1115,11 @@ async fn roles_page(
                                                 }
                                             }
                                             @if !uses_custom_bindings {
-                                                @let is_disabled = EventDisabledRoleBinding::exists_for_role_type(&mut transaction, data.series, &data.event, binding.role_type_id).await?;
+                                                @let is_disabled = EventDisabledRoleBinding::exists_for_binding(&mut transaction, data.series, &data.event, binding.id).await?;
                                                 div(style = "display: flex; justify-content: center; gap: 8px; flex-wrap: wrap;") {
                                                     @if is_disabled {
                                                         @let (errors, enable_button) = button_form(
-                                                            uri!(enable_role_binding(data.series, &*data.event, binding.role_type_id)),
+                                                            uri!(enable_role_binding(data.series, &*data.event, binding.id)),
                                                             csrf.as_ref(),
                                                             Vec::new(),
                                                             "Enable"
@@ -1138,7 +1128,7 @@ async fn roles_page(
                                                         : enable_button;
                                                     } else {
                                                         @let (errors, disable_button) = button_form(
-                                                            uri!(disable_role_binding(data.series, &*data.event, binding.role_type_id)),
+                                                            uri!(disable_role_binding(data.series, &*data.event, binding.id)),
                                                             csrf.as_ref(),
                                                             Vec::new(),
                                                             "Disable"
@@ -1263,18 +1253,28 @@ async fn roles_page(
                             thead {
                                 tr {
                                     th : "Role Type";
+                                    th : "Language";
                                     th : "Actions";
                                 }
                             }
                             tbody {
                                 @for disabled_binding in &disabled_bindings {
-                                    @let role_type = RoleType::from_id(&mut transaction, disabled_binding.role_type_id).await?;
-                                    @if let Some(role_type) = role_type {
+                                    @let binding_info = sqlx::query!(
+                                        r#"
+                                            SELECT rt.name AS role_type_name, rb.language AS "language: Language"
+                                            FROM role_bindings rb
+                                            JOIN role_types rt ON rb.role_type_id = rt.id
+                                            WHERE rb.id = $1
+                                        "#,
+                                        disabled_binding.role_binding_id as _
+                                    ).fetch_optional(&mut *transaction).await?;
+                                    @if let Some(binding_info) = binding_info {
                                         tr {
-                                            td : role_type.name;
+                                            td : binding_info.role_type_name;
+                                            td : binding_info.language;
                                             td {
                                                 @let (errors, enable_button) = button_form(
-                                                    uri!(enable_role_binding(data.series, &*data.event, disabled_binding.role_type_id)),
+                                                    uri!(enable_role_binding(data.series, &*data.event, disabled_binding.role_binding_id)),
                                                     csrf.as_ref(),
                                                     Vec::new(),
                                                     "Enable"
@@ -1392,12 +1392,7 @@ async fn roles_page(
                             acc
                         });
                     @for ((role_type_name, language), requests) in approved_by_role_type {
-                        @let role_type = RoleType::from_name(&mut transaction, &requests[0].role_type_name).await?;
-                        @let is_disabled = if let Some(role_type) = role_type {
-                            EventDisabledRoleBinding::exists_for_role_type(&mut transaction, data.series, &data.event, role_type.id).await?
-                        } else {
-                            false
-                        };
+                        @let is_disabled = EventDisabledRoleBinding::exists_for_binding(&mut transaction, data.series, &data.event, requests[0].role_binding_id).await?;
                         @if !is_disabled {
                             details {
                                 summary : format!("{} [{}] ({})", role_type_name, language.short_code().to_uppercase(), requests.len());
@@ -1533,6 +1528,7 @@ pub(crate) struct EditRoleBindingForm {
 #[rocket::post("/event/<series>/<event>/roles/add-binding", data = "<form>")]
 pub(crate) async fn add_role_binding(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     _uri: &HttpOrigin<'_>,
     series: Series,
@@ -1628,6 +1624,15 @@ pub(crate) async fn add_role_binding(
             )
             .await?;
             transaction.commit().await?;
+
+            // Update volunteer info messages to show the new role
+            let _ = volunteer_requests::update_volunteer_posts_for_event(
+                pool,
+                &*discord_ctx.read().await,
+                series,
+                event,
+            ).await;
+
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _))))
         }
     } else {
@@ -1650,6 +1655,7 @@ pub(crate) async fn add_role_binding(
 #[rocket::post("/event/<series>/<event>/roles/<binding>/delete", data = "<form>")]
 pub(crate) async fn delete_role_binding(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     series: Series,
     event: &str,
@@ -1693,6 +1699,15 @@ pub(crate) async fn delete_role_binding(
         } else {
             RoleBinding::delete(&mut transaction, binding).await?;
             transaction.commit().await?;
+
+            // Update volunteer info messages to remove the deleted role
+            let _ = volunteer_requests::update_volunteer_posts_for_event(
+                pool,
+                &*discord_ctx.read().await,
+                series,
+                event,
+            ).await;
+
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _))))
         }
     } else {
@@ -3864,11 +3879,11 @@ impl EventDisabledRoleBinding {
                     id AS "id: Id<EventDisabledRoleBindings>",
                     series AS "series: Series",
                     event,
-                    role_type_id AS "role_type_id: Id<RoleTypes>",
+                    role_binding_id AS "role_binding_id: Id<RoleBindings>",
                     created_at AS "created_at!"
                 FROM event_disabled_role_bindings
                 WHERE series = $1 AND event = $2
-                ORDER BY role_type_id
+                ORDER BY role_binding_id
             "#,
             series as _,
             event
@@ -3881,14 +3896,14 @@ impl EventDisabledRoleBinding {
         pool: &mut Transaction<'_, Postgres>,
         series: Series,
         event: &str,
-        role_type_id: Id<RoleTypes>,
+        role_binding_id: Id<RoleBindings>,
     ) -> sqlx::Result<Id<EventDisabledRoleBindings>> {
         let id = sqlx::query_scalar!(
-            r#"INSERT INTO event_disabled_role_bindings (series, event, role_type_id)
+            r#"INSERT INTO event_disabled_role_bindings (series, event, role_binding_id)
                VALUES ($1, $2, $3) RETURNING id"#,
             series as _,
             event,
-            role_type_id as _
+            role_binding_id as _
         )
         .fetch_one(&mut **pool)
         .await?;
@@ -3899,30 +3914,30 @@ impl EventDisabledRoleBinding {
         pool: &mut Transaction<'_, Postgres>,
         series: Series,
         event: &str,
-        role_type_id: Id<RoleTypes>,
+        role_binding_id: Id<RoleBindings>,
     ) -> sqlx::Result<()> {
         sqlx::query!(
-            r#"DELETE FROM event_disabled_role_bindings WHERE series = $1 AND event = $2 AND role_type_id = $3"#,
+            r#"DELETE FROM event_disabled_role_bindings WHERE series = $1 AND event = $2 AND role_binding_id = $3"#,
             series as _,
             event,
-            role_type_id as _
+            role_binding_id as _
         )
         .execute(&mut **pool)
         .await?;
         Ok(())
     }
 
-    pub(crate) async fn exists_for_role_type(
+    pub(crate) async fn exists_for_binding(
         pool: &mut Transaction<'_, Postgres>,
         series: Series,
         event: &str,
-        role_type_id: Id<RoleTypes>,
+        role_binding_id: Id<RoleBindings>,
     ) -> sqlx::Result<bool> {
         let result = sqlx::query_scalar!(
-            r#"SELECT EXISTS(SELECT 1 FROM event_disabled_role_bindings WHERE series = $1 AND event = $2 AND role_type_id = $3)"#,
+            r#"SELECT EXISTS(SELECT 1 FROM event_disabled_role_bindings WHERE series = $1 AND event = $2 AND role_binding_id = $3)"#,
             series as _,
             event,
-            role_type_id as _
+            role_binding_id as _
         )
         .fetch_one(&mut **pool)
         .await?;
@@ -4021,14 +4036,14 @@ impl EffectiveRoleBinding {
 
         // Get disabled role bindings for this event
         let disabled_bindings = EventDisabledRoleBinding::for_event(&mut *pool, series, event).await?;
-        let disabled_role_types: HashSet<Id<RoleTypes>> = disabled_bindings
+        let disabled_binding_ids: HashSet<Id<RoleBindings>> = disabled_bindings
             .into_iter()
-            .map(|binding| binding.role_type_id)
+            .map(|binding| binding.role_binding_id)
             .collect();
 
         // Combine and process all bindings
         let mut all_bindings = Vec::new();
-        
+
         // Add event-specific bindings
         for mut binding in event_bindings {
             binding.has_event_override = discord_override_map.contains_key(&binding.id);
@@ -4040,7 +4055,7 @@ impl EffectiveRoleBinding {
 
         // Add game bindings (excluding disabled ones)
         for mut binding in game_bindings {
-            if !disabled_role_types.contains(&binding.role_type_id) {
+            if !disabled_binding_ids.contains(&binding.id) {
                 binding.has_event_override = discord_override_map.contains_key(&binding.id);
                 if binding.has_event_override {
                     binding.discord_role_id = discord_override_map.get(&binding.id).copied();
@@ -4118,13 +4133,14 @@ pub(crate) fn render_language_content_box_end() -> RawHtml<String> {
     RawHtml("</div>".to_string())
 }
 
-#[rocket::post("/event/<series>/<event>/role-types/<role_type_id>/disable-binding")]
+#[rocket::post("/event/<series>/<event>/role-bindings/<role_binding_id>/disable-binding")]
 pub(crate) async fn disable_role_binding(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     series: Series,
     event: &str,
-    role_type_id: Id<RoleTypes>,
+    role_binding_id: Id<RoleBindings>,
     _csrf: Option<CsrfToken>,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
@@ -4137,36 +4153,47 @@ pub(crate) async fn disable_role_binding(
     }
 
     // Check if this is a game role binding that can be disabled
-    let game = game::Game::from_series(&mut transaction, series).await?;
-    if let Some(game) = game {
-        // Check if this role type exists in the game's role bindings
-        let game_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await?;
-        let role_type_exists = game_bindings.iter().any(|binding| binding.role_type_id == role_type_id);
-        
-        if !role_type_exists {
-            return Err(StatusOrError::Status(Status::BadRequest));
-        }
+    // Verify the binding exists and is a game binding (not event-specific)
+    let binding = sqlx::query!(
+        r#"SELECT game_id FROM role_bindings WHERE id = $1 AND series IS NULL AND event IS NULL"#,
+        role_binding_id as _
+    )
+    .fetch_optional(&mut *transaction)
+    .await?;
 
-        // Check if already disabled
-        if EventDisabledRoleBinding::exists_for_role_type(&mut transaction, series, event, role_type_id).await? {
-            return Err(StatusOrError::Status(Status::BadRequest));
-        }
-
-        // Disable the role binding
-        EventDisabledRoleBinding::create(&mut transaction, series, event, role_type_id).await?;
+    if binding.is_none() {
+        return Err(StatusOrError::Status(Status::BadRequest));
     }
 
+    // Check if already disabled
+    if EventDisabledRoleBinding::exists_for_binding(&mut transaction, series, event, role_binding_id).await? {
+        return Err(StatusOrError::Status(Status::BadRequest));
+    }
+
+    // Disable the role binding
+    EventDisabledRoleBinding::create(&mut transaction, series, event, role_binding_id).await?;
+
     transaction.commit().await?;
+
+    // Update volunteer info messages to remove the disabled role
+    let _ = volunteer_requests::update_volunteer_posts_for_event(
+        pool,
+        &*discord_ctx.read().await,
+        series,
+        event,
+    ).await;
+
     Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _)))))
 }
 
-#[rocket::post("/event/<series>/<event>/role-types/<role_type_id>/enable-binding")]
+#[rocket::post("/event/<series>/<event>/role-bindings/<role_binding_id>/enable-binding")]
 pub(crate) async fn enable_role_binding(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     series: Series,
     event: &str,
-    role_type_id: Id<RoleTypes>,
+    role_binding_id: Id<RoleBindings>,
     _csrf: Option<CsrfToken>,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
@@ -4179,14 +4206,23 @@ pub(crate) async fn enable_role_binding(
     }
 
     // Check if this role binding is currently disabled
-    if !EventDisabledRoleBinding::exists_for_role_type(&mut transaction, series, event, role_type_id).await? {
+    if !EventDisabledRoleBinding::exists_for_binding(&mut transaction, series, event, role_binding_id).await? {
         return Err(StatusOrError::Status(Status::BadRequest));
     }
 
     // Enable the role binding
-    EventDisabledRoleBinding::delete(&mut transaction, series, event, role_type_id).await?;
+    EventDisabledRoleBinding::delete(&mut transaction, series, event, role_binding_id).await?;
 
     transaction.commit().await?;
+
+    // Update volunteer info messages to add the re-enabled role
+    let _ = volunteer_requests::update_volunteer_posts_for_event(
+        pool,
+        &*discord_ctx.read().await,
+        series,
+        event,
+    ).await;
+
     Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _)))))
 }
 

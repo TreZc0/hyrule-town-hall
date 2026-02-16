@@ -1021,6 +1021,10 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
             }
         }
     }
+    // Hide status column for solo events (it tracks team invitation status, which doesn't apply)
+    if matches!(data.team_config, TeamConfig::Solo) {
+        show_status = ShowStatus::None;
+    }
     let show_restream_consent = is_organizer || if let Some(ref me) = me {
         data.restreamers(&mut transaction).await?.contains(me)
     } else {
@@ -1042,6 +1046,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
 
     let mut footnotes = Vec::default();
     let teams_label = if let TeamConfig::Solo = data.team_config { "Entrants" } else { "Teams" };
+    let has_opt_outs = signups.iter().any(|signup| signup.is_opted_out);
     let mut column_headers = Vec::default();
     if let QualifierKind::Rank | QualifierKind::Score(_) = qualifier_kind {
         column_headers.push(html! {
@@ -1190,6 +1195,13 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                 i : "Standings will not be published until after the qualifier stage has ended.";
             }
         } else {
+        @if has_opt_outs {
+            div(class = "bg-surface") {
+                p {
+                    : "* = opted out";
+                }
+            }
+        }
         table {
             thead {
                 tr {
@@ -1233,14 +1245,16 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                             @match qualifier_kind {
                                 QualifierKind::Rank => td {
                                     @if is_opted_out {
-                                        : "—";
+                                        : "—*";
                                     } else {
                                         : team.as_ref().and_then(|team| team.qualifier_rank);
                                     }
                                 }
                                 QualifierKind::Score(_) => td {
                                     @let hide_rank = !is_organizer && data.qualifier_score_hiding != QualifierScoreHiding::None && !all_qualifiers_ended;
-                                    @if is_opted_out || hide_rank {
+                                    @if is_opted_out {
+                                        : "—*";
+                                    } else if hide_rank {
                                         : "—";
                                     } else {
                                         : signup_idx + 1;
