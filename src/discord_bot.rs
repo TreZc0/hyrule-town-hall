@@ -2857,16 +2857,13 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
 
                                             // Check if the message still has the REVERT button (wasn't clicked)
                                             if let Ok(message) = channel_id.message(&ctx_clone, message_id).await {
-                                                // Check if the REVERT button is actually still present
-                                                let has_revert_button = message.components.iter().any(|row| {
-                                                    row.components.iter().any(|component| {
-                                                        if let serenity::all::ActionRowComponent::Button(button) = component {
-                                                            button.data.custom_id.as_ref().map_or(false, |id| id == "async_revert")
-                                                        } else {
-                                                            false
-                                                        }
-                                                    })
-                                                });
+                                                // Check if the message still has exactly 1 component row with 1 button (REVERT)
+                                                // and the content still says "30 seconds to revert"
+                                                // If reverted, it will have 2 buttons (FINISH/FORFEIT) and different text
+                                                let has_revert_button = message.components.len() == 1
+                                                    && message.components.first()
+                                                        .map_or(false, |row| row.components.len() == 1)
+                                                    && message.content.contains("30 seconds to revert");
 
                                                 if has_revert_button {
                                                     // Finalize the finish
