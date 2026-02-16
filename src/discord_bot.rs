@@ -2857,7 +2857,18 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
 
                                             // Check if the message still has the REVERT button (wasn't clicked)
                                             if let Ok(message) = channel_id.message(&ctx_clone, message_id).await {
-                                                if message.components.iter().any(|_| message.content.contains("30 seconds to revert")) {
+                                                // Check if the REVERT button is actually still present
+                                                let has_revert_button = message.components.iter().any(|row| {
+                                                    row.components.iter().any(|component| {
+                                                        if let serenity::all::ActionRowComponent::Button(button) = component {
+                                                            button.data.custom_id.as_ref().map_or(false, |id| id == "async_revert")
+                                                        } else {
+                                                            false
+                                                        }
+                                                    })
+                                                });
+
+                                                if has_revert_button {
                                                     // Finalize the finish
                                                     let _ = AsyncRaceManager::finalize_finish(
                                                         &pool_clone,
