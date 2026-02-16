@@ -3173,6 +3173,34 @@ pub(crate) struct AlttprDeRaceOptions {
 }
 
 impl AlttprDeRaceOptions {
+    /// Convert a custom choice key to a human-readable label
+    fn key_to_label(key: &str) -> Option<&'static str> {
+        match key {
+            "pool_hard" => Some("Hard Item Pool"),
+            "pool_expert" => Some("Expert Item Pool"),
+            "pool" => Some("Item Pool"),
+            "pots" | "lottery" => Some("Pottery Shuffle"),
+            "all_dungeons" => Some("All Dungeons"),
+            "flute" => Some("Flute"),
+            "hovering" => Some("Hovering"),
+            "inverted" => Some("Inverted"),
+            "keydrop" => Some("Keydrop Shuffle"),
+            "mirror_scroll" => Some("Mirror Scroll"),
+            "no_delay" => Some("No Delay"),
+            "pseudoboots" => Some("Pseudoboots"),
+            "zw" => Some("ZW"),
+            _ => None,
+        }
+    }
+
+    /// Get the custom choices as human-readable labels
+    pub(crate) fn custom_choices_labels(&self) -> Vec<String> {
+        self.custom_choices
+            .keys()
+            .map(|k| Self::key_to_label(k).unwrap_or(k).to_string())
+            .collect()
+    }
+
     pub(crate) fn mode_display(&self) -> Option<String> {
         self.mode.as_ref().map(|mode| {
             alttprde::MODES.iter()

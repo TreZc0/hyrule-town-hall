@@ -2082,7 +2082,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         response_content.push(if was_scheduled { " has been rescheduled for " } else { " is now scheduled for " });
                                                         response_content.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
                                                         let response_content = response_content
-                                                            .push(". The race room will be opened momentarily.")
+                                                            .push(". The async thread will be opened momentarily.")
                                                             .build();
                                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                                             .ephemeral(false)

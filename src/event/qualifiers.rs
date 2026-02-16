@@ -3,6 +3,7 @@ use crate::{
     event::{Data, Series, Tab},
     prelude::*,
     seed,
+    volunteer_requests,
 };
 
 async fn qualifiers_form(mut transaction: Transaction<'_, Postgres>, me: User, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, is_started: bool, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
@@ -293,7 +294,7 @@ async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, me: User, ur
 }
 
 #[rocket::get("/event/<series>/<event>/qualifiers/<race_id>/edit")]
-pub(crate) async fn get_edit(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String, race_id: Id<Races>) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+pub(crate) async fn get_edit(pool: &State<PgPool>, _discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String, race_id: Id<Races>) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let event_data = Data::new(&mut transaction, series, &event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     if !me.is_global_admin() && !event_data.organizers(&mut transaction).await?.contains(&me) {
@@ -317,7 +318,7 @@ pub(crate) struct EditRaceForm {
 }
 
 #[rocket::post("/event/<series>/<event>/qualifiers/<race_id>/edit", data = "<form>")]
-pub(crate) async fn post_edit_race(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, race_id: Id<Races>, form: Form<Contextual<'_, EditRaceForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn post_edit_race(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, race_id: Id<Races>, form: Form<Contextual<'_, EditRaceForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let event_data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
@@ -335,6 +336,15 @@ pub(crate) async fn post_edit_race(pool: &State<PgPool>, me: User, uri: Origin<'
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(edit_race_form(transaction, me, uri, csrf.as_ref(), event_data, race_id, form.context).await?)
         } else {
+            // Fetch original start time to detect if it changed
+            let original_start = sqlx::query_scalar!(
+                "SELECT start FROM races WHERE id = $1 AND series = $2 AND event = $3 AND phase = 'Qualifier'",
+                race_id as _, series as _, event
+            )
+            .fetch_optional(&mut *transaction)
+            .await?
+            .flatten();
+
             let start = match NaiveDateTime::parse_from_str(&value.race_start, "%Y-%m-%dT%H:%M") {
                 Ok(naive_dt) => DateTime::<Utc>::from_naive_utc_and_offset(naive_dt, Utc),
                 Err(_) => {
@@ -360,6 +370,8 @@ pub(crate) async fn post_edit_race(pool: &State<PgPool>, me: User, uri: Origin<'
                 None
             };
 
+            let time_changed = original_start.is_some() && original_start != Some(start);
+
             sqlx::query!(
                 "UPDATE races SET round = $1, start = $2, room = $3, last_edited_by = $4, last_edited_at = $5 WHERE id = $6 AND series = $7 AND event = $8 AND phase = 'Qualifier'",
                 value.race_round, start, room, me.id as _, Utc::now(), race_id as _, series as _, event
@@ -368,6 +380,71 @@ pub(crate) async fn post_edit_race(pool: &State<PgPool>, me: User, uri: Origin<'
             .await?;
 
             transaction.commit().await?;
+
+            // Update volunteer post if the time changed
+            if time_changed {
+                use serenity::all::{UserId, ButtonStyle, CreateActionRow, CreateButton, CreateMessage};
+
+                let _ = volunteer_requests::update_volunteer_post_for_race(
+                    pool,
+                    &*discord_ctx.read().await,
+                    race_id,
+                ).await;
+
+                // Send reschedule notification DMs to volunteers
+                let mut transaction = pool.begin().await?;
+                if let Ok(signups) = event::roles::Signup::for_race(&mut transaction, race_id).await {
+                    let affected_signups: Vec<_> = signups.iter()
+                        .filter(|s| matches!(s.status, event::roles::VolunteerSignupStatus::Pending | event::roles::VolunteerSignupStatus::Confirmed))
+                        .collect();
+
+                    // Build race description for qualifier
+                    let race_description = value.race_round.clone();
+
+                    // Send DM to each affected volunteer
+                    for signup in affected_signups {
+                        if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
+                            if let Some(discord) = user.discord {
+                                let discord_user_id = UserId::new(discord.id.get());
+
+                                let mut msg = MessageBuilder::default();
+                                msg.push("**Race Rescheduled**\n\n");
+                                msg.push("The race ");
+                                msg.push_mono(&race_description);
+                                msg.push(" in ");
+                                msg.push(&event_data.display_name);
+                                msg.push(" has been rescheduled.\n\n");
+                                msg.push("**New time:** ");
+                                msg.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
+                                msg.push("\n\n");
+                                msg.push("If you're no longer available, you can withdraw your signup using the button below or on the website: <");
+                                msg.push(&format!("{}/event/{}/{}/races/{}/signups",
+                                    base_uri(), series.slug(), event, u64::from(race_id)));
+                                msg.push(">");
+
+                                // Create withdraw button
+                                let button = CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
+                                    .label("Withdraw Signup")
+                                    .style(ButtonStyle::Danger);
+                                let row = CreateActionRow::Buttons(vec![button]);
+
+                                // Send DM
+                                let discord_ctx_guard = discord_ctx.read().await;
+                                if let Ok(dm_channel) = discord_user_id.create_dm_channel(&*discord_ctx_guard).await {
+                                    if let Err(e) = dm_channel.send_message(&*discord_ctx_guard,
+                                        CreateMessage::new()
+                                            .content(msg.build())
+                                            .components(vec![row])
+                                    ).await {
+                                        eprintln!("Failed to send reschedule notification DM to user {}: {}", signup.user_id, e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
         }
     } else {

@@ -317,10 +317,7 @@ impl AsyncRaceManager {
                 // Display custom settings picked by both runners
                 if !alttprde_options.custom_choices.is_empty() {
                     content.push("**Settings chosen by both runners:** ");
-                    let choices: Vec<String> = alttprde_options.custom_choices
-                        .keys()
-                        .map(|k| k.clone())
-                        .collect();
+                    let choices = alttprde_options.custom_choices_labels();
                     content.push(choices.join(", "));
                     content.push_line("");
                 }
