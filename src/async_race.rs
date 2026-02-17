@@ -1102,6 +1102,7 @@ impl AsyncRaceManager {
             content.push_line("");
             content.mention_user(&player);
             content.push(", please provide a link to the recording or VoD here as soon as you can. If the game has a collection end screen, please also provide a screenshot of that screen.");
+            content.push_line("");
             content.push("Organizers will then verify and record your final time.");
 
             thread.say(discord_ctx, content.build()).await?;
