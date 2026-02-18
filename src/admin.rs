@@ -1186,7 +1186,7 @@ pub(crate) async fn zsr_backends(
                                     &backend.hth_export_id_col,
                                     &backend.commentators_col,
                                     &backend.trackers_col,
-                                    &backend.restream_channel_col,
+                                    backend.restream_channel_col.as_deref().unwrap_or("—"),
                                     &backend.notes_col
                                 );
                                 td {
@@ -1235,8 +1235,8 @@ pub(crate) async fn zsr_backends(
                     input(type = "text", id = "trackers_col", name = "trackers_col", required, value = "Q", placeholder = "e.g., Q");
                 });
                 : form_field("restream_channel_col", &mut Vec::new(), html! {
-                    label(for = "restream_channel_col") : "Restream Channel Column";
-                    input(type = "text", id = "restream_channel_col", name = "restream_channel_col", required, value = "I", placeholder = "e.g., I");
+                    label(for = "restream_channel_col") : "Restream Channel Column (optional)";
+                    input(type = "text", id = "restream_channel_col", name = "restream_channel_col", placeholder = "e.g., I");
                 });
                 : form_field("notes_col", &mut Vec::new(), html! {
                     label(for = "notes_col") : "Notes Column";
@@ -1280,7 +1280,7 @@ pub(crate) struct ZsrBackendForm {
     hth_export_id_col: String,
     commentators_col: String,
     trackers_col: String,
-    restream_channel_col: String,
+    restream_channel_col: Option<String>,
     notes_col: String,
     dst_formula_standard: String,
     dst_formula_dst: String,
@@ -1311,7 +1311,7 @@ pub(crate) async fn add_zsr_backend(
             &value.hth_export_id_col,
             &value.commentators_col,
             &value.trackers_col,
-            &value.restream_channel_col,
+            value.restream_channel_col.as_deref().filter(|s| !s.is_empty()),
             &value.notes_col,
             &value.dst_formula_standard,
             &value.dst_formula_dst,
@@ -1377,8 +1377,8 @@ pub(crate) async fn edit_zsr_backend(
                     input(type = "text", id = "trackers_col", name = "trackers_col", required, value = &backend.trackers_col);
                 });
                 : form_field("restream_channel_col", &mut Vec::new(), html! {
-                    label(for = "restream_channel_col") : "Restream Channel Column";
-                    input(type = "text", id = "restream_channel_col", name = "restream_channel_col", required, value = &backend.restream_channel_col);
+                    label(for = "restream_channel_col") : "Restream Channel Column (optional)";
+                    input(type = "text", id = "restream_channel_col", name = "restream_channel_col", value = backend.restream_channel_col.as_deref().unwrap_or_default());
                 });
                 : form_field("notes_col", &mut Vec::new(), html! {
                     label(for = "notes_col") : "Notes Column";
@@ -1437,7 +1437,7 @@ pub(crate) async fn update_zsr_backend(
             &value.hth_export_id_col,
             &value.commentators_col,
             &value.trackers_col,
-            &value.restream_channel_col,
+            value.restream_channel_col.as_deref().filter(|s| !s.is_empty()),
             &value.notes_col,
             &value.dst_formula_standard,
             &value.dst_formula_dst,

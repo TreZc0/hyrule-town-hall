@@ -82,7 +82,7 @@ pub(crate) struct RestreamingBackend {
     pub(crate) hth_export_id_col: String,
     pub(crate) commentators_col: String,
     pub(crate) trackers_col: String,
-    pub(crate) restream_channel_col: String,
+    pub(crate) restream_channel_col: Option<String>,
     pub(crate) notes_col: String,
     pub(crate) dst_formula_standard: String,
     pub(crate) dst_formula_dst: String,
@@ -147,7 +147,7 @@ impl RestreamingBackend {
         hth_export_id_col: &str,
         commentators_col: &str,
         trackers_col: &str,
-        restream_channel_col: &str,
+        restream_channel_col: Option<&str>,
         notes_col: &str,
         dst_formula_standard: &str,
         dst_formula_dst: &str,
@@ -168,7 +168,7 @@ impl RestreamingBackend {
             hth_export_id_col,
             commentators_col,
             trackers_col,
-            restream_channel_col,
+            restream_channel_col as _,
             notes_col,
             dst_formula_standard,
             dst_formula_dst
@@ -188,7 +188,7 @@ impl RestreamingBackend {
         hth_export_id_col: &str,
         commentators_col: &str,
         trackers_col: &str,
-        restream_channel_col: &str,
+        restream_channel_col: Option<&str>,
         notes_col: &str,
         dst_formula_standard: &str,
         dst_formula_dst: &str,
@@ -215,7 +215,7 @@ impl RestreamingBackend {
             hth_export_id_col,
             commentators_col,
             trackers_col,
-            restream_channel_col,
+            restream_channel_col as _,
             notes_col,
             dst_formula_standard,
             dst_formula_dst
@@ -831,7 +831,7 @@ pub(crate) async fn export_race(
 
         if let Some(row) = row_num {
             // Build batch update
-            let updates = vec![
+            let mut updates = vec![
                 (format!("'Restream Signups'!A{}", row), vec![vec![utc_date]]),
                 (format!("'Restream Signups'!B{}", row), vec![vec![format!("=IF(A{}=\"\",\"\",TEXT(A{},\"ddd\"))", row, row)]]),
                 (format!("'Restream Signups'!C{}", row), vec![vec![dst_formula.replace("{row}", &row.to_string())]]),
@@ -841,10 +841,12 @@ pub(crate) async fn export_race(
                 (format!("'Restream Signups'!G{}", row), vec![vec![get_runner_count(race).to_string()]]),
                 (format!("'Restream Signups'!{}{}", backend.commentators_col, row), vec![vec![commentators.join(", ")]]),
                 (format!("'Restream Signups'!{}{}", backend.trackers_col, row), vec![vec![trackers.join(", ")]]),
-                (format!("'Restream Signups'!{}{}", backend.restream_channel_col, row), vec![vec![restream_channel]]),
                 (format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row), vec![vec![export_id.clone()]]),
                 (format!("'Restream Signups'!{}{}", backend.notes_col, row), vec![vec![notes]]),
             ];
+            if let Some(ref restream_channel_col) = backend.restream_channel_col {
+                updates.push((format!("'Restream Signups'!{}{}", restream_channel_col, row), vec![vec![restream_channel]]));
+            }
 
             sheets::batch_update_values(http_client, &backend.google_sheet_id, updates).await?;
         }
