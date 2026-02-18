@@ -3744,6 +3744,11 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         .unwrap_or(true);
 
                         // Get user's approved role requests
+                        let game = if uses_custom_bindings {
+                            None
+                        } else {
+                            crate::game::Game::from_series(&mut transaction, race.series).await?
+                        };
                         let approved_requests = if uses_custom_bindings {
                             event::roles::RoleRequest::for_user_and_event(
                                 &mut transaction,
@@ -3751,26 +3756,25 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 race.series,
                                 &race.event,
                             ).await?
+                        } else if let Some(ref game) = game {
+                            event::roles::RoleRequest::for_user_and_game(
+                                &mut transaction,
+                                user.id,
+                                game.id,
+                            ).await?
                         } else {
-                            // Get game-level role requests
-                            if let Some(game) = crate::game::Game::from_series(&mut transaction, race.series).await? {
-                                event::roles::RoleRequest::for_user_and_game(
-                                    &mut transaction,
-                                    user.id,
-                                    game.id,
-                                ).await?
-                            } else {
-                                Vec::new()
-                            }
+                            Vec::new()
                         };
 
                         if approved_requests.is_empty() {
                             let apply_url = if uses_custom_bindings {
                                 // Event uses custom role bindings - send to event volunteer page
                                 format!("{}/event/{}/{}/volunteer-roles", base_uri(), race.series.slug(), race.event)
-                            } else {
+                            } else if let Some(ref game) = game {
                                 // Event uses game-level bindings - send to game page
-                                format!("{}/games/{}", base_uri(), race.series.slug())
+                                format!("{}/games/{}", base_uri(), game.name)
+                            } else {
+                                format!("{}/games", base_uri())
                             };
 
                             interaction.create_response(ctx, CreateInteractionResponse::Message(
