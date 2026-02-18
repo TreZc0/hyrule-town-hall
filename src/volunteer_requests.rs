@@ -397,9 +397,8 @@ async fn get_races_needing_announcements(
         };
 
         // Check restream consent - all teams must have consented
-        // Skip this check for qualifier races since they're open to all entrants
-        let is_qualifier = race.phase.as_ref().is_some_and(|p| p == "Qualifier");
-        if !is_qualifier {
+        // Skip this check for open-entry races and qualifiers
+        if !matches!(race.entrants, Entrants::Open) && !race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
             if let Some(mut teams) = race.teams_opt() {
                 if !teams.all(|team| team.restream_consent) {
                     continue;
