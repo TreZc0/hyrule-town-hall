@@ -4794,7 +4794,7 @@ pub(crate) async fn trigger_volunteer_requests(
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
 
     // Check organizer permission
-    if !data.organizers(&mut transaction).await?.contains(&me) {
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
 

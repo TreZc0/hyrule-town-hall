@@ -800,13 +800,13 @@ pub(crate) async fn add_organizer(pool: &State<PgPool>, me: User, uri: Origin<'_
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?)
         } else {
-            // Find user by display name
+            // Find user by ID
+            let organizer_id: Id<Users> = value.organizer.parse().map_err(|_| StatusOrError::Status(Status::NotFound))?;
             let user = sqlx::query!(r#"
-                SELECT id, display_source AS "display_source: DisplaySource", racetime_display_name, discord_display_name 
-                FROM users 
-                WHERE (display_source = $1 OR display_source = $2) AND (racetime_display_name = $3 OR discord_display_name = $3)
-                LIMIT 1
-            "#, DisplaySource::RaceTime as _, DisplaySource::Discord as _, &value.organizer)
+                SELECT id
+                FROM users
+                WHERE id = $1
+            "#, organizer_id as _)
             .fetch_optional(&mut *transaction).await?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
             
