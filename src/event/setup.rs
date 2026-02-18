@@ -974,7 +974,7 @@ fn serialize_user_id<S>(id: &Id<Users>, serializer: S) -> Result<S::Ok, S::Error
 where
     S: serde::Serializer,
 {
-    serializer.serialize_u64(u64::from(*id))
+    serializer.serialize_str(&u64::from(*id).to_string())
 }
 
 struct UserSearchRow {
