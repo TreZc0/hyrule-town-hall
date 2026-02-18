@@ -501,6 +501,7 @@ async fn get_matchup_description(
             let name3 = get_entrant_name(transaction, e3).await?;
             format!("{} vs {} vs {}", name1, name2, name3)
         }
+        Entrants::Open => "Open Signup Race".to_string(),
         _ => "Unknown matchup".to_string(),
     };
 
