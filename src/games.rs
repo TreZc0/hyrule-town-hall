@@ -7,6 +7,8 @@ use crate::{
     form::{form_field, full_form, full_form_confirm, button_form, button_form_confirm},
     id::{RoleBindings, RoleRequests, RoleTypes},
     time::{format_datetime, DateTimeFormat},
+    series::Series,
+    volunteer_requests,
 };
 use rocket::{uri, form::{Form, Contextual}};
 
@@ -1230,6 +1232,7 @@ pub(crate) async fn revoke_game_role_request(
 #[rocket::post("/games/<game_name>/roles/binding/<binding_id>/edit", data = "<form>")]
 pub(crate) async fn edit_game_role_binding(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: Option<User>,
     game_name: &str,
     binding_id: Id<RoleBindings>,
@@ -1284,6 +1287,31 @@ pub(crate) async fn edit_game_role_binding(
     .await.map_err(Error::from)?;
 
     transaction.commit().await.map_err(Error::from)?;
+
+    // Update volunteer info messages for all events that use this game's role bindings
+    let affected_events = sqlx::query!(
+        r#"SELECT DISTINCT e.series AS "series: Series", e.event
+        FROM events e
+        JOIN game_series gs ON e.series = gs.series
+        WHERE gs.game_id = $1
+          AND e.volunteer_requests_enabled = true
+          AND e.discord_volunteer_info_channel IS NOT NULL"#,
+        game.id
+    )
+    .fetch_all(pool.inner())
+    .await
+    .unwrap_or_default();
+
+    let discord = discord_ctx.read().await;
+    for row in affected_events {
+        let _ = volunteer_requests::update_volunteer_posts_for_event(
+            pool,
+            &*discord,
+            row.series,
+            &row.event,
+        ).await;
+    }
+
     Ok(Redirect::to(uri!(manage_roles(game_name, _, _))))
 }
 

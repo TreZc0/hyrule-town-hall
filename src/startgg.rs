@@ -487,7 +487,6 @@ pub(crate) async fn swiss_standings(
         T::ResponseData: Clone + Send + Sync,
     {
         if total_pages > 1 {
-            log::info!("Fetching {} additional pages sequentially", total_pages - 1);
             for page in 2..=total_pages {
                 let response = query_cached::<T>(http_client, startgg_token, page_vars_fn(page)).await?;
                 process_response(&response);

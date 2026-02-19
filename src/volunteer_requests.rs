@@ -104,6 +104,14 @@ pub(crate) async fn check_and_post_volunteer_requests(
             lead_time,
             ping_enabled,
         ).await;
+
+        // Always refresh existing posts to remove races that have since started
+        let _ = update_volunteer_posts_for_event(
+            pool,
+            discord_ctx,
+            event_row.series,
+            &event_row.event,
+        ).await;
     }
 
     transaction.commit().await?;
@@ -876,12 +884,6 @@ pub(crate) async fn update_volunteer_post_for_race(
             _ => false,
         }
     });
-
-    // If no needs remain, we still want to show the races with their filled status
-    // But if there are truly no races, just return
-    if needs.is_empty() {
-        return Ok(());
-    }
 
     // Calculate time window (use lead time from event)
     let lead_time = Duration::hours(race_info.volunteer_request_lead_time_hours as i64);

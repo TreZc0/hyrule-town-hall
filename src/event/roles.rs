@@ -1732,6 +1732,7 @@ pub(crate) async fn delete_role_binding(
 #[rocket::post("/event/<series>/<event>/roles/binding/<binding>/edit", data = "<form>")]
 pub(crate) async fn edit_role_binding(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     series: Series,
     event: &str,
@@ -1782,6 +1783,15 @@ pub(crate) async fn edit_role_binding(
     .await?;
 
     transaction.commit().await?;
+
+    // Update volunteer info messages to reflect the new thresholds
+    let _ = volunteer_requests::update_volunteer_posts_for_event(
+        pool,
+        &*discord_ctx.read().await,
+        series,
+        event,
+    ).await;
+
     Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _)))))
 }
 
