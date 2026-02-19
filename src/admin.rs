@@ -333,52 +333,17 @@ pub(crate) async fn add_game_post(
         return Err(Error::Unauthorized.into());
     }
 
-    eprintln!("Starting add_game_post with name: {}, display_name: {}", form.name, form.display_name);
-
-    let mut transaction = match pool.begin().await {
-        Ok(t) => {
-            eprintln!("Successfully began transaction");
-            t
-        },
-        Err(e) => {
-            eprintln!("Failed to begin transaction: {:?}", e);
-            return Err(Error::from(e).into());
-        }
-    };
-    
-    eprintln!("Executing INSERT query...");
-    let insert_result = sqlx::query!(
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
+    sqlx::query!(
         r#"INSERT INTO games (name, display_name, description) VALUES ($1, $2, $3)"#,
         form.name,
         form.display_name,
         if form.description.is_empty() { None } else { Some(&form.description) }
     )
     .execute(&mut *transaction)
-    .await;
-    
-    match insert_result {
-        Ok(result) => {
-            eprintln!("INSERT query successful, affected rows: {}", result.rows_affected());
-        },
-        Err(e) => {
-            eprintln!("INSERT query failed: {:?}", e);
-            return Err(Error::from(e).into());
-        }
-    }
-    
-    eprintln!("Committing transaction...");
-    let commit_result = transaction.commit().await;
-    match commit_result {
-        Ok(_) => {
-            eprintln!("Transaction committed successfully");
-        },
-        Err(e) => {
-            eprintln!("Transaction commit failed: {:?}", e);
-            return Err(Error::from(e).into());
-        }
-    }
-    
-    eprintln!("Redirecting to admin index");
+    .await
+    .map_err(Error::from)?;
+    transaction.commit().await.map_err(Error::from)?;
     Ok(Redirect::to(uri!(index)))
 }
 
@@ -493,36 +458,15 @@ pub(crate) async fn add_game_admin(
         }
         
         // Add user as admin
-        eprintln!("Adding user {} as admin for game {} (game_id: {})", admin_id, game_name, game.id);
-        let insert_result = sqlx::query!(
+        sqlx::query!(
             r#"INSERT INTO game_admins (game_id, admin_id) VALUES ($1, $2)"#,
             game.id,
             i64::from(admin_id)
         )
         .execute(&mut *transaction)
-        .await;
-        
-        match insert_result {
-            Ok(result) => {
-                eprintln!("INSERT game_admins successful, affected rows: {}", result.rows_affected());
-            },
-            Err(e) => {
-                eprintln!("INSERT game_admins failed: {:?}", e);
-                return Err(Error::from(e).into());
-            }
-        }
-        
-        eprintln!("Committing game admin transaction...");
-        let commit_result = transaction.commit().await;
-        match commit_result {
-            Ok(_) => {
-                eprintln!("Game admin transaction committed successfully");
-            },
-            Err(e) => {
-                eprintln!("Game admin transaction commit failed: {:?}", e);
-                return Err(Error::from(e).into());
-            }
-        }
+        .await
+        .map_err(Error::from)?;
+        transaction.commit().await.map_err(Error::from)?;
     }
     Ok(Redirect::to(uri!(manage_game_admins(game_name))))
 }
@@ -684,48 +628,25 @@ pub(crate) async fn game_management(
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let me = me.ok_or(Error::Unauthorized)?;
     
-    let mut transaction = match pool.begin().await {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Failed to begin transaction: {:?}", e);
-            return Err(StatusOrError::Err(Error::from(e)));
-        }
-    };
-    
-    let game = match Game::from_name(&mut transaction, game_name).await {
-        Ok(Some(g)) => g,
-        Ok(None) => return Err(StatusOrError::Status(Status::NotFound)),
-        Err(e) => {
-            eprintln!("Failed to get game by name '{}': {:?}", game_name, e);
-            return Err(StatusOrError::Err(Error::from(e)));
-        }
-    };
-    
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
+
+    let game = Game::from_name(&mut transaction, game_name)
+        .await.map_err(Error::from)?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+
     // Check if user is trez or a game admin
     let is_trez_user = is_trez(&me);
     let is_game_admin = if !is_trez_user {
-        match is_game_admin(&me, &game, &mut transaction).await {
-            Ok(admin) => admin,
-            Err(e) => {
-                eprintln!("Failed to check game admin status: {:?}", e);
-                return Err(StatusOrError::Err(Error::from(e)));
-            }
-        }
+        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
     } else {
         false
     };
-    
+
     if !is_trez_user && !is_game_admin {
         return Err(StatusOrError::Err(Error::Unauthorized));
     }
-    
-    let series = match game.series(&mut transaction).await {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to get game series: {:?}", e);
-            return Err(StatusOrError::Err(Error::from(e)));
-        }
-    };
+
+    let series = game.series(&mut transaction).await.map_err(Error::from)?;
 
     // Now, for each series, fetch events using the pool
     let mut series_with_events = Vec::new();
@@ -738,10 +659,7 @@ pub(crate) async fn game_management(
                 // No events for this series, but we still want to show it
                 series_with_events.push((series_item, Vec::new()));
             }
-            Err(e) => {
-                eprintln!("Failed to get series events for {:?}: {:?}", series_item, e);
-                return Err(StatusOrError::Err(Error::from(e)));
-            }
+            Err(e) => return Err(StatusOrError::Err(Error::from(e))),
         }
     }
 
@@ -752,13 +670,7 @@ pub(crate) async fn game_management(
     let game_role_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
     let all_role_types = RoleType::all(&mut transaction).await.map_err(Error::from)?;
 
-    match transaction.commit().await {
-        Ok(_) => {},
-        Err(e) => {
-            eprintln!("Failed to commit transaction: {:?}", e);
-            return Err(StatusOrError::Err(Error::from(e)));
-        }
-    }
+    transaction.commit().await.map_err(Error::from)?;
 
     // Get active languages and filter bindings
     let active_languages: Vec<Language> = {
@@ -914,21 +826,14 @@ pub(crate) async fn game_management(
         }
     };
 
-    let page_transaction = pool.begin().await.map_err(Error::from)?;
-    match page(
-        page_transaction,
+    Ok(page(
+        pool.begin().await.map_err(Error::from)?,
         &Some(me),
         &uri,
         PageStyle { kind: PageKind::Other, ..PageStyle::default() },
         &format!("Game Management — {}", game_display_name),
         content,
-    ).await {
-        Ok(page_content) => Ok(page_content),
-        Err(e) => {
-            eprintln!("Failed to generate page: {:?}", e);
-            Err(StatusOrError::Err(Error::from(e)))
-        }
-    }
+    ).await.map_err(Error::from)?)
 }
 
 #[derive(FromForm, CsrfForm)]
