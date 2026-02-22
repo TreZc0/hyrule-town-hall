@@ -369,6 +369,8 @@ impl Goal {
             | Self::Rsl
             | Self::StandardRuleset
             | Self::TriforceBlitz
+            | Self::TwwrMainWeekly
+            | Self::TwwrMainMiniblins26
                 => false,
             | Self::AlttprDe9Bracket
             | Self::AlttprDe9SwissA
@@ -398,8 +400,6 @@ impl Goal {
             | Self::TriforceBlitzProgressionSpoiler
             | Self::WeTryToBeBetterS1
             | Self::WeTryToBeBetterS2
-            | Self::TwwrMainWeekly
-            | Self::TwwrMainMiniblins26
                 => true,
         }
     }
@@ -433,8 +433,8 @@ impl Goal {
             Self::TournoiFrancoS5 => "Tournoi Francophone Saison 5",
             Self::TriforceBlitz => "Triforce Blitz",
             Self::TriforceBlitzProgressionSpoiler => "Triforce Blitz Progression Spoiler",
-            Self::TwwrMainWeekly => "Weekly",
-            Self::TwwrMainMiniblins26 => "Miniblins 2026",
+            Self::TwwrMainWeekly => "Miniblins",
+            Self::TwwrMainMiniblins26 => "Miniblins",
             Self::WeTryToBeBetterS1 => "WeTryToBeBetter",
             Self::WeTryToBeBetterS2 => "WeTryToBeBetter Season 2",
         }
@@ -3462,7 +3462,13 @@ impl Handler {
                     room_url: race_data.url.clone(),
                     public: !race_data.unlisted,
                 };
-                assert!(clean_shutdown.open_rooms.insert(room.clone()), "should_handle_inner called for new race room {} but clean_shutdown.open_rooms already contained this room", race_data.url);
+                if !clean_shutdown.open_rooms.insert(room.clone()) {
+                    // Previous handler is still mid-cleanup (handled_races was cleared but
+                    // open_rooms hasn't been updated yet by our task() spawn). Skip this scan
+                    // cycle; the next one will pick it up cleanly.
+                    unlock!();
+                    return false
+                }
                 clean_shutdown.updates.send(CleanShutdownUpdate::RoomOpened(room)).allow_unreceived();
             });
         }
@@ -3655,7 +3661,7 @@ impl Handler {
         Ok(())
     }
 
-    async fn roll_seed_inner(&self, ctx: &RaceContext<GlobalState>, delay_until: Option<DateTime<Utc>>, mut updates: mpsc::Receiver<SeedRollUpdate>, language: Language, article: &'static str, description: String) {
+    async fn roll_seed_inner(&self, ctx: &RaceContext<GlobalState>, delay_until: Option<DateTime<Utc>>, mut updates: mpsc::Receiver<SeedRollUpdate>, language: Language, article: &'static str, description: String, suppress_preamble: bool) {
         let db_pool = ctx.global_state.db_pool.clone();
         let ctx = ctx.clone();
         let state = self.race_state.clone();
@@ -3674,11 +3680,13 @@ impl Handler {
                 } else {
                     delay
                 };
-                ctx.say(if let French = language {
-                    format!("Votre {description} sera postée dans {}.", French.format_duration(display_delay, true))
-                } else {
-                    format!("Your {description} will be posted in {}.", English.format_duration(display_delay, true))
-                }).await?;
+                if !suppress_preamble {
+                    ctx.say(if let French = language {
+                        format!("Votre {description} sera postée dans {}.", French.format_duration(display_delay, true))
+                    } else {
+                        format!("Your {description} will be posted in {}.", English.format_duration(display_delay, true))
+                    }).await?;
+                }
                 let mut sleep = pin!(sleep_until(Instant::now() + delay));
                 loop {
                     select! {
@@ -3706,7 +3714,7 @@ impl Handler {
     async fn roll_seed(&self, ctx: &RaceContext<GlobalState>, preroll: PrerollMode, version: VersionedBranch, settings: seed::Settings, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
         let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
-        self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_seed(preroll, true, delay_until, version, settings, unlock_spoiler_log), language, article, description).await;
+        self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_seed(preroll, true, delay_until, version, settings, unlock_spoiler_log), language, article, description, false).await;
     }
 
     async fn roll_alttprde9_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
@@ -3721,7 +3729,7 @@ impl Handler {
         let alttprde_options = AlttprDeRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race, event.round_modes.as_ref()).await;
         let seed_options_str = alttprde_options.as_seed_options_str();
         let race_options_str = alttprde_options.as_race_options_str();
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_alttprde9_seed(alttprde_options), language, article, format!("seed with {}", seed_options_str)).await;
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_alttprde9_seed(alttprde_options), language, article, format!("seed with {}", seed_options_str), false).await;
         ctx.send_message(format!("@entrants Remember: this race will be played with {}!",
                                     race_options_str
                                 ), true, Vec::default()).await.expect("failed to send race options");
@@ -3732,7 +3740,7 @@ impl Handler {
         let delay_until = official_start - TimeDelta::minutes(10);
 
         let crosskeys_options = CrosskeysRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race).await;
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2025_seed(crosskeys_options), language, article, format!("seed with {}", crosskeys_options.as_seed_options_str())).await;
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2025_seed(crosskeys_options), language, article, format!("seed with {}", crosskeys_options.as_seed_options_str()), false).await;
         ctx.send_message(format!("@entrants Remember: this race will be played with {}!",
                                     crosskeys_options.as_race_options_str()
                                 ), true, Vec::default()).await.expect("failed to send race options");
@@ -3742,13 +3750,13 @@ impl Handler {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(10);
 
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_mysteryd20_seed(), language, article, "Mystery seed".to_string()).await;
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_mysteryd20_seed(), language, article, "Mystery seed".to_string(), false).await;
     }
 
     async fn roll_twwr_seed(&self, ctx: &RaceContext<GlobalState>, permalink: String, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
         let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
-        self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().record_twwr_permalink(permalink, unlock_spoiler_log), language, article, description).await;
+        self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().record_twwr_permalink(permalink, unlock_spoiler_log), language, article, description, false).await;
     }
 
     async fn roll_twwr_seed_official(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
@@ -3757,13 +3765,13 @@ impl Handler {
         let settings_string = self.official_data.as_ref().and_then(|data| data.event.settings_string.clone()).expect("TWWR event missing settings string");
         let goal = self.goal(ctx).await.to_racetime().expect("failed to convert goal to racetime");
         let version = goal.rando_version(self.official_data.as_ref().map(|data| &data.event));
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_twwr_seed(Some(version), settings_string, UnlockSpoilerLog::Never), language, article, "seed".to_string()).await;
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_twwr_seed(Some(version), settings_string, UnlockSpoilerLog::Never), language, article, "seed".to_string(), false).await;
     }
 
     async fn roll_rsl_seed(&self, ctx: &RaceContext<GlobalState>, preset: rsl::VersionedPreset, world_count: u8, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
         let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
-        self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_rsl_seed(delay_until, preset, world_count, unlock_spoiler_log), language, article, description).await;
+        self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_rsl_seed(delay_until, preset, world_count, unlock_spoiler_log), language, article, description, false).await;
     }
 
     async fn roll_tfb_seed(&self, ctx: &RaceContext<GlobalState>, version: &'static str, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
@@ -3771,7 +3779,7 @@ impl Handler {
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
         // Triforce Blitz website's auto unlock doesn't know about async parts so has to be disabled for asyncs
         let unlock_spoiler_log = if unlock_spoiler_log == UnlockSpoilerLog::After && self.official_data.as_ref().is_some_and(|official_data| official_data.cal_event.is_private_async_part()) { UnlockSpoilerLog::Never } else { unlock_spoiler_log };
-        self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_tfb_seed(delay_until, version, Some(format!("https://{}{}", racetime_host(), ctx.data().await.url)), unlock_spoiler_log), language, article, description).await;
+        self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_tfb_seed(delay_until, version, Some(format!("https://{}{}", racetime_host(), ctx.data().await.url)), unlock_spoiler_log), language, article, description, false).await;
     }
 
     async fn roll_tfb_dev_seed(&self, ctx: &RaceContext<GlobalState>, coop: bool, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
@@ -3779,10 +3787,10 @@ impl Handler {
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
         // Triforce Blitz website's auto unlock doesn't know about async parts so has to be disabled for asyncs
         let unlock_spoiler_log = if unlock_spoiler_log == UnlockSpoilerLog::After && self.official_data.as_ref().is_some_and(|official_data| official_data.cal_event.is_private_async_part()) { UnlockSpoilerLog::Never } else { unlock_spoiler_log };
-        self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_tfb_dev_seed(delay_until, coop, Some(format!("https://{}{}", racetime_host(), ctx.data().await.url)), unlock_spoiler_log), language, article, description).await;
+        self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_tfb_dev_seed(delay_until, coop, Some(format!("https://{}{}", racetime_host(), ctx.data().await.url)), unlock_spoiler_log), language, article, description, false).await;
     }
 
-    async fn queue_existing_seed(&self, ctx: &RaceContext<GlobalState>, goal: Goal, seed: seed::Data, language: Language, article: &'static str, description: String) {
+    async fn queue_existing_seed(&self, ctx: &RaceContext<GlobalState>, goal: Goal, seed: seed::Data, language: Language, article: &'static str, description: String, suppress_preamble: bool) {
         let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
         let event = self.official_data.as_ref().map(|OfficialRaceData { event, .. }| event);
@@ -3790,7 +3798,7 @@ impl Handler {
         let unlock_spoiler_log = goal.unlock_spoiler_log(self.is_official(), false);
         let (tx, rx) = mpsc::channel(1);
         tx.send(SeedRollUpdate::Done { rsl_preset: None, version, unlock_spoiler_log, seed }).await.unwrap();
-        self.roll_seed_inner(ctx, delay_until, rx, language, article, description).await;
+        self.roll_seed_inner(ctx, delay_until, rx, language, article, description, suppress_preamble).await;
     }
 
     /// Returns `false` if this race was already finished/cancelled.
@@ -4929,7 +4937,7 @@ impl RaceHandler<GlobalState> for Handler {
             }
             lock!(@read state = this.race_state; {
                 if existing_seed.files.is_some() {
-                    this.queue_existing_seed(ctx, goal, existing_seed, English, "a", format!("seed")).await; //TODO better article/description
+                    this.queue_existing_seed(ctx, goal, existing_seed, English, "a", format!("seed"), true).await; //TODO better article/description
                 } else if goal.requires_seed() {
                     // Only roll seeds for goals that require them
                     let event_id = Some((event.series, &*event.event));
@@ -5436,7 +5444,7 @@ impl RaceHandler<GlobalState> for Handler {
                             SeedCommandParseResult::Tfb { version, unlock_spoiler_log, language, article, description } => self.roll_tfb_seed(ctx, version, unlock_spoiler_log, language, article, description).await,
                             SeedCommandParseResult::TfbDev { coop, unlock_spoiler_log, language, article, description } => self.roll_tfb_dev_seed(ctx, coop, unlock_spoiler_log, language, article, description).await,
                             SeedCommandParseResult::Twwr { permalink, unlock_spoiler_log, language, article, description } => self.roll_twwr_seed(ctx, permalink, unlock_spoiler_log, language, article, description).await,
-                            SeedCommandParseResult::QueueExisting { data, language, article, description } => self.queue_existing_seed(ctx, goal, data, language, article, description).await,
+                            SeedCommandParseResult::QueueExisting { data, language, article, description } => self.queue_existing_seed(ctx, goal, data, language, article, description, false).await,
                             SeedCommandParseResult::SendPresets { language, msg } => {
                                 ctx.say(if let French = language {
                                     format!("Désolé {reply_to}, {msg}. Veuillez utiliser un des suivants :")
@@ -6141,18 +6149,21 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
         return Ok(None);
     }
     
-    // Check if this is a weekly race and get its notification channel from the database
-    let weekly_notification_channel = if cal_event.race.phase.is_none() {
+    // Check if this is a weekly race and get its notification channel/role from the database
+    let (weekly_notification_channel, weekly_notification_role) = if cal_event.race.phase.is_none() {
         if let Some(round) = cal_event.race.round.as_deref().and_then(|r| r.strip_suffix(" Weekly")) {
-            WeeklySchedule::for_round(&mut *transaction, event.series, &event.event, round)
+            let schedule = WeeklySchedule::for_round(&mut *transaction, event.series, &event.event, round)
                 .await
-                .to_racetime()?
-                .and_then(|s| s.notification_channel_id)
+                .to_racetime()?;
+            (
+                schedule.as_ref().and_then(|s| s.notification_channel_id),
+                schedule.and_then(|s| s.notification_role_id),
+            )
         } else {
-            None
+            (None, None)
         }
     } else {
-        None
+        (None, None)
     };
 
     let is_room_url = room_url.is_ok();
@@ -6319,6 +6330,11 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
             }
             msg.build()
         }
+    };
+    let msg = if let Some(PgSnowflake(role_id)) = weekly_notification_role {
+        format!("<@&{}> {}", role_id.get(), msg)
+    } else {
+        msg
     };
     Ok(Some((is_room_url, msg, weekly_notification_channel)))
 }

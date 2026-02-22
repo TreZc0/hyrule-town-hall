@@ -1,5 +1,5 @@
 use {
-    serenity::model::id::ChannelId,
+    serenity::model::id::{ChannelId, RoleId},
     crate::{
         discord_bot::PgSnowflake,
         event::{
@@ -1060,6 +1060,14 @@ impl<'v> WeeklySchedulesFormDefaults<'v> {
             None
         }
     }
+
+    fn add_notification_role(&self) -> Option<&str> {
+        if let Self::AddContext(ctx) = self {
+            ctx.field_value("notification_role_id")
+        } else {
+            None
+        }
+    }
 }
 
 fn frequency_display(days: i16) -> &'static str {
@@ -1188,6 +1196,11 @@ async fn weekly_schedules_form(mut transaction: Transaction<'_, Postgres>, me: O
                         input(type = "text", id = "notification_channel_id", name = "notification_channel_id", value? = defaults.add_notification_channel(), placeholder = "Discord channel ID (optional)");
                         label(class = "help") : "(Discord channel to post race notifications when room opens; leave empty for default)";
                     });
+                    : form_field("notification_role_id", &mut errors, html! {
+                        label(for = "notification_role_id") : "Notification Role ID:";
+                        input(type = "text", id = "notification_role_id", name = "notification_role_id", value? = defaults.add_notification_role(), placeholder = "Discord role ID (optional)");
+                        label(class = "help") : "(Discord role to ping in the race announcement; leave empty for no ping)";
+                    });
                     : form_field("room_open_minutes_before", &mut errors, html! {
                         label(for = "room_open_minutes_before") : "Open Room (minutes before):";
                         input(type = "number", id = "room_open_minutes_before", name = "room_open_minutes_before", value = defaults.add_room_open_minutes().unwrap_or("30"), min = "1", max = "60");
@@ -1244,6 +1257,8 @@ pub(crate) struct AddWeeklyScheduleForm {
     settings_description: Option<String>,
     #[field(default = None)]
     notification_channel_id: Option<String>,
+    #[field(default = None)]
+    notification_role_id: Option<String>,
     #[field(default = Some(30))]
     room_open_minutes_before: Option<i16>,
 }
@@ -1305,6 +1320,21 @@ pub(crate) async fn weekly_schedule_add(pool: &State<PgPool>, me: User, uri: Ori
                     }
                 }
             });
+        let notification_role_id = value.notification_role_id.as_ref()
+            .and_then(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    match trimmed.parse::<u64>() {
+                        Ok(id) => Some(PgSnowflake(RoleId::new(id))),
+                        Err(_) => {
+                            form.context.push_error(form::Error::validation("Invalid Discord role ID. Must be a number.").with_name("notification_role_id"));
+                            None
+                        }
+                    }
+                }
+            });
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::AddContext(form.context)).await?)
         } else {
@@ -1320,6 +1350,7 @@ pub(crate) async fn weekly_schedule_add(pool: &State<PgPool>, me: User, uri: Ori
                 active: value.active,
                 settings_description: value.settings_description.as_ref().and_then(|s| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) }),
                 notification_channel_id,
+                notification_role_id,
                 room_open_minutes_before: value.room_open_minutes_before.unwrap_or(30),
             };
             schedule.save(&mut transaction).await?;
@@ -1451,6 +1482,12 @@ async fn weekly_schedule_edit_form(mut transaction: Transaction<'_, Postgres>, m
                         input(type = "text", id = "notification_channel_id", name = "notification_channel_id", value = ctx.field_value("notification_channel_id").unwrap_or(&notification_channel_str), placeholder = "Discord channel ID (optional)");
                         label(class = "help") : "(Discord channel to post race notifications when room opens; leave empty for default)";
                     });
+                    @let notification_role_str = schedule.notification_role_id.map(|PgSnowflake(id)| id.get().to_string()).unwrap_or_default();
+                    : form_field("notification_role_id", &mut errors, html! {
+                        label(for = "notification_role_id") : "Notification Role ID:";
+                        input(type = "text", id = "notification_role_id", name = "notification_role_id", value = ctx.field_value("notification_role_id").unwrap_or(&notification_role_str), placeholder = "Discord role ID (optional)");
+                        label(class = "help") : "(Discord role to ping in the race announcement; leave empty for no ping)";
+                    });
                     : form_field("room_open_minutes_before", &mut errors, html! {
                         label(for = "room_open_minutes_before") : "Open Room (minutes before):";
                         @let current_minutes = ctx.field_value("room_open_minutes_before").and_then(|v| v.parse::<i16>().ok()).unwrap_or(schedule.room_open_minutes_before);
@@ -1511,6 +1548,8 @@ pub(crate) struct EditWeeklyScheduleForm {
     settings_description: Option<String>,
     #[field(default = None)]
     notification_channel_id: Option<String>,
+    #[field(default = None)]
+    notification_role_id: Option<String>,
     #[field(default = Some(30))]
     room_open_minutes_before: Option<i16>,
 }
@@ -1573,6 +1612,21 @@ pub(crate) async fn weekly_schedule_edit_post(pool: &State<PgPool>, me: User, ur
                     }
                 }
             });
+        let notification_role_id = value.notification_role_id.as_ref()
+            .and_then(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    match trimmed.parse::<u64>() {
+                        Ok(id) => Some(PgSnowflake(RoleId::new(id))),
+                        Err(_) => {
+                            form.context.push_error(form::Error::validation("Invalid Discord role ID. Must be a number.").with_name("notification_role_id"));
+                            None
+                        }
+                    }
+                }
+            });
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(weekly_schedule_edit_form(transaction, Some(me), uri, csrf.as_ref(), data, schedule, form.context).await?)
         } else {
@@ -1584,6 +1638,7 @@ pub(crate) async fn weekly_schedule_edit_post(pool: &State<PgPool>, me: User, ur
             schedule.active = value.active;
             schedule.settings_description = value.settings_description.as_ref().and_then(|s| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) });
             schedule.notification_channel_id = notification_channel_id;
+            schedule.notification_role_id = notification_role_id;
             schedule.room_open_minutes_before = value.room_open_minutes_before.unwrap_or(30);
             schedule.save(&mut transaction).await?;
             transaction.commit().await?;
