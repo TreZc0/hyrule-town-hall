@@ -1810,9 +1810,6 @@ pub(crate) async fn info_page_get(
             .replace('>', "&gt;");
         format!("<p>Welcome to the <strong>{}</strong> event.</p>", dn_escaped)
     });
-    let initial_json = serde_json::to_string(&initial_content)
-        .map(|s| s.replace("</", "<\\/"))
-        .unwrap_or_else(|_| "\"\"".to_string());
     let csrf = csrf.as_ref();
     let header = data.header(&mut transaction, me.as_ref(), Tab::Configure, false).await?;
     let content = html! {
@@ -1825,12 +1822,12 @@ pub(crate) async fn info_page_get(
                 strong : "Insert organizer list";
                 : " button to add a placeholder that automatically shows the current organizer names.";
             }
-            link(rel = "stylesheet", href = "https://cdn.quilljs.com/1.3.7/quill.snow.css");
             form(action = uri!(info_page_post(data.series, &*data.event)), method = "post") {
                 : csrf;
-                div(id = "editor-container", style = "min-height: 300px; margin-bottom: 1em;") {}
-                textarea(name = "content", id = "editor-content", style = "display:none") {}
-                div {
+                textarea(name = "content", id = "editor-content", style = "min-height: 300px; width: 100%;") {
+                    : RawHtml(initial_content);
+                }
+                div(style = "margin-top: 1em;") {
                     input(type = "submit", value = "Save");
                     @if has_custom {
                         : " ";
@@ -1844,10 +1841,7 @@ pub(crate) async fn info_page_get(
                     }
                 }
             }
-            script(src = "https://cdn.quilljs.com/1.3.7/quill.js") {}
-            script {
-                : RawHtml(format!("window.__initialContent = {};", initial_json));
-            }
+            script(src = "https://cdnjs.cloudflare.com/ajax/libs/tinymce/8.1.2/tinymce.min.js") {}
             script(src = static_url!("info-page-editor.js")) {}
         }
     };
