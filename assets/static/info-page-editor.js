@@ -1,7 +1,7 @@
 tinymce.init({
     selector: '#editor-content',
-    skin_url: 'https://cdnjs.cloudflare.com/ajax/libs/tinymce/8.1.2/skins/ui/oxide',
-    content_css: 'https://cdnjs.cloudflare.com/ajax/libs/tinymce/8.1.2/skins/content/default/content.min.css',
+    skin_url: 'https://cdnjs.cloudflare.com/ajax/libs/tinymce/8.1.2/skins/ui/oxide-dark',
+    content_css: 'https://cdnjs.cloudflare.com/ajax/libs/tinymce/8.1.2/skins/content/dark/content.min.css',
     plugins: 'table image link lists code',
     toolbar: 'undo redo | bold italic underline strikethrough | blocks | link image | bullist numlist | table | spoiler organizers | code',
     license_key: 'gpl',
