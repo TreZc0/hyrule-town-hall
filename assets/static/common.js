@@ -105,46 +105,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
         function updateGoalCustomField() {
             const isCustom = racetimeGoalSelect.value === 'custom';
-            racetimeGoalCustom.disabled = !isCustom;
-            racetimeGoalCustom.required = isCustom;
 
-            // Hide/show the custom field
+            // Only hide/show — do NOT disable, since disabled fields aren't
+            // submitted and Rocket will reject the form with "Missing".
             if (racetimeGoalCustomFieldset) {
                 racetimeGoalCustomFieldset.style.display = isCustom ? '' : 'none';
-            }
-
-            // Clear any validation errors when hiding the field
-            if (!isCustom) {
-                racetimeGoalCustom.setCustomValidity('');
-                // Remove error class from fieldset
-                if (racetimeGoalCustomFieldset) {
-                    racetimeGoalCustomFieldset.classList.remove('error');
-                    // Remove error messages
-                    const errorMessages = racetimeGoalCustomFieldset.querySelectorAll('p.error');
-                    errorMessages.forEach(msg => msg.remove());
-                }
             }
         }
 
         racetimeGoalSelect.addEventListener('change', updateGoalCustomField);
         updateGoalCustomField();
-
-        // Add form validation
-        const form = racetimeGoalSelect.closest('form');
-        if (form) {
-            form.addEventListener('submit', function(e) {
-                if (racetimeGoalSelect.value === 'custom' && !racetimeGoalCustom.value.trim()) {
-                    e.preventDefault();
-                    racetimeGoalCustom.setCustomValidity('Please enter a custom goal string.');
-                    racetimeGoalCustom.reportValidity();
-                } else {
-                    racetimeGoalCustom.setCustomValidity('');
-                }
-            });
-
-            racetimeGoalCustom.addEventListener('input', function() {
-                racetimeGoalCustom.setCustomValidity('');
-            });
-        }
     }
 });
