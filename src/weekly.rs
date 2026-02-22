@@ -41,6 +41,10 @@ pub(crate) struct WeeklySchedule {
     pub(crate) notification_channel_id: Option<PgSnowflake<ChannelId>>,
     pub(crate) notification_role_id: Option<PgSnowflake<RoleId>>,
     pub(crate) room_open_minutes_before: i16,
+    /// Optional racetime.gg goal string override. If `None`, the event-level default is used.
+    /// If the value matches a known `Goal::as_str()`, `Goal::is_custom()` determines the custom flag;
+    /// otherwise the custom flag is set to `true`.
+    pub(crate) racetime_goal: Option<String>,
 }
 
 impl WeeklySchedule {
@@ -89,7 +93,8 @@ impl WeeklySchedule {
                 settings_description,
                 notification_channel_id,
                 notification_role_id,
-                room_open_minutes_before
+                room_open_minutes_before,
+                racetime_goal
             FROM weekly_schedules
             WHERE series = $1 AND event = $2
             ORDER BY name
@@ -116,6 +121,7 @@ impl WeeklySchedule {
                 notification_channel_id: row.notification_channel_id.map(|id| PgSnowflake(ChannelId::new(id as u64))),
                 notification_role_id: row.notification_role_id.map(|id| PgSnowflake(RoleId::new(id as u64))),
                 room_open_minutes_before: row.room_open_minutes_before,
+                racetime_goal: row.racetime_goal,
             });
         }
 
@@ -142,7 +148,8 @@ impl WeeklySchedule {
                 settings_description,
                 notification_channel_id,
                 notification_role_id,
-                room_open_minutes_before
+                room_open_minutes_before,
+                racetime_goal
             FROM weekly_schedules
             WHERE id = $1
             "#,
@@ -165,6 +172,7 @@ impl WeeklySchedule {
             notification_channel_id: row.notification_channel_id.map(|id| PgSnowflake(ChannelId::new(id as u64))),
             notification_role_id: row.notification_role_id.map(|id| PgSnowflake(RoleId::new(id as u64))),
             room_open_minutes_before: row.room_open_minutes_before,
+            racetime_goal: row.racetime_goal,
         }))
     }
 
@@ -191,7 +199,8 @@ impl WeeklySchedule {
                 settings_description,
                 notification_channel_id,
                 notification_role_id,
-                room_open_minutes_before
+                room_open_minutes_before,
+                racetime_goal
             FROM weekly_schedules
             WHERE series = $1 AND event = $2 AND name = $3
             "#,
@@ -216,6 +225,7 @@ impl WeeklySchedule {
             notification_channel_id: row.notification_channel_id.map(|id| PgSnowflake(ChannelId::new(id as u64))),
             notification_role_id: row.notification_role_id.map(|id| PgSnowflake(RoleId::new(id as u64))),
             room_open_minutes_before: row.room_open_minutes_before,
+            racetime_goal: row.racetime_goal,
         }))
     }
 
@@ -223,8 +233,8 @@ impl WeeklySchedule {
     pub(crate) async fn save(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"
-            INSERT INTO weekly_schedules (id, series, event, name, frequency_days, time_of_day, timezone, anchor_date, active, settings_description, notification_channel_id, notification_role_id, room_open_minutes_before)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            INSERT INTO weekly_schedules (id, series, event, name, frequency_days, time_of_day, timezone, anchor_date, active, settings_description, notification_channel_id, notification_role_id, room_open_minutes_before, racetime_goal)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
                 frequency_days = EXCLUDED.frequency_days,
@@ -235,7 +245,8 @@ impl WeeklySchedule {
                 settings_description = EXCLUDED.settings_description,
                 notification_channel_id = EXCLUDED.notification_channel_id,
                 notification_role_id = EXCLUDED.notification_role_id,
-                room_open_minutes_before = EXCLUDED.room_open_minutes_before
+                room_open_minutes_before = EXCLUDED.room_open_minutes_before,
+                racetime_goal = EXCLUDED.racetime_goal
             "#,
             self.id as _,
             self.series as _,
@@ -249,7 +260,8 @@ impl WeeklySchedule {
             self.settings_description.as_ref(),
             self.notification_channel_id.map(|PgSnowflake(id)| id.get() as i64),
             self.notification_role_id.map(|PgSnowflake(id)| id.get() as i64),
-            self.room_open_minutes_before
+            self.room_open_minutes_before,
+            self.racetime_goal.as_deref()
         )
         .execute(&mut **transaction)
         .await?;

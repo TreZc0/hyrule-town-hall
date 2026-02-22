@@ -2992,10 +2992,10 @@ fn ocarina_note_to_ootr_discord_emoji(note: OcarinaNote) -> ReactionType {
     }
 }
 
-async fn room_options(goal: Goal, event: &event::Data<'_>, cal_event: &cal::Event, info_user: String, info_bot: String, auto_start: bool) -> racetime::StartRace {
+async fn room_options(goal_str: String, goal_is_custom: bool, event: &event::Data<'_>, cal_event: &cal::Event, info_user: String, info_bot: String, auto_start: bool) -> racetime::StartRace {
     racetime::StartRace {
-        goal: goal.as_str().to_owned(),
-        goal_is_custom: goal.is_custom(),
+        goal: goal_str,
+        goal_is_custom,
         team_race: event.team_config.is_racetime_team_format() && matches!(cal_event.kind, cal::EventKind::Normal),
         invitational: !matches!(cal_event.race.entrants, Entrants::Open),
         unlisted: cal_event.is_private_async_part(),
@@ -5294,7 +5294,7 @@ impl RaceHandler<GlobalState> for Handler {
                     }).await?;
                     let (access_token, _) = racetime::authorize_with_host(&ctx.global_state.host_info, &ctx.global_state.racetime_config.client_id, &ctx.global_state.racetime_config.client_secret, &ctx.global_state.http_client).await?;
                     room_options(
-                        goal, event, cal_event,
+                        goal.as_str().to_owned(), goal.is_custom(), event, cal_event,
                         ctx.data().await.info_user.clone().unwrap_or_default(),
                         ctx.data().await.info_bot.clone().unwrap_or_default(),
                         true,
@@ -5324,7 +5324,7 @@ impl RaceHandler<GlobalState> for Handler {
                                     if restreams.is_empty() {
                                         let (access_token, _) = racetime::authorize_with_host(&ctx.global_state.host_info, &ctx.global_state.racetime_config.client_id, &ctx.global_state.racetime_config.client_secret, &ctx.global_state.http_client).await?;
                                         room_options(
-                                            goal, event, cal_event,
+                                            goal.as_str().to_owned(), goal.is_custom(), event, cal_event,
                                             ctx.data().await.info_user.clone().unwrap_or_default(),
                                             ctx.data().await.info_bot.clone().unwrap_or_default(),
                                             false,
@@ -6079,9 +6079,24 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                         info_user
                     }
                 };
-                let Some(goal) = Goal::for_event(cal_event.race.series, &cal_event.race.event) else { return Ok(None) };
+                let schedule_goal = if let Some(round) = cal_event.race.round.as_deref().and_then(|r| r.strip_suffix(" Weekly")) {
+                    if let Ok(Some(schedule)) = WeeklySchedule::for_round(&mut *transaction, cal_event.race.series, &cal_event.race.event, round).await {
+                        schedule.racetime_goal
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let (goal_str, goal_is_custom) = if let Some(ref g) = schedule_goal {
+                    let is_custom = g.parse::<Goal>().map(|goal| goal.is_custom()).unwrap_or(true);
+                    (g.clone(), is_custom)
+                } else {
+                    let Some(goal) = Goal::for_event(cal_event.race.series, &cal_event.race.event) else { return Ok(None) };
+                    (goal.as_str().to_owned(), goal.is_custom())
+                };
                 let race_slug = room_options(
-                    goal, event, cal_event,
+                    goal_str, goal_is_custom, event, cal_event,
                     info_user,
                     String::default(),
                     cal_event.is_private_async_part() || cal_event.race.video_urls.is_empty(),
@@ -6665,7 +6680,7 @@ async fn handle_rooms(global_state: Arc<GlobalState>, shutdown: rocket::Shutdown
             match racetime::BotBuilder::new(&connection.category_slug, &connection.client_id, &connection.client_secret)
                 .state(global_state.clone())
                 .host(global_state.host_info.clone())
-                .user_agent(concat!("MidosHouse/", env!("CARGO_PKG_VERSION"), " (https://github.com/midoshouse/midos.house)"))
+                .user_agent(concat!("HyruleTownHall/", env!("CARGO_PKG_VERSION"), " (https://github.com/TreZc0/hyrule-town-hall)"))
                 .scan_races_every(Duration::from_secs(5))
                 .build().await
             {

@@ -55,4 +55,15 @@ document.addEventListener('DOMContentLoaded', function() {
             localOption.remove();
         }
     }
+
+    // Enable/disable the custom goal input based on the goal dropdown
+    const racetimeGoalSelect = document.getElementById('racetime_goal');
+    const racetimeGoalCustom = document.getElementById('racetime_goal_custom');
+    if (racetimeGoalSelect && racetimeGoalCustom) {
+        function updateGoalCustomField() {
+            racetimeGoalCustom.disabled = racetimeGoalSelect.value !== 'custom';
+        }
+        racetimeGoalSelect.addEventListener('change', updateGoalCustomField);
+        updateGoalCustomField();
+    }
 });

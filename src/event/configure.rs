@@ -8,7 +8,7 @@ use {
             Tab,
         },
         prelude::*,
-        racetime_bot::VersionedBranch,
+        racetime_bot::{Goal, VersionedBranch},
         startgg,
         user::DisplaySource,
     },
@@ -1068,6 +1068,22 @@ impl<'v> WeeklySchedulesFormDefaults<'v> {
             None
         }
     }
+
+    fn add_racetime_goal(&self) -> Option<&str> {
+        if let Self::AddContext(ctx) = self {
+            ctx.field_value("racetime_goal")
+        } else {
+            None
+        }
+    }
+
+    fn add_racetime_goal_custom(&self) -> Option<&str> {
+        if let Self::AddContext(ctx) = self {
+            ctx.field_value("racetime_goal_custom")
+        } else {
+            None
+        }
+    }
 }
 
 fn frequency_display(days: i16) -> &'static str {
@@ -1206,6 +1222,27 @@ async fn weekly_schedules_form(mut transaction: Transaction<'_, Postgres>, me: O
                         input(type = "number", id = "room_open_minutes_before", name = "room_open_minutes_before", value = defaults.add_room_open_minutes().unwrap_or("30"), min = "1", max = "60");
                         label(class = "help") : "(How many minutes before the race start time to open the room)";
                     });
+                    : form_field("racetime_goal", &mut errors, html! {
+                        label(for = "racetime_goal") : "racetime.gg Goal Override:";
+                        @let current_goal = defaults.add_racetime_goal().unwrap_or("");
+                        @let unique_goals = {
+                            let mut seen = HashSet::new();
+                            all::<Goal>().filter_map(|g| if seen.insert(g.as_str()) { Some(g.as_str()) } else { None }).collect::<Vec<_>>()
+                        };
+                        select(id = "racetime_goal", name = "racetime_goal") {
+                            option(value = "", selected? = current_goal.is_empty()) : "None (use event default)";
+                            @for goal_str in &unique_goals {
+                                option(value = goal_str, selected? = current_goal == *goal_str) : goal_str;
+                            }
+                            option(value = "custom", selected? = current_goal == "custom") : "Custom...";
+                        }
+                        label(class = "help") : "(Override the racetime.gg goal used when opening rooms for this schedule)";
+                    });
+                    : form_field("racetime_goal_custom", &mut errors, html! {
+                        label(for = "racetime_goal_custom") : "Custom Goal String:";
+                        input(type = "text", id = "racetime_goal_custom", name = "racetime_goal_custom", value? = defaults.add_racetime_goal_custom(), placeholder = "Exact goal string on racetime.gg");
+                        label(class = "help") : "(Only used when \"Custom...\" is selected above)";
+                    });
                     : form_field("active", &mut errors, html! {
                         input(type = "checkbox", id = "active", name = "active", checked? = defaults.add_active().unwrap_or(true));
                         label(for = "active") : "Active";
@@ -1261,6 +1298,11 @@ pub(crate) struct AddWeeklyScheduleForm {
     notification_role_id: Option<String>,
     #[field(default = Some(30))]
     room_open_minutes_before: Option<i16>,
+    /// Empty string = use event default, "custom" = use racetime_goal_custom, otherwise the literal goal string.
+    #[field(default = String::new())]
+    racetime_goal: String,
+    #[field(default = None)]
+    racetime_goal_custom: Option<String>,
 }
 
 #[rocket::post("/event/<series>/<event>/configure/weekly-schedules", data = "<form>")]
@@ -1335,6 +1377,17 @@ pub(crate) async fn weekly_schedule_add(pool: &State<PgPool>, me: User, uri: Ori
                     }
                 }
             });
+        let racetime_goal = match value.racetime_goal.as_str() {
+            "" => None,
+            "custom" => {
+                let custom = value.racetime_goal_custom.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                if custom.is_none() {
+                    form.context.push_error(form::Error::validation("Please enter a custom goal string.").with_name("racetime_goal_custom"));
+                }
+                custom
+            }
+            other => Some(other.to_string()),
+        };
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::AddContext(form.context)).await?)
         } else {
@@ -1352,6 +1405,7 @@ pub(crate) async fn weekly_schedule_add(pool: &State<PgPool>, me: User, uri: Ori
                 notification_channel_id,
                 notification_role_id,
                 room_open_minutes_before: value.room_open_minutes_before.unwrap_or(30),
+                racetime_goal,
             };
             schedule.save(&mut transaction).await?;
             transaction.commit().await?;
@@ -1494,6 +1548,39 @@ async fn weekly_schedule_edit_form(mut transaction: Transaction<'_, Postgres>, m
                         input(type = "number", id = "room_open_minutes_before", name = "room_open_minutes_before", value = current_minutes.to_string(), min = "1", max = "60");
                         label(class = "help") : "(How many minutes before the race start time to open the room)";
                     });
+                    : form_field("racetime_goal", &mut errors, html! {
+                        label(for = "racetime_goal") : "racetime.gg Goal Override:";
+                        @let current_goal = ctx.field_value("racetime_goal").unwrap_or_else(|| {
+                            match schedule.racetime_goal.as_deref() {
+                                None => "",
+                                Some(g) if all::<Goal>().any(|goal| goal.as_str() == g) => g,
+                                Some(_) => "custom",
+                            }
+                        });
+                        @let unique_goals = {
+                            let mut seen = HashSet::new();
+                            all::<Goal>().filter_map(|g| if seen.insert(g.as_str()) { Some(g.as_str()) } else { None }).collect::<Vec<_>>()
+                        };
+                        select(id = "racetime_goal", name = "racetime_goal") {
+                            option(value = "", selected? = current_goal.is_empty()) : "None (use event default)";
+                            @for goal_str in &unique_goals {
+                                option(value = goal_str, selected? = current_goal == *goal_str) : goal_str;
+                            }
+                            option(value = "custom", selected? = current_goal == "custom") : "Custom...";
+                        }
+                        label(class = "help") : "(Override the racetime.gg goal used when opening rooms for this schedule)";
+                    });
+                    : form_field("racetime_goal_custom", &mut errors, html! {
+                        label(for = "racetime_goal_custom") : "Custom Goal String:";
+                        @let custom_val = ctx.field_value("racetime_goal_custom").unwrap_or_else(|| {
+                            match schedule.racetime_goal.as_deref() {
+                                Some(g) if !all::<Goal>().any(|goal| goal.as_str() == g) => g,
+                                _ => "",
+                            }
+                        });
+                        input(type = "text", id = "racetime_goal_custom", name = "racetime_goal_custom", value = custom_val, placeholder = "Exact goal string on racetime.gg");
+                        label(class = "help") : "(Only used when \"Custom...\" is selected above)";
+                    });
                     : form_field("active", &mut errors, html! {
                         input(type = "checkbox", id = "active", name = "active", checked? = ctx.field_value("active").map_or(schedule.active, |v| v == "on"));
                         label(for = "active") : "Active";
@@ -1552,6 +1639,11 @@ pub(crate) struct EditWeeklyScheduleForm {
     notification_role_id: Option<String>,
     #[field(default = Some(30))]
     room_open_minutes_before: Option<i16>,
+    /// Empty string = use event default, "custom" = use racetime_goal_custom, otherwise the literal goal string.
+    #[field(default = String::new())]
+    racetime_goal: String,
+    #[field(default = None)]
+    racetime_goal_custom: Option<String>,
 }
 
 #[rocket::post("/event/<series>/<event>/configure/weekly-schedules/<schedule_id>/edit", data = "<form>")]
@@ -1627,6 +1719,17 @@ pub(crate) async fn weekly_schedule_edit_post(pool: &State<PgPool>, me: User, ur
                     }
                 }
             });
+        let racetime_goal = match value.racetime_goal.as_str() {
+            "" => None,
+            "custom" => {
+                let custom = value.racetime_goal_custom.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                if custom.is_none() {
+                    form.context.push_error(form::Error::validation("Please enter a custom goal string.").with_name("racetime_goal_custom"));
+                }
+                custom
+            }
+            other => Some(other.to_string()),
+        };
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(weekly_schedule_edit_form(transaction, Some(me), uri, csrf.as_ref(), data, schedule, form.context).await?)
         } else {
@@ -1640,6 +1743,7 @@ pub(crate) async fn weekly_schedule_edit_post(pool: &State<PgPool>, me: User, ur
             schedule.notification_channel_id = notification_channel_id;
             schedule.notification_role_id = notification_role_id;
             schedule.room_open_minutes_before = value.room_open_minutes_before.unwrap_or(30);
+            schedule.racetime_goal = racetime_goal;
             schedule.save(&mut transaction).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(weekly_schedules_get(series, event))))

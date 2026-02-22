@@ -201,14 +201,14 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
         }));
         let config = Config::load().await?;
         let http_client = reqwest::Client::builder()
-            .user_agent(concat!("MidosHouse/", env!("CARGO_PKG_VERSION"), " (https://github.com/midoshouse/midos.house)"))
+            .user_agent(concat!("HyruleTownHall/", env!("CARGO_PKG_VERSION"), " (https://github.com/TreZc0/hyrule-town-hall)"))
             .timeout(Duration::from_secs(30))
             .use_rustls_tls()
             .hickory_dns(true)
             .https_only(true)
             .build()?;
         let insecure_http_client = reqwest::Client::builder()
-            .user_agent(concat!("MidosHouse/", env!("CARGO_PKG_VERSION"), " (https://github.com/midoshouse/midos.house)"))
+            .user_agent(concat!("HyruleTownHall/", env!("CARGO_PKG_VERSION"), " (https://github.com/TreZc0/hyrule-town-hall)"))
             .timeout(Duration::from_secs(30))
             .danger_accept_invalid_certs(true) // https://discord.com/channels/274180765816848384/1012773802201071736/1372836620822122526
             .use_rustls_tls()
