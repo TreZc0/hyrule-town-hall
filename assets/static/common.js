@@ -56,14 +56,95 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Enable/disable the custom goal input based on the goal dropdown
+    // Fetch and populate racetime.gg goals dynamically
     const racetimeGoalSelect = document.getElementById('racetime_goal');
     const racetimeGoalCustom = document.getElementById('racetime_goal_custom');
+    const racetimeGoalCustomFieldset = racetimeGoalCustom?.closest('fieldset');
+
     if (racetimeGoalSelect && racetimeGoalCustom) {
-        function updateGoalCustomField() {
-            racetimeGoalCustom.disabled = racetimeGoalSelect.value !== 'custom';
+        // Fetch goals from racetime.gg
+        const categorySlug = racetimeGoalSelect.dataset.racetimeCategory;
+        const currentGoal = racetimeGoalSelect.dataset.currentGoal;
+
+        if (categorySlug) {
+            fetch(`/api/v1/racetime/${categorySlug}/goals`)
+                .then(response => {
+                    if (!response.ok) {
+                        console.warn('Failed to fetch racetime.gg goals');
+                        return null;
+                    }
+                    return response.json();
+                })
+                .then(goals => {
+                    if (!goals || !Array.isArray(goals)) {
+                        return;
+                    }
+
+                    // Clear existing options except the first one (None) and last one (Custom)
+                    const firstOption = racetimeGoalSelect.options[0];
+                    const customOption = racetimeGoalSelect.options[racetimeGoalSelect.options.length - 1];
+                    racetimeGoalSelect.innerHTML = '';
+                    racetimeGoalSelect.appendChild(firstOption);
+
+                    // Add goals from racetime.gg
+                    goals.forEach(goal => {
+                        const option = document.createElement('option');
+                        option.value = goal;
+                        option.textContent = goal;
+                        option.selected = currentGoal === goal;
+                        racetimeGoalSelect.appendChild(option);
+                    });
+
+                    // Re-add custom option
+                    racetimeGoalSelect.appendChild(customOption);
+                })
+                .catch(error => {
+                    console.warn('Error fetching racetime.gg goals:', error);
+                });
         }
+
+        function updateGoalCustomField() {
+            const isCustom = racetimeGoalSelect.value === 'custom';
+            racetimeGoalCustom.disabled = !isCustom;
+            racetimeGoalCustom.required = isCustom;
+
+            // Hide/show the custom field
+            if (racetimeGoalCustomFieldset) {
+                racetimeGoalCustomFieldset.style.display = isCustom ? '' : 'none';
+            }
+
+            // Clear any validation errors when hiding the field
+            if (!isCustom) {
+                racetimeGoalCustom.setCustomValidity('');
+                // Remove error class from fieldset
+                if (racetimeGoalCustomFieldset) {
+                    racetimeGoalCustomFieldset.classList.remove('error');
+                    // Remove error messages
+                    const errorMessages = racetimeGoalCustomFieldset.querySelectorAll('p.error');
+                    errorMessages.forEach(msg => msg.remove());
+                }
+            }
+        }
+
         racetimeGoalSelect.addEventListener('change', updateGoalCustomField);
         updateGoalCustomField();
+
+        // Add form validation
+        const form = racetimeGoalSelect.closest('form');
+        if (form) {
+            form.addEventListener('submit', function(e) {
+                if (racetimeGoalSelect.value === 'custom' && !racetimeGoalCustom.value.trim()) {
+                    e.preventDefault();
+                    racetimeGoalCustom.setCustomValidity('Please enter a custom goal string.');
+                    racetimeGoalCustom.reportValidity();
+                } else {
+                    racetimeGoalCustom.setCustomValidity('');
+                }
+            });
+
+            racetimeGoalCustom.addEventListener('input', function() {
+                racetimeGoalCustom.setCustomValidity('');
+            });
+        }
     }
 });

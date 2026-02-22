@@ -575,6 +575,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         api::graphql_playground,
         api::entrants_csv,
         api::swiss_standings_endpoint,
+        api::racetime_goals,
         auth::racetime_callback,
         auth::discord_callback,
         auth::challonge_callback,

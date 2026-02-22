@@ -1479,6 +1479,20 @@ pub(crate) async fn weekly_schedule_toggle(pool: &State<PgPool>, me: User, uri: 
 }
 
 async fn weekly_schedule_edit_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, schedule: WeeklySchedule, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
+    // Get the racetime category slug for this series
+    let racetime_category = sqlx::query_scalar!(
+        r#"
+        SELECT grc.category_slug
+        FROM game_series gs
+        JOIN game_racetime_connection grc ON gs.game_id = grc.game_id
+        WHERE gs.series = $1
+        LIMIT 1
+        "#,
+        event.series as _
+    )
+    .fetch_optional(&mut *transaction)
+    .await?;
+
     let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, true).await?;
     let content = if event.is_ended() {
         html! {
@@ -1564,7 +1578,7 @@ async fn weekly_schedule_edit_form(mut transaction: Transaction<'_, Postgres>, m
                             let mut seen = HashSet::new();
                             all::<Goal>().filter_map(|g| if seen.insert(g.as_str()) { Some(g.as_str()) } else { None }).collect::<Vec<_>>()
                         };
-                        select(id = "racetime_goal", name = "racetime_goal") {
+                        select(id = "racetime_goal", name = "racetime_goal", data_racetime_category = racetime_category.as_deref().unwrap_or(""), data_current_goal = current_goal) {
                             option(value = "", selected? = current_goal.is_empty()) : "None (use event default)";
                             @for goal_str in &unique_goals {
                                 option(value = goal_str, selected? = current_goal == *goal_str) : goal_str;

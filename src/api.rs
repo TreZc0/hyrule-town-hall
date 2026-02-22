@@ -767,3 +767,33 @@ pub(crate) async fn swiss_standings_endpoint(
     ).await.map_err(|_| StatusOrError::Status(Status::NotFound))?;
     Ok(Json(standings))
 }
+
+#[derive(Debug, serde::Deserialize)]
+struct RacetimeCategoryData {
+    goals: Vec<String>,
+}
+
+#[rocket::get("/api/v1/racetime/<category_slug>/goals")]
+pub(crate) async fn racetime_goals(
+    http_client: &State<reqwest::Client>,
+    category_slug: &str,
+) -> Result<Json<Vec<String>>, Status> {
+    // Fetch category data from racetime.gg
+    let url = format!("https://racetime.gg/{}/data", category_slug);
+    let response = http_client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|_| Status::ServiceUnavailable)?;
+
+    if !response.status().is_success() {
+        return Err(Status::NotFound);
+    }
+
+    let data: RacetimeCategoryData = response
+        .json()
+        .await
+        .map_err(|_| Status::InternalServerError)?;
+
+    Ok(Json(data.goals))
+}
