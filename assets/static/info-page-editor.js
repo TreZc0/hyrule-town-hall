@@ -4,6 +4,7 @@ tinymce.init({
     content_css: 'https://cdnjs.cloudflare.com/ajax/libs/tinymce/8.1.2/skins/content/default/content.min.css',
     plugins: 'table image link lists code',
     toolbar: 'undo redo | bold italic underline strikethrough | blocks | link image | bullist numlist | table | spoiler organizers | code',
+    license_key: 'gpl',
     promotion: false,
     branding: false,
     min_height: 400,
