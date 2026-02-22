@@ -640,6 +640,8 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::configure::weekly_schedule_toggle,
         event::configure::weekly_schedule_edit_get,
         event::configure::weekly_schedule_edit_post,
+        event::configure::info_page_get,
+        event::configure::info_page_post,
         event::configure::search_users,
         event::configure::restreamer_search,
         event::configure::video_url_suggestions,

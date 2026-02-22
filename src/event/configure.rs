@@ -197,6 +197,9 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                     li {
                         a(href = uri!(weekly_schedules_get(event.series, &*event.event))) : "Manage weekly schedules";
                     }
+                    li {
+                        a(href = uri!(info_page_get(event.series, &*event.event))) : "Edit info page";
+                    }
                 }
             }
         } else if is_game_admin {
@@ -1751,4 +1754,152 @@ pub(crate) async fn weekly_schedule_edit_post(pool: &State<PgPool>, me: User, ur
     } else {
         RedirectOrContent::Content(weekly_schedule_edit_form(transaction, Some(me), uri, csrf.as_ref(), data, schedule, form.context).await?)
     })
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct InfoPageForm {
+    #[field(default = String::new())]
+    csrf: String,
+    content: String,
+    #[field(default = false)]
+    reset: bool,
+}
+
+#[rocket::get("/event/<series>/<event>/configure/info-page")]
+pub(crate) async fn info_page_get(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: String,
+) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    let is_authorized = if let Some(ref me) = me {
+        data.organizers(&mut transaction).await?.contains(me) || me.is_global_admin()
+    } else {
+        false
+    };
+    if !is_authorized {
+        let header = data.header(&mut transaction, me.as_ref(), Tab::Configure, false).await?;
+        return Ok(page(transaction, &me, &uri,
+            PageStyle { chests: data.chests().await?, ..PageStyle::default() },
+            &format!("Edit Info Page — {}", data.display_name),
+            html! {
+                : header;
+                article {
+                    p : "This page is for organizers of this event only.";
+                }
+            }
+        ).await?);
+    }
+    let existing: Option<String> = sqlx::query_scalar!(
+        "SELECT content FROM event_descriptions WHERE series = $1 AND event = $2",
+        data.series as _,
+        &*data.event,
+    )
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let has_custom = existing.is_some();
+    let initial_content = existing.unwrap_or_else(|| {
+        let dn_escaped = data.display_name
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        format!("<p>Welcome to the <strong>{}</strong> event.</p>", dn_escaped)
+    });
+    let initial_json = serde_json::to_string(&initial_content)
+        .map(|s| s.replace("</", "<\\/"))
+        .unwrap_or_else(|_| "\"\"".to_string());
+    let csrf = csrf.as_ref();
+    let header = data.header(&mut transaction, me.as_ref(), Tab::Configure, false).await?;
+    let content = html! {
+        : header;
+        article {
+            h2 : "Edit Info Page";
+            p {
+                : "Use the editor below to customize the info page for this event. ";
+                : "Use the ";
+                strong : "Insert organizer list";
+                : " button to add a placeholder that automatically shows the current organizer names.";
+            }
+            link(rel = "stylesheet", href = "https://cdn.quilljs.com/1.3.7/quill.snow.css");
+            form(action = uri!(info_page_post(data.series, &*data.event)), method = "post") {
+                : csrf;
+                div(id = "editor-container", style = "min-height: 300px; margin-bottom: 1em;") {}
+                textarea(name = "content", id = "editor-content", style = "display:none") {}
+                div {
+                    input(type = "submit", value = "Save");
+                    @if has_custom {
+                        : " ";
+                        button(
+                            type = "submit",
+                            name = "reset",
+                            value = "true",
+                            style = "margin-left: 1em;",
+                            onclick = "return confirm('Delete custom description? The info page will revert to the default content.')"
+                        ) : "Delete custom description";
+                    }
+                }
+            }
+            script(src = "https://cdn.quilljs.com/1.3.7/quill.js") {}
+            script {
+                : RawHtml(format!("window.__initialContent = {};", initial_json));
+            }
+            script(src = static_url!("info-page-editor.js")) {}
+        }
+    };
+    Ok(page(transaction, &me, &uri,
+        PageStyle { chests: data.chests().await?, ..PageStyle::default() },
+        &format!("Edit Info Page — {}", data.display_name),
+        content,
+    ).await?)
+}
+
+#[rocket::post("/event/<series>/<event>/configure/info-page", data = "<form>")]
+pub(crate) async fn info_page_post(
+    pool: &State<PgPool>,
+    me: User,
+    _uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, InfoPageForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.context.errors().next().is_some() {
+        return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(info_page_get(data.series, &*data.event)))));
+    }
+    if let Some(ref value) = form.value {
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+            return Err(StatusOrError::Status(Status::Forbidden));
+        }
+        if value.reset {
+            sqlx::query!(
+                "DELETE FROM event_descriptions WHERE series = $1 AND event = $2",
+                data.series as _,
+                &*data.event,
+            )
+            .execute(&mut *transaction)
+            .await?;
+        } else if !value.content.trim().is_empty() {
+            sqlx::query!(
+                "INSERT INTO event_descriptions (series, event, content) VALUES ($1, $2, $3)
+                 ON CONFLICT (series, event) DO UPDATE SET content = EXCLUDED.content",
+                data.series as _,
+                &*data.event,
+                value.content,
+            )
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+    }
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(crate::event::info(data.series, &*data.event)))))
 }

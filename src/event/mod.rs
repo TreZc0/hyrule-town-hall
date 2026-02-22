@@ -1035,7 +1035,14 @@ pub(crate) async fn info(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let header = data.header(&mut transaction, me.as_ref(), Tab::Info, false).await?;
-    let content = match data.series {
+    let custom_description: Option<String> = sqlx::query_scalar!(
+        "SELECT content FROM event_descriptions WHERE series = $1 AND event = $2",
+        data.series as _,
+        &*data.event,
+    )
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let series_content = match data.series {
         Series::AlttprDe => alttprde::info(&mut transaction, &data).await?,
         Series::BattleRoyale => ohko::info(&mut transaction, &data).await?,
         Series::CoOp => coop::info(&mut transaction, &data).await?,
@@ -1058,28 +1065,62 @@ pub(crate) async fn info(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
         Series::TwwrMain => twwrmain::info(&mut transaction, &data).await?,
         Series::WeTryToBeBetter => wttbb::info(&mut transaction, &data).await?,
     };
-    let content = html! {
-        : header;
-        @if let Some(content) = content {
+    let content = if let Some(custom_html) = custom_description {
+        let organizers = data.organizers(&mut transaction).await?;
+        let organizer_html = English.join_html_opt(organizers).map(|h| h.0).unwrap_or_default();
+        let rendered = custom_html.replace("{{organizers}}", &organizer_html);
+        html! {
+            : header;
+            article {
+                : RawHtml(rendered);
+            }
+        }
+    } else if let Some(content) = series_content {
+        html! {
+            : header;
             : content;
-        } else if let Some(organizers) = English.join_html_opt(data.organizers(&mut transaction).await?) {
-            article {
-                p {
-                    : "This event ";
-                    @if data.is_ended() {
-                        : "was";
-                    } else {
-                        : "is";
+        }
+    } else {
+        let game = data.game(&mut transaction).await?;
+        let organizers = data.organizers(&mut transaction).await?;
+        let organizer_html = English.join_html_opt(organizers);
+        match (game.as_ref(), organizer_html) {
+            (Some(g), Some(orgs)) => html! {
+                : header;
+                article {
+                    p {
+                        : "Welcome to the ";
+                        : &g.display_name;
+                        : " event '";
+                        : &data.display_name;
+                        : "', as part of the ";
+                        : data.series.display_name();
+                        : " series, organized by ";
+                        : orgs;
+                        : ".";
                     }
-                    : " organized by ";
-                    : organizers;
-                    : ".";
                 }
-            }
-        } else {
-            article {
-                p : "No information about this event available yet.";
-            }
+            },
+            (None, Some(orgs)) => html! {
+                : header;
+                article {
+                    p {
+                        : "Welcome to event '";
+                        : &data.display_name;
+                        : "', as part of the ";
+                        : data.series.display_name();
+                        : " series, organized by ";
+                        : orgs;
+                        : ".";
+                    }
+                }
+            },
+            _ => html! {
+                : header;
+                article {
+                    p : "No information about this event available yet.";
+                }
+            },
         }
     };
     Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &data.display_name, content).await?)
