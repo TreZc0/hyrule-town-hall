@@ -914,6 +914,85 @@ impl Race {
         }
     }
 
+    pub(crate) async fn multistream_url_prerace(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, event: &event::Data<'_>) -> Result<Option<Url>, Error> {
+        async fn entrant_twitch_names<'a>(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, event: &event::Data<'_>, entrant: &'a Entrant) -> Result<Option<Vec<Cow<'a, str>>>, Error> {
+            let mut channels = Vec::default();
+            match entrant {
+                Entrant::MidosHouseTeam(team) => for (member, role) in team.members_roles(&mut *transaction).await? {
+                    if event.team_config.role_is_racing(role) {
+                        if let Some(twitch_name) = member.racetime_user_data(http_client).await?.and_then(identity).and_then(|racetime_user_data| racetime_user_data.twitch_name) {
+                            channels.push(Cow::Owned(twitch_name));
+                        } else {
+                            return Ok(None)
+                        }
+                    }
+                },
+                Entrant::Discord { twitch_username: Some(twitch_name), .. } | Entrant::Named { twitch_username: Some(twitch_name), .. } => channels.push(Cow::Borrowed(&**twitch_name)),
+                Entrant::Discord { twitch_username: None, racetime_id: Some(racetime_id), .. } | Entrant::Named { twitch_username: None, racetime_id: Some(racetime_id), .. } => {
+                    let racetime_user_data = racetime_bot::user_data(http_client, racetime_id).await?;
+                    if let Some(twitch_name) = racetime_user_data.and_then(|racetime_user_data| racetime_user_data.twitch_name) {
+                        channels.push(Cow::Owned(twitch_name));
+                    } else {
+                        return Ok(None)
+                    }
+                }
+                Entrant::Discord { twitch_username: None, racetime_id: None, id } => if_chain! {
+                    if let Some(user) = User::from_discord(&mut **transaction, *id).await?;
+                    if let Some(Some(racetime_user_data)) = user.racetime_user_data(http_client).await?;
+                    if let Some(twitch_name) = racetime_user_data.twitch_name;
+                    then {
+                        channels.push(Cow::Owned(twitch_name));
+                    } else {
+                        return Ok(None)
+                    }
+                },
+                Entrant::Named { twitch_username: None, racetime_id: None, .. } => return Ok(None),
+            }
+            Ok(Some(channels))
+        }
+
+        Ok(match self.entrants {
+            Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) => None,
+            Entrants::Two(ref entrants) => {
+                let mut channels = Vec::default();
+                for entrant in entrants {
+                    if let Some(twitch_names) = entrant_twitch_names(&mut *transaction, http_client, event, entrant).await? {
+                        channels.extend(twitch_names);
+                    } else {
+                        return Ok(None)
+                    }
+                }
+                let mut url = Url::parse("https://multistre.am/").unwrap();
+                url.path_segments_mut().unwrap().extend(&channels).push(match channels.len() {
+                    0 => return Ok(None),
+                    2 => "layout4",
+                    4 => "layout12",
+                    6 => "layout18",
+                    _ => unimplemented!(),
+                });
+                Some(url)
+            }
+            Entrants::Three(ref entrants) => {
+                let mut channels = Vec::default();
+                for entrant in entrants {
+                    if let Some(twitch_names) = entrant_twitch_names(&mut *transaction, http_client, event, entrant).await? {
+                        channels.extend(twitch_names);
+                    } else {
+                        return Ok(None)
+                    }
+                }
+                let mut url = Url::parse("https://multistre.am/").unwrap();
+                url.path_segments_mut().unwrap().extend(&channels).push(match channels.len() {
+                    0 => return Ok(None),
+                    3 => "layout7",
+                    6 => "layout17",
+                    _ => unimplemented!(),
+                });
+                Some(url)
+            }
+        })
+    }
+
     pub(crate) async fn multistream_url(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, event: &event::Data<'_>) -> Result<Option<Url>, Error> {
         async fn entrant_twitch_names<'a>(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, event: &event::Data<'_>, entrant: &'a Entrant) -> Result<Option<Vec<Cow<'a, str>>>, Error> {
             let mut channels = Vec::default();
