@@ -637,13 +637,14 @@ pub(crate) async fn build_race_title(
         _ => "TBD".to_owned(),
     };
 
-    // Combine: EventName: Round - Matchup
+    // Combine: EventName: Round/Phase (G{n}) - Matchup
+    let game_suffix = race.game.map(|g| format!(" (G{})", g)).unwrap_or_default();
     if let Some(round) = &race.round {
-        format!("{}: {} - {}", event_name, round, matchup)
+        format!("{}: {}{} - {}", event_name, round, game_suffix, matchup)
     } else if let Some(phase) = &race.phase {
-        format!("{}: {} - {}", event_name, phase, matchup)
+        format!("{}: {}{} - {}", event_name, phase, game_suffix, matchup)
     } else {
-        format!("{}: {}", event_name, matchup)
+        format!("{}: {}{}", event_name, matchup, game_suffix)
     }
 }
 
