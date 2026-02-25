@@ -988,29 +988,35 @@ pub(crate) async fn game_management(
                         option(value = "per_race") : "Per Race";
                     }
                 });
-                : form_field("ping_interval", &mut ping_errors, html! {
-                    label(for = "gpw_interval") : "Interval (scheduled only):";
-                    select(name = "ping_interval", id = "gpw_interval") {
-                        option(value = "daily") : "Daily";
-                        option(value = "weekly") : "Weekly";
+                div(id = "gpw-scheduled-fields", data_ping_form_scheduled = "gpw_type") {
+                    : form_field("ping_interval", &mut ping_errors, html! {
+                        label(for = "gpw_interval") : "Interval:";
+                        select(name = "ping_interval", id = "gpw_interval") {
+                            option(value = "daily") : "Daily";
+                            option(value = "weekly") : "Weekly";
+                        }
+                    });
+                    : form_field("schedule_time", &mut ping_errors, html! {
+                        label(for = "gpw_time") : "Schedule time UTC (HH:MM):";
+                        input(type = "time", name = "schedule_time", id = "gpw_time");
+                    });
+                    div(id = "gpw-weekly-field", data_ping_form_weekly = "gpw_interval") {
+                        : form_field("schedule_day_of_week", &mut ping_errors, html! {
+                            label(for = "gpw_dow") : "Day of week (0=Mon..6=Sun):";
+                            input(type = "number", name = "schedule_day_of_week", id = "gpw_dow", min = "0", max = "6", placeholder = "0–6");
+                        });
                     }
-                });
-                : form_field("schedule_time", &mut ping_errors, html! {
-                    label(for = "gpw_time") : "Schedule time UTC (HH:MM):";
-                    input(type = "time", name = "schedule_time", id = "gpw_time");
-                });
-                : form_field("schedule_day_of_week", &mut ping_errors, html! {
-                    label(for = "gpw_dow") : "Day of week (weekly only, 0=Mon..6=Sun):";
-                    input(type = "number", name = "schedule_day_of_week", id = "gpw_dow", min = "0", max = "6", placeholder = "0–6");
-                });
+                }
                 : form_field("discord_ping_channel", &mut ping_errors, html! {
                     label(for = "gpw_channel") : "Discord ping channel ID (optional):";
                     input(type = "text", name = "discord_ping_channel", id = "gpw_channel", placeholder = "e.g. 123456789012345678");
                 });
-                : form_field("lead_times", &mut ping_errors, html! {
-                    label(for = "gpw_lead_times") : "Lead times in hours (per-race only, comma-separated, e.g. 24,48,72):";
-                    input(type = "text", name = "lead_times", id = "gpw_lead_times", placeholder = "e.g. 24,48,72");
-                });
+                div(id = "gpw-per-race-fields", data_ping_form_per_race = "gpw_type") {
+                    : form_field("lead_times", &mut ping_errors, html! {
+                        label(for = "gpw_lead_times") : "Lead times in hours (comma-separated, e.g. 24,48,72):";
+                        input(type = "text", name = "lead_times", id = "gpw_lead_times", placeholder = "e.g. 24,48,72");
+                    });
+                }
                 : form_field("delete_after_race", &mut ping_errors, html! {
                     input(type = "checkbox", name = "delete_after_race", id = "gpw_delete");
                     label(for = "gpw_delete") : " Delete ping messages after race starts";

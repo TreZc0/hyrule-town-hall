@@ -1205,29 +1205,35 @@ async fn roles_page(
                             option(value = "per_race") : "Per Race (ping per race at lead time)";
                         }
                     });
-                    : form_field("ping_interval", &mut ping_errors, html! {
-                        label(for = "pw_interval") : "Interval (scheduled only):";
-                        select(name = "ping_interval", id = "pw_interval") {
-                            option(value = "daily") : "Daily";
-                            option(value = "weekly") : "Weekly";
+                    div(id = "pw-scheduled-fields", data_ping_form_scheduled = "pw_type") {
+                        : form_field("ping_interval", &mut ping_errors, html! {
+                            label(for = "pw_interval") : "Interval:";
+                            select(name = "ping_interval", id = "pw_interval") {
+                                option(value = "daily") : "Daily";
+                                option(value = "weekly") : "Weekly";
+                            }
+                        });
+                        : form_field("schedule_time", &mut ping_errors, html! {
+                            label(for = "pw_time") : "Schedule time UTC (HH:MM):";
+                            input(type = "time", name = "schedule_time", id = "pw_time");
+                        });
+                        div(id = "pw-weekly-field", data_ping_form_weekly = "pw_interval") {
+                            : form_field("schedule_day_of_week", &mut ping_errors, html! {
+                                label(for = "pw_dow") : "Day of week (0=Mon..6=Sun):";
+                                input(type = "number", name = "schedule_day_of_week", id = "pw_dow", min = "0", max = "6", placeholder = "0–6");
+                            });
                         }
-                    });
-                    : form_field("schedule_time", &mut ping_errors, html! {
-                        label(for = "pw_time") : "Schedule time UTC (scheduled only, HH:MM):";
-                        input(type = "time", name = "schedule_time", id = "pw_time");
-                    });
-                    : form_field("schedule_day_of_week", &mut ping_errors, html! {
-                        label(for = "pw_dow") : "Day of week (weekly only, 0=Mon..6=Sun):";
-                        input(type = "number", name = "schedule_day_of_week", id = "pw_dow", min = "0", max = "6", placeholder = "0–6");
-                    });
+                    }
                     : form_field("discord_ping_channel", &mut ping_errors, html! {
                         label(for = "pw_channel") : "Discord ping channel ID (optional, falls back to volunteer info channel):";
                         input(type = "text", name = "discord_ping_channel", id = "pw_channel", placeholder = "e.g. 123456789012345678");
                     });
-                    : form_field("lead_times", &mut ping_errors, html! {
-                        label(for = "pw_lead_times") : "Lead times in hours (per-race only, comma-separated, e.g. 24,48,72):";
-                        input(type = "text", name = "lead_times", id = "pw_lead_times", placeholder = "e.g. 24,48,72");
-                    });
+                    div(id = "pw-per-race-fields", data_ping_form_per_race = "pw_type") {
+                        : form_field("lead_times", &mut ping_errors, html! {
+                            label(for = "pw_lead_times") : "Lead times in hours (comma-separated, e.g. 24,48,72):";
+                            input(type = "text", name = "lead_times", id = "pw_lead_times", placeholder = "e.g. 24,48,72");
+                        });
+                    }
                     : form_field("delete_after_race", &mut ping_errors, html! {
                         input(type = "checkbox", name = "delete_after_race", id = "pw_delete");
                         label(for = "pw_delete") : " Delete ping messages after race starts";

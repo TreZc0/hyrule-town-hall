@@ -1,3 +1,37 @@
+document.addEventListener('DOMContentLoaded', function() {
+    // Auto-wire show/hide for ping workflow add forms.
+    // Divs with data-ping-form-scheduled="<typeSelectId>" are shown only when type = "scheduled".
+    // Divs with data-ping-form-per-race="<typeSelectId>" are shown only when type = "per_race".
+    // Divs with data-ping-form-weekly="<intervalSelectId>" are shown only when interval = "weekly".
+
+    document.querySelectorAll('[data-ping-form-scheduled]').forEach(function(scheduledDiv) {
+        const typeId = scheduledDiv.getAttribute('data-ping-form-scheduled');
+        const typeSelect = document.getElementById(typeId);
+        if (!typeSelect) return;
+
+        // Find the per-race counterpart driven by the same type select
+        const perRaceDiv = document.querySelector(`[data-ping-form-per-race="${typeId}"]`);
+
+        // Find the weekly sub-div inside the scheduled div (if any)
+        const weeklyDiv = scheduledDiv.querySelector('[data-ping-form-weekly]');
+        const intervalSelectId = weeklyDiv ? weeklyDiv.getAttribute('data-ping-form-weekly') : null;
+        const intervalSelect = intervalSelectId ? document.getElementById(intervalSelectId) : null;
+
+        function update() {
+            const isScheduled = typeSelect.value === 'scheduled';
+            scheduledDiv.style.display = isScheduled ? '' : 'none';
+            if (perRaceDiv) perRaceDiv.style.display = isScheduled ? 'none' : '';
+            if (weeklyDiv && intervalSelect) {
+                weeklyDiv.style.display = (isScheduled && intervalSelect.value === 'weekly') ? '' : 'none';
+            }
+        }
+
+        typeSelect.addEventListener('change', update);
+        if (intervalSelect) intervalSelect.addEventListener('change', update);
+        update();
+    });
+});
+
 function startEditWorkflow(id) {
     const row = document.querySelector(`tr[data-workflow-id="${id}"]`);
     if (!row) return;
