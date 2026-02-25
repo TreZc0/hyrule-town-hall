@@ -258,9 +258,9 @@ fn build_scheduled_ping_message(
 
     msg.push("**Looking for Volunteers — ");
     msg.push(display_name);
-    msg.push(&format!(" ({})**\n", language.short_code().to_uppercase()));
+    msg.push(&format!("** ({} restreams)\n", language.short_code().to_uppercase()));
 
-    msg.push("Races needing volunteers:\n");
+    msg.push("Upcoming races (timestamps in your timezone):\n");
     for (matchup, start_ts, msg_id, chan_id, race_id_raw, role_counts) in race_summaries {
         let signup_str = role_counts.iter()
             .map(|(name, current, min)| format!("{}: {}/{}", name, current, min))
@@ -497,7 +497,7 @@ async fn check_scheduled_workflow(
         let signups = Signup::for_race(&mut transaction, race_id).await?;
 
         let mut needs_ping = false;
-        // (role_name, current_count, min_count) for roles below minimum
+        // (role_name, current_count, min_count) for all roles in this language
         let mut role_counts: Vec<(String, i32, i32)> = Vec::new();
         for binding in &role_bindings {
             if binding.is_disabled || binding.language != workflow.language {
@@ -510,12 +510,12 @@ async fn check_scheduled_workflow(
                 .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Pending))
                 .count() as i32;
             let current = confirmed + pending;
+            role_counts.push((binding.role_type_name.clone(), current, binding.min_count));
             if current < binding.min_count {
                 needs_ping = true;
                 if let Some(role_id) = binding.discord_role_id {
                     role_ids_to_ping.insert(role_id);
                 }
-                role_counts.push((binding.role_type_name.clone(), current, binding.min_count));
             }
         }
 
@@ -672,11 +672,11 @@ async fn check_per_race_workflow(
                 .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Pending))
                 .count() as i32;
             let current = confirmed + pending;
+            role_counts.push((binding.role_type_name.clone(), current, binding.min_count));
             if current < binding.min_count {
                 if let Some(role_id) = binding.discord_role_id {
                     role_ids_to_ping.insert(role_id);
                 }
-                role_counts.push((binding.role_type_name.clone(), current, binding.min_count));
             }
         }
 
