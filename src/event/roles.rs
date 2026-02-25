@@ -1043,6 +1043,47 @@ async fn roles_page(
                 }
             }
 
+            // If no event-level workflows, fetch game-level ones for read-only display
+            let (game_ping_workflows, game_ping_lead_times) = if event_ping_workflows.is_empty() {
+                if let Some(ref game) = game_info {
+                    let wfs = sqlx::query!(
+                        r#"SELECT
+                            w.id,
+                            w.language AS "language: Language",
+                            w.discord_ping_channel,
+                            w.delete_after_race,
+                            w.workflow_type AS "workflow_type: crate::volunteer_pings::PingWorkflowTypeDb",
+                            w.ping_interval AS "ping_interval: crate::volunteer_pings::PingInterval",
+                            w.schedule_time,
+                            w.schedule_day_of_week
+                        FROM volunteer_ping_workflows w
+                        WHERE w.game_id = $1
+                        ORDER BY w.id"#,
+                        game.id,
+                    )
+                    .fetch_all(&mut *transaction)
+                    .await?;
+
+                    let mut lt_map: std::collections::HashMap<i32, Vec<i32>> = std::collections::HashMap::new();
+                    for wf in &wfs {
+                        if matches!(wf.workflow_type, crate::volunteer_pings::PingWorkflowTypeDb::PerRace) {
+                            let lts = sqlx::query_scalar!(
+                                "SELECT lead_time_hours FROM volunteer_ping_lead_times WHERE workflow_id = $1 ORDER BY lead_time_hours",
+                                wf.id
+                            )
+                            .fetch_all(&mut *transaction)
+                            .await?;
+                            lt_map.insert(wf.id, lts);
+                        }
+                    }
+                    (wfs, lt_map)
+                } else {
+                    (Vec::new(), std::collections::HashMap::new())
+                }
+            } else {
+                (Vec::new(), std::collections::HashMap::new())
+            };
+
             html! {
                 @if let Some(ref msg) = msg {
                     div(class = "info-box") { p : msg; }
@@ -1169,11 +1210,12 @@ async fn roles_page(
                                     }
                                     td(class = "wf-actions") {
                                         button(class = "button edit-btn", onclick = format!("startEditWorkflow({})", wf.id)) : "Edit";
-                                        @let (errs3, del_btn3) = button_form(
+                                        @let (errs3, del_btn3) = button_form_confirm(
                                             uri!(delete_ping_workflow(data.series, &*data.event, wf.id)),
                                             csrf.as_ref(),
                                             Vec::new(),
-                                            "Delete"
+                                            "Delete",
+                                            "Delete this ping workflow?"
                                         );
                                         : errs3;
                                         : del_btn3;
@@ -1183,7 +1225,81 @@ async fn roles_page(
                         }
                     }
                 } else {
-                    p : "No event-level ping workflows configured. Game-level workflows (if any) will be used.";
+                    @if game_ping_workflows.is_empty() {
+                        p : "No event-level or game-level ping workflows configured.";
+                    } else {
+                        div(class = "info-box") {
+                            p : "No event-level workflows configured. The game-level workflows below are being used for this event. Adding any event-level workflow here will override all game-level workflows for this event.";
+                        }
+                        table {
+                            thead {
+                                tr {
+                                    th : "Language";
+                                    th : "Type";
+                                    th : "Details";
+                                    th : "Ping Channel";
+                                    th : "Delete After Race";
+                                }
+                            }
+                            tbody {
+                                @for wf in &game_ping_workflows {
+                                    tr {
+                                        td : format!("{}", wf.language.short_code().to_uppercase());
+                                        td {
+                                            @match wf.workflow_type {
+                                                crate::volunteer_pings::PingWorkflowTypeDb::Scheduled => { : "Scheduled"; }
+                                                crate::volunteer_pings::PingWorkflowTypeDb::PerRace => { : "Per Race"; }
+                                            }
+                                        }
+                                        td {
+                                            @match wf.workflow_type {
+                                                crate::volunteer_pings::PingWorkflowTypeDb::Scheduled => {
+                                                    @if let Some(t) = wf.schedule_time {
+                                                        : format!("{} UTC", t.format("%H:%M"));
+                                                    }
+                                                    @if let Some(interval) = wf.ping_interval {
+                                                        @match interval {
+                                                            crate::volunteer_pings::PingInterval::Daily => { : " (daily)"; }
+                                                            crate::volunteer_pings::PingInterval::Weekly => {
+                                                                @if let Some(day) = wf.schedule_day_of_week {
+                                                                    : format!(" (weekly, day {})", day);
+                                                                } else {
+                                                                    : " (weekly)";
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                crate::volunteer_pings::PingWorkflowTypeDb::PerRace => {
+                                                    @if let Some(lts) = game_ping_lead_times.get(&wf.id) {
+                                                        @if lts.is_empty() {
+                                                            : "No lead times configured";
+                                                        } else {
+                                                            : format!("Lead times: {}h", lts.iter().map(|h| h.to_string()).collect::<Vec<_>>().join(", "));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        td {
+                                            @if let Some(chan) = wf.discord_ping_channel {
+                                                : chan.to_string();
+                                            } else {
+                                                : "Uses volunteer info channel";
+                                            }
+                                        }
+                                        td {
+                                            @if wf.delete_after_race {
+                                                span(style = "color: green;") : "✓ Yes";
+                                            } else {
+                                                span(style = "color: red;") : "✗ No";
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 h3 : "Add Ping Workflow";

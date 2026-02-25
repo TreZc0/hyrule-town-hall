@@ -9,6 +9,7 @@ use crate::{
     time::{format_datetime, DateTimeFormat},
     series::Series,
     volunteer_requests,
+    volunteer_pings,
 };
 use rocket::{uri, form::{Form, Contextual}};
 
@@ -495,6 +496,37 @@ pub(crate) async fn manage_roles(
     let filtered_bindings: Vec<&GameRoleBinding> = role_bindings.iter().filter(|b| b.language == current_language).collect();
     let base_url = format!("/games/{}/roles", game_name);
 
+    let game_ping_workflows = sqlx::query!(
+        r#"SELECT
+            w.id,
+            w.language AS "language: Language",
+            w.discord_ping_channel,
+            w.delete_after_race,
+            w.workflow_type AS "workflow_type: volunteer_pings::PingWorkflowTypeDb",
+            w.ping_interval AS "ping_interval: volunteer_pings::PingInterval",
+            w.schedule_time,
+            w.schedule_day_of_week
+        FROM volunteer_ping_workflows w
+        WHERE w.game_id = $1
+        ORDER BY w.id"#,
+        game.id,
+    )
+    .fetch_all(&mut *transaction)
+    .await.map_err(Error::from)?;
+
+    let mut game_ping_lead_times: HashMap<i32, Vec<i32>> = HashMap::new();
+    for wf in &game_ping_workflows {
+        if matches!(wf.workflow_type, volunteer_pings::PingWorkflowTypeDb::PerRace) {
+            let lts = sqlx::query_scalar!(
+                "SELECT lead_time_hours FROM volunteer_ping_lead_times WHERE workflow_id = $1 ORDER BY lead_time_hours",
+                wf.id
+            )
+            .fetch_all(&mut *transaction)
+            .await.map_err(Error::from)?;
+            game_ping_lead_times.insert(wf.id, lts);
+        }
+    }
+
     let content = html! {
         article {
             h1 : format!("Manage Roles — {}", game.display_name);
@@ -733,7 +765,178 @@ pub(crate) async fn manage_roles(
                 }
             }
 
+            hr;
+
+            h2 : "Volunteer Ping Workflows";
+            p : "Game-level volunteer ping workflows apply to all events in this game unless the event defines its own workflows.";
+
+            @if !game_ping_workflows.is_empty() {
+                table {
+                    thead {
+                        tr {
+                            th : "Language";
+                            th : "Type";
+                            th : "Details";
+                            th : "Ping Channel";
+                            th : "Delete After Race";
+                            th : "Actions";
+                        }
+                    }
+                    tbody {
+                        @for wf in &game_ping_workflows {
+                            @let wf_lead_times_str = game_ping_lead_times.get(&wf.id)
+                                .map(|lts| lts.iter().map(|h| h.to_string()).collect::<Vec<_>>().join(","))
+                                .unwrap_or_default();
+                            @let wf_type_str = match wf.workflow_type {
+                                volunteer_pings::PingWorkflowTypeDb::Scheduled => "scheduled",
+                                volunteer_pings::PingWorkflowTypeDb::PerRace => "per_race",
+                            };
+                            @let wf_interval_str = wf.ping_interval.map(|i| match i {
+                                volunteer_pings::PingInterval::Daily => "daily",
+                                volunteer_pings::PingInterval::Weekly => "weekly",
+                            }).unwrap_or("");
+                            @let wf_time_str = wf.schedule_time.map(|t| format!("{}", t.format("%H:%M"))).unwrap_or_default();
+                            @let wf_dow_str = wf.schedule_day_of_week.map(|d| d.to_string()).unwrap_or_default();
+                            @let wf_edit_path = format!("/game/{}/ping-workflows/{}/edit", game_name, wf.id);
+                            @let wf_delete_path = format!("/game/{}/ping-workflows/{}/delete", game_name, wf.id);
+                            @let wf_channel_val = wf.discord_ping_channel.map(|c| c.to_string()).unwrap_or_default();
+                            tr(
+                                data_workflow_id = wf.id.to_string(),
+                                data_type = wf_type_str,
+                                data_interval = wf_interval_str,
+                                data_schedule_time = wf_time_str,
+                                data_schedule_dow = wf_dow_str,
+                                data_lead_times = wf_lead_times_str,
+                                data_edit_path = wf_edit_path,
+                                data_delete_path = wf_delete_path,
+                            ) {
+                                td : format!("{}", wf.language.short_code().to_uppercase());
+                                td {
+                                    @match wf.workflow_type {
+                                        volunteer_pings::PingWorkflowTypeDb::Scheduled => { : "Scheduled"; }
+                                        volunteer_pings::PingWorkflowTypeDb::PerRace => { : "Per Race"; }
+                                    }
+                                }
+                                td(class = "wf-details") {
+                                    @match wf.workflow_type {
+                                        volunteer_pings::PingWorkflowTypeDb::Scheduled => {
+                                            @if let Some(t) = wf.schedule_time {
+                                                : format!("{} UTC", t.format("%H:%M"));
+                                            }
+                                            @if let Some(interval) = wf.ping_interval {
+                                                @match interval {
+                                                    volunteer_pings::PingInterval::Daily => { : " (daily)"; }
+                                                    volunteer_pings::PingInterval::Weekly => {
+                                                        @if let Some(day) = wf.schedule_day_of_week {
+                                                            : format!(" (weekly, day {})", day);
+                                                        } else {
+                                                            : " (weekly)";
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        volunteer_pings::PingWorkflowTypeDb::PerRace => {
+                                            @if let Some(lts) = game_ping_lead_times.get(&wf.id) {
+                                                @if lts.is_empty() {
+                                                    : "No lead times configured";
+                                                } else {
+                                                    : format!("Lead times: {}h", lts.iter().map(|h| h.to_string()).collect::<Vec<_>>().join(", "));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                td(class = "wf-channel", data_value = wf_channel_val) {
+                                    @if let Some(chan) = wf.discord_ping_channel {
+                                        : chan.to_string();
+                                    } else {
+                                        : "Uses volunteer info channel";
+                                    }
+                                }
+                                td(class = "wf-delete-after", data_value = wf.delete_after_race.to_string()) {
+                                    @if wf.delete_after_race {
+                                        span(style = "color: green;") : "✓ Yes";
+                                    } else {
+                                        span(style = "color: red;") : "✗ No";
+                                    }
+                                }
+                                td(class = "wf-actions") {
+                                    button(class = "button edit-btn", onclick = format!("startEditWorkflow({})", wf.id)) : "Edit";
+                                    @let (errs3, del_btn3) = button_form_confirm(
+                                        uri!(crate::admin::delete_game_ping_workflow(game_name, wf.id)),
+                                        csrf.as_ref(),
+                                        Vec::new(),
+                                        "Delete",
+                                        "Delete this ping workflow?"
+                                    );
+                                    : errs3;
+                                    : del_btn3;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                p : "No game-level ping workflows configured.";
+            }
+
+            h3 : "Add Game Ping Workflow";
+            @let mut ping_errors = Vec::new();
+            : full_form(uri!(crate::admin::add_game_ping_workflow(game_name)), csrf.as_ref(), html! {
+                : form_field("language", &mut ping_errors, html! {
+                    label(for = "gpw_language") : "Language:";
+                    select(name = "language", id = "gpw_language") {
+                        option(value = "en") : "English";
+                        option(value = "fr") : "French";
+                        option(value = "de") : "German";
+                        option(value = "pt") : "Portuguese";
+                    }
+                });
+                : form_field("workflow_type", &mut ping_errors, html! {
+                    label(for = "gpw_type") : "Type:";
+                    select(name = "workflow_type", id = "gpw_type") {
+                        option(value = "scheduled") : "Scheduled";
+                        option(value = "per_race") : "Per Race";
+                    }
+                });
+                div(id = "gpw-scheduled-fields", data_ping_form_scheduled = "gpw_type") {
+                    : form_field("ping_interval", &mut ping_errors, html! {
+                        label(for = "gpw_interval") : "Interval:";
+                        select(name = "ping_interval", id = "gpw_interval") {
+                            option(value = "daily") : "Daily";
+                            option(value = "weekly") : "Weekly";
+                        }
+                    });
+                    : form_field("schedule_time", &mut ping_errors, html! {
+                        label(for = "gpw_time") : "Schedule time UTC (HH:MM):";
+                        input(type = "time", name = "schedule_time", id = "gpw_time");
+                    });
+                    div(id = "gpw-weekly-field", data_ping_form_weekly = "gpw_interval") {
+                        : form_field("schedule_day_of_week", &mut ping_errors, html! {
+                            label(for = "gpw_dow") : "Day of week (0=Mon..6=Sun):";
+                            input(type = "number", name = "schedule_day_of_week", id = "gpw_dow", min = "0", max = "6", placeholder = "0–6");
+                        });
+                    }
+                }
+                : form_field("discord_ping_channel", &mut ping_errors, html! {
+                    label(for = "gpw_channel") : "Discord ping channel ID (optional):";
+                    input(type = "text", name = "discord_ping_channel", id = "gpw_channel", placeholder = "e.g. 123456789012345678");
+                });
+                div(id = "gpw-per-race-fields", data_ping_form_per_race = "gpw_type") {
+                    : form_field("lead_times", &mut ping_errors, html! {
+                        label(for = "gpw_lead_times") : "Lead times in hours (comma-separated, e.g. 24,48,72):";
+                        input(type = "text", name = "lead_times", id = "gpw_lead_times", placeholder = "e.g. 24,48,72");
+                    });
+                }
+                : form_field("delete_after_race", &mut ping_errors, html! {
+                    input(type = "checkbox", name = "delete_after_race", id = "gpw_delete");
+                    label(for = "gpw_delete") : " Delete ping messages after race starts";
+                });
+            }, ping_errors, "Add Game Ping Workflow");
+
             script(src = static_url!("game-role-binding-edit.js")) {}
+            script(src = static_url!("ping-workflow-edit.js")) {}
         }
     };
 
