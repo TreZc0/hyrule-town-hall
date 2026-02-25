@@ -25,6 +25,7 @@ use {
         },
         legal,
         racetime_bot::SeedMetadata,
+        weekly::WeeklySchedule,
         prelude::*,
     },
 };
@@ -299,7 +300,9 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
     let mut ongoing_events = Vec::default();
     for event in upcoming_events.drain(..).collect_vec() {
         if event.series != Series::Standard || event.event != "w" { // the weeklies are a perpetual event so we avoid always listing them
-            if event.is_started(&mut transaction).await? { &mut ongoing_events } else { &mut upcoming_events }.push(event);
+            let started = event.is_started(&mut transaction).await?;
+            let has_active_weekly = WeeklySchedule::for_event(&mut transaction, event.series, &event.event).await?.iter().any(|s| s.active);
+            if started || has_active_weekly { &mut ongoing_events } else { &mut upcoming_events }.push(event);
         }
     }
     let page_content = html! {
