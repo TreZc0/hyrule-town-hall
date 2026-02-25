@@ -305,15 +305,13 @@ async fn post_volunteer_requests_for_event(
             cutoff,
         );
 
-        if let Err(e) = channel_id.edit_message(
+        if let Err(_e) = channel_id.edit_message(
             discord_ctx,
             existing_id,
             EditMessage::new()
                 .content(content)
                 .components(components)
-        ).await {
-            eprintln!("Failed to update volunteer request message with new races: {}", e);
-        }
+        ).await {}
 
         existing_id
     } else {
@@ -857,16 +855,13 @@ pub(crate) async fn update_volunteer_post_for_race(
     );
 
     // Edit the message
-    if let Err(e) = channel_id.edit_message(
+    if let Err(_e) = channel_id.edit_message(
         discord_ctx,
         message_id,
         EditMessage::new()
             .content(content)
             .components(components)
-    ).await {
-        eprintln!("Failed to update volunteer request message: {}", e);
-        // Don't return error - this is a best-effort update
-    }
+    ).await {}
 
     transaction.commit().await?;
     Ok(())
