@@ -68,6 +68,7 @@ mod team;
 mod time;
 #[cfg(unix)] mod unix_socket;
 mod user;
+mod volunteer_pings;
 mod volunteer_requests;
 mod weekly;
 mod zsr_export;
@@ -387,6 +388,12 @@ async fn volunteer_request_manager(
                 let discord_ctx = discord_ctx.read().await;
                 if let Err(e) = volunteer_requests::check_and_post_volunteer_requests(&db_pool, &discord_ctx).await {
                     eprintln!("Error checking volunteer requests: {}", e);
+                }
+                if let Err(e) = volunteer_pings::check_and_send_volunteer_pings(&db_pool, &discord_ctx).await {
+                    eprintln!("Error sending volunteer pings: {}", e);
+                }
+                if let Err(e) = volunteer_pings::delete_stale_ping_messages(&db_pool, &discord_ctx).await {
+                    eprintln!("Error deleting stale ping messages: {}", e);
                 }
             }
             _ = shutdown.clone() => break,

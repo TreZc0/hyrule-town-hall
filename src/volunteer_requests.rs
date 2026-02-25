@@ -1,10 +1,10 @@
 use {
     chrono::{DateTime, Duration, Utc},
     serenity::all::{ButtonStyle, CreateActionRow, CreateButton, CreateMessage, EditMessage},
-    serenity::model::id::{ChannelId, MessageId, RoleId},
+    serenity::model::id::{ChannelId, MessageId},
     serenity_utils::message::TimestampStyle,
     sqlx::{PgPool, Postgres, Transaction},
-    std::collections::{BTreeMap, HashMap},
+    std::collections::BTreeMap,
     std::mem,
     crate::{
         cal::{Entrant, Entrants, Race, RaceSchedule},
@@ -35,7 +35,6 @@ struct RoleNeed {
     pending_count: i32,
     min_count: i32,
     max_count: i32,
-    needs_ping: bool,
     language: Language,
 }
 
@@ -73,7 +72,6 @@ pub(crate) async fn check_and_post_volunteer_requests(
             series AS "series: Series",
             event,
             volunteer_request_lead_time_hours,
-            volunteer_request_ping_enabled,
             discord_volunteer_info_channel AS "discord_volunteer_info_channel: PgSnowflake<ChannelId>"
         FROM events
         WHERE volunteer_requests_enabled = true
@@ -84,7 +82,6 @@ pub(crate) async fn check_and_post_volunteer_requests(
 
     for event_row in enabled_events {
         let lead_time = Duration::hours(event_row.volunteer_request_lead_time_hours as i64);
-        let ping_enabled = event_row.volunteer_request_ping_enabled;
         let channel_id = match event_row.discord_volunteer_info_channel {
             Some(PgSnowflake(id)) => id,
             None => continue,
@@ -102,7 +99,6 @@ pub(crate) async fn check_and_post_volunteer_requests(
             &event_data,
             channel_id,
             lead_time,
-            ping_enabled,
         ).await;
 
         // Always refresh existing posts to remove races that have since started
@@ -133,7 +129,6 @@ pub(crate) async fn check_and_post_for_event(
         r#"SELECT
             volunteer_requests_enabled,
             volunteer_request_lead_time_hours,
-            volunteer_request_ping_enabled,
             discord_volunteer_info_channel AS "discord_volunteer_info_channel: PgSnowflake<ChannelId>"
         FROM events
         WHERE series = $1 AND event = $2"#,
@@ -158,7 +153,6 @@ pub(crate) async fn check_and_post_for_event(
     };
 
     let lead_time = Duration::hours(settings.volunteer_request_lead_time_hours as i64);
-    let ping_enabled = settings.volunteer_request_ping_enabled;
 
     let event_data = match event::Data::new(&mut transaction, series, event).await? {
         Some(data) => data,
@@ -171,7 +165,6 @@ pub(crate) async fn check_and_post_for_event(
         &event_data,
         channel_id,
         lead_time,
-        ping_enabled,
     ).await?;
 
     transaction.commit().await?;
@@ -185,7 +178,6 @@ async fn post_volunteer_requests_for_event(
     event_data: &event::Data<'_>,
     channel_id: ChannelId,
     lead_time: Duration,
-    ping_enabled: bool,
 ) -> Result<CheckResult, Error> {
     let now = Utc::now();
     let cutoff = now + lead_time;
@@ -291,7 +283,6 @@ async fn post_volunteer_requests_for_event(
                         pending_count,
                         min_count: binding.min_count,
                         max_count: binding.max_count,
-                        needs_ping: confirmed_count < binding.min_count,
                         language: binding.language,
                     });
                 }
@@ -306,11 +297,10 @@ async fn post_volunteer_requests_for_event(
             }
         }
 
-        // Build and edit the message (ping only for new races)
+        // Build and edit the message (no pings — pings are handled by volunteer_pings workflows)
         let (content, components) = build_announcement_content(
             &all_needs,
             event_data,
-            ping_enabled,
             now,
             cutoff,
         );
@@ -327,11 +317,10 @@ async fn post_volunteer_requests_for_event(
 
         existing_id
     } else {
-        // Create a new post
+        // Create a new post (no pings — pings are handled by volunteer_pings workflows)
         let message = build_announcement_message(
             &races_needing_volunteers,
             event_data,
-            ping_enabled,
             now,
             cutoff,
         );
@@ -453,7 +442,6 @@ async fn get_races_needing_announcements(
 
             // Check if volunteers are needed
             if confirmed_count < binding.max_count {
-                let needs_ping = confirmed_count < binding.min_count;
                 role_needs.push(RoleNeed {
                     role_name: binding.role_type_name.clone(),
                     discord_role_id: binding.discord_role_id,
@@ -462,7 +450,6 @@ async fn get_races_needing_announcements(
                     pending_count,
                     min_count: binding.min_count,
                     max_count: binding.max_count,
-                    needs_ping,
                     language: binding.language,
                 });
                 has_any_need = true;
@@ -569,34 +556,10 @@ fn format_date_range(start: DateTime<Utc>, end: DateTime<Utc>) -> String {
 fn build_announcement_content(
     needs: &[RaceVolunteerNeed],
     event_data: &event::Data<'_>,
-    ping_enabled: bool,
     time_window_start: DateTime<Utc>,
     time_window_end: DateTime<Utc>,
 ) -> (String, Vec<CreateActionRow>) {
     let mut msg = MessageBuilder::default();
-
-    // Collect all roles that need pinging
-    let mut roles_to_ping: HashMap<i64, String> = HashMap::new();
-    if ping_enabled {
-        for need in needs {
-            for role_need in &need.role_needs {
-                if role_need.needs_ping {
-                    if let Some(role_id) = role_need.discord_role_id {
-                        roles_to_ping.insert(role_id, role_need.role_name.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    // Add role pings at the top
-    if !roles_to_ping.is_empty() {
-        for role_id in roles_to_ping.keys() {
-            msg.role(RoleId::new(*role_id as u64));
-            msg.push(" ");
-        }
-        msg.push("\n\n");
-    }
 
     msg.push("**Open Races for ");
     msg.push(&event_data.display_name);
@@ -728,14 +691,12 @@ fn build_announcement_content(
 fn build_announcement_message(
     needs: &[RaceVolunteerNeed],
     event_data: &event::Data<'_>,
-    ping_enabled: bool,
     time_window_start: DateTime<Utc>,
     time_window_end: DateTime<Utc>,
 ) -> CreateMessage {
     let (content, components) = build_announcement_content(
         needs,
         event_data,
-        ping_enabled,
         time_window_start,
         time_window_end,
     );
@@ -849,7 +810,6 @@ pub(crate) async fn update_volunteer_post_for_race(
 
             // Check if volunteers are needed (or if there are any signups to show)
             if confirmed_count < binding.max_count || pending_count > 0 {
-                let needs_ping = confirmed_count < binding.min_count;
                 role_needs.push(RoleNeed {
                     role_name: binding.role_type_name.clone(),
                     discord_role_id: binding.discord_role_id,
@@ -858,7 +818,6 @@ pub(crate) async fn update_volunteer_post_for_race(
                     pending_count,
                     min_count: binding.min_count,
                     max_count: binding.max_count,
-                    needs_ping,
                     language: binding.language,
                 });
                 has_any_need = true;
@@ -889,11 +848,10 @@ pub(crate) async fn update_volunteer_post_for_race(
     let lead_time = Duration::hours(race_info.volunteer_request_lead_time_hours as i64);
     let cutoff = now + lead_time;
 
-    // Build the updated message content (without pings on updates)
+    // Build the updated message content
     let (content, components) = build_announcement_content(
         &needs,
         &event_data,
-        false, // Don't ping on updates
         now,
         cutoff,
     );

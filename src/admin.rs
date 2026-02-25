@@ -18,7 +18,7 @@ use crate::{
     lang::Language,
     prelude::*,
     user::User,
-    event::{self, roles::{GameRoleBinding, RoleType, render_language_tabs, render_language_content_box_start, render_language_content_box_end}},
+    event::{roles::{GameRoleBinding, RoleType, render_language_tabs, render_language_content_box_start, render_language_content_box_end}},
     series::Series,
     id::{RoleTypes, RoleBindings},
 };
@@ -670,6 +670,40 @@ pub(crate) async fn game_management(
     let game_role_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
     let all_role_types = RoleType::all(&mut transaction).await.map_err(Error::from)?;
 
+    // Fetch game-level ping workflows
+    let game_ping_workflows = sqlx::query!(
+        r#"SELECT
+            w.id,
+            w.language AS "language: Language",
+            w.discord_ping_channel,
+            w.delete_after_race,
+            w.workflow_type AS "workflow_type: crate::volunteer_pings::PingWorkflowTypeDb",
+            w.ping_interval AS "ping_interval: crate::volunteer_pings::PingInterval",
+            w.schedule_time,
+            w.schedule_day_of_week
+        FROM volunteer_ping_workflows w
+        WHERE w.game_id = $1
+        ORDER BY w.id"#,
+        game.id,
+    )
+    .fetch_all(&mut *transaction)
+    .await
+    .map_err(Error::from)?;
+
+    let mut game_ping_lead_times: HashMap<i32, Vec<i32>> = HashMap::new();
+    for wf in &game_ping_workflows {
+        if matches!(wf.workflow_type, crate::volunteer_pings::PingWorkflowTypeDb::PerRace) {
+            let lts = sqlx::query_scalar!(
+                "SELECT lead_time_hours FROM volunteer_ping_lead_times WHERE workflow_id = $1 ORDER BY lead_time_hours",
+                wf.id
+            )
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(Error::from)?;
+            game_ping_lead_times.insert(wf.id, lts);
+        }
+    }
+
     transaction.commit().await.map_err(Error::from)?;
 
     // Get active languages and filter bindings
@@ -820,6 +854,156 @@ pub(crate) async fn game_management(
                 });
             }, errors, "Add Game Role Binding");
             
+            hr;
+
+            h2 : "Game Ping Workflows";
+            p : "Game-level volunteer ping workflows apply to all events in this game unless the event defines its own workflows.";
+
+            @if !game_ping_workflows.is_empty() {
+                table {
+                    thead {
+                        tr {
+                            th : "Language";
+                            th : "Type";
+                            th : "Details";
+                            th : "Ping Channel";
+                            th : "Delete After Race";
+                            th : "Actions";
+                        }
+                    }
+                    tbody {
+                        @for wf in &game_ping_workflows {
+                            tr {
+                                td : format!("{}", wf.language.short_code().to_uppercase());
+                                td {
+                                    @match wf.workflow_type {
+                                        crate::volunteer_pings::PingWorkflowTypeDb::Scheduled => { : "Scheduled"; }
+                                        crate::volunteer_pings::PingWorkflowTypeDb::PerRace => { : "Per Race"; }
+                                    }
+                                }
+                                td {
+                                    @match wf.workflow_type {
+                                        crate::volunteer_pings::PingWorkflowTypeDb::Scheduled => {
+                                            @if let Some(t) = wf.schedule_time {
+                                                : format!("{} UTC", t.format("%H:%M"));
+                                            }
+                                            @if let Some(interval) = wf.ping_interval {
+                                                @match interval {
+                                                    crate::volunteer_pings::PingInterval::Daily => { : " (daily)"; }
+                                                    crate::volunteer_pings::PingInterval::Weekly => {
+                                                        @if let Some(day) = wf.schedule_day_of_week {
+                                                            : format!(" (weekly, day {})", day);
+                                                        } else {
+                                                            : " (weekly)";
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        crate::volunteer_pings::PingWorkflowTypeDb::PerRace => {
+                                            @if let Some(lts) = game_ping_lead_times.get(&wf.id) {
+                                                @if lts.is_empty() {
+                                                    : "No lead times configured";
+                                                } else {
+                                                    : format!("Lead times: {}h", lts.iter().map(|h| h.to_string()).collect::<Vec<_>>().join(", "));
+                                                }
+                                                br;
+                                                @let mut errs = Vec::new();
+                                                : full_form(uri!(add_game_ping_workflow_lead_time(&game_name_clone, wf.id)), csrf.as_ref(), html! {
+                                                    : form_field("lead_time_hours", &mut errs, html! {
+                                                        input(type = "number", name = "lead_time_hours", placeholder = "hours", min = "1", max = "720", style = "width: 6em;");
+                                                    });
+                                                }, errs, "Add Lead Time");
+                                                @for lt in lts {
+                                                    @let (errs2, del_btn) = button_form(
+                                                        uri!(delete_game_ping_workflow_lead_time(&game_name_clone, wf.id, *lt)),
+                                                        csrf.as_ref(),
+                                                        Vec::new(),
+                                                        &format!("Remove {}h", lt)
+                                                    );
+                                                    : errs2;
+                                                    : del_btn;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                td {
+                                    @if let Some(chan) = wf.discord_ping_channel {
+                                        : chan.to_string();
+                                    } else {
+                                        : "Uses volunteer info channel";
+                                    }
+                                }
+                                td {
+                                    @if wf.delete_after_race {
+                                        : "Yes";
+                                    } else {
+                                        : "No";
+                                    }
+                                }
+                                td {
+                                    @let (errs3, del_btn3) = button_form(
+                                        uri!(delete_game_ping_workflow(&game_name_clone, wf.id)),
+                                        csrf.as_ref(),
+                                        Vec::new(),
+                                        "Delete"
+                                    );
+                                    : errs3;
+                                    : del_btn3;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                p : "No game-level ping workflows configured.";
+            }
+
+            h3 : "Add Game Ping Workflow";
+            @let mut ping_errors = Vec::new();
+            : full_form(uri!(add_game_ping_workflow(&game_name_clone)), csrf.as_ref(), html! {
+                : form_field("language", &mut ping_errors, html! {
+                    label(for = "gpw_language") : "Language:";
+                    select(name = "language", id = "gpw_language") {
+                        option(value = "en") : "English";
+                        option(value = "fr") : "French";
+                        option(value = "de") : "German";
+                        option(value = "pt") : "Portuguese";
+                    }
+                });
+                : form_field("workflow_type", &mut ping_errors, html! {
+                    label(for = "gpw_type") : "Type:";
+                    select(name = "workflow_type", id = "gpw_type") {
+                        option(value = "scheduled") : "Scheduled";
+                        option(value = "per_race") : "Per Race";
+                    }
+                });
+                : form_field("ping_interval", &mut ping_errors, html! {
+                    label(for = "gpw_interval") : "Interval (scheduled only):";
+                    select(name = "ping_interval", id = "gpw_interval") {
+                        option(value = "daily") : "Daily";
+                        option(value = "weekly") : "Weekly";
+                    }
+                });
+                : form_field("schedule_time", &mut ping_errors, html! {
+                    label(for = "gpw_time") : "Schedule time UTC (HH:MM):";
+                    input(type = "time", name = "schedule_time", id = "gpw_time");
+                });
+                : form_field("schedule_day_of_week", &mut ping_errors, html! {
+                    label(for = "gpw_dow") : "Day of week (weekly only, 0=Mon..6=Sun):";
+                    input(type = "number", name = "schedule_day_of_week", id = "gpw_dow", min = "0", max = "6", placeholder = "0–6");
+                });
+                : form_field("discord_ping_channel", &mut ping_errors, html! {
+                    label(for = "gpw_channel") : "Discord ping channel ID (optional):";
+                    input(type = "text", name = "discord_ping_channel", id = "gpw_channel", placeholder = "e.g. 123456789012345678");
+                });
+                : form_field("delete_after_race", &mut ping_errors, html! {
+                    input(type = "checkbox", name = "delete_after_race", id = "gpw_delete");
+                    label(for = "gpw_delete") : " Delete ping messages after race starts";
+                });
+            }, ping_errors, "Add Game Ping Workflow");
+
             p {
                 a(href = uri!(game_management_overview)) : "← Back to Game Management";
             }
@@ -1382,4 +1566,257 @@ pub(crate) async fn delete_zsr_backend(
     }
 
     Ok(Redirect::to(uri!(zsr_backends)))
+}
+
+// ─── Game Ping Workflow CRUD ─────────────────────────────────────────────────
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct AddGamePingWorkflowForm {
+    #[field(default = String::new())]
+    csrf: String,
+    language: Language,
+    workflow_type: String,
+    #[field(default = String::new())]
+    ping_interval: String,
+    #[field(default = String::new())]
+    schedule_time: String,
+    #[field(default = String::new())]
+    schedule_day_of_week: String,
+    #[field(default = String::new())]
+    discord_ping_channel: String,
+    #[field(default = false)]
+    delete_after_race: bool,
+}
+
+#[rocket::post("/game/<game_name>/ping-workflows/add", data = "<form>")]
+pub(crate) async fn add_game_ping_workflow(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    csrf: Option<CsrfToken>,
+    game_name: &str,
+    form: Form<Contextual<'_, AddGamePingWorkflowForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(Error::Unauthorized)?;
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
+    let game = Game::from_name(&mut transaction, game_name)
+        .await.map_err(Error::from)?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    let is_trez_user = is_trez(&me);
+    let is_admin = if !is_trez_user {
+        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
+    } else { false };
+    if !is_trez_user && !is_admin {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if let Some(ref value) = form.value {
+        let is_scheduled = value.workflow_type == "scheduled";
+        let is_per_race = value.workflow_type == "per_race";
+
+        if !is_scheduled && !is_per_race {
+            return Ok(Redirect::to(uri!(game_management(game_name, _))));
+        }
+
+        let discord_ping_channel = if value.discord_ping_channel.is_empty() {
+            None
+        } else {
+            value.discord_ping_channel.parse::<i64>().ok()
+        };
+
+        if is_scheduled {
+            let ping_interval = if value.ping_interval == "weekly" { "weekly" } else { "daily" };
+            let schedule_time_str = if value.schedule_time.is_empty() {
+                "18:00".to_string()
+            } else {
+                value.schedule_time.clone()
+            };
+            let schedule_day: Option<i16> = if value.ping_interval == "weekly" {
+                value.schedule_day_of_week.parse::<i16>().ok()
+            } else {
+                None
+            };
+
+            sqlx::query_unchecked!(
+                r#"INSERT INTO volunteer_ping_workflows
+                    (game_id, language, discord_ping_channel, delete_after_race, workflow_type, ping_interval, schedule_time, schedule_day_of_week)
+                VALUES ($1, $2, $3, $4, 'scheduled', $5::ping_interval, $6::time, $7)"#,
+                game.id,
+                value.language as _,
+                discord_ping_channel,
+                value.delete_after_race,
+                ping_interval,
+                schedule_time_str,
+                schedule_day,
+            )
+            .execute(&mut *transaction)
+            .await
+            .map_err(Error::from)?;
+        } else {
+            sqlx::query!(
+                r#"INSERT INTO volunteer_ping_workflows
+                    (game_id, language, discord_ping_channel, delete_after_race, workflow_type)
+                VALUES ($1, $2, $3, $4, 'per_race')"#,
+                game.id,
+                value.language as _,
+                discord_ping_channel,
+                value.delete_after_race,
+            )
+            .execute(&mut *transaction)
+            .await
+            .map_err(Error::from)?;
+        }
+
+        transaction.commit().await.map_err(Error::from)?;
+    }
+
+    Ok(Redirect::to(uri!(game_management(game_name, _))))
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct DeleteGamePingWorkflowForm {
+    #[field(default = String::new())]
+    csrf: String,
+}
+
+#[rocket::post("/game/<game_name>/ping-workflows/<workflow_id>/delete", data = "<form>")]
+pub(crate) async fn delete_game_ping_workflow(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    csrf: Option<CsrfToken>,
+    game_name: &str,
+    workflow_id: i32,
+    form: Form<Contextual<'_, DeleteGamePingWorkflowForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(Error::Unauthorized)?;
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
+    let game = Game::from_name(&mut transaction, game_name)
+        .await.map_err(Error::from)?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    let is_trez_user = is_trez(&me);
+    let is_admin = if !is_trez_user {
+        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
+    } else { false };
+    if !is_trez_user && !is_admin {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if form.value.is_some() {
+        sqlx::query!(
+            "DELETE FROM volunteer_ping_workflows WHERE id = $1 AND game_id = $2",
+            workflow_id,
+            game.id,
+        )
+        .execute(&mut *transaction)
+        .await
+        .map_err(Error::from)?;
+        transaction.commit().await.map_err(Error::from)?;
+    }
+
+    Ok(Redirect::to(uri!(game_management(game_name, _))))
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct AddGamePingWorkflowLeadTimeForm {
+    #[field(default = String::new())]
+    csrf: String,
+    lead_time_hours: i32,
+}
+
+#[rocket::post("/game/<game_name>/ping-workflows/<workflow_id>/lead-time/add", data = "<form>")]
+pub(crate) async fn add_game_ping_workflow_lead_time(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    csrf: Option<CsrfToken>,
+    game_name: &str,
+    workflow_id: i32,
+    form: Form<Contextual<'_, AddGamePingWorkflowLeadTimeForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(Error::Unauthorized)?;
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
+    let game = Game::from_name(&mut transaction, game_name)
+        .await.map_err(Error::from)?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    let is_trez_user = is_trez(&me);
+    let is_admin = if !is_trez_user {
+        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
+    } else { false };
+    if !is_trez_user && !is_admin {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if let Some(ref value) = form.value {
+        if value.lead_time_hours >= 1 {
+            sqlx::query!(
+                "INSERT INTO volunteer_ping_lead_times (workflow_id, lead_time_hours) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                workflow_id,
+                value.lead_time_hours,
+            )
+            .execute(&mut *transaction)
+            .await
+            .map_err(Error::from)?;
+            transaction.commit().await.map_err(Error::from)?;
+        }
+    }
+
+    Ok(Redirect::to(uri!(game_management(game_name, _))))
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct DeleteGamePingWorkflowLeadTimeForm {
+    #[field(default = String::new())]
+    csrf: String,
+}
+
+#[rocket::post("/game/<game_name>/ping-workflows/<workflow_id>/lead-time/<hours>/delete", data = "<form>")]
+pub(crate) async fn delete_game_ping_workflow_lead_time(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    csrf: Option<CsrfToken>,
+    game_name: &str,
+    workflow_id: i32,
+    hours: i32,
+    form: Form<Contextual<'_, DeleteGamePingWorkflowLeadTimeForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(Error::Unauthorized)?;
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
+    let game = Game::from_name(&mut transaction, game_name)
+        .await.map_err(Error::from)?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    let is_trez_user = is_trez(&me);
+    let is_admin = if !is_trez_user {
+        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
+    } else { false };
+    if !is_trez_user && !is_admin {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if form.value.is_some() {
+        sqlx::query!(
+            "DELETE FROM volunteer_ping_lead_times WHERE workflow_id = $1 AND lead_time_hours = $2",
+            workflow_id,
+            hours,
+        )
+        .execute(&mut *transaction)
+        .await
+        .map_err(Error::from)?;
+        transaction.commit().await.map_err(Error::from)?;
+    }
+
+    Ok(Redirect::to(uri!(game_management(game_name, _))))
 }

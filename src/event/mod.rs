@@ -219,8 +219,6 @@ pub(crate) struct Data<'a> {
     pub(crate) volunteer_requests_enabled: bool,
     /// How many hours in advance to post volunteer request announcements.
     pub(crate) volunteer_request_lead_time_hours: i32,
-    /// When true, role pings are included in volunteer request posts when below min_count.
-    pub(crate) volunteer_request_ping_enabled: bool,
     /// When true, uses event-specific role bindings. When false, uses game-level role bindings.
     pub(crate) force_custom_role_binding: bool,
     /// Controls when qualifier scores are hidden on the teams page.
@@ -290,7 +288,6 @@ impl<'a> Data<'a> {
             automated_asyncs,
             volunteer_requests_enabled,
             volunteer_request_lead_time_hours,
-            volunteer_request_ping_enabled,
             force_custom_role_binding,
             qualifier_score_hiding AS "qualifier_score_hiding: QualifierScoreHiding"
         FROM events WHERE series = $1 AND event = $2"#, series as _, &event).fetch_optional(&mut **transaction).await?
@@ -347,7 +344,6 @@ impl<'a> Data<'a> {
                 automated_asyncs: row.automated_asyncs,
                 volunteer_requests_enabled: row.volunteer_requests_enabled,
                 volunteer_request_lead_time_hours: row.volunteer_request_lead_time_hours,
-                volunteer_request_ping_enabled: row.volunteer_request_ping_enabled,
                 force_custom_role_binding: row.force_custom_role_binding.unwrap_or(true),
                 qualifier_score_hiding: row.qualifier_score_hiding,
             }))
