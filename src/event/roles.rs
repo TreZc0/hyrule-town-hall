@@ -1090,7 +1090,32 @@ async fn roles_page(
                         }
                         tbody {
                             @for wf in &event_ping_workflows {
-                                tr {
+                                @let wf_lead_times_str = ping_workflow_lead_times.get(&wf.id)
+                                    .map(|lts| lts.iter().map(|h| h.to_string()).collect::<Vec<_>>().join(","))
+                                    .unwrap_or_default();
+                                @let wf_type_str = match wf.workflow_type {
+                                    crate::volunteer_pings::PingWorkflowTypeDb::Scheduled => "scheduled",
+                                    crate::volunteer_pings::PingWorkflowTypeDb::PerRace => "per_race",
+                                };
+                                @let wf_interval_str = wf.ping_interval.map(|i| match i {
+                                    crate::volunteer_pings::PingInterval::Daily => "daily",
+                                    crate::volunteer_pings::PingInterval::Weekly => "weekly",
+                                }).unwrap_or("");
+                                @let wf_time_str = wf.schedule_time.map(|t| format!("{}", t.format("%H:%M"))).unwrap_or_default();
+                                @let wf_dow_str = wf.schedule_day_of_week.map(|d| d.to_string()).unwrap_or_default();
+                                @let wf_edit_path = format!("/event/{}/{}/volunteer-ping-workflow/{}/edit", data.series.slug(), &*data.event, wf.id);
+                                @let wf_delete_path = format!("/event/{}/{}/volunteer-ping-workflow/{}/delete", data.series.slug(), &*data.event, wf.id);
+                                @let wf_channel_val = wf.discord_ping_channel.map(|c| c.to_string()).unwrap_or_default();
+                                tr(
+                                    data_workflow_id = wf.id.to_string(),
+                                    data_type = wf_type_str,
+                                    data_interval = wf_interval_str,
+                                    data_schedule_time = wf_time_str,
+                                    data_schedule_dow = wf_dow_str,
+                                    data_lead_times = wf_lead_times_str,
+                                    data_edit_path = wf_edit_path,
+                                    data_delete_path = wf_delete_path,
+                                ) {
                                     td : format!("{}", wf.language.short_code().to_uppercase());
                                     td {
                                         @match wf.workflow_type {
@@ -1098,7 +1123,7 @@ async fn roles_page(
                                             crate::volunteer_pings::PingWorkflowTypeDb::PerRace => { : "Per Race"; }
                                         }
                                     }
-                                    td {
+                                    td(class = "wf-details") {
                                         @match wf.workflow_type {
                                             crate::volunteer_pings::PingWorkflowTypeDb::Scheduled => {
                                                 @if let Some(t) = wf.schedule_time {
@@ -1124,44 +1149,26 @@ async fn roles_page(
                                                     } else {
                                                         : format!("Lead times: {}h", lts.iter().map(|h| h.to_string()).collect::<Vec<_>>().join(", "));
                                                     }
-                                                    // Lead time add form
-                                                    br;
-                                                    @let mut errs = Vec::new();
-                                                    : full_form(uri!(add_ping_workflow_lead_time(data.series, &*data.event, wf.id)), csrf.as_ref(), html! {
-                                                        : form_field("lead_time_hours", &mut errs, html! {
-                                                            input(type = "number", name = "lead_time_hours", placeholder = "hours", min = "1", max = "720", style = "width: 6em;");
-                                                        });
-                                                    }, errs, "Add Lead Time");
-                                                    // Lead time delete buttons
-                                                    @for lt in lts {
-                                                        @let (errs2, del_btn) = button_form(
-                                                            uri!(delete_ping_workflow_lead_time(data.series, &*data.event, wf.id, *lt)),
-                                                            csrf.as_ref(),
-                                                            Vec::new(),
-                                                            &format!("Remove {}h", lt)
-                                                        );
-                                                        : errs2;
-                                                        : del_btn;
-                                                    }
                                                 }
                                             }
                                         }
                                     }
-                                    td {
+                                    td(class = "wf-channel", data_value = wf_channel_val) {
                                         @if let Some(chan) = wf.discord_ping_channel {
                                             : chan.to_string();
                                         } else {
                                             : "Uses volunteer info channel";
                                         }
                                     }
-                                    td {
+                                    td(class = "wf-delete-after", data_value = wf.delete_after_race.to_string()) {
                                         @if wf.delete_after_race {
-                                            : "Yes";
+                                            span(style = "color: green;") : "✓ Yes";
                                         } else {
-                                            : "No";
+                                            span(style = "color: red;") : "✗ No";
                                         }
                                     }
-                                    td {
+                                    td(class = "wf-actions") {
+                                        button(class = "button edit-btn", onclick = format!("startEditWorkflow({})", wf.id)) : "Edit";
                                         @let (errs3, del_btn3) = button_form(
                                             uri!(delete_ping_workflow(data.series, &*data.event, wf.id)),
                                             csrf.as_ref(),
@@ -1216,6 +1223,10 @@ async fn roles_page(
                     : form_field("discord_ping_channel", &mut ping_errors, html! {
                         label(for = "pw_channel") : "Discord ping channel ID (optional, falls back to volunteer info channel):";
                         input(type = "text", name = "discord_ping_channel", id = "pw_channel", placeholder = "e.g. 123456789012345678");
+                    });
+                    : form_field("lead_times", &mut ping_errors, html! {
+                        label(for = "pw_lead_times") : "Lead times in hours (per-race only, comma-separated, e.g. 24,48,72):";
+                        input(type = "text", name = "lead_times", id = "pw_lead_times", placeholder = "e.g. 24,48,72");
                     });
                     : form_field("delete_after_race", &mut ping_errors, html! {
                         input(type = "checkbox", name = "delete_after_race", id = "pw_delete");
@@ -1658,6 +1669,7 @@ async fn roles_page(
             : content;
             link(rel = "stylesheet", href = static_url!("roles-page.css"));
             script(src = static_url!("role-binding-edit.js")) {}
+            script(src = static_url!("ping-workflow-edit.js")) {}
         },
     )
     .await?)
@@ -5037,6 +5049,8 @@ pub(crate) struct AddPingWorkflowForm {
     schedule_day_of_week: String,
     #[field(default = String::new())]
     discord_ping_channel: String,
+    #[field(default = String::new())]
+    lead_times: String,
     #[field(default = false)]
     delete_after_race: bool,
 }
@@ -5109,18 +5123,34 @@ pub(crate) async fn add_ping_workflow(
             .execute(&mut *transaction)
             .await?;
         } else {
-            sqlx::query!(
+            let workflow_id = sqlx::query_scalar!(
                 r#"INSERT INTO volunteer_ping_workflows
                     (series, event, language, discord_ping_channel, delete_after_race, workflow_type)
-                VALUES ($1, $2, $3, $4, $5, 'per_race')"#,
+                VALUES ($1, $2, $3, $4, $5, 'per_race') RETURNING id"#,
                 series.slug(),
                 event,
                 value.language as _,
                 discord_ping_channel,
                 value.delete_after_race,
             )
-            .execute(&mut *transaction)
+            .fetch_one(&mut *transaction)
             .await?;
+
+            for part in value.lead_times.split(',') {
+                let part = part.trim();
+                if part.is_empty() { continue; }
+                if let Ok(hours) = part.parse::<i32>() {
+                    if hours >= 1 {
+                        sqlx::query!(
+                            "INSERT INTO volunteer_ping_lead_times (workflow_id, lead_time_hours) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                            workflow_id,
+                            hours,
+                        )
+                        .execute(&mut *transaction)
+                        .await?;
+                    }
+                }
+            }
         }
 
         transaction.commit().await?;
@@ -5170,6 +5200,135 @@ pub(crate) async fn delete_ping_workflow(
     }
 
     Ok(Redirect::to(uri!(get(series, event, _, _))))
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct EditPingWorkflowForm {
+    #[field(default = String::new())]
+    csrf: String,
+    #[field(default = String::new())]
+    discord_ping_channel: String,
+    #[field(default = false)]
+    delete_after_race: bool,
+    // Scheduled fields
+    #[field(default = String::new())]
+    ping_interval: String,
+    #[field(default = String::new())]
+    schedule_time: String,
+    #[field(default = String::new())]
+    schedule_day_of_week: String,
+    // Per-race field
+    #[field(default = String::new())]
+    lead_times: String,
+}
+
+#[rocket::post("/event/<series>/<event>/volunteer-ping-workflow/<workflow_id>/edit", data = "<form>")]
+pub(crate) async fn edit_ping_workflow(
+    pool: &State<PgPool>,
+    me: User,
+    series: Series,
+    event: &str,
+    workflow_id: i32,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, EditPingWorkflowForm>>,
+) -> Result<rocket::http::Status, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if let Some(ref value) = form.value {
+        let discord_ping_channel = if value.discord_ping_channel.is_empty() {
+            None
+        } else {
+            value.discord_ping_channel.parse::<i64>().ok()
+        };
+
+        // Look up workflow type
+        let wf = sqlx::query!(
+            r#"SELECT workflow_type AS "workflow_type: crate::volunteer_pings::PingWorkflowTypeDb"
+               FROM volunteer_ping_workflows WHERE id = $1 AND series = $2 AND event = $3"#,
+            workflow_id,
+            series.slug(),
+            event,
+        )
+        .fetch_optional(&mut *transaction)
+        .await?;
+
+        if let Some(wf) = wf {
+            match wf.workflow_type {
+                crate::volunteer_pings::PingWorkflowTypeDb::Scheduled => {
+                    let ping_interval = if value.ping_interval == "weekly" { "weekly" } else { "daily" };
+                    let schedule_time_str = if value.schedule_time.is_empty() {
+                        "18:00".to_string()
+                    } else {
+                        value.schedule_time.clone()
+                    };
+                    let schedule_day: Option<i16> = if value.ping_interval == "weekly" {
+                        value.schedule_day_of_week.parse::<i16>().ok()
+                    } else {
+                        None
+                    };
+                    sqlx::query_unchecked!(
+                        r#"UPDATE volunteer_ping_workflows
+                           SET discord_ping_channel = $1, delete_after_race = $2,
+                               ping_interval = $3::ping_interval, schedule_time = $4::time,
+                               schedule_day_of_week = $5, updated_at = NOW()
+                           WHERE id = $6"#,
+                        discord_ping_channel,
+                        value.delete_after_race,
+                        ping_interval,
+                        schedule_time_str,
+                        schedule_day,
+                        workflow_id,
+                    )
+                    .execute(&mut *transaction)
+                    .await?;
+                }
+                crate::volunteer_pings::PingWorkflowTypeDb::PerRace => {
+                    sqlx::query!(
+                        "UPDATE volunteer_ping_workflows SET discord_ping_channel = $1, delete_after_race = $2, updated_at = NOW() WHERE id = $3",
+                        discord_ping_channel,
+                        value.delete_after_race,
+                        workflow_id,
+                    )
+                    .execute(&mut *transaction)
+                    .await?;
+
+                    // Replace all lead times
+                    sqlx::query!("DELETE FROM volunteer_ping_lead_times WHERE workflow_id = $1", workflow_id)
+                        .execute(&mut *transaction)
+                        .await?;
+
+                    for part in value.lead_times.split(',') {
+                        let part = part.trim();
+                        if part.is_empty() { continue; }
+                        if let Ok(hours) = part.parse::<i32>() {
+                            if hours >= 1 {
+                                sqlx::query!(
+                                    "INSERT INTO volunteer_ping_lead_times (workflow_id, lead_time_hours) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                                    workflow_id,
+                                    hours,
+                                )
+                                .execute(&mut *transaction)
+                                .await?;
+                            }
+                        }
+                    }
+                }
+            }
+            transaction.commit().await?;
+        }
+    }
+
+    Ok(rocket::http::Status::Ok)
 }
 
 #[derive(FromForm, CsrfForm)]
