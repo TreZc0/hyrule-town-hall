@@ -236,8 +236,8 @@ fn scheduled_workflow_should_fire(
 /// Builds a ping message for a set of role IDs needing pings and a list of races.
 fn build_scheduled_ping_message(
     role_ids: &HashSet<i64>,
-    // (matchup, start_ts, volunteer_request_message_id, volunteer_request_channel_id, race_id_raw, role_counts)
-    race_summaries: &[(String, String, Option<i64>, Option<i64>, i64, Vec<(String, i32, i32)>)],
+    // (matchup, start_ts, volunteer_request_message_id, volunteer_request_channel_id, race_id_raw, needed_role_names)
+    race_summaries: &[(String, String, Option<i64>, Option<i64>, i64, Vec<String>)],
     display_name: &str,
     language: Language,
     guild_id: Option<i64>,
@@ -261,11 +261,8 @@ fn build_scheduled_ping_message(
     msg.push(&format!("** ({} restreams)\n", language.short_code().to_uppercase()));
 
     msg.push("Upcoming races (timestamps in your timezone):\n");
-    for (matchup, start_ts, msg_id, chan_id, race_id_raw, role_counts) in race_summaries {
-        let signup_str = role_counts.iter()
-            .map(|(name, current, max)| format!("{}: {}/{}", name, current, max))
-            .collect::<Vec<_>>()
-            .join(", ");
+    for (matchup, start_ts, msg_id, chan_id, race_id_raw, needed_role_names) in race_summaries {
+        let needs_str = needed_role_names.join(", ");
         let web_url = format!("{}/event/{}/{}/races/{}/signups", base_uri(), series.slug(), event, race_id_raw);
         let link_str = if let (Some(msg_id), Some(chan_id), Some(guild)) = (msg_id, chan_id, guild_id) {
             format!(
@@ -275,7 +272,7 @@ fn build_scheduled_ping_message(
         } else {
             format!("[[Web signup]({})]", web_url)
         };
-        msg.push(&format!("• {} — Signups: {} — {}: {}\n", matchup, signup_str, start_ts, link_str));
+        msg.push(&format!("• {} — Needs: {} — {}: {}\n", matchup, needs_str, start_ts, link_str));
     }
 
     msg.push("\nAll upcoming races: ");
@@ -294,7 +291,7 @@ fn build_per_race_ping_message(
     volunteer_request_message_id: Option<i64>,
     volunteer_request_channel_id: Option<i64>,
     race_web_signup_url: &str,
-    role_counts: &[(String, i32, i32)],
+    needed_role_names: &[String],
     volunteer_page_url: &str,
 ) -> CreateMessage {
     let mut msg = MessageBuilder::default();
@@ -313,11 +310,8 @@ fn build_per_race_ping_message(
     msg.push(matchup);
     msg.push("**\n");
 
-    let signup_str = role_counts.iter()
-        .map(|(name, current, min)| format!("{}: {}/{}", name, current, min))
-        .collect::<Vec<_>>()
-        .join(", ");
-    msg.push(&format!("Signups: {} — Race starts: {}\n", signup_str, start_ts));
+    let needs_str = needed_role_names.join(", ");
+    msg.push(&format!("Needs: {} — Race starts: {}\n", needs_str, start_ts));
 
     if let (Some(msg_id), Some(chan_id), Some(guild)) = (volunteer_request_message_id, volunteer_request_channel_id, guild_id) {
         msg.push(&format!(
@@ -497,8 +491,7 @@ async fn check_scheduled_workflow(
         let signups = Signup::for_race(&mut transaction, race_id).await?;
 
         let mut needs_ping = false;
-        // (role_name, current_count, max_count) for all roles in this language
-        let mut role_counts: Vec<(String, i32, i32)> = Vec::new();
+        let mut needed_role_names: Vec<String> = Vec::new();
         for binding in &role_bindings {
             if binding.is_disabled || binding.language != workflow.language {
                 continue;
@@ -510,9 +503,9 @@ async fn check_scheduled_workflow(
                 .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Pending))
                 .count() as i32;
             let current = confirmed + pending;
-            role_counts.push((binding.role_type_name.clone(), current, binding.max_count));
             if current < binding.min_count {
                 needs_ping = true;
+                needed_role_names.push(binding.role_type_name.clone());
                 if let Some(role_id) = binding.discord_role_id {
                     role_ids_to_ping.insert(role_id);
                 }
@@ -548,7 +541,7 @@ async fn check_scheduled_workflow(
             .map(|m| (m.volunteer_request_message_id, m.discord_volunteer_info_channel))
             .unwrap_or((None, None));
 
-        race_summaries.push((matchup, start_ts, vmsg_id, vchan_id, *race_id_raw, role_counts));
+        race_summaries.push((matchup, start_ts, vmsg_id, vchan_id, *race_id_raw, needed_role_names));
     }
 
     transaction.commit().await?;
@@ -660,7 +653,7 @@ async fn check_per_race_workflow(
         let signups = Signup::for_race(&mut transaction, race_id).await?;
 
         let mut role_ids_to_ping: HashSet<i64> = HashSet::new();
-        let mut role_counts: Vec<(String, i32, i32)> = Vec::new();
+        let mut needed_role_names: Vec<String> = Vec::new();
         for binding in &role_bindings {
             if binding.is_disabled || binding.language != workflow.language {
                 continue;
@@ -672,8 +665,8 @@ async fn check_per_race_workflow(
                 .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Pending))
                 .count() as i32;
             let current = confirmed + pending;
-            role_counts.push((binding.role_type_name.clone(), current, binding.max_count));
             if current < binding.min_count {
+                needed_role_names.push(binding.role_type_name.clone());
                 if let Some(role_id) = binding.discord_role_id {
                     role_ids_to_ping.insert(role_id);
                 }
@@ -721,7 +714,7 @@ async fn check_per_race_workflow(
             vmsg_id,
             vchan_id,
             &race_web_signup_url,
-            &role_counts,
+            &needed_role_names,
             volunteer_page_url,
         );
 

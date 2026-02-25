@@ -1439,7 +1439,7 @@ pub(crate) async fn add_game_ping_workflow(
         let is_per_race = value.workflow_type == "per_race";
 
         if !is_scheduled && !is_per_race {
-            return Ok(Redirect::to(uri!(game_management(game_name, _))));
+            return Ok(Redirect::to(uri!(crate::games::manage_roles(game_name, _, _))));
         }
 
         let discord_ping_channel = if value.discord_ping_channel.is_empty() {
@@ -1511,7 +1511,7 @@ pub(crate) async fn add_game_ping_workflow(
         transaction.commit().await.map_err(Error::from)?;
     }
 
-    Ok(Redirect::to(uri!(game_management(game_name, _))))
+    Ok(Redirect::to(uri!(crate::games::manage_roles(game_name, _, _))))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -1558,7 +1558,7 @@ pub(crate) async fn delete_game_ping_workflow(
         transaction.commit().await.map_err(Error::from)?;
     }
 
-    Ok(Redirect::to(uri!(game_management(game_name, _))))
+    Ok(Redirect::to(uri!(crate::games::manage_roles(game_name, _, _))))
 }
 
 #[derive(FromForm, CsrfForm)]
