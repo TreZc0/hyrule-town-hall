@@ -846,6 +846,55 @@ impl Race {
         })
     }
 
+    pub(crate) async fn ignore_remaining_games(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<(), Error> {
+        if let Some(game) = self.game {
+            let ([team1, team2, team3], [p1, p2, p3], [p1_discord, p2_discord], [p1_racetime, p2_racetime], [p1_twitch, p2_twitch], [total, finished]) = self.entrants.to_db();
+            sqlx::query!(r#"UPDATE races SET ignored = true WHERE
+                NOT ignored
+                AND series = $1
+                AND event = $2
+                AND phase IS NOT DISTINCT FROM $3
+                AND round IS NOT DISTINCT FROM $4
+                AND game > $5
+                AND team1 IS NOT DISTINCT FROM $6
+                AND team2 IS NOT DISTINCT FROM $7
+                AND team3 IS NOT DISTINCT FROM $8
+                AND p1 IS NOT DISTINCT FROM $9
+                AND p2 IS NOT DISTINCT FROM $10
+                AND p3 IS NOT DISTINCT FROM $11
+                AND p1_discord IS NOT DISTINCT FROM $12
+                AND p2_discord IS NOT DISTINCT FROM $13
+                AND p1_racetime IS NOT DISTINCT FROM $14
+                AND p2_racetime IS NOT DISTINCT FROM $15
+                AND p1_twitch IS NOT DISTINCT FROM $16
+                AND p2_twitch IS NOT DISTINCT FROM $17
+                AND total IS NOT DISTINCT FROM $18
+                AND finished IS NOT DISTINCT FROM $19
+            "#,
+                self.series as _,
+                self.event,
+                self.phase,
+                self.round,
+                game,
+                team1 as _,
+                team2 as _,
+                team3 as _,
+                p1,
+                p2,
+                p3,
+                p1_discord.map(PgSnowflake) as _,
+                p2_discord.map(PgSnowflake) as _,
+                p1_racetime,
+                p2_racetime,
+                p1_twitch,
+                p2_twitch,
+                total.map(|total| total as i32),
+                finished.map(|finished| finished as i32),
+            ).execute(&mut **transaction).await?;
+        }
+        Ok(())
+    }
+
     pub(crate) async fn event(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<event::Data<'static>, event::DataError> {
         event::Data::new(transaction, self.series, self.event.clone()).await?.ok_or(event::DataError::Missing)
     }

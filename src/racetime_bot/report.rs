@@ -349,6 +349,7 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
             };
             results_channel.say(&*ctx.global_state.discord_ctx.read().await, msg).await.to_racetime()?;
         }
+        let mut series_decided = false;
         match cal_event.race.source {
             cal::Source::Manual | cal::Source::Sheet { .. } => {}
             cal::Source::Challonge { .. } => {} //TODO
@@ -413,6 +414,8 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                                         .collect()),
                                 }
                             ).await.to_racetime()?;
+                            cal_event.race.ignore_remaining_games(&mut transaction).await.to_racetime()?;
+                            series_decided = true;
                         } else {
                             startgg::query_uncached::<startgg::ReportBracketSetMutation>(
                                 &ctx.global_state.http_client,
@@ -451,12 +454,12 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
             cal::Source::SpeedGaming { .. } => {} //TODO
         }
         if_chain! {
+            if !series_decided;
             if let Entrant::MidosHouseTeam(winner) = winner;
             if let Entrant::MidosHouseTeam(loser) = loser;
             if let Some(draft_kind) = event.draft_kind();
             if let Some(next_game) = cal_event.race.next_game(&mut transaction, &ctx.global_state.http_client).await.to_racetime()?;
             then {
-                //TODO if this game decides the match, delete next game instead of initializing draft
                 let draft = match draft_kind {
                     draft::Kind::AlttprDe9 => {
                         cal_event.race.draft.clone().expect("AlttprDe9 race should have draft state")
@@ -467,9 +470,6 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                 if_chain! {
                     if let Some(guild_id) = event.discord_guild;
                     if let Some(scheduling_thread) = next_game.scheduling_thread;
-                    // not automatically posting if the match might already be decided
-                    //TODO remove this condition after implementing handling for decided matches (see TODO comment above)
-                    if cal_event.race.game.expect("found next game for race without game number") <= cal_event.race.game_count(&mut transaction).await.to_racetime()? / 2;
                     let discord_ctx = ctx.global_state.discord_ctx.read().await;
                     let data = discord_ctx.data.read().await;
                     if let Some(Some(command_ids)) = data.get::<CommandIds>().and_then(|command_ids| command_ids.get(&guild_id).copied());
