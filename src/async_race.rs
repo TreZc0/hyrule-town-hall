@@ -340,6 +340,14 @@ impl AsyncRaceManager {
         content.push("To maintain fairness, the final match results will only be shared after both players have completed the seed and organizers have confirmed the results.");
         
         // Instructions based on display order
+        let is_alttpr = sqlx::query_scalar!(
+            r#"SELECT EXISTS (
+                SELECT 1 FROM game_series gs
+                JOIN games g ON g.id = gs.game_id
+                WHERE gs.series = $1 AND g.name = 'alttpr'
+            ) AS "is_alttpr!""#,
+            event.series as _
+        ).fetch_one(&mut **transaction).await.unwrap_or(false);
         let display_order = Self::get_display_order(race, async_part);
         if display_order == 1 {
             content.push_line("");
@@ -347,7 +355,11 @@ impl AsyncRaceManager {
             content.push_line("");
             content.push("• Local record from OBS and upload to YouTube as unlisted.");
             content.push_line("");
-            content.push("• When finished, inform us immediately with your finish time and a screenshot of the collection rate end scene.");
+            if is_alttpr {
+                content.push("• When finished, inform us immediately with your finish time and a screenshot of the collection rate end scene.");
+            } else {
+                content.push("• When finished, inform us immediately and provide a screenshot showing your final time and an indicator of seed completion.");
+            }
             content.push_line("");
             content.push("• We suggest using MKV format for recording (more crash-resistant than MP4).");
         } else {
@@ -356,7 +368,11 @@ impl AsyncRaceManager {
             content.push_line("");
             content.push("• You can stream to Twitch/YouTube OR local record and upload to YouTube as unlisted.");
             content.push_line("");
-            content.push("• When finished, inform us immediately with your finish time and a screenshot of the collection rate end scene.");
+            if is_alttpr {
+                content.push("• When finished, inform us immediately with your finish time and a screenshot of the collection rate end scene.");
+            } else { 
+                content.push("• When finished, inform us immediately and provide a screenshot showing your final time and an indicator of seed completion.");
+            }
             content.push_line("");
             content.push("• If streaming to Twitch, ensure VoDs are published for access for the organizers.");
         }
@@ -759,7 +775,19 @@ impl AsyncRaceManager {
         content.push_line("");
         content.push("• Upload your recording to YouTube (unlisted is fine).");
         content.push_line("");
-        content.push("• Provide a screenshot of your final time/collection rate.");
+        let is_alttpr = sqlx::query_scalar!(
+            r#"SELECT EXISTS (
+                SELECT 1 FROM game_series gs
+                JOIN games g ON g.id = gs.game_id
+                WHERE gs.series = $1 AND g.name = 'alttpr'
+            ) AS "is_alttpr!""#,
+            event.series as _
+        ).fetch_one(&mut **transaction).await.unwrap_or(false);
+        if is_alttpr {
+            content.push("• Provide a screenshot of your final time and collection rate.");
+        } else {
+            content.push("• Provide a screenshot showing your final time and an indicator of seed completion.");
+        }
         content.push_line("");
 
         Ok(content)
