@@ -281,6 +281,339 @@ impl GenericInteraction for ComponentInteraction {
     }
 }
 
+async fn apply_live_schedule(
+    ctx: &DiscordCtx,
+    interaction: &impl GenericInteraction,
+    mut transaction: Transaction<'_, Postgres>,
+    mut race: Race,
+    event: event::Data<'static>,
+    was_scheduled: bool,
+    start: DateTime<Utc>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    race.schedule.set_live_start(start);
+    race.schedule_updated_at = Some(Utc::now());
+    race.save(&mut transaction).await?;
+    // Create or update Discord scheduled event
+    let http_client = {
+        let data = ctx.data.read().await;
+        data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone()
+    };
+    match crate::discord_scheduled_events::create_discord_scheduled_event(ctx, &mut transaction, &mut race, &event, &http_client).await {
+        Ok(()) => {
+            race.save(&mut transaction).await?; // Save updated discord_scheduled_event_id
+        }
+        Err(e) => {
+            eprintln!("Failed to create Discord scheduled event for race {}: {}", race.id, e);
+        }
+    }
+    let mut cal_event = cal::Event { kind: cal::EventKind::Normal, race };
+    if start - Utc::now() < TimeDelta::minutes(30) {
+        // Commit transaction BEFORE creating room so race handler can find it in database
+        transaction.commit().await?;
+
+        let (http_client, new_room_lock, racetime_host, racetime_config, clean_shutdown) = {
+            let data = ctx.data.read().await;
+            (
+                data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
+                data.get::<NewRoomLock>().expect("new room lock missing from Discord context").clone(),
+                data.get::<RacetimeHost>().expect("racetime.gg host missing from Discord context").clone(),
+                data.get::<ConfigRaceTime>().expect("racetime.gg config missing from Discord context").clone(),
+                data.get::<CleanShutdown>().expect("clean shutdown state missing from Discord context").clone(),
+            )
+        };
+
+        // Start a new transaction for room creation
+        let mut transaction = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?;
+        lock!(new_room_lock = new_room_lock; {
+            if let Some((_, msg, _notification_channel)) = racetime_bot::create_room(&mut transaction, ctx, &racetime_host, &racetime_config.client_id, &racetime_config.client_secret, &http_client, clean_shutdown, &cal_event, &event).await? {
+                if let Some(channel) = event.discord_race_room_channel {
+                    if let Err(e) = channel.say(ctx, &msg).await {
+                        eprintln!("Failed to post race message to Discord race room channel: {}", e);
+                    }
+                }
+                interaction.edit_response(ctx, EditInteractionResponse::new()
+                    .content(msg)
+                ).await?;
+            } else {
+                let mut response_content = MessageBuilder::default();
+                response_content.push(if let Some(game) = cal_event.race.game { format!("Game {game}") } else { format!("This race") });
+                response_content.push(if was_scheduled { " has been rescheduled for " } else { " is now scheduled for " });
+                response_content.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
+                let response_content = response_content
+                    .push(". The race room will be opened momentarily.")
+                    .build();
+                interaction.edit_response(ctx, EditInteractionResponse::new()
+                    .content(response_content)
+                ).await?;
+            }
+            transaction.commit().await?;
+        });
+
+        // Update volunteer post if this was a reschedule
+        if was_scheduled {
+            let pool = {
+                let data = ctx.data.read().await;
+                data.get::<DbPool>().expect("database connection pool missing from Discord context").clone()
+            };
+            let _ = volunteer_requests::update_volunteer_post_for_race(
+                &pool,
+                ctx,
+                cal_event.race.id,
+            ).await;
+
+            // Send reschedule notification DMs to volunteers
+            let mut transaction = pool.begin().await?;
+            let signups = event::roles::Signup::for_race(&mut transaction, cal_event.race.id).await?;
+            let affected_signups: Vec<_> = signups.iter()
+                .filter(|s| matches!(s.status, event::roles::VolunteerSignupStatus::Pending | event::roles::VolunteerSignupStatus::Confirmed))
+                .collect();
+
+            // Build race description
+            let race_description = if cal_event.race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
+                match (&cal_event.race.round, &cal_event.race.phase) {
+                    (Some(round), _) => round.clone(),
+                    (None, Some(phase)) => phase.clone(),
+                    (None, None) => "Qualifier".to_string(),
+                }
+            } else {
+                match &cal_event.race.entrants {
+                    Entrants::Two([team1, team2]) => format!("{} vs {}",
+                        match team1 {
+                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                            Entrant::Named { name, .. } => name.clone(),
+                            Entrant::Discord { .. } => "Discord User".to_string(),
+                        },
+                        match team2 {
+                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                            Entrant::Named { name, .. } => name.clone(),
+                            Entrant::Discord { .. } => "Discord User".to_string(),
+                        }
+                    ),
+                    Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                        match team1 {
+                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                            Entrant::Named { name, .. } => name.clone(),
+                            Entrant::Discord { .. } => "Discord User".to_string(),
+                        },
+                        match team2 {
+                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                            Entrant::Named { name, .. } => name.clone(),
+                            Entrant::Discord { .. } => "Discord User".to_string(),
+                        },
+                        match team3 {
+                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                            Entrant::Named { name, .. } => name.clone(),
+                            Entrant::Discord { .. } => "Discord User".to_string(),
+                        }
+                    ),
+                    _ => cal_event.race.round.clone().or_else(|| cal_event.race.phase.clone()).unwrap_or_else(|| "Race".to_string()),
+                }
+            };
+
+            // Send DM to each affected volunteer
+            for signup in affected_signups {
+                if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
+                    if let Some(discord) = user.discord {
+                        let discord_user_id = UserId::new(discord.id.get());
+
+                        let mut msg = MessageBuilder::default();
+                        msg.push("**Race Rescheduled**\n\n");
+                        msg.push("The race ");
+                        msg.push_mono(&race_description);
+                        msg.push(" in ");
+                        msg.push(&event.display_name);
+                        msg.push(" has been rescheduled.\n\n");
+                        msg.push("**New time:** ");
+                        msg.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
+                        msg.push("\n\n");
+                        msg.push("If you're no longer available, you can withdraw your signup using the button below or on the website: <");
+                        msg.push(&format!("{}/event/{}/{}/races/{}/signups",
+                            base_uri(), cal_event.race.series.slug(), cal_event.race.event, u64::from(cal_event.race.id)));
+                        msg.push(">");
+
+                        // Create withdraw button
+                        let button = CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
+                            .label("Withdraw Signup")
+                            .style(ButtonStyle::Danger);
+                        let row = CreateActionRow::Buttons(vec![button]);
+
+                        // Send DM
+                        if let Ok(dm_channel) = discord_user_id.create_dm_channel(ctx).await {
+                            if let Err(e) = dm_channel.send_message(ctx,
+                                CreateMessage::new()
+                                    .content(msg.build())
+                                    .components(vec![row])
+                            ).await {
+                                eprintln!("Failed to send reschedule notification DM to user {}: {}", signup.user_id, e);
+                            }
+                        }
+                    }
+                }
+            }
+
+            transaction.commit().await?;
+        }
+    } else {
+        // Create Discord scheduled event for races scheduled > 30 minutes in advance
+        let http_client = {
+            let data = ctx.data.read().await;
+            data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone()
+        };
+        match crate::discord_scheduled_events::create_discord_scheduled_event(ctx, &mut transaction, &mut cal_event.race, &event, &http_client).await {
+            Ok(()) => {
+                cal_event.race.save(&mut transaction).await?;
+            }
+            Err(e) => {
+                eprintln!("Failed to create Discord scheduled event for race {}: {}", cal_event.race.id, e);
+            }
+        }
+        let overlapping_maintenance_windows = if let RaceHandleMode::RaceTime = cal_event.should_create_room(&mut transaction, &event).await? {
+            sqlx::query_as!(Range::<DateTime<Utc>>, r#"SELECT start, end_time AS "end" FROM racetime_maintenance WHERE start < $1 AND end_time > $2"#, start + event.series.default_race_duration(), start - TimeDelta::minutes(30)).fetch_all(&mut *transaction).await?
+        } else {
+            Vec::default()
+        };
+        transaction.commit().await?;
+
+        // Update volunteer post if this was a reschedule
+        if was_scheduled {
+            let pool = {
+                let data = ctx.data.read().await;
+                data.get::<DbPool>().expect("database connection pool missing from Discord context").clone()
+            };
+            let _ = volunteer_requests::update_volunteer_post_for_race(
+                &pool,
+                ctx,
+                cal_event.race.id,
+            ).await;
+
+            // Send reschedule notification DMs to volunteers
+            let mut transaction = pool.begin().await?;
+            let signups = event::roles::Signup::for_race(&mut transaction, cal_event.race.id).await?;
+            let affected_signups: Vec<_> = signups.iter()
+                .filter(|s| matches!(s.status, event::roles::VolunteerSignupStatus::Pending | event::roles::VolunteerSignupStatus::Confirmed))
+                .collect();
+
+            // Build race description
+            let race_description = if cal_event.race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
+                match (&cal_event.race.round, &cal_event.race.phase) {
+                    (Some(round), _) => round.clone(),
+                    (None, Some(phase)) => phase.clone(),
+                    (None, None) => "Qualifier".to_string(),
+                }
+            } else {
+                match &cal_event.race.entrants {
+                    Entrants::Two([team1, team2]) => format!("{} vs {}",
+                        match team1 {
+                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                            Entrant::Named { name, .. } => name.clone(),
+                            Entrant::Discord { .. } => "Discord User".to_string(),
+                        },
+                        match team2 {
+                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                            Entrant::Named { name, .. } => name.clone(),
+                            Entrant::Discord { .. } => "Discord User".to_string(),
+                        }
+                    ),
+                    Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                        match team1 {
+                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                            Entrant::Named { name, .. } => name.clone(),
+                            Entrant::Discord { .. } => "Discord User".to_string(),
+                        },
+                        match team2 {
+                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                            Entrant::Named { name, .. } => name.clone(),
+                            Entrant::Discord { .. } => "Discord User".to_string(),
+                        },
+                        match team3 {
+                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                            Entrant::Named { name, .. } => name.clone(),
+                            Entrant::Discord { .. } => "Discord User".to_string(),
+                        }
+                    ),
+                    _ => cal_event.race.round.clone().or_else(|| cal_event.race.phase.clone()).unwrap_or_else(|| "Race".to_string()),
+                }
+            };
+
+            // Send DM to each affected volunteer
+            for signup in affected_signups {
+                if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
+                    if let Some(discord) = user.discord {
+                        let discord_user_id = UserId::new(discord.id.get());
+
+                        let mut msg = MessageBuilder::default();
+                        msg.push("**Race Rescheduled**\n\n");
+                        msg.push("The race ");
+                        msg.push_mono(&race_description);
+                        msg.push(" in ");
+                        msg.push(&event.display_name);
+                        msg.push(" has been rescheduled.\n\n");
+                        msg.push("**New time:** ");
+                        msg.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
+                        msg.push("\n\n");
+                        msg.push("If you're no longer available, you can withdraw your signup using the button below or on the website: <");
+                        msg.push(&format!("{}/event/{}/{}/races/{}/signups",
+                            base_uri(), cal_event.race.series.slug(), cal_event.race.event, u64::from(cal_event.race.id)));
+                        msg.push(">");
+
+                        // Create withdraw button
+                        let button = CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
+                            .label("Withdraw Signup")
+                            .style(ButtonStyle::Danger);
+                        let row = CreateActionRow::Buttons(vec![button]);
+
+                        // Send DM
+                        if let Ok(dm_channel) = discord_user_id.create_dm_channel(ctx).await {
+                            if let Err(e) = dm_channel.send_message(ctx,
+                                CreateMessage::new()
+                                    .content(msg.build())
+                                    .components(vec![row])
+                            ).await {
+                                eprintln!("Failed to send reschedule notification DM to user {}: {}", signup.user_id, e);
+                            }
+                        }
+                    }
+                }
+            }
+
+            transaction.commit().await?;
+        }
+
+        let response_content = if_chain! {
+            if let French = event.language;
+            if cal_event.race.game.is_none();
+            if overlapping_maintenance_windows.is_empty();
+            then {
+                MessageBuilder::default()
+                    .push("Votre race a été planifiée pour le ")
+                    .push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime)
+                    .push('.')
+                    .build()
+            } else {
+                let mut response_content = MessageBuilder::default();
+                response_content.push(if let Some(game) = cal_event.race.game { format!("Game {game}") } else { format!("This race") });
+                response_content.push(if was_scheduled { " has been rescheduled for " } else { " is now scheduled for " });
+                response_content.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
+                response_content.push('.');
+                for window in overlapping_maintenance_windows {
+                    response_content.push_line("");
+                    response_content.push_bold("Warning:");
+                    response_content.push(" this race may overlap with racetime.gg maintenance planned for ");
+                    response_content.push_timestamp(window.start, serenity_utils::message::TimestampStyle::ShortDateTime);
+                    response_content.push(" until ");
+                    response_content.push_timestamp(window.end, serenity_utils::message::TimestampStyle::ShortDateTime);
+                    response_content.push('.');
+                }
+                response_content.build()
+            }
+        };
+        interaction.edit_response(ctx, EditInteractionResponse::new()
+            .content(response_content)
+        ).await?;
+    }
+    Ok(())
+}
+
 //TODO refactor (MH admins should have permissions, room already being open should not remove permissions but only remove the team from return)
 async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction, game: Option<i16>, allow_rooms_for_other_teams: bool, alternative_instructions: Option<&str>, already_deferred: bool) -> Result<Option<(Transaction<'a, Postgres>, Race, Option<Team>)>, Box<dyn std::error::Error + Send + Sync>> {
     let (mut transaction, http_client) = {
@@ -1529,7 +1862,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 .ephemeral(false)
                             )).await?;
 
-                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, false, None, true).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, false, None, true).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
@@ -1580,326 +1913,57 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             ).await?;
                                             transaction.rollback().await?;
                                         } else {
-                                            race.schedule.set_live_start(start);
-                                            race.schedule_updated_at = Some(Utc::now());
-                                            race.save(&mut transaction).await?;
-                                            // Create or update Discord scheduled event
-                                            let http_client = {
-                                                let data = ctx.data.read().await;
-                                                data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone()
-                                            };
-                                            match crate::discord_scheduled_events::create_discord_scheduled_event(ctx, &mut transaction, &mut race, &event, &http_client).await {
-                                                Ok(()) => {
-                                                    race.save(&mut transaction).await?; // Save updated discord_scheduled_event_id
-                                                }
-                                                Err(e) => {
-                                                    eprintln!("Failed to create Discord scheduled event for race {}: {}", race.id, e);
-                                                }
-                                            }
-                                            let mut cal_event = cal::Event { kind: cal::EventKind::Normal, race };
-                                            if start - Utc::now() < TimeDelta::minutes(30) {
-                                                // Commit transaction BEFORE creating room so race handler can find it in database
-                                                transaction.commit().await?;
-
-                                                let (http_client, new_room_lock, racetime_host, racetime_config, clean_shutdown) = {
-                                                    let data = ctx.data.read().await;
-                                                    (
-                                                        data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
-                                                        data.get::<NewRoomLock>().expect("new room lock missing from Discord context").clone(),
-                                                        data.get::<RacetimeHost>().expect("racetime.gg host missing from Discord context").clone(),
-                                                        data.get::<ConfigRaceTime>().expect("racetime.gg config missing from Discord context").clone(),
-                                                        data.get::<CleanShutdown>().expect("clean shutdown state missing from Discord context").clone(),
-                                                    )
-                                                };
-
-                                                // Start a new transaction for room creation
-                                                let mut transaction = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?;
-                                                lock!(new_room_lock = new_room_lock; {
-                                                    if let Some((_, msg, _notification_channel)) = racetime_bot::create_room(&mut transaction, ctx, &racetime_host, &racetime_config.client_id, &racetime_config.client_secret, &http_client, clean_shutdown, &cal_event, &event).await? {
-                                                        if let Some(channel) = event.discord_race_room_channel {
-                                                            if let Err(e) = channel.say(ctx, &msg).await {
-                                                                eprintln!("Failed to post race message to Discord race room channel: {}", e);
-                                                            }
-                                                        }
-                                                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                                                            .content(msg)
-                                                        ).await?;
-                                                    } else {
-                                                        let mut response_content = MessageBuilder::default();
-                                                        response_content.push(if let Some(game) = cal_event.race.game { format!("Game {game}") } else { format!("This race") });
-                                                        response_content.push(if was_scheduled { " has been rescheduled for " } else { " is now scheduled for " });
-                                                        response_content.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
-                                                        let response_content = response_content
-                                                            .push(". The race room will be opened momentarily.")
-                                                            .build();
-                                                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                                                            .content(response_content)
-                                                        ).await?;
-                                                    }
-                                                    transaction.commit().await?;
-                                                });
-
-                                                // Update volunteer post if this was a reschedule
-                                                if was_scheduled {
-                                                    let pool = {
-                                                        let data = ctx.data.read().await;
-                                                        data.get::<DbPool>().expect("database connection pool missing from Discord context").clone()
-                                                    };
-                                                    let _ = volunteer_requests::update_volunteer_post_for_race(
-                                                        &pool,
-                                                        ctx,
-                                                        cal_event.race.id,
-                                                    ).await;
-
-                                                    // Send reschedule notification DMs to volunteers
-                                                    let mut transaction = pool.begin().await?;
-                                                    let signups = event::roles::Signup::for_race(&mut transaction, cal_event.race.id).await?;
-                                                    let affected_signups: Vec<_> = signups.iter()
-                                                        .filter(|s| matches!(s.status, event::roles::VolunteerSignupStatus::Pending | event::roles::VolunteerSignupStatus::Confirmed))
-                                                        .collect();
-
-                                                    // Build race description
-                                                    let race_description = if cal_event.race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
-                                                        match (&cal_event.race.round, &cal_event.race.phase) {
-                                                            (Some(round), _) => round.clone(),
-                                                            (None, Some(phase)) => phase.clone(),
-                                                            (None, None) => "Qualifier".to_string(),
-                                                        }
-                                                    } else {
-                                                        match &cal_event.race.entrants {
-                                                            Entrants::Two([team1, team2]) => format!("{} vs {}",
-                                                                match team1 {
-                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    Entrant::Named { name, .. } => name.clone(),
-                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                                                },
-                                                                match team2 {
-                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    Entrant::Named { name, .. } => name.clone(),
-                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                                                }
-                                                            ),
-                                                            Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
-                                                                match team1 {
-                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    Entrant::Named { name, .. } => name.clone(),
-                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                                                },
-                                                                match team2 {
-                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    Entrant::Named { name, .. } => name.clone(),
-                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                                                },
-                                                                match team3 {
-                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    Entrant::Named { name, .. } => name.clone(),
-                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                                                }
-                                                            ),
-                                                            _ => cal_event.race.round.clone().or_else(|| cal_event.race.phase.clone()).unwrap_or_else(|| "Race".to_string()),
-                                                        }
-                                                    };
-
-                                                    // Send DM to each affected volunteer
-                                                    for signup in affected_signups {
-                                                        if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
-                                                            if let Some(discord) = user.discord {
-                                                                let discord_user_id = UserId::new(discord.id.get());
-
-                                                                let mut msg = MessageBuilder::default();
-                                                                msg.push("**Race Rescheduled**\n\n");
-                                                                msg.push("The race ");
-                                                                msg.push_mono(&race_description);
-                                                                msg.push(" in ");
-                                                                msg.push(&event.display_name);
-                                                                msg.push(" has been rescheduled.\n\n");
-                                                                msg.push("**New time:** ");
-                                                                msg.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
-                                                                msg.push("\n\n");
-                                                                msg.push("If you're no longer available, you can withdraw your signup using the button below or on the website: <");
-                                                                msg.push(&format!("{}/event/{}/{}/races/{}/signups",
-                                                                    base_uri(), cal_event.race.series.slug(), cal_event.race.event, u64::from(cal_event.race.id)));
-                                                                msg.push(">");
-
-                                                                // Create withdraw button
-                                                                let button = CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
-                                                                    .label("Withdraw Signup")
-                                                                    .style(ButtonStyle::Danger);
-                                                                let row = CreateActionRow::Buttons(vec![button]);
-
-                                                                // Send DM
-                                                                if let Ok(dm_channel) = discord_user_id.create_dm_channel(ctx).await {
-                                                                    if let Err(e) = dm_channel.send_message(ctx,
-                                                                        CreateMessage::new()
-                                                                            .content(msg.build())
-                                                                            .components(vec![row])
-                                                                    ).await {
-                                                                        eprintln!("Failed to send reschedule notification DM to user {}: {}", signup.user_id, e);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-
-                                                    transaction.commit().await?;
-                                                }
-                                            } else {
-                                                // Create Discord scheduled event for races scheduled > 30 minutes in advance
+                                            // Check for BO3/5 schedule ambiguity: no game param specified but
+                                            // the next game is already scheduled (not just unscheduled)
+                                            if game.is_none() && was_scheduled && race.game.is_some() {
                                                 let http_client = {
                                                     let data = ctx.data.read().await;
                                                     data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone()
                                                 };
-                                                match crate::discord_scheduled_events::create_discord_scheduled_event(ctx, &mut transaction, &mut cal_event.race, &event, &http_client).await {
-                                                    Ok(()) => {
-                                                        cal_event.race.save(&mut transaction).await?;
+                                                let all_upcoming = Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), None, false).await?;
+                                                let unscheduled_games: Vec<_> = all_upcoming.into_iter()
+                                                    .filter(|r| matches!(r.schedule, RaceSchedule::Unscheduled) && r.game.is_some())
+                                                    .collect();
+                                                if !unscheduled_games.is_empty() {
+                                                    let game_num = race.game.unwrap();
+                                                    let existing_start = match race.schedule {
+                                                        RaceSchedule::Live { start: existing, .. } => Some(existing),
+                                                        _ => None,
+                                                    };
+                                                    let mut prompt = MessageBuilder::default();
+                                                    prompt.push(format!("Game {} is already scheduled", game_num));
+                                                    if let Some(existing) = existing_start {
+                                                        prompt.push(" for ");
+                                                        prompt.push_timestamp(existing, serenity_utils::message::TimestampStyle::ShortDateTime);
                                                     }
-                                                    Err(e) => {
-                                                        eprintln!("Failed to create Discord scheduled event for race {}: {}", cal_event.race.id, e);
+                                                    prompt.push(". Which game should be scheduled for ");
+                                                    prompt.push_timestamp(start, serenity_utils::message::TimestampStyle::ShortDateTime);
+                                                    prompt.push("?");
+                                                    let mut buttons = vec![
+                                                        CreateButton::new(format!("schedule_game_{}_{}", game_num, start.timestamp()))
+                                                            .label(format!("Reschedule Game {}", game_num))
+                                                            .style(ButtonStyle::Secondary),
+                                                    ];
+                                                    for unscheduled_race in &unscheduled_games {
+                                                        let g = unscheduled_race.game.unwrap();
+                                                        buttons.push(
+                                                            CreateButton::new(format!("schedule_game_{}_{}", g, start.timestamp()))
+                                                                .label(format!("Schedule Game {}", g))
+                                                                .style(ButtonStyle::Primary),
+                                                        );
                                                     }
-                                                }
-                                                let overlapping_maintenance_windows = if let RaceHandleMode::RaceTime = cal_event.should_create_room(&mut transaction, &event).await? {
-                                                    sqlx::query_as!(Range::<DateTime<Utc>>, r#"SELECT start, end_time AS "end" FROM racetime_maintenance WHERE start < $1 AND end_time > $2"#, start + event.series.default_race_duration(), start - TimeDelta::minutes(30)).fetch_all(&mut *transaction).await?
+                                                    buttons.truncate(5); // Discord limit per action row
+                                                    let row = CreateActionRow::Buttons(buttons);
+                                                    interaction.edit_response(ctx, EditInteractionResponse::new()
+                                                        .content(prompt.build())
+                                                        .components(vec![row])
+                                                    ).await?;
+                                                    transaction.rollback().await?;
                                                 } else {
-                                                    Vec::default()
-                                                };
-                                                transaction.commit().await?;
-
-                                                // Update volunteer post if this was a reschedule
-                                                if was_scheduled {
-                                                    let pool = {
-                                                        let data = ctx.data.read().await;
-                                                        data.get::<DbPool>().expect("database connection pool missing from Discord context").clone()
-                                                    };
-                                                    let _ = volunteer_requests::update_volunteer_post_for_race(
-                                                        &pool,
-                                                        ctx,
-                                                        cal_event.race.id,
-                                                    ).await;
-
-                                                    // Send reschedule notification DMs to volunteers
-                                                    let mut transaction = pool.begin().await?;
-                                                    let signups = event::roles::Signup::for_race(&mut transaction, cal_event.race.id).await?;
-                                                    let affected_signups: Vec<_> = signups.iter()
-                                                        .filter(|s| matches!(s.status, event::roles::VolunteerSignupStatus::Pending | event::roles::VolunteerSignupStatus::Confirmed))
-                                                        .collect();
-
-                                                    // Build race description
-                                                    let race_description = if cal_event.race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
-                                                        match (&cal_event.race.round, &cal_event.race.phase) {
-                                                            (Some(round), _) => round.clone(),
-                                                            (None, Some(phase)) => phase.clone(),
-                                                            (None, None) => "Qualifier".to_string(),
-                                                        }
-                                                    } else {
-                                                        match &cal_event.race.entrants {
-                                                            Entrants::Two([team1, team2]) => format!("{} vs {}",
-                                                                match team1 {
-                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    Entrant::Named { name, .. } => name.clone(),
-                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                                                },
-                                                                match team2 {
-                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    Entrant::Named { name, .. } => name.clone(),
-                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                                                }
-                                                            ),
-                                                            Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
-                                                                match team1 {
-                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    Entrant::Named { name, .. } => name.clone(),
-                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                                                },
-                                                                match team2 {
-                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    Entrant::Named { name, .. } => name.clone(),
-                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                                                },
-                                                                match team3 {
-                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    Entrant::Named { name, .. } => name.clone(),
-                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                                                }
-                                                            ),
-                                                            _ => cal_event.race.round.clone().or_else(|| cal_event.race.phase.clone()).unwrap_or_else(|| "Race".to_string()),
-                                                        }
-                                                    };
-
-                                                    // Send DM to each affected volunteer
-                                                    for signup in affected_signups {
-                                                        if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
-                                                            if let Some(discord) = user.discord {
-                                                                let discord_user_id = UserId::new(discord.id.get());
-
-                                                                let mut msg = MessageBuilder::default();
-                                                                msg.push("**Race Rescheduled**\n\n");
-                                                                msg.push("The race ");
-                                                                msg.push_mono(&race_description);
-                                                                msg.push(" in ");
-                                                                msg.push(&event.display_name);
-                                                                msg.push(" has been rescheduled.\n\n");
-                                                                msg.push("**New time:** ");
-                                                                msg.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
-                                                                msg.push("\n\n");
-                                                                msg.push("If you're no longer available, you can withdraw your signup using the button below or on the website: <");
-                                                                msg.push(&format!("{}/event/{}/{}/races/{}/signups",
-                                                                    base_uri(), cal_event.race.series.slug(), cal_event.race.event, u64::from(cal_event.race.id)));
-                                                                msg.push(">");
-
-                                                                // Create withdraw button
-                                                                let button = CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
-                                                                    .label("Withdraw Signup")
-                                                                    .style(ButtonStyle::Danger);
-                                                                let row = CreateActionRow::Buttons(vec![button]);
-
-                                                                // Send DM
-                                                                if let Ok(dm_channel) = discord_user_id.create_dm_channel(ctx).await {
-                                                                    if let Err(e) = dm_channel.send_message(ctx,
-                                                                        CreateMessage::new()
-                                                                            .content(msg.build())
-                                                                            .components(vec![row])
-                                                                    ).await {
-                                                                        eprintln!("Failed to send reschedule notification DM to user {}: {}", signup.user_id, e);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-
-                                                    transaction.commit().await?;
+                                                    apply_live_schedule(ctx, interaction, transaction, race, event, was_scheduled, start).await?;
                                                 }
-
-                                                let response_content = if_chain! {
-                                                    if let French = event.language;
-                                                    if cal_event.race.game.is_none();
-                                                    if overlapping_maintenance_windows.is_empty();
-                                                    then {
-                                                        MessageBuilder::default()
-                                                            .push("Votre race a été planifiée pour le ")
-                                                            .push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime)
-                                                            .push('.')
-                                                            .build()
-                                                    } else {
-                                                        let mut response_content = MessageBuilder::default();
-                                                        response_content.push(if let Some(game) = cal_event.race.game { format!("Game {game}") } else { format!("This race") });
-                                                        response_content.push(if was_scheduled { " has been rescheduled for " } else { " is now scheduled for " });
-                                                        response_content.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
-                                                        response_content.push('.');
-                                                        for window in overlapping_maintenance_windows {
-                                                            response_content.push_line("");
-                                                            response_content.push_bold("Warning:");
-                                                            response_content.push(" this race may overlap with racetime.gg maintenance planned for ");
-                                                            response_content.push_timestamp(window.start, serenity_utils::message::TimestampStyle::ShortDateTime);
-                                                            response_content.push(" until ");
-                                                            response_content.push_timestamp(window.end, serenity_utils::message::TimestampStyle::ShortDateTime);
-                                                            response_content.push('.');
-                                                        }
-                                                        response_content.build()
-                                                    }
-                                                };
-                                                interaction.edit_response(ctx, EditInteractionResponse::new()
-                                                    .content(response_content)
-                                                ).await?;
+                                            } else {
+                                                apply_live_schedule(ctx, interaction, transaction, race, event, was_scheduled, start).await?;
                                             }
                                         }
                                     } else {
@@ -4091,6 +4155,47 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 .content("✓ You have successfully withdrawn from this race. Thank you for letting us know!")
                                 .components(vec![])
                         )).await?;
+                    } else if let Some(rest) = custom_id.strip_prefix("schedule_game_") {
+                        // Button click from the BO3/5 schedule disambiguation prompt.
+                        // custom_id format: "schedule_game_{game_number}_{unix_timestamp}"
+                        let Some((game_str, ts_str)) = rest.split_once('_') else {
+                            panic!("malformed schedule_game button custom_id: {custom_id:?}")
+                        };
+                        let game_num = game_str.parse::<i16>().expect("game number in schedule_game button custom_id");
+                        let unix_ts = ts_str.parse::<i64>().expect("unix timestamp in schedule_game button custom_id");
+                        let start = Utc.timestamp_opt(unix_ts, 0).single().expect("valid timestamp in schedule_game button custom_id");
+
+                        interaction.create_response(ctx, CreateInteractionResponse::Defer(
+                            CreateInteractionResponseMessage::new().ephemeral(false)
+                        )).await?;
+
+                        if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, Some(game_num), false, None, true).await? {
+                            let event = race.event(&mut transaction).await?;
+                            let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
+                            let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
+                            if let Some(speedgaming_slug) = &event.speedgaming_slug {
+                                let response_content = if was_scheduled {
+                                    format!("Please contact a tournament organizer to reschedule this race.")
+                                } else {
+                                    MessageBuilder::default()
+                                        .push("Please use <https://speedgaming.org/")
+                                        .push(speedgaming_slug)
+                                        .push("/submit> to schedule races for this event.")
+                                        .build()
+                                };
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content(response_content)
+                                ).await?;
+                                transaction.rollback().await?;
+                            } else if team.is_some() || is_organizer {
+                                apply_live_schedule(ctx, interaction, transaction, race, event, was_scheduled, start).await?;
+                            } else {
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Sorry, only participants in this race and organizers can use this command.")
+                                ).await?;
+                                transaction.rollback().await?;
+                            }
+                        }
                     } else {
                         panic!("received message component interaction with unknown custom ID {custom_id:?}")
                     },
