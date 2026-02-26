@@ -1916,15 +1916,11 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             // Check for BO3/5 schedule ambiguity: no game param specified but
                                             // the next game is already scheduled (not just unscheduled)
                                             if game.is_none() && was_scheduled && race.game.is_some() {
-                                                let http_client = {
-                                                    let data = ctx.data.read().await;
-                                                    data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone()
-                                                };
-                                                let all_upcoming = Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), None, false).await?;
-                                                let unscheduled_games: Vec<_> = all_upcoming.into_iter()
-                                                    .filter(|r| matches!(r.schedule, RaceSchedule::Unscheduled) && r.game.is_some())
-                                                    .collect();
-                                                if !unscheduled_games.is_empty() {
+                                                let unscheduled_game_nums = sqlx::query_scalar!(
+                                                    r#"SELECT game AS "game!" FROM races WHERE NOT ignored AND scheduling_thread = $1 AND start IS NULL AND game IS NOT NULL ORDER BY game"#,
+                                                    PgSnowflake(interaction.channel_id()) as _
+                                                ).fetch_all(&mut *transaction).await?;
+                                                if !unscheduled_game_nums.is_empty() {
                                                     let game_num = race.game.unwrap();
                                                     let existing_start = match race.schedule {
                                                         RaceSchedule::Live { start: existing, .. } => Some(existing),
@@ -1944,8 +1940,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                             .label(format!("Reschedule Game {}", game_num))
                                                             .style(ButtonStyle::Secondary),
                                                     ];
-                                                    for unscheduled_race in &unscheduled_games {
-                                                        let g = unscheduled_race.game.unwrap();
+                                                    for g in unscheduled_game_nums {
                                                         buttons.push(
                                                             CreateButton::new(format!("schedule_game_{}_{}", g, start.timestamp()))
                                                                 .label(format!("Schedule Game {}", g))
@@ -4367,8 +4362,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let unix_ts = ts_str.parse::<i64>().expect("unix timestamp in schedule_game button custom_id");
                         let start = Utc.timestamp_opt(unix_ts, 0).single().expect("valid timestamp in schedule_game button custom_id");
 
-                        interaction.create_response(ctx, CreateInteractionResponse::Defer(
-                            CreateInteractionResponseMessage::new().ephemeral(false)
+                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                            CreateInteractionResponseMessage::new()
+                                .content("Processing...")
+                                .components(vec![])
                         )).await?;
 
                         if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, Some(game_num), false, None, true).await? {
