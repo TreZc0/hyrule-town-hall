@@ -3726,6 +3726,241 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 }
                             }
                         }
+                    } else if custom_id == "async_override_cancel" {
+                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                            CreateInteractionResponseMessage::new()
+                                .content("Override cancelled.")
+                                .components(vec![])
+                        )).await?;
+                    } else if let Some(params) = custom_id.strip_prefix("async_override_result_") {
+                        // Confirm override of an existing async result: params = {race_id}_{async_part}_{total_seconds}
+                        if let Some((race_part_str, seconds_str)) = params.rsplit_once('_') {
+                            if let Some((race_id_str, async_part_str)) = race_part_str.rsplit_once('_') {
+                                if let (Ok(race_id), Ok(async_part), Ok(total_seconds)) = (
+                                    race_id_str.parse::<i64>(),
+                                    async_part_str.parse::<i32>(),
+                                    seconds_str.parse::<i64>(),
+                                ) {
+                                    interaction.create_response(ctx, CreateInteractionResponse::Defer(
+                                        CreateInteractionResponseMessage::new()
+                                    )).await?;
+
+                                    let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+                                    let mut transaction = pool.begin().await?;
+
+                                    let user_id = interaction.user.id;
+                                    let is_organizer = sqlx::query!(
+                                        r#"SELECT EXISTS(SELECT 1 FROM organizers eo JOIN users u ON eo.organizer = u.id WHERE u.discord_id = $1) as "exists!""#,
+                                        user_id.get() as i64
+                                    ).fetch_one(&mut *transaction).await?.exists;
+
+                                    if !is_organizer {
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                                            .content("You must be an event organizer to use this command.")
+                                            .components(vec![])
+                                        ).await?;
+                                        transaction.rollback().await?;
+                                    } else {
+                                        let user = User::from_discord(&mut *transaction, user_id).await?
+                                            .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
+                                        let pg_interval = PgInterval { months: 0, days: 0, microseconds: total_seconds * 1_000_000 };
+
+                                        sqlx::query!(
+                                            "UPDATE async_times SET finish_time = $1, recorded_at = NOW(), recorded_by = $2 WHERE race_id = $3 AND async_part = $4",
+                                            pg_interval,
+                                            user.id as _,
+                                            race_id,
+                                            async_part,
+                                        ).execute(&mut *transaction).await?;
+
+                                        let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await
+                                            .map_err(|_e| Error::Sql(sqlx::Error::RowNotFound))?;
+                                        let display_order = get_display_order(&race, async_part);
+                                        let ordinal = match display_order { 1 => "1st", 2 => "2nd", 3 => "3rd", n => &format!("{}th", n) };
+                                        let h = total_seconds / 3600;
+                                        let m = (total_seconds % 3600) / 60;
+                                        let s = total_seconds % 60;
+
+                                        finalize_async_if_complete(ctx, &mut transaction, race_id, &race).await?;
+                                        transaction.commit().await?;
+
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                                            .content(format!("Override confirmed. Time recorded for {} half: {:02}:{:02}:{:02}", ordinal, h, m, s))
+                                            .components(vec![])
+                                        ).await?;
+                                    }
+                                }
+                            }
+                        }
+                    } else if let Some(params) = custom_id.strip_prefix("async_override_forfeit_") {
+                        // Confirm override of existing async result with a forfeit: params = {race_id}_{async_part}
+                        if let Some((race_id_str, async_part_str)) = params.rsplit_once('_') {
+                            if let (Ok(race_id), Ok(async_part)) = (race_id_str.parse::<i64>(), async_part_str.parse::<i32>()) {
+                                interaction.create_response(ctx, CreateInteractionResponse::Defer(
+                                    CreateInteractionResponseMessage::new()
+                                )).await?;
+
+                                let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+                                let mut transaction = pool.begin().await?;
+
+                                let user_id = interaction.user.id;
+                                let is_organizer = sqlx::query!(
+                                    r#"SELECT EXISTS(SELECT 1 FROM organizers eo JOIN users u ON eo.organizer = u.id WHERE u.discord_id = $1) as "exists!""#,
+                                    user_id.get() as i64
+                                ).fetch_one(&mut *transaction).await?.exists;
+
+                                if !is_organizer {
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
+                                        .content("You must be an event organizer to use this command.")
+                                        .components(vec![])
+                                    ).await?;
+                                    transaction.rollback().await?;
+                                } else {
+                                    let user = User::from_discord(&mut *transaction, user_id).await?
+                                        .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
+
+                                    sqlx::query!(
+                                        "UPDATE async_times SET finish_time = NULL, recorded_at = NOW(), recorded_by = $1 WHERE race_id = $2 AND async_part = $3",
+                                        user.id as _,
+                                        race_id,
+                                        async_part,
+                                    ).execute(&mut *transaction).await?;
+
+                                    let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await
+                                        .map_err(|_e| Error::Sql(sqlx::Error::RowNotFound))?;
+                                    let display_order = get_display_order(&race, async_part);
+                                    let ordinal = match display_order { 1 => "1st", 2 => "2nd", 3 => "3rd", n => &format!("{}th", n) };
+
+                                    finalize_async_if_complete(ctx, &mut transaction, race_id, &race).await?;
+                                    transaction.commit().await?;
+
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
+                                        .content(format!("Override confirmed. Forfeit recorded for {} half.", ordinal))
+                                        .components(vec![])
+                                    ).await?;
+                                }
+                            }
+                        }
+                    } else if let Some(params) = custom_id.strip_prefix("async_override_qualifier_result_") {
+                        // Confirm override of existing qualifier result: params = {team_id}_{kind_int}_{total_seconds}
+                        if let Some((team_kind_str, seconds_str)) = params.rsplit_once('_') {
+                            if let Some((team_id_str, kind_str)) = team_kind_str.rsplit_once('_') {
+                                if let (Ok(team_id), Ok(kind_int), Ok(total_seconds)) = (
+                                    team_id_str.parse::<u64>(),
+                                    kind_str.parse::<i32>(),
+                                    seconds_str.parse::<i64>(),
+                                ) {
+                                    if let Some(async_kind) = AsyncKind::from_i32(kind_int) {
+                                        interaction.create_response(ctx, CreateInteractionResponse::Defer(
+                                            CreateInteractionResponseMessage::new()
+                                        )).await?;
+
+                                        let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+                                        let mut transaction = pool.begin().await?;
+
+                                        let user_id = interaction.user.id;
+                                        let is_organizer = sqlx::query!(
+                                            r#"SELECT EXISTS(SELECT 1 FROM organizers eo JOIN users u ON eo.organizer = u.id WHERE u.discord_id = $1) as "exists!""#,
+                                            user_id.get() as i64
+                                        ).fetch_one(&mut *transaction).await?.exists;
+
+                                        if !is_organizer {
+                                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                                .content("You must be an event organizer to use this command.")
+                                                .components(vec![])
+                                            ).await?;
+                                            transaction.rollback().await?;
+                                        } else {
+                                            let pg_interval = PgInterval { months: 0, days: 0, microseconds: total_seconds * 1_000_000 };
+                                            sqlx::query!(
+                                                "UPDATE async_teams SET submitted = NOW(), finish_time = $1 WHERE team = $2 AND kind = $3",
+                                                pg_interval,
+                                                team_id as i64,
+                                                async_kind as _,
+                                            ).execute(&mut *transaction).await?;
+
+                                            let team = Team::from_id(&mut transaction, Id::from(team_id)).await?.ok_or(sqlx::Error::RowNotFound)?;
+                                            let members = team.members(&mut transaction).await?;
+                                            for member in &members {
+                                                sqlx::query!(
+                                                    "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, $5, NULL) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
+                                                    team.series as _,
+                                                    team.event,
+                                                    member.id as _,
+                                                    async_kind as _,
+                                                    pg_interval,
+                                                ).execute(&mut *transaction).await?;
+                                            }
+
+                                            let team_name = team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into());
+                                            let h = total_seconds / 3600;
+                                            let m = (total_seconds % 3600) / 60;
+                                            let s = total_seconds % 60;
+                                            transaction.commit().await?;
+
+                                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                                .content(format!("Override confirmed. Time recorded for {}: {:02}:{:02}:{:02}", team_name, h, m, s))
+                                                .components(vec![])
+                                            ).await?;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if let Some(params) = custom_id.strip_prefix("async_override_qualifier_forfeit_") {
+                        // Confirm override of existing qualifier result with a forfeit: params = {team_id}_{kind_int}
+                        if let Some((team_id_str, kind_str)) = params.rsplit_once('_') {
+                            if let (Ok(team_id), Ok(kind_int)) = (team_id_str.parse::<u64>(), kind_str.parse::<i32>()) {
+                                if let Some(async_kind) = AsyncKind::from_i32(kind_int) {
+                                    interaction.create_response(ctx, CreateInteractionResponse::Defer(
+                                        CreateInteractionResponseMessage::new()
+                                    )).await?;
+
+                                    let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+                                    let mut transaction = pool.begin().await?;
+
+                                    let user_id = interaction.user.id;
+                                    let is_organizer = sqlx::query!(
+                                        r#"SELECT EXISTS(SELECT 1 FROM organizers eo JOIN users u ON eo.organizer = u.id WHERE u.discord_id = $1) as "exists!""#,
+                                        user_id.get() as i64
+                                    ).fetch_one(&mut *transaction).await?.exists;
+
+                                    if !is_organizer {
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                                            .content("You must be an event organizer to use this command.")
+                                            .components(vec![])
+                                        ).await?;
+                                        transaction.rollback().await?;
+                                    } else {
+                                        sqlx::query!(
+                                            "UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND kind = $2",
+                                            team_id as i64,
+                                            async_kind as _,
+                                        ).execute(&mut *transaction).await?;
+
+                                        let team = Team::from_id(&mut transaction, Id::from(team_id)).await?.ok_or(sqlx::Error::RowNotFound)?;
+                                        let members = team.members(&mut transaction).await?;
+                                        for member in &members {
+                                            sqlx::query!(
+                                                "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, NULL, NULL) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
+                                                team.series as _,
+                                                team.event,
+                                                member.id as _,
+                                                async_kind as _,
+                                            ).execute(&mut *transaction).await?;
+                                        }
+
+                                        let team_name = team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into());
+                                        transaction.commit().await?;
+
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                                            .content(format!("Override confirmed. Forfeit recorded for {}.", team_name))
+                                            .components(vec![])
+                                        ).await?;
+                                    }
+                                }
+                            }
+                        }
                     } else if let Some(params) = custom_id.strip_prefix("async_forfeit_qualifier_") {
                         // Handle qualifier FORFEIT button - show confirmation
                         if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
@@ -4782,29 +5017,13 @@ async fn handle_async_command(
                     let team = Team::from_id(&mut transaction, team_id).await?.ok_or(sqlx::Error::RowNotFound)?;
                     let team_name = team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into());
 
-                    if is_forfeit {
-                        sqlx::query!("UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND kind = $2", team_id as _, async_kind as _).execute(&mut *transaction).await?;
-
-                        // Insert forfeit records into async_players so they're counted
-                        let members = team.members(&mut transaction).await?;
-                        for member in members {
-                            sqlx::query!(
-                                "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, NULL, NULL) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = EXCLUDED.vod",
-                                team.series as _,
-                                team.event,
-                                member.id as _,
-                                async_kind as _
-                            ).execute(&mut *transaction).await?;
-                        }
-
-                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                            .content(format!("Forfeit recorded for {}.", team_name))
-                        ).await?;
-                    } else {
+                    // For result commands, parse time before checking for an existing submission
+                    let (qual_time_str, qual_total_seconds, qual_pg_interval) = if !is_forfeit {
                         let time_str = interaction.data.options.iter()
                             .find(|opt| opt.name == "time")
                             .and_then(|opt| opt.value.as_str())
-                            .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
+                            .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?
+                            .to_string();
 
                         let time_parts: Vec<&str> = time_str.split(':').collect();
                         if time_parts.len() != 3 {
@@ -4818,21 +5037,71 @@ async fn handle_async_command(
                         let hours: i32 = time_parts[0].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
                         let minutes: i32 = time_parts[1].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
                         let seconds: i32 = time_parts[2].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+                        let total_seconds = (hours * 3600 + minutes * 60 + seconds) as i64;
+                        let pg_interval = PgInterval { months: 0, days: 0, microseconds: total_seconds * 1_000_000 };
+                        (Some(time_str), Some(total_seconds), Some(pg_interval))
+                    } else {
+                        (None, None, None)
+                    };
 
-                        let total_seconds = hours * 3600 + minutes * 60 + seconds;
-                        let milliseconds = (total_seconds as i64) * 1_000;
-                        let pg_interval = PgInterval {
-                            months: 0,
-                            days: 0,
-                            microseconds: milliseconds * 1_000,
+                    // Check if a result already exists
+                    let already_submitted = sqlx::query_scalar!(
+                        "SELECT submitted FROM async_teams WHERE team = $1 AND kind = $2",
+                        team_id as _,
+                        async_kind as _,
+                    ).fetch_optional(&mut *transaction).await?
+                        .flatten()
+                        .is_some();
+
+                    if already_submitted {
+                        let new_desc = if is_forfeit { "forfeit".to_string() } else { qual_time_str.as_ref().unwrap().clone() };
+
+                        let confirm_id = if is_forfeit {
+                            format!("async_override_qualifier_forfeit_{}_{}", team_id, async_kind as i32)
+                        } else {
+                            format!("async_override_qualifier_result_{}_{}_{}", team_id, async_kind as i32, qual_total_seconds.unwrap())
                         };
 
+                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                            .content(format!(
+                                "A result already exists for **{}**. Override with **{}**?",
+                                team_name, new_desc
+                            ))
+                            .components(vec![CreateActionRow::Buttons(vec![
+                                CreateButton::new(confirm_id).label("Yes, override").style(ButtonStyle::Danger),
+                                CreateButton::new("async_override_cancel").label("Cancel").style(ButtonStyle::Secondary),
+                            ])])
+                        ).await?;
+                        transaction.rollback().await?;
+                        return Ok(());
+                    }
+
+                    // No existing result — proceed with write
+                    if is_forfeit {
+                        sqlx::query!("UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND kind = $2", team_id as _, async_kind as _).execute(&mut *transaction).await?;
+
+                        let members = team.members(&mut transaction).await?;
+                        for member in members {
+                            sqlx::query!(
+                                "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, NULL, NULL) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
+                                team.series as _,
+                                team.event,
+                                member.id as _,
+                                async_kind as _
+                            ).execute(&mut *transaction).await?;
+                        }
+
+                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                            .content(format!("Forfeit recorded for {}.", team_name))
+                        ).await?;
+                    } else {
+                        let pg_interval = qual_pg_interval.unwrap();
                         sqlx::query!("UPDATE async_teams SET submitted = NOW(), finish_time = $1 WHERE team = $2 AND kind = $3", pg_interval, team_id as _, async_kind as _).execute(&mut *transaction).await?;
 
                         let members = team.members(&mut transaction).await?;
                         for member in members {
                              sqlx::query!(
-                                "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = EXCLUDED.vod",
+                                "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
                                 team.series as _,
                                 team.event,
                                 member.id as _,
@@ -4843,7 +5112,7 @@ async fn handle_async_command(
                         }
 
                         interaction.edit_response(ctx, EditInteractionResponse::new()
-                            .content(format!("Time recorded for {}: {}", team_name, time_str))
+                            .content(format!("Time recorded for {}: {}", team_name, qual_time_str.unwrap()))
                         ).await?;
                     }
 
@@ -4872,8 +5141,74 @@ async fn handle_async_command(
     // Load race data early so we can use it for display order
     let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await.map_err(|_e| Error::Sql(sqlx::Error::RowNotFound))?;
 
+    // For result commands, parse time before checking for an existing record
+    let (time_str, total_seconds, pg_interval) = if !is_forfeit {
+        let time_str = interaction.data.options.iter()
+            .find(|opt| opt.name == "time")
+            .and_then(|opt| opt.value.as_str())
+            .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?
+            .to_string();
+
+        let time_parts: Vec<&str> = time_str.split(':').collect();
+        if time_parts.len() != 3 {
+            interaction.edit_response(ctx, EditInteractionResponse::new()
+                .content("Time must be in format hh:mm:ss")
+            ).await?;
+            transaction.rollback().await?;
+            return Ok(());
+        }
+
+        let hours: i32 = time_parts[0].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+        let minutes: i32 = time_parts[1].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+        let seconds: i32 = time_parts[2].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+        let total_seconds = (hours * 3600 + minutes * 60 + seconds) as i64;
+        let pg_interval = PgInterval { months: 0, days: 0, microseconds: total_seconds * 1_000_000 };
+        (Some(time_str), Some(total_seconds), Some(pg_interval))
+    } else {
+        (None, None, None)
+    };
+
+    // Check if a result already exists for this async part
+    let existing = sqlx::query!(
+        "SELECT finish_time FROM async_times WHERE race_id = $1 AND async_part = $2",
+        race_id,
+        async_part as i32,
+    ).fetch_optional(&mut *transaction).await?;
+
+    if let Some(existing_row) = existing {
+        let existing_desc = if let Some(ft) = existing_row.finish_time {
+            let secs = ft.microseconds / 1_000_000 + (ft.days as i64) * 86400 + (ft.months as i64) * 2592000;
+            format!("{:02}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
+        } else {
+            "forfeit".to_string()
+        };
+        let new_desc = if is_forfeit { "forfeit".to_string() } else { time_str.as_ref().unwrap().clone() };
+
+        let display_order = get_display_order(&race, async_part as i32);
+        let ordinal = match display_order { 1 => "1st", 2 => "2nd", 3 => "3rd", n => &format!("{}th", n) };
+
+        let confirm_id = if is_forfeit {
+            format!("async_override_forfeit_{}_{}", race_id, async_part)
+        } else {
+            format!("async_override_result_{}_{}_{}", race_id, async_part, total_seconds.unwrap())
+        };
+
+        interaction.edit_response(ctx, EditInteractionResponse::new()
+            .content(format!(
+                "A result already exists for the {} half of this async: **{}**. Override with **{}**?",
+                ordinal, existing_desc, new_desc
+            ))
+            .components(vec![CreateActionRow::Buttons(vec![
+                CreateButton::new(confirm_id).label("Yes, override").style(ButtonStyle::Danger),
+                CreateButton::new("async_override_cancel").label("Cancel").style(ButtonStyle::Secondary),
+            ])])
+        ).await?;
+        transaction.rollback().await?;
+        return Ok(());
+    }
+
+    // No existing result — proceed with write
     if is_forfeit {
-        // Record forfeit (finish_time = NULL)
         sqlx::query!(
             r#"
             INSERT INTO async_times (race_id, async_part, finish_time, recorded_by, link)
@@ -4890,50 +5225,12 @@ async fn handle_async_command(
             link,
         ).execute(&mut *transaction).await?;
 
-        // Send immediate response
         let display_order = get_display_order(&race, async_part as i32);
-        let ordinal = match display_order {
-            1 => "1st",
-            2 => "2nd",
-            3 => "3rd",
-            n => &format!("{}th", n),
-        };
-
-        let content = format!("Forfeit recorded for {} half of this async.", ordinal);
-
+        let ordinal = match display_order { 1 => "1st", 2 => "2nd", 3 => "3rd", n => &format!("{}th", n) };
         interaction.edit_response(ctx, EditInteractionResponse::new()
-            .content(content)
+            .content(format!("Forfeit recorded for {} half of this async.", ordinal))
         ).await?;
     } else {
-        // Record time result
-        let time_str = interaction.data.options.iter()
-            .find(|opt| opt.name == "time")
-            .and_then(|opt| opt.value.as_str())
-            .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
-
-        // Parse the time (format: hh:mm:ss)
-        let time_parts: Vec<&str> = time_str.split(':').collect();
-        if time_parts.len() != 3 {
-            interaction.edit_response(ctx, EditInteractionResponse::new()
-                .content("Time must be in format hh:mm:ss")
-            ).await?;
-            transaction.rollback().await?;
-            return Ok(());
-        }
-
-        let hours: i32 = time_parts[0].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
-        let minutes: i32 = time_parts[1].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
-        let seconds: i32 = time_parts[2].parse().map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
-
-        let total_seconds = hours * 3600 + minutes * 60 + seconds;
-
-        // Insert the async time
-        let pg_interval = PgInterval {
-            months: 0,
-            days: 0,
-            microseconds: (total_seconds as i64) * 1_000_000,
-        };
-
         sqlx::query!(
             r#"
             INSERT INTO async_times (race_id, async_part, finish_time, recorded_by, link)
@@ -4946,28 +5243,30 @@ async fn handle_async_command(
             "#,
             race_id,
             async_part as i32,
-            pg_interval,
+            pg_interval.unwrap(),
             user.id as _,
             link,
         ).execute(&mut *transaction).await?;
 
-        // Send immediate response
         let display_order = get_display_order(&race, async_part as i32);
-        let ordinal = match display_order {
-            1 => "1st",
-            2 => "2nd",
-            3 => "3rd",
-            n => &format!("{}th", n),
-        };
-
-        let content = format!("Time recorded for {} half of this async: {}", ordinal, time_str);
-
+        let ordinal = match display_order { 1 => "1st", 2 => "2nd", 3 => "3rd", n => &format!("{}th", n) };
         interaction.edit_response(ctx, EditInteractionResponse::new()
-            .content(content)
+            .content(format!("Time recorded for {} half of this async: {}", ordinal, time_str.unwrap()))
         ).await?;
     }
 
-    // Check if both async parts are complete (only count records that have been properly recorded)
+    finalize_async_if_complete(ctx, &mut transaction, race_id, &race).await?;
+
+    transaction.commit().await?;
+    Ok(())
+}
+
+async fn finalize_async_if_complete(
+    ctx: &DiscordCtx,
+    transaction: &mut Transaction<'_, Postgres>,
+    race_id: i64,
+    race: &Race,
+) -> Result<(), Error> {
     let async_times = sqlx::query!(
         r#"
         SELECT async_part, finish_time, link FROM async_times
@@ -4975,195 +5274,182 @@ async fn handle_async_command(
         ORDER BY async_part
         "#,
         race_id
-    ).fetch_all(&mut *transaction).await?;
+    ).fetch_all(&mut **transaction).await?;
 
     let expected_parts = race.teams().count();
-    if async_times.len() >= expected_parts {
-        // All parts are complete, finalize the race
-        let event_name = race.event.clone();
-        let event = event::Data::new(&mut transaction, race.series, &event_name).await?
-            .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
+    if async_times.len() < expected_parts {
+        return Ok(());
+    }
 
-        // Update race end times
-        for async_time in &async_times {
-            // Calculate end time based on start time + finish time
-            let start_time = match async_time.async_part {
-                1 => sqlx::query_scalar!("SELECT async_start1 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
-                2 => sqlx::query_scalar!("SELECT async_start2 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
-                3 => sqlx::query_scalar!("SELECT async_start3 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
-                _ => continue,
-            };
+    // All parts are complete, finalize the race
+    let event_name = race.event.clone();
+    let event = event::Data::new(transaction, race.series, &event_name).await?
+        .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
 
-            if let Some(start_time) = start_time {
-                // Calculate finish time in seconds
-                if let Some(finish_time) = &async_time.finish_time {
-                    let finish_seconds = finish_time.microseconds / 1_000_000
-                        + (finish_time.days as i64) * 86400
-                        + (finish_time.months as i64) * 30 * 86400;
+    // Update race end times
+    for async_time in &async_times {
+        let start_time = match async_time.async_part {
+            1 => sqlx::query_scalar!("SELECT async_start1 FROM races WHERE id = $1", race_id).fetch_one(&mut **transaction).await?,
+            2 => sqlx::query_scalar!("SELECT async_start2 FROM races WHERE id = $1", race_id).fetch_one(&mut **transaction).await?,
+            3 => sqlx::query_scalar!("SELECT async_start3 FROM races WHERE id = $1", race_id).fetch_one(&mut **transaction).await?,
+            _ => continue,
+        };
 
-                    let end_time = start_time + chrono::Duration::seconds(finish_seconds);
-
-                    match async_time.async_part {
-                        1 => sqlx::query!("UPDATE races SET async_end1 = $1 WHERE id = $2", end_time, race_id).execute(&mut *transaction).await?,
-                        2 => sqlx::query!("UPDATE races SET async_end2 = $1 WHERE id = $2", end_time, race_id).execute(&mut *transaction).await?,
-                        3 => sqlx::query!("UPDATE races SET async_end3 = $1 WHERE id = $2", end_time, race_id).execute(&mut *transaction).await?,
-                        _ => return Ok(()),
-                    };
-                }
-            }
-        }
-
-        // Report the results
-        let results = async_times.iter().filter_map(|at| {
-            // finish_time is Option<PgInterval>, calculate total seconds
-            if let Some(finish_time) = &at.finish_time {
-                let seconds = finish_time.microseconds / 1_000_000
+        if let Some(start_time) = start_time {
+            if let Some(finish_time) = &async_time.finish_time {
+                let finish_seconds = finish_time.microseconds / 1_000_000
                     + (finish_time.days as i64) * 86400
                     + (finish_time.months as i64) * 30 * 86400;
-                Some((at.async_part, Duration::from_secs(seconds as u64)))
-            } else {
-                None // Skip records without finish times (forfeits)
-            }
-        }).collect::<Vec<_>>();
 
-        // Find the winning and losing players
-        let mut total_times: Vec<(i32, Option<Duration>, &Team)> = results.iter()
-            .map(|(part, time)| {
-                let team = match part {
-                    1 => race.teams().next(),
-                    2 => race.teams().nth(1),
-                    3 => race.teams().nth(2),
-                    _ => None,
+                let end_time = start_time + chrono::Duration::seconds(finish_seconds);
+
+                match async_time.async_part {
+                    1 => sqlx::query!("UPDATE races SET async_end1 = $1 WHERE id = $2", end_time, race_id).execute(&mut **transaction).await?,
+                    2 => sqlx::query!("UPDATE races SET async_end2 = $1 WHERE id = $2", end_time, race_id).execute(&mut **transaction).await?,
+                    3 => sqlx::query!("UPDATE races SET async_end3 = $1 WHERE id = $2", end_time, race_id).execute(&mut **transaction).await?,
+                    _ => return Ok(()),
                 };
-                (*part, Some(*time), team.unwrap())
-            })
-            .collect();
-
-        // Add forfeiting players with None time
-        for async_time in &async_times {
-            if async_time.finish_time.is_none() {
-                let team = match async_time.async_part {
-                    1 => race.teams().next(),
-                    2 => race.teams().nth(1),
-                    3 => race.teams().nth(2),
-                    _ => None,
-                };
-                if let Some(team) = team {
-                    total_times.push((async_time.async_part, None, team));
-                }
             }
-        }
-
-        total_times.sort_by(|a, b| {
-            // Sort by finish time, with None (forfeits) coming last
-            match (a.1, b.1) {
-                (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
-                (Some(_), None) => Less,
-                (None, Some(_)) => Greater,
-                (None, None) => Equal,
-            }
-        });
-
-        let (_winner_part, winner_time, winner_team) = &total_times[0];
-        let (_loser_part, loser_time, loser_team) = &total_times[1];
-
-        // Get player names
-        let winner_player = winner_team.members(&mut transaction).await?.into_iter().next()
-            .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
-        let loser_player = loser_team.members(&mut transaction).await?.into_iter().next()
-            .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
-
-        // Format the results message like live races
-        let mut content = MessageBuilder::default();
-        content.push("Async results for ");
-
-        if let Some(phase) = &race.phase {
-            content.push_safe(phase.clone());
-            content.push(' ');
-        }
-        if let Some(round) = &race.round {
-            content.push_safe(round.clone());
-            content.push(' ');
-        }
-
-        content.mention_user(&winner_player);
-        content.push(" (");
-        if let Some(winner_time) = winner_time {
-            content.push(format!("{:02}:{:02}:{:02}",
-                winner_time.as_secs() / 3600,
-                (winner_time.as_secs() % 3600) / 60,
-                winner_time.as_secs() % 60
-            ));
-        } else { // this should never happen.
-            content.push("DNF");
-        }
-        content.push(") defeats ");
-        content.mention_user(&loser_player);
-        content.push(" (");
-        if let Some(loser_time) = loser_time {
-            content.push(format!("{:02}:{:02}:{:02}",
-                loser_time.as_secs() / 3600,
-                (loser_time.as_secs() % 3600) / 60,
-                loser_time.as_secs() % 60
-            ));
-        } else {
-            content.push("DNF");
-        }
-        content.push(")");
-
-        // Add links if available
-        let mut links_content = MessageBuilder::default();
-        let mut has_links = false;
-
-        for async_time in &async_times {
-            if let Some(link) = &async_time.link {
-                if !has_links {
-                    links_content.push_line("");
-                    links_content.push("**Recordings:**");
-                    has_links = true;
-                }
-                links_content.push_line("");
-                let player = match async_time.async_part {
-                    1 => race.teams().next(),
-                    2 => race.teams().nth(1),
-                    3 => race.teams().nth(2),
-                    _ => None,
-                };
-                if let Some(player) = player {
-                    let player_name = player.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Player".to_string().into());
-                    links_content.push_safe(player_name);
-                    links_content.push(": <");
-                    links_content.push(link);
-                    links_content.push(">");
-                }
-            }
-        }
-
-        if has_links {
-            content.push(links_content.build());
-        }
-
-        // Send to race results channel
-        if let Some(results_channel) = event.discord_race_results_channel {
-            results_channel.say(ctx, content.build()).await?;
-        }
-
-        // Send to scheduling thread
-        if let Some(scheduling_thread) = race.scheduling_thread {
-            scheduling_thread.say(ctx, content.build()).await?;
-        }
-
-        // Extract the fields we need for external reporting
-        let async_times_parsed: Vec<(i32, Option<PgInterval>)> = async_times.iter()
-            .map(|at| (at.async_part, at.finish_time.clone()))
-            .collect();
-
-        if let Err(e) = report_async_race_to_external_platforms(ctx, &race, &async_times_parsed, &results).await {
-            transaction.rollback().await?;
-            return Err(e);
         }
     }
 
-    transaction.commit().await?;
+    // Report the results
+    let results = async_times.iter().filter_map(|at| {
+        if let Some(finish_time) = &at.finish_time {
+            let seconds = finish_time.microseconds / 1_000_000
+                + (finish_time.days as i64) * 86400
+                + (finish_time.months as i64) * 30 * 86400;
+            Some((at.async_part, Duration::from_secs(seconds as u64)))
+        } else {
+            None
+        }
+    }).collect::<Vec<_>>();
+
+    // Find the winning and losing players
+    let mut total_times: Vec<(i32, Option<Duration>, &Team)> = results.iter()
+        .map(|(part, time)| {
+            let team = match part {
+                1 => race.teams().next(),
+                2 => race.teams().nth(1),
+                3 => race.teams().nth(2),
+                _ => None,
+            };
+            (*part, Some(*time), team.unwrap())
+        })
+        .collect();
+
+    for async_time in &async_times {
+        if async_time.finish_time.is_none() {
+            let team = match async_time.async_part {
+                1 => race.teams().next(),
+                2 => race.teams().nth(1),
+                3 => race.teams().nth(2),
+                _ => None,
+            };
+            if let Some(team) = team {
+                total_times.push((async_time.async_part, None, team));
+            }
+        }
+    }
+
+    total_times.sort_by(|a, b| {
+        match (a.1, b.1) {
+            (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
+            (Some(_), None) => Less,
+            (None, Some(_)) => Greater,
+            (None, None) => Equal,
+        }
+    });
+
+    let (_winner_part, winner_time, winner_team) = &total_times[0];
+    let (_loser_part, loser_time, loser_team) = &total_times[1];
+
+    let winner_player = winner_team.members(transaction).await?.into_iter().next()
+        .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
+    let loser_player = loser_team.members(transaction).await?.into_iter().next()
+        .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
+
+    let mut content = MessageBuilder::default();
+    content.push("Async results for ");
+
+    if let Some(phase) = &race.phase {
+        content.push_safe(phase.clone());
+        content.push(' ');
+    }
+    if let Some(round) = &race.round {
+        content.push_safe(round.clone());
+        content.push(' ');
+    }
+
+    content.mention_user(&winner_player);
+    content.push(" (");
+    if let Some(winner_time) = winner_time {
+        content.push(format!("{:02}:{:02}:{:02}",
+            winner_time.as_secs() / 3600,
+            (winner_time.as_secs() % 3600) / 60,
+            winner_time.as_secs() % 60
+        ));
+    } else {
+        content.push("DNF");
+    }
+    content.push(") defeats ");
+    content.mention_user(&loser_player);
+    content.push(" (");
+    if let Some(loser_time) = loser_time {
+        content.push(format!("{:02}:{:02}:{:02}",
+            loser_time.as_secs() / 3600,
+            (loser_time.as_secs() % 3600) / 60,
+            loser_time.as_secs() % 60
+        ));
+    } else {
+        content.push("DNF");
+    }
+    content.push(")");
+
+    let mut links_content = MessageBuilder::default();
+    let mut has_links = false;
+
+    for async_time in &async_times {
+        if let Some(link) = &async_time.link {
+            if !has_links {
+                links_content.push_line("");
+                links_content.push("**Recordings:**");
+                has_links = true;
+            }
+            links_content.push_line("");
+            let player = match async_time.async_part {
+                1 => race.teams().next(),
+                2 => race.teams().nth(1),
+                3 => race.teams().nth(2),
+                _ => None,
+            };
+            if let Some(player) = player {
+                let player_name = player.name(transaction).await?.unwrap_or_else(|| "Unknown Player".to_string().into());
+                links_content.push_safe(player_name);
+                links_content.push(": <");
+                links_content.push(link);
+                links_content.push(">");
+            }
+        }
+    }
+
+    if has_links {
+        content.push(links_content.build());
+    }
+
+    if let Some(results_channel) = event.discord_race_results_channel {
+        results_channel.say(ctx, content.build()).await?;
+    }
+
+    if let Some(scheduling_thread) = race.scheduling_thread {
+        scheduling_thread.say(ctx, content.build()).await?;
+    }
+
+    let async_times_parsed: Vec<(i32, Option<PgInterval>)> = async_times.iter()
+        .map(|at| (at.async_part, at.finish_time.clone()))
+        .collect();
+
+    report_async_race_to_external_platforms(ctx, race, &async_times_parsed, &results).await?;
+
     Ok(())
 }
