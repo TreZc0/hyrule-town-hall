@@ -5937,6 +5937,7 @@ impl RaceHandler<GlobalState> for Handler {
             !error.ends_with(" is not allowed to join this race.") // failing to invite a user should not crash the race handler
             && !error.ends_with(" is already an entrant.") // failing to invite a user should not crash the race handler
             && error != "This user has not requested to join this race. Refresh to continue." // a join request may be accepted multiple times if multiple race data changes happen in quick succession
+            && error != "Specified user is not a race entrant." // failing to remove a user as entrant should not crash the race handler
         );
         if errors.is_empty() {
             Ok(())
