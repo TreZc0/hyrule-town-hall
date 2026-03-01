@@ -4004,15 +4004,19 @@ impl RaceHandler<GlobalState> for Handler {
                 } else {
                     (RaceState::Init, format!("Team A"), format!("Team B"))
                 };
-                let restreams = cal_event.race.video_urls.iter().map(|(&language, video_url)| (video_url.clone(), RestreamState {
-                    language: Some(language),
-                    restreamer_racetime_id: cal_event.race.restreamers.get(&language).cloned(),
-                    ready: false,
-                })).collect();
-                let stream_delay = match cal_event.race.entrants {
-                    Entrants::Open | Entrants::Count { .. } => event.open_stream_delay,
-                    Entrants::Two(_) | Entrants::Three(_) | Entrants::Named(_) => event.invitational_stream_delay,
-                };
+                let mut restreams = HashMap::default();
+                for (&language, video_url) in &cal_event.race.video_urls {
+                    restreams.insert(video_url.clone(), RestreamState {
+                        language: Some(language),
+                        restreamer_racetime_id: if let Some(restreamer) = cal_event.race.restreamers.get(&language) {
+                            Some(restreamer.racetime_id(&mut transaction).await.to_racetime()?)
+                        } else {
+                            None
+                        },
+                        ready: false,
+                    });
+                }
+                let stream_delay = cal_event.race.stream_delay(&event);
                 if !stream_delay.is_zero() || event.emulator_settings_reminder || event.prevent_late_joins {
                     let delay_until = cal_event.start().expect("handling room for official race without start time") - stream_delay - TimeDelta::minutes(5);
                     if let Ok(delay) = (delay_until - Utc::now()).to_std() {
