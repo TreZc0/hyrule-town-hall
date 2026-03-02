@@ -5117,9 +5117,10 @@ async fn handle_async_command(
         (None, None, None)
     };
 
-    // Check if a result already exists for this async part
+    // Check if a result already exists for this async part (recorded_at IS NOT NULL distinguishes
+    // actual results from placeholder rows inserted when a player readies up)
     let existing = sqlx::query!(
-        "SELECT finish_time FROM async_times WHERE race_id = $1 AND async_part = $2",
+        "SELECT finish_time FROM async_times WHERE race_id = $1 AND async_part = $2 AND recorded_at IS NOT NULL",
         race_id,
         async_part as i32,
     ).fetch_optional(&mut *transaction).await?;
