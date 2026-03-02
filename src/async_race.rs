@@ -348,6 +348,14 @@ impl AsyncRaceManager {
             ) AS "is_alttpr!""#,
             event.series as _
         ).fetch_one(&mut **transaction).await.unwrap_or(false);
+        let is_twwr = sqlx::query_scalar!(
+            r#"SELECT EXISTS (
+                SELECT 1 FROM game_series gs
+                JOIN games g ON g.id = gs.game_id
+                WHERE gs.series = $1 AND g.name = 'twwr'
+            ) AS "is_twwr!""#,
+            event.series as _
+        ).fetch_one(&mut **transaction).await.unwrap_or(false);
         let display_order = Self::get_display_order(race, async_part);
         if display_order == 1 {
             content.push_line("");
@@ -357,6 +365,8 @@ impl AsyncRaceManager {
             content.push_line("");
             if is_alttpr {
                 content.push("• When finished, inform us immediately with your finish time and a screenshot of the collection rate end scene.");
+            } else if is_twwr {
+                content.push("• When finished, inform us immediately with a screenshot showing your finish time together with the sword in Ganondorf's head.");
             } else {
                 content.push("• When finished, inform us immediately and provide a screenshot showing your final time and an indicator of seed completion.");
             }
@@ -370,7 +380,9 @@ impl AsyncRaceManager {
             content.push_line("");
             if is_alttpr {
                 content.push("• When finished, inform us immediately with your finish time and a screenshot of the collection rate end scene.");
-            } else { 
+            } else if is_twwr {
+                content.push("• When finished, inform us immediately with your finish time and a screenshot while showing the sword in Ganondorf's head.");
+            } else {
                 content.push("• When finished, inform us immediately and provide a screenshot showing your final time and an indicator of seed completion.");
             }
             content.push_line("");
@@ -783,8 +795,18 @@ impl AsyncRaceManager {
             ) AS "is_alttpr!""#,
             event.series as _
         ).fetch_one(&mut **transaction).await.unwrap_or(false);
+        let is_twwr = sqlx::query_scalar!(
+            r#"SELECT EXISTS (
+                SELECT 1 FROM game_series gs
+                JOIN games g ON g.id = gs.game_id
+                WHERE gs.series = $1 AND g.name = 'twwr'
+            ) AS "is_twwr!""#,
+            event.series as _
+        ).fetch_one(&mut **transaction).await.unwrap_or(false);
         if is_alttpr {
             content.push("• Provide a screenshot of your final time and collection rate.");
+        } else if is_twwr {
+            content.push("• Provide a screenshot showing your final time together with the sword in Ganondorf's head.");
         } else {
             content.push("• Provide a screenshot showing your final time and an indicator of seed completion.");
         }

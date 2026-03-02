@@ -3600,6 +3600,16 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                 team_id as i64
                                             ).fetch_one(&mut *transaction).await.unwrap_or(false);
 
+                                            let is_twwr = sqlx::query_scalar!(
+                                                r#"SELECT EXISTS (
+                                                    SELECT 1 FROM teams t
+                                                    JOIN game_series gs ON gs.series = t.series
+                                                    JOIN games g ON g.id = gs.game_id
+                                                    WHERE t.id = $1 AND g.name = 'twwr'
+                                                ) AS "is_twwr!""#,
+                                                team_id as i64
+                                            ).fetch_one(&mut *transaction).await.unwrap_or(false);
+
                                             tokio::spawn(async move {
                                                 sleep(Duration::from_secs(30)).await;
 
@@ -3625,6 +3635,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         msg.push("• A link to your VOD/recording\n");
                                                         if is_alttpr {
                                                             msg.push("• A screenshot of your final time & collection rate\n\n");
+                                                        } else if is_twwr {
+                                                            msg.push("• A screenshot showing your final time together with the sword in Ganondorf's head\n\n");
                                                         } else {
                                                             msg.push("• A screenshot of your final time and indication of seed completion\n\n");
                                                         }
