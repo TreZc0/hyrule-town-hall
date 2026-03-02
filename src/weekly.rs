@@ -269,6 +269,32 @@ impl WeeklySchedule {
         Ok(())
     }
 
+    /// Returns the round name used for races created by this schedule (e.g., "Saturday Weekly").
+    pub(crate) fn round_name(&self) -> String {
+        let frequency_label = match self.frequency_days {
+            7 => "Weekly",
+            14 => "Biweekly",
+            28 | 30 => "Monthly",
+            _ => "Weekly",
+        };
+        format!("{} {frequency_label}", self.name)
+    }
+
+    /// Deletes all upcoming (future, non-ignored) races created by this schedule.
+    /// Returns the number of races deleted.
+    pub(crate) async fn delete_upcoming_races(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<u64, sqlx::Error> {
+        let round = self.round_name();
+        let result = sqlx::query!(
+            "DELETE FROM races WHERE series = $1 AND event = $2 AND round = $3 AND start > NOW() AND NOT ignored",
+            self.series as _,
+            &self.event,
+            round,
+        )
+        .execute(&mut **transaction)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     /// Delete this schedule from the database.
     pub(crate) async fn delete(transaction: &mut Transaction<'_, Postgres>, id: Id<WeeklySchedules>) -> Result<(), sqlx::Error> {
         sqlx::query!("DELETE FROM weekly_schedules WHERE id = $1", id as _)

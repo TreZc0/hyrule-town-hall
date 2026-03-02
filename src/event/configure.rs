@@ -1432,12 +1432,15 @@ pub(crate) async fn weekly_schedule_delete(pool: &State<PgPool>, me: User, uri: 
         if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
             form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
         }
-        if WeeklySchedule::from_id(&mut transaction, schedule_id).await?.is_none() {
+        let schedule = WeeklySchedule::from_id(&mut transaction, schedule_id).await?;
+        if schedule.is_none() {
             form.context.push_error(form::Error::validation("Schedule not found."));
         }
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::DeleteContext(schedule_id, form.context)).await?)
         } else {
+            let schedule = schedule.unwrap();
+            schedule.delete_upcoming_races(&mut transaction).await?;
             WeeklySchedule::delete(&mut transaction, schedule_id).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(weekly_schedules_get(series, event))))
@@ -1468,7 +1471,12 @@ pub(crate) async fn weekly_schedule_toggle(pool: &State<PgPool>, me: User, uri: 
             RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::ToggleContext(schedule_id, form.context)).await?)
         } else {
             let mut schedule = schedule.unwrap();
+            let was_active = schedule.active;
             schedule.active = !schedule.active;
+            if was_active {
+                // Pausing: remove upcoming races so they aren't stale when the schedule resumes
+                schedule.delete_upcoming_races(&mut transaction).await?;
+            }
             schedule.save(&mut transaction).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(weekly_schedules_get(series, event))))
