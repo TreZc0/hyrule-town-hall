@@ -2278,7 +2278,17 @@ pub(crate) async fn race_table(
                         td {
                             @match race.schedule {
                                 RaceSchedule::Unscheduled => {}
-                                RaceSchedule::Live { start, .. } => : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                RaceSchedule::Live { start, .. } => {
+                                    : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                    @if show_event && options.show_multistreams && let delay = race.stream_delay(event) && !delay.is_zero() {
+                                        br;
+                                        small {
+                                            : "+ ";
+                                            : unparse_duration(delay);
+                                            : " stream delay";
+                                        }
+                                    }
+                                }
                                 RaceSchedule::Async { .. } => : "(async)";
                             }
                         }
