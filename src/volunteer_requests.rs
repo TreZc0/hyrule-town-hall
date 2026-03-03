@@ -842,6 +842,19 @@ pub(crate) async fn update_volunteer_post_for_race(
         }
     });
 
+    // All races in this post have started — delete the now-empty Discord message
+    if needs.is_empty() {
+        let _ = channel_id.delete_message(discord_ctx, message_id).await;
+        sqlx::query!(
+            "UPDATE races SET volunteer_request_message_id = NULL WHERE volunteer_request_message_id = $1",
+            PgSnowflake(message_id) as _
+        )
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        return Ok(());
+    }
+
     // Calculate time window (use lead time from event)
     let lead_time = Duration::hours(race_info.volunteer_request_lead_time_hours as i64);
     let cutoff = now + lead_time;
@@ -876,14 +889,15 @@ pub(crate) async fn update_volunteer_posts_for_event(
 ) -> Result<(), Error> {
     let mut transaction = pool.begin().await?;
 
-    // Find all unique message IDs for races in this event
+    // Find all unique message IDs for races in this event that haven't started yet
     let message_ids = sqlx::query_scalar!(
         r#"SELECT DISTINCT volunteer_request_message_id AS "message_id: PgSnowflake<MessageId>"
         FROM races
         WHERE series = $1
           AND event = $2
           AND volunteer_request_message_id IS NOT NULL
-          AND ignored = false"#,
+          AND ignored = false
+          AND start > NOW()"#,
         series as _,
         event
     )
