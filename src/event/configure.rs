@@ -1420,7 +1420,7 @@ pub(crate) async fn weekly_schedule_add(pool: &State<PgPool>, me: User, uri: Ori
 }
 
 #[rocket::post("/event/<series>/<event>/configure/weekly-schedules/<schedule_id>/delete", data = "<form>")]
-pub(crate) async fn weekly_schedule_delete(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, schedule_id: Id<WeeklySchedules>, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn weekly_schedule_delete(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, schedule_id: Id<WeeklySchedules>, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
@@ -1440,9 +1440,15 @@ pub(crate) async fn weekly_schedule_delete(pool: &State<PgPool>, me: User, uri: 
             RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::DeleteContext(schedule_id, form.context)).await?)
         } else {
             let schedule = schedule.unwrap();
-            schedule.delete_upcoming_races(&mut transaction).await?;
+            let affected_message_ids = schedule.delete_upcoming_races(&mut transaction).await?;
             WeeklySchedule::delete(&mut transaction, schedule_id).await?;
             transaction.commit().await?;
+            let discord_ctx = discord_ctx.read().await;
+            for message_id in affected_message_ids {
+                let _ = crate::volunteer_requests::update_volunteer_post_by_message_id(
+                    pool, &discord_ctx, series, event, message_id,
+                ).await;
+            }
             RedirectOrContent::Redirect(Redirect::to(uri!(weekly_schedules_get(series, event))))
         }
     } else {
@@ -1451,7 +1457,7 @@ pub(crate) async fn weekly_schedule_delete(pool: &State<PgPool>, me: User, uri: 
 }
 
 #[rocket::post("/event/<series>/<event>/configure/weekly-schedules/<schedule_id>/toggle", data = "<form>")]
-pub(crate) async fn weekly_schedule_toggle(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, schedule_id: Id<WeeklySchedules>, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn weekly_schedule_toggle(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, schedule_id: Id<WeeklySchedules>, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
@@ -1473,12 +1479,20 @@ pub(crate) async fn weekly_schedule_toggle(pool: &State<PgPool>, me: User, uri: 
             let mut schedule = schedule.unwrap();
             let was_active = schedule.active;
             schedule.active = !schedule.active;
-            if was_active {
+            let affected_message_ids = if was_active {
                 // Pausing: remove upcoming races so they aren't stale when the schedule resumes
-                schedule.delete_upcoming_races(&mut transaction).await?;
-            }
+                schedule.delete_upcoming_races(&mut transaction).await?
+            } else {
+                vec![]
+            };
             schedule.save(&mut transaction).await?;
             transaction.commit().await?;
+            let discord_ctx = discord_ctx.read().await;
+            for message_id in affected_message_ids {
+                let _ = crate::volunteer_requests::update_volunteer_post_by_message_id(
+                    pool, &discord_ctx, series, event, message_id,
+                ).await;
+            }
             RedirectOrContent::Redirect(Redirect::to(uri!(weekly_schedules_get(series, event))))
         }
     } else {

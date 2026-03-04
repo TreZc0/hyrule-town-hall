@@ -846,10 +846,10 @@ impl Race {
         })
     }
 
-    pub(crate) async fn ignore_remaining_games(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<(), Error> {
+    pub(crate) async fn ignore_remaining_games(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<Id<Races>>, Error> {
         if let Some(game) = self.game {
             let ([team1, team2, team3], [p1, p2, p3], [p1_discord, p2_discord], [p1_racetime, p2_racetime], [p1_twitch, p2_twitch], [total, finished]) = self.entrants.to_db();
-            sqlx::query!(r#"UPDATE races SET ignored = true WHERE
+            let ids = sqlx::query_scalar!(r#"UPDATE races SET ignored = true WHERE
                 NOT ignored
                 AND series = $1
                 AND event = $2
@@ -870,6 +870,7 @@ impl Race {
                 AND p2_twitch IS NOT DISTINCT FROM $17
                 AND total IS NOT DISTINCT FROM $18
                 AND finished IS NOT DISTINCT FROM $19
+                RETURNING id AS "id: Id<Races>"
             "#,
                 self.series as _,
                 self.event,
@@ -890,9 +891,11 @@ impl Race {
                 p2_twitch,
                 total.map(|total| total as i32),
                 finished.map(|finished| finished as i32),
-            ).execute(&mut **transaction).await?;
+            ).fetch_all(&mut **transaction).await?;
+            Ok(ids)
+        } else {
+            Ok(vec![])
         }
-        Ok(())
     }
 
     pub(crate) async fn event(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<event::Data<'static>, event::DataError> {

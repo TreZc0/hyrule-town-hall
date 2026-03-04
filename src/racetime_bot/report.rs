@@ -144,9 +144,10 @@ fn determine_overall_winner(game_results: &[startgg::GameResult]) -> startgg::ID
         .expect("No games completed")
 }
 
-async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ctx: &RaceContext<GlobalState>, cal_event: &cal::Event, event: &event::Data<'_>, mut entrants: [(Entrant, S, Url); 2]) -> Result<Transaction<'a, Postgres>, Error> {
+async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ctx: &RaceContext<GlobalState>, cal_event: &cal::Event, event: &event::Data<'_>, mut entrants: [(Entrant, S, Url); 2]) -> Result<(Transaction<'a, Postgres>, Vec<Id<Races>>), Error> {
     entrants.sort_unstable_by_key(|(_, time, _)| time.sort_key());
     let [(winner, winning_time, winning_room), (loser, losing_time, losing_room)] = entrants;
+    let mut ignored_race_ids: Vec<Id<Races>> = vec![];
     if winning_time.is_dnf() && losing_time.is_dnf() {
         if let Some(results_channel) = event.discord_race_results_channel.or(event.discord_organizer_channel) {
             let msg = if_chain! {
@@ -414,7 +415,7 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                                         .collect()),
                                 }
                             ).await.to_racetime()?;
-                            cal_event.race.ignore_remaining_games(&mut transaction).await.to_racetime()?;
+                            ignored_race_ids = cal_event.race.ignore_remaining_games(&mut transaction).await.to_racetime()?;
                             series_decided = true;
                         } else {
                             startgg::query_uncached::<startgg::ReportBracketSetMutation>(
@@ -486,7 +487,7 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
             }
         }
     }
-    Ok(transaction)
+    Ok((transaction, ignored_race_ids))
 }
 
 async fn report_ffa(ctx: &RaceContext<GlobalState>, cal_event: &cal::Event, event: &event::Data<'_>, room: Url) -> Result<(), Error> {
@@ -624,6 +625,7 @@ impl Handler {
                 organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, msg.build()).await.to_racetime()?;
             }
         } else {
+            let mut ignored_race_ids = Vec::new();
             match event.team_config {
                 TeamConfig::Solo => match cal_event.race.entrants {
                     Entrants::Open | Entrants::Count { .. } => {
@@ -653,7 +655,9 @@ impl Handler {
                                 }
                             }
                             if let Ok(teams) = teams.try_into() {
-                                transaction = report_1v1(transaction, ctx, cal_event, event, teams).await?;
+                                let (t, ids) = report_1v1(transaction, ctx, cal_event, event, teams).await?;
+                                transaction = t;
+                                ignored_race_ids = ids;
                             } else { //TODO separate function for reporting 3-entrant results
                                 report_ffa(ctx, cal_event, event, room).await?;
                             }
@@ -677,7 +681,9 @@ impl Handler {
                                 }
                             }
                             if let Ok(teams) = teams.try_into() {
-                                transaction = report_1v1(transaction, ctx, cal_event, event, teams).await?;
+                                let (t, ids) = report_1v1(transaction, ctx, cal_event, event, teams).await?;
+                                transaction = t;
+                                ignored_race_ids = ids;
                             } else { //TODO separate function for reporting 3-entrant results
                                 report_ffa(ctx, cal_event, event, room).await?;
                             }
@@ -747,7 +753,9 @@ impl Handler {
                                 if all_teams_found;
                                 if let Ok(teams) = teams.try_into();
                                 then {
-                                    transaction = report_1v1(transaction, ctx, cal_event, event, teams).await?;
+                                    let (t, ids) = report_1v1(transaction, ctx, cal_event, event, teams).await?;
+                                    transaction = t;
+                                    ignored_race_ids = ids;
                                 } else { //TODO separate function for reporting 3-entrant results
                                     let room = Url::parse(&format!("https://{}{}", racetime_host(), data.url)).to_racetime()?;
                                     report_ffa(ctx, cal_event, event, room).await?;
@@ -771,7 +779,9 @@ impl Handler {
                                 if all_teams_found;
                                 if let Ok(teams) = teams.try_into();
                                 then {
-                                    transaction = report_1v1(transaction, ctx, cal_event, event, teams).await?;
+                                    let (t, ids) = report_1v1(transaction, ctx, cal_event, event, teams).await?;
+                                    transaction = t;
+                                    ignored_race_ids = ids;
                                 } else { //TODO separate function for reporting 3-entrant results
                                     let room = Url::parse(&format!("https://{}{}", racetime_host(), data.url)).to_racetime()?;
                                     report_ffa(ctx, cal_event, event, room).await?;
@@ -781,6 +791,18 @@ impl Handler {
                     }
                 },
             }
+            transaction.commit().await.to_racetime()?;
+            if !ignored_race_ids.is_empty() {
+                let discord_ctx = ctx.global_state.discord_ctx.read().await;
+                for race_id in ignored_race_ids {
+                    let _ = crate::volunteer_requests::update_volunteer_post_for_race(
+                        &ctx.global_state.db_pool,
+                        &discord_ctx,
+                        race_id,
+                    ).await;
+                }
+            }
+            return Ok(());
         }
         transaction.commit().await.to_racetime()?;
         Ok(())

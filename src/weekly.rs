@@ -9,7 +9,7 @@ use {
         TimeZone,
     },
     chrono_tz::Tz,
-    serenity::model::id::{ChannelId, RoleId},
+    serenity::model::id::{ChannelId, MessageId, RoleId},
     crate::{
         discord_bot::PgSnowflake,
         id::Table,
@@ -282,9 +282,25 @@ impl WeeklySchedule {
 
     /// Deletes all upcoming (future, non-ignored) races created by this schedule.
     /// Returns the number of races deleted.
-    pub(crate) async fn delete_upcoming_races(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<u64, sqlx::Error> {
+    pub(crate) async fn delete_upcoming_races(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<MessageId>, sqlx::Error> {
         let round = self.round_name();
-        let result = sqlx::query!(
+        // Capture message IDs of announced races before deleting them, so the
+        // caller can update the Discord volunteer posts after the commit.
+        let message_ids = sqlx::query_scalar!(
+            r#"SELECT DISTINCT volunteer_request_message_id AS "id: PgSnowflake<MessageId>"
+            FROM races
+            WHERE series = $1 AND event = $2 AND round = $3 AND start > NOW() AND NOT ignored
+              AND volunteer_request_message_id IS NOT NULL"#,
+            self.series as _,
+            &self.event,
+            round,
+        )
+        .fetch_all(&mut **transaction)
+        .await?
+        .into_iter()
+        .filter_map(|opt| opt.map(|PgSnowflake(id)| id))
+        .collect();
+        sqlx::query!(
             "DELETE FROM races WHERE series = $1 AND event = $2 AND round = $3 AND start > NOW() AND NOT ignored",
             self.series as _,
             &self.event,
@@ -292,7 +308,7 @@ impl WeeklySchedule {
         )
         .execute(&mut **transaction)
         .await?;
-        Ok(result.rows_affected())
+        Ok(message_ids)
     }
 
     /// Delete this schedule from the database.

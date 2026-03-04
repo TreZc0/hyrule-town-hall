@@ -659,8 +659,20 @@ fn build_announcement_content(
             continue;
         }
 
-        // Button label: truncate matchup to fit Discord's 80 char limit
-        let label = format!("Sign up: {}", truncate_string(&need.matchup, 60));
+        // Button label: truncate matchup to fit Discord's 80 char limit.
+        // If multiple races share the same matchup string, add the date to disambiguate.
+        let has_duplicate_matchup = needs.iter()
+            .filter(|n| n.matchup == need.matchup)
+            .count() > 1;
+        let label = if has_duplicate_matchup {
+            if let RaceSchedule::Live { start, .. } = need.race.schedule {
+                format!("Sign up: {} - {}", truncate_string(&need.matchup, 60), start.format("%b %d"))
+            } else {
+                format!("Sign up: {}", truncate_string(&need.matchup, 60))
+            }
+        } else {
+            format!("Sign up: {}", truncate_string(&need.matchup, 60))
+        };
         let button = CreateButton::new(format!("volunteer_signup_{}", u64::from(need.race.id)))
             .label(label)
             .style(ButtonStyle::Primary);
@@ -925,5 +937,142 @@ pub(crate) async fn update_volunteer_posts_for_event(
         }
     }
 
+    Ok(())
+}
+
+/// Updates or deletes a volunteer post identified by its Discord message ID.
+///
+/// Used when races are deleted outright (e.g. pausing/deleting a weekly schedule),
+/// so the race rows are gone and we can't look up the message ID from a race.
+pub(crate) async fn update_volunteer_post_by_message_id(
+    pool: &PgPool,
+    discord_ctx: &DiscordCtx,
+    series: Series,
+    event: &str,
+    message_id: MessageId,
+) -> Result<(), Error> {
+    let mut transaction = pool.begin().await?;
+    let http_client = reqwest::Client::new();
+
+    // Look up the volunteer info channel and lead time from the event
+    let event_config = sqlx::query!(
+        r#"SELECT
+            discord_volunteer_info_channel AS "channel: PgSnowflake<ChannelId>",
+            volunteer_request_lead_time_hours
+        FROM events WHERE series = $1 AND event = $2"#,
+        series as _,
+        event,
+    )
+    .fetch_optional(&mut *transaction)
+    .await?;
+
+    let event_config = match event_config {
+        Some(c) => c,
+        None => return Ok(()),
+    };
+    let channel_id = match event_config.channel {
+        Some(PgSnowflake(id)) => id,
+        None => return Ok(()),
+    };
+
+    // Find remaining non-ignored races that still reference this message
+    let race_ids = sqlx::query_scalar!(
+        r#"SELECT id AS "id: Id<Races>"
+        FROM races
+        WHERE volunteer_request_message_id = $1
+          AND ignored = false
+        ORDER BY start ASC NULLS LAST"#,
+        PgSnowflake(message_id) as _
+    )
+    .fetch_all(&mut *transaction)
+    .await?;
+
+    if race_ids.is_empty() {
+        // No races left for this post — delete the Discord message
+        let _ = channel_id.delete_message(discord_ctx, message_id).await;
+        sqlx::query!(
+            "UPDATE races SET volunteer_request_message_id = NULL WHERE volunteer_request_message_id = $1",
+            PgSnowflake(message_id) as _
+        )
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        return Ok(());
+    }
+
+    let event_data = match event::Data::new(&mut transaction, series, event.to_owned()).await? {
+        Some(data) => data,
+        None => return Ok(()),
+    };
+
+    // Build volunteer needs for remaining races
+    let mut needs = Vec::new();
+    for rid in &race_ids {
+        let race = Race::from_id(&mut transaction, &http_client, *rid).await?;
+        let matchup = get_matchup_description(&mut transaction, &race).await?;
+        let role_bindings = EffectiveRoleBinding::for_event(&mut transaction, series, event).await?;
+        let signups = Signup::for_race(&mut transaction, *rid).await?;
+
+        let mut role_needs = Vec::new();
+        let mut has_any_need = false;
+        for binding in &role_bindings {
+            if binding.is_disabled { continue; }
+            let confirmed_signups: Vec<_> = signups.iter()
+                .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Confirmed))
+                .collect();
+            let confirmed_count = confirmed_signups.len() as i32;
+            let mut confirmed_names = Vec::new();
+            for signup in &confirmed_signups {
+                if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
+                    confirmed_names.push(user.display_name().to_owned());
+                }
+            }
+            let pending_count = signups.iter()
+                .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Pending))
+                .count() as i32;
+            if confirmed_count < binding.max_count || pending_count > 0 {
+                role_needs.push(RoleNeed {
+                    role_name: binding.role_type_name.clone(),
+                    discord_role_id: binding.discord_role_id,
+                    confirmed_names,
+                    confirmed_count,
+                    pending_count,
+                    min_count: binding.min_count,
+                    max_count: binding.max_count,
+                    language: binding.language,
+                });
+                has_any_need = true;
+            }
+        }
+        if has_any_need || !role_needs.is_empty() {
+            needs.push(RaceVolunteerNeed { race, matchup, role_needs });
+        }
+    }
+
+    let now = Utc::now();
+    needs.retain(|need| matches!(need.race.schedule, RaceSchedule::Live { start, .. } if start > now));
+
+    if needs.is_empty() {
+        let _ = channel_id.delete_message(discord_ctx, message_id).await;
+        sqlx::query!(
+            "UPDATE races SET volunteer_request_message_id = NULL WHERE volunteer_request_message_id = $1",
+            PgSnowflake(message_id) as _
+        )
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        return Ok(());
+    }
+
+    let lead_time = Duration::hours(event_config.volunteer_request_lead_time_hours as i64);
+    let (content, components) = build_announcement_content(&needs, &event_data, now, now + lead_time);
+
+    if let Err(_e) = channel_id.edit_message(
+        discord_ctx,
+        message_id,
+        EditMessage::new().content(content).components(components),
+    ).await {}
+
+    transaction.commit().await?;
     Ok(())
 }
