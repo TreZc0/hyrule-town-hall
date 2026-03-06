@@ -577,13 +577,12 @@ pub(crate) async fn sync_export(
         let export = ExportConfig::from_id(&mut transaction, export_id).await?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-        let (exported, removed, errors) = zsr_export::sync_all_races(&mut transaction, http_client.inner(), &export).await?;
+        let errors = zsr_export::sync_all_races(&mut transaction, http_client.inner(), &export).await?;
 
         transaction.commit().await?;
 
-        eprintln!("Manual sync: exported {}, removed {}, {} errors", exported, removed, errors.len());
         for err in &errors {
-            eprintln!("  - {}", err);
+            eprintln!("Manual sync export {}: {}", export_id, err);
         }
     }
 
@@ -614,9 +613,10 @@ pub(crate) async fn sync_all(
 
         for export in exports {
             if export.enabled {
-                let (exported, removed, errors) = zsr_export::sync_all_races(&mut transaction, http_client.inner(), &export).await?;
-                eprintln!("Manual sync to backend {}: exported {}, removed {}, {} errors",
-                    export.backend_id, exported, removed, errors.len());
+                let errors = zsr_export::sync_all_races(&mut transaction, http_client.inner(), &export).await?;
+                for err in &errors {
+                    eprintln!("Manual sync to backend {}: {}", export.backend_id, err);
+                }
             }
         }
 

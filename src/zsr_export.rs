@@ -938,7 +938,7 @@ pub(crate) async fn sync_all_races(
     transaction: &mut Transaction<'_, Postgres>,
     http_client: &reqwest::Client,
     export: &ExportConfig,
-) -> Result<(usize, usize, Vec<String>), Error> {
+) -> Result<Vec<String>, Error> {
     let backend = RestreamingBackend::from_id(transaction, export.backend_id).await?
         .ok_or(Error::BackendNotFound(export.backend_id))?;
 
@@ -958,8 +958,6 @@ pub(crate) async fn sync_all_races(
     .fetch_all(&mut **transaction)
     .await?;
 
-    let mut exported = 0;
-    let mut removed = 0;
     let mut errors = Vec::new();
 
     for race_id in race_ids {
@@ -973,9 +971,8 @@ pub(crate) async fn sync_all_races(
 
         // Check if race should be removed
         if should_remove_race(&race) {
-            match remove_race(transaction, http_client, race.id, export, &backend).await {
-                Ok(()) => removed += 1,
-                Err(e) => errors.push(format!("Race {} (remove): {}", race.id, e)),
+            if let Err(e) = remove_race(transaction, http_client, race.id, export, &backend).await {
+                errors.push(format!("Race {} (remove): {}", race.id, e));
             }
             continue;
         }
@@ -983,22 +980,18 @@ pub(crate) async fn sync_all_races(
         // Check if race should be exported
         match should_export_race(transaction, &race, export, &backend).await {
             Ok(true) => {
-                // Check if this is an update
                 let existing = RaceExport::find(transaction, race.id, export.id).await?;
                 let is_update = existing.is_some();
-
-                match export_race(transaction, http_client, &race, export, &backend, &event_data.display_name, is_update).await {
-                    Ok(_) => exported += 1,
-                    Err(e) => errors.push(format!("Race {}: {}", race.id, e)),
+                if let Err(e) = export_race(transaction, http_client, &race, export, &backend, &event_data.display_name, is_update).await {
+                    errors.push(format!("Race {}: {}", race.id, e));
                 }
             }
             Ok(false) => {
-                // Trigger not met - check if we need to remove
+                // Trigger not met - remove if previously exported
                 let existing = RaceExport::find(transaction, race.id, export.id).await?;
                 if existing.is_some() {
-                    match remove_race(transaction, http_client, race.id, export, &backend).await {
-                        Ok(()) => removed += 1,
-                        Err(e) => errors.push(format!("Race {} (remove): {}", race.id, e)),
+                    if let Err(e) = remove_race(transaction, http_client, race.id, export, &backend).await {
+                        errors.push(format!("Race {} (remove): {}", race.id, e));
                     }
                 }
             }
@@ -1006,7 +999,7 @@ pub(crate) async fn sync_all_races(
         }
     }
 
-    Ok((exported, removed, errors))
+    Ok(errors)
 }
 
 // ============================================================================
@@ -1024,16 +1017,9 @@ pub(crate) async fn check_and_sync_all_exports(
 
     for export in exports {
         match sync_all_races(&mut transaction, http_client, &export).await {
-            Ok((exported, removed, errors)) => {
-                if exported > 0 || removed > 0 || !errors.is_empty() {
-                    eprintln!(
-                        "ZSR Export {}/{} to backend {}: exported {}, removed {}, {} errors",
-                        export.series.slug(), export.event, export.backend_id,
-                        exported, removed, errors.len()
-                    );
-                    for err in errors {
-                        eprintln!("  - {}", err);
-                    }
+            Ok(errors) => {
+                for err in errors {
+                    eprintln!("ZSR Export {}/{} to backend {}: {}", export.series.slug(), export.event, export.backend_id, err);
                 }
             }
             Err(e) => {
