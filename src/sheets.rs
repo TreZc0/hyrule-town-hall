@@ -135,6 +135,8 @@ pub(crate) enum WriteError {
     EmptyToken,
     #[error("OAuth token is expired")]
     TokenExpired,
+    #[error("sheet not found: {0}")]
+    SheetNotFound(String),
 }
 
 impl IsNetworkError for WriteError {
@@ -145,6 +147,7 @@ impl IsNetworkError for WriteError {
             Self::Wheel(e) => e.is_network_error(),
             Self::EmptyToken => false,
             Self::TokenExpired => false,
+            Self::SheetNotFound(_) => false,
         }
     }
 }
@@ -319,6 +322,144 @@ pub(crate) async fn batch_update_values(
         ))
             .bearer_auth(&token)
             .json(&request)
+            .send().await?
+            .detailed_error_for_status().await?;
+
+        *next_write = Instant::now() + RATE_LIMIT;
+        Ok(())
+    })
+}
+
+/// Get the numeric sheet ID for a named sheet within a spreadsheet
+pub(crate) async fn get_sheet_id(
+    http_client: &reqwest::Client,
+    spreadsheet_id: &str,
+    sheet_name: &str,
+) -> Result<i32, WriteError> {
+    #[derive(Deserialize)]
+    struct SpreadsheetMeta { sheets: Vec<SheetItem> }
+    #[derive(Deserialize)]
+    struct SheetItem { properties: SheetItemProperties }
+    #[derive(Deserialize)]
+    struct SheetItemProperties {
+        #[serde(rename = "sheetId")]
+        sheet_id: i32,
+        title: String,
+    }
+
+    lock!(next_write = WRITE_RATE_LIMIT; {
+        sleep_until(*next_write).await;
+        let token = get_auth_token().await?;
+
+        let meta = http_client.get(&format!(
+            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}"
+        ))
+            .bearer_auth(&token)
+            .query(&[("fields", "sheets.properties(sheetId,title)")])
+            .send().await?
+            .detailed_error_for_status().await?
+            .json_with_text_in_error::<SpreadsheetMeta>().await?;
+
+        *next_write = Instant::now() + RATE_LIMIT;
+
+        meta.sheets.into_iter()
+            .find(|s| s.properties.title == sheet_name)
+            .map(|s| s.properties.sheet_id)
+            .ok_or_else(|| WriteError::SheetNotFound(sheet_name.to_owned()))
+    })
+}
+
+/// Insert a blank row at the given 1-indexed row position
+pub(crate) async fn insert_row_at(
+    http_client: &reqwest::Client,
+    spreadsheet_id: &str,
+    sheet_id: i32,
+    row: usize,
+) -> Result<(), WriteError> {
+    let start_index = (row - 1) as i32;
+
+    #[derive(Serialize)]
+    struct Request { requests: Vec<InsertDimReq> }
+    #[derive(Serialize)]
+    struct InsertDimReq { #[serde(rename = "insertDimension")] insert_dimension: InsertDimContent }
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct InsertDimContent { range: DimRange, inherit_from_before: bool }
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DimRange { sheet_id: i32, dimension: String, start_index: i32, end_index: i32 }
+
+    lock!(next_write = WRITE_RATE_LIMIT; {
+        sleep_until(*next_write).await;
+        let token = get_auth_token().await?;
+
+        http_client.post(&format!(
+            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate"
+        ))
+            .bearer_auth(&token)
+            .json(&Request {
+                requests: vec![InsertDimReq {
+                    insert_dimension: InsertDimContent {
+                        range: DimRange {
+                            sheet_id,
+                            dimension: "ROWS".to_owned(),
+                            start_index,
+                            end_index: start_index + 1,
+                        },
+                        inherit_from_before: false,
+                    },
+                }],
+            })
+            .send().await?
+            .detailed_error_for_status().await?;
+
+        *next_write = Instant::now() + RATE_LIMIT;
+        Ok(())
+    })
+}
+
+/// Sort rows from start_row (1-indexed) onwards by column A ascending
+pub(crate) async fn sort_rows_by_column_a(
+    http_client: &reqwest::Client,
+    spreadsheet_id: &str,
+    sheet_id: i32,
+    start_row: usize,
+) -> Result<(), WriteError> {
+    let start_row_index = (start_row - 1) as i32;
+
+    #[derive(Serialize)]
+    struct Request { requests: Vec<SortRangeReq> }
+    #[derive(Serialize)]
+    struct SortRangeReq { #[serde(rename = "sortRange")] sort_range: SortRangeContent }
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SortRangeContent { range: GridRange, sort_specs: Vec<SortSpec> }
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct GridRange { sheet_id: i32, start_row_index: i32 }
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SortSpec { dimension_index: i32, sort_order: String }
+
+    lock!(next_write = WRITE_RATE_LIMIT; {
+        sleep_until(*next_write).await;
+        let token = get_auth_token().await?;
+
+        http_client.post(&format!(
+            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate"
+        ))
+            .bearer_auth(&token)
+            .json(&Request {
+                requests: vec![SortRangeReq {
+                    sort_range: SortRangeContent {
+                        range: GridRange { sheet_id, start_row_index },
+                        sort_specs: vec![SortSpec {
+                            dimension_index: 0,
+                            sort_order: "ASCENDING".to_owned(),
+                        }],
+                    },
+                }],
+            })
             .send().await?
             .detailed_error_for_status().await?;
 

@@ -621,6 +621,12 @@ pub(crate) async fn build_race_title(
     // Use export title if set, otherwise event display name
     let event_name = export.title.as_deref().unwrap_or(event_display_name);
 
+    // Qualifier races get a simplified title without matchup
+    if race.phase.as_deref() == Some("Qualifier") {
+        let round = race.round.as_deref().unwrap_or("1");
+        return format!("{}: Qualifier {}", event_name, round);
+    }
+
     // Build matchup string
     let matchup = match &race.entrants {
         Entrants::Two([e1, e2]) => {
@@ -697,31 +703,39 @@ pub(crate) async fn ensure_description_entry(
         "'Descriptions'!A:A",
     ).await?;
 
-    // Check if title already exists (starting from row 2, so index 1)
-    let title_exists = existing.iter()
-        .skip(1) // Skip header row
-        .any(|row| row.first().map(|s| s == title).unwrap_or(false));
+    // Get the estimate - use override if present, otherwise calculate from series default duration
+    let estimate = export.estimate_override.clone()
+        .unwrap_or_else(|| format_estimate(export.series.default_race_duration()));
+    let description = export.description.clone().unwrap_or_default();
+    let nodecg_pk = export.nodecg_pk.map(|pk| pk.to_string()).unwrap_or_default();
 
-    if !title_exists {
-        // Get the estimate - use override if present, otherwise calculate from series default duration
-        let estimate = export.estimate_override.clone()
-            .unwrap_or_else(|| format_estimate(export.series.default_race_duration()));
+    // Check if title already exists (skip header row at index 0)
+    let existing_row_idx = existing.iter()
+        .skip(1)
+        .position(|row| row.first().map(|s| s == title).unwrap_or(false))
+        .map(|pos| pos + 2); // Convert to 1-indexed sheet row (pos is 0-indexed after the skip)
 
-        // Build the row data
-        let values = vec![vec![
-            title.to_owned(),                                    // Name
-            export.description.clone().unwrap_or_default(),      // Description
-            estimate,                                            // Estimate
-            default_runner_count.to_string(),                    // Runners
-            export.nodecg_pk.map(|pk| pk.to_string()).unwrap_or_default(), // PK
-        ]];
-
-        // Append to the Descriptions sheet
+    if let Some(row_num) = existing_row_idx {
+        // Update existing row — columns B (description), C (estimate), E (PK)
+        sheets::batch_update_values(http_client, &backend.google_sheet_id, vec![
+            (format!("'Descriptions'!B{}", row_num), vec![vec![description]]),
+            (format!("'Descriptions'!C{}", row_num), vec![vec![estimate]]),
+            (format!("'Descriptions'!D{}", row_num), vec![vec![default_runner_count.to_string()]]),
+            (format!("'Descriptions'!E{}", row_num), vec![vec![nodecg_pk]]),
+        ]).await?;
+    } else {
+        // Append new row to the Descriptions sheet
         sheets::append_values(
             http_client,
             &backend.google_sheet_id,
             "'Descriptions'!A:E",
-            values,
+            vec![vec![
+                title.to_owned(),
+                description,
+                estimate,
+                default_runner_count.to_string(),
+                nodecg_pk,
+            ]],
         ).await?;
     }
 
@@ -838,7 +852,6 @@ pub(crate) async fn export_race(
                 (format!("'Restream Signups'!C{}", row), vec![vec![dst_formula.replace("{row}", &row.to_string())]]),
                 (format!("'Restream Signups'!D{}", row), vec![vec![format!("=IF(C{}=\"\",\"\",TEXT(C{},\"ddd\"))", row, row)]]),
                 (format!("'Restream Signups'!E{}", row), vec![vec![title]]),
-                (format!("'Restream Signups'!F{}", row), vec![vec![export.description.clone().unwrap_or_default()]]),
                 (format!("'Restream Signups'!G{}", row), vec![vec![get_runner_count(race).to_string()]]),
                 (format!("'Restream Signups'!{}{}", backend.commentators_col, row), vec![vec![commentators.join(", ")]]),
                 (format!("'Restream Signups'!{}{}", backend.trackers_col, row), vec![vec![trackers.join(", ")]]),
@@ -852,34 +865,30 @@ pub(crate) async fn export_race(
             sheets::batch_update_values(http_client, &backend.google_sheet_id, updates).await?;
         }
     } else {
-        // Append new row to the sheet
-        let values = vec![vec![
-            utc_date,
-            format!("=IF(A4=\"\",\"\",TEXT(A4,\"ddd\"))"),
-            dst_formula.replace("{row}", "4"),
-            format!("=IF(C4=\"\",\"\",TEXT(C4,\"ddd\"))"),
-            title,
-            export.description.clone().unwrap_or_default(),
-            get_runner_count(race).to_string(),
-            String::new(), // Restreamer (column H)
-            restream_channel,
-            String::new(), // Filler columns
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            commentators.join(", "),
-            trackers.join(", "),
-            export_id.clone(),
-        ]];
+        // Insert a new row at position 4 (after the header rows)
+        let sheet_id = sheets::get_sheet_id(http_client, &backend.google_sheet_id, "Restream Signups").await?;
+        sheets::insert_row_at(http_client, &backend.google_sheet_id, sheet_id, 4).await?;
 
-        sheets::append_values(
-            http_client,
-            &backend.google_sheet_id,
-            "'Restream Signups'!A:Z",
-            values,
-        ).await?;
+        let row = 4usize;
+        let mut updates = vec![
+            (format!("'Restream Signups'!A{}", row), vec![vec![utc_date]]),
+            (format!("'Restream Signups'!B{}", row), vec![vec![format!("=IF(A{}=\"\",\"\",TEXT(A{},\"ddd\"))", row, row)]]),
+            (format!("'Restream Signups'!C{}", row), vec![vec![dst_formula.replace("{row}", &row.to_string())]]),
+            (format!("'Restream Signups'!D{}", row), vec![vec![format!("=IF(C{}=\"\",\"\",TEXT(C{},\"ddd\"))", row, row)]]),
+            (format!("'Restream Signups'!E{}", row), vec![vec![title]]),
+            (format!("'Restream Signups'!G{}", row), vec![vec![get_runner_count(race).to_string()]]),
+            (format!("'Restream Signups'!{}{}", backend.commentators_col, row), vec![vec![commentators.join(", ")]]),
+            (format!("'Restream Signups'!{}{}", backend.trackers_col, row), vec![vec![trackers.join(", ")]]),
+            (format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row), vec![vec![export_id.clone()]]),
+            (format!("'Restream Signups'!{}{}", backend.notes_col, row), vec![vec![notes]]),
+        ];
+        if let Some(ref restream_channel_col) = backend.restream_channel_col {
+            updates.push((format!("'Restream Signups'!{}{}", restream_channel_col, row), vec![vec![restream_channel]]));
+        }
+        sheets::batch_update_values(http_client, &backend.google_sheet_id, updates).await?;
+
+        // Sort rows from row 4 onwards by date in column A
+        sheets::sort_rows_by_column_a(http_client, &backend.google_sheet_id, sheet_id, 4).await?;
     }
 
     // Record the export
@@ -935,6 +944,9 @@ pub(crate) async fn sync_all_races(
 
     let event_data = event::Data::new(transaction, export.series, &export.event).await?
         .ok_or(Error::EventNotFound)?;
+
+    // Ensure the event description entry exists (or is up to date) in the Descriptions sheet
+    ensure_description_entry(http_client, export, &backend, &event_data.display_name, 2).await?;
 
     // Get all races for this event
     let race_ids = sqlx::query_scalar!(r#"
