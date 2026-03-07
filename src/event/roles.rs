@@ -3516,8 +3516,10 @@ async fn match_signup_page(
                                     li {
                                         : user.display_name();
                                         @if let Some(ref notes) = signup.notes {
-                                            : " - ";
-                                            : notes;
+                                            : " ";
+                                            small {
+                                                em : format!("[{}]", notes);
+                                            }
                                         }
                                     }
                                 }

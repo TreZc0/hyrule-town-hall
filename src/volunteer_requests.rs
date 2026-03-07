@@ -477,9 +477,9 @@ async fn get_matchup_description(
     transaction: &mut Transaction<'_, Postgres>,
     race: &Race,
 ) -> Result<String, Error> {
-    // For qualifier races, just use the round name (e.g., "Live 1")
+    // For qualifier races, use "Qualifier <round>" (e.g., "Qualifier 1")
     if race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
-        return Ok(race.round.clone().unwrap_or_else(|| "Qualifier".to_string()));
+        return Ok(race.round.as_ref().map(|r| format!("Qualifier {}", r)).unwrap_or_else(|| "Qualifier".to_string()));
     }
 
     let matchup = match &race.entrants {
