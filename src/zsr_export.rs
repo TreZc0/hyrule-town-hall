@@ -809,11 +809,21 @@ pub(crate) async fn export_race(
     let commentators = get_volunteers_for_role(transaction, race, "comment").await.unwrap_or_default();
     let trackers = get_volunteers_for_role(transaction, race, "track").await.unwrap_or_default();
 
-    // Get restream channel
-    let restream_channel = race.video_urls
-        .get(&backend.language)
-        .map(|url| url.to_string())
-        .unwrap_or_default();
+    // Get restream channel (use alias if one is configured)
+    let restream_channel = if let Some(url) = race.video_urls.get(&backend.language) {
+        let url_str = url.to_string();
+        // Normalize away www. so aliases work regardless of which form is stored
+        let normalized = url_str.replace("://www.", "://");
+        let alias = sqlx::query_scalar!(
+            "SELECT alias FROM zsr_channel_aliases WHERE channel_url = $1",
+            normalized
+        )
+        .fetch_optional(&mut **transaction)
+        .await?;
+        alias.unwrap_or(url_str)
+    } else {
+        String::new()
+    };
 
     // Determine which DST formula to use
     let dst_formula = if backend.language == German {
