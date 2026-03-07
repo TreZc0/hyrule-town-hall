@@ -809,20 +809,19 @@ pub(crate) async fn export_race(
     let commentators = get_volunteers_for_role(transaction, race, "comment").await.unwrap_or_default();
     let trackers = get_volunteers_for_role(transaction, race, "track").await.unwrap_or_default();
 
-    // Get restream channel (use alias if one is configured)
+    // Get restream channel alias — only fill the field if an alias is configured
     let restream_channel = if let Some(url) = race.video_urls.get(&backend.language) {
         let url_str = url.to_string();
         // Normalize away www. so aliases work regardless of which form is stored
         let normalized = url_str.replace("://www.", "://");
-        let alias = sqlx::query_scalar!(
+        sqlx::query_scalar!(
             "SELECT alias FROM zsr_channel_aliases WHERE channel_url = $1",
             normalized
         )
         .fetch_optional(&mut **transaction)
-        .await?;
-        alias.unwrap_or(url_str)
+        .await?
     } else {
-        String::new()
+        None
     };
 
     // Determine which DST formula to use
@@ -872,10 +871,8 @@ pub(crate) async fn export_race(
                 (format!("'Restream Signups'!{}{}", backend.trackers_col, row), vec![vec![trackers.join(", ")]]),
                 (format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row), vec![vec![export_id.clone()]]),
             ];
-            if let Some(ref restream_channel_col) = backend.restream_channel_col {
-                if !restream_channel.is_empty() {
-                    updates.push((format!("'Restream Signups'!{}{}", restream_channel_col, row), vec![vec![restream_channel]]));
-                }
+            if let (Some(restream_channel_col), Some(alias)) = (&backend.restream_channel_col, &restream_channel) {
+                updates.push((format!("'Restream Signups'!{}{}", restream_channel_col, row), vec![vec![alias.clone()]]));
             }
 
             sheets::batch_update_values(http_client, &backend.google_sheet_id, updates).await?;
@@ -897,8 +894,8 @@ pub(crate) async fn export_race(
             (format!("'Restream Signups'!{}{}", backend.trackers_col, row), vec![vec![trackers.join(", ")]]),
             (format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row), vec![vec![export_id.clone()]]),
         ];
-        if let Some(ref restream_channel_col) = backend.restream_channel_col {
-            updates.push((format!("'Restream Signups'!{}{}", restream_channel_col, row), vec![vec![restream_channel]]));
+        if let (Some(restream_channel_col), Some(alias)) = (&backend.restream_channel_col, &restream_channel) {
+            updates.push((format!("'Restream Signups'!{}{}", restream_channel_col, row), vec![vec![alias.clone()]]));
         }
         sheets::batch_update_values(http_client, &backend.google_sheet_id, updates).await?;
 
