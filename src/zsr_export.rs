@@ -665,13 +665,21 @@ async fn get_entrant_name(transaction: &mut Transaction<'_, Postgres>, entrant: 
     }
 }
 
-/// Get the number of runners/players in a race
-pub(crate) fn get_runner_count(race: &Race) -> i32 {
+/// Get the runner count string for a race
+pub(crate) fn format_runner_count(race: &Race) -> String {
+    let is_qualifier = race.phase.as_deref() == Some("Qualifier");
+    let is_weekly = race.phase.is_none()
+        && race.round.as_deref().map(|r| r.ends_with(" Weekly")).unwrap_or(false);
+
+    if is_qualifier || is_weekly {
+        return "2-4".to_owned();
+    }
+
     match &race.entrants {
-        Entrants::Two(_) => 2,
-        Entrants::Three(_) => 3,
-        Entrants::Count { total, .. } => *total as i32,
-        _ => 2, // Default to 2 for solo races
+        Entrants::Two(_) => "2".to_owned(),
+        Entrants::Three(_) => "3".to_owned(),
+        Entrants::Count { total, .. } => total.to_string(),
+        _ => "2".to_owned(),
     }
 }
 
@@ -849,13 +857,15 @@ pub(crate) async fn export_race(
                 (format!("'Restream Signups'!D{}", row), vec![vec![format!("=IF(C{}=\"\",\"\",TEXT(C{},\"ddd\"))", row, row)]]),
                 (format!("'Restream Signups'!E{}", row), vec![vec![title]]),
                 (format!("'Restream Signups'!F{}", row), vec![vec![estimate.clone()]]),
-                (format!("'Restream Signups'!G{}", row), vec![vec![get_runner_count(race).to_string()]]),
+                (format!("'Restream Signups'!G{}", row), vec![vec![format_runner_count(race)]]),
                 (format!("'Restream Signups'!{}{}", backend.commentators_col, row), vec![vec![commentators.join(", ")]]),
                 (format!("'Restream Signups'!{}{}", backend.trackers_col, row), vec![vec![trackers.join(", ")]]),
                 (format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row), vec![vec![export_id.clone()]]),
             ];
             if let Some(ref restream_channel_col) = backend.restream_channel_col {
-                updates.push((format!("'Restream Signups'!{}{}", restream_channel_col, row), vec![vec![restream_channel]]));
+                if !restream_channel.is_empty() {
+                    updates.push((format!("'Restream Signups'!{}{}", restream_channel_col, row), vec![vec![restream_channel]]));
+                }
             }
 
             sheets::batch_update_values(http_client, &backend.google_sheet_id, updates).await?;
@@ -872,7 +882,7 @@ pub(crate) async fn export_race(
             (format!("'Restream Signups'!C{}", row), vec![vec![dst_formula.replace("{row}", &row.to_string())]]),
             (format!("'Restream Signups'!D{}", row), vec![vec![format!("=IF(C{}=\"\",\"\",TEXT(C{},\"ddd\"))", row, row)]]),
             (format!("'Restream Signups'!E{}", row), vec![vec![title]]),
-            (format!("'Restream Signups'!G{}", row), vec![vec![get_runner_count(race).to_string()]]),
+            (format!("'Restream Signups'!G{}", row), vec![vec![format_runner_count(race)]]),
             (format!("'Restream Signups'!{}{}", backend.commentators_col, row), vec![vec![commentators.join(", ")]]),
             (format!("'Restream Signups'!{}{}", backend.trackers_col, row), vec![vec![trackers.join(", ")]]),
             (format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row), vec![vec![export_id.clone()]]),
