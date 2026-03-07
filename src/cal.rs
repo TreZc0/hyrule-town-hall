@@ -3275,7 +3275,7 @@ pub(crate) async fn ensure_weekly_races(
         for weekly_time in [next_weekly, weekly_after] {
             let start = weekly_time.to_utc();
             let exists = sqlx::query_scalar!(
-                r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND start = $3 AND round = $4 AND NOT ignored) AS "exists!""#,
+                r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND start = $3 AND round = $4) AS "exists!""#,
                 series as _,
                 event,
                 start,
