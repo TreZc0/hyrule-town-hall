@@ -3301,8 +3301,8 @@ async fn match_signup_page(
                         }
                     ),
                     _ => {
-                        // For qualifier races without fixed entrants, show round or "Qualifier"
-                        race.round.clone().unwrap_or_else(|| "Qualifier".to_string())
+                        // For qualifier races without fixed entrants, show "Qualification Race <round>" or "Qualifier"
+                        race.round.as_ref().map(|r| format!("Qualification Race {}", r)).unwrap_or_else(|| "Qualifier".to_string())
                     }
                 };
             }

@@ -681,7 +681,7 @@ pub(crate) fn format_estimate(duration: TimeDelta) -> String {
     let hours = total_seconds / 3600;
     let minutes = (total_seconds % 3600) / 60;
     let seconds = total_seconds % 60;
-    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+    format!("{}:{:02}:{:02}", hours, minutes, seconds)
 }
 
 /// Ensure the event description entry exists in the Descriptions sheet on the backend.
@@ -776,7 +776,6 @@ pub(crate) async fn export_race(
     export: &ExportConfig,
     backend: &RestreamingBackend,
     event_display_name: &str,
-    is_update: bool,
 ) -> Result<String, Error> {
     let RaceSchedule::Live { start, .. } = race.schedule else {
         return Err(Error::NotLive);
@@ -794,6 +793,10 @@ pub(crate) async fn export_race(
     // Build title
     let title = build_race_title(transaction, race, export, event_display_name).await;
 
+    // Get estimate
+    let estimate = export.estimate_override.clone()
+        .unwrap_or_else(|| format_estimate(export.series.default_race_duration()));
+
     // Get volunteers
     let commentators = get_volunteers_for_role(transaction, race, "comment").await.unwrap_or_default();
     let trackers = get_volunteers_for_role(transaction, race, "track").await.unwrap_or_default();
@@ -803,13 +806,6 @@ pub(crate) async fn export_race(
         .get(&backend.language)
         .map(|url| url.to_string())
         .unwrap_or_default();
-
-    // Build notes
-    let notes = if is_update {
-        "HTH Update: Time changed".to_owned()
-    } else {
-        String::new()
-    };
 
     // Determine which DST formula to use
     let dst_formula = if backend.language == German {
@@ -852,11 +848,11 @@ pub(crate) async fn export_race(
                 (format!("'Restream Signups'!C{}", row), vec![vec![dst_formula.replace("{row}", &row.to_string())]]),
                 (format!("'Restream Signups'!D{}", row), vec![vec![format!("=IF(C{}=\"\",\"\",TEXT(C{},\"ddd\"))", row, row)]]),
                 (format!("'Restream Signups'!E{}", row), vec![vec![title]]),
+                (format!("'Restream Signups'!F{}", row), vec![vec![estimate.clone()]]),
                 (format!("'Restream Signups'!G{}", row), vec![vec![get_runner_count(race).to_string()]]),
                 (format!("'Restream Signups'!{}{}", backend.commentators_col, row), vec![vec![commentators.join(", ")]]),
                 (format!("'Restream Signups'!{}{}", backend.trackers_col, row), vec![vec![trackers.join(", ")]]),
                 (format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row), vec![vec![export_id.clone()]]),
-                (format!("'Restream Signups'!{}{}", backend.notes_col, row), vec![vec![notes]]),
             ];
             if let Some(ref restream_channel_col) = backend.restream_channel_col {
                 updates.push((format!("'Restream Signups'!{}{}", restream_channel_col, row), vec![vec![restream_channel]]));
@@ -880,15 +876,21 @@ pub(crate) async fn export_race(
             (format!("'Restream Signups'!{}{}", backend.commentators_col, row), vec![vec![commentators.join(", ")]]),
             (format!("'Restream Signups'!{}{}", backend.trackers_col, row), vec![vec![trackers.join(", ")]]),
             (format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row), vec![vec![export_id.clone()]]),
-            (format!("'Restream Signups'!{}{}", backend.notes_col, row), vec![vec![notes]]),
         ];
         if let Some(ref restream_channel_col) = backend.restream_channel_col {
             updates.push((format!("'Restream Signups'!{}{}", restream_channel_col, row), vec![vec![restream_channel]]));
         }
         sheets::batch_update_values(http_client, &backend.google_sheet_id, updates).await?;
 
-        // Sort rows from row 4 onwards by date in column A
-        sheets::sort_rows_by_column_a(http_client, &backend.google_sheet_id, sheet_id, 4).await?;
+        // Record the export before sorting so it's never lost if the sort fails
+        RaceExport::upsert(transaction, race.id, export.id, &export_id).await?;
+
+        // Sort rows from row 4 onwards by date in column A (non-fatal)
+        if let Err(e) = sheets::sort_rows_by_column_a(http_client, &backend.google_sheet_id, sheet_id, 4).await {
+            eprintln!("ZSR Export: sort after insert failed: {}", e);
+        }
+
+        return Ok(export_id);
     }
 
     // Record the export
@@ -980,9 +982,7 @@ pub(crate) async fn sync_all_races(
         // Check if race should be exported
         match should_export_race(transaction, &race, export, &backend).await {
             Ok(true) => {
-                let existing = RaceExport::find(transaction, race.id, export.id).await?;
-                let is_update = existing.is_some();
-                if let Err(e) = export_race(transaction, http_client, &race, export, &backend, &event_data.display_name, is_update).await {
+                if let Err(e) = export_race(transaction, http_client, &race, export, &backend, &event_data.display_name).await {
                     errors.push(format!("Race {}: {}", race.id, e));
                 }
             }
