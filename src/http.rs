@@ -302,7 +302,11 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
         if event.series != Series::Standard || event.event != "w" { // the weeklies are a perpetual event so we avoid always listing them
             let started = event.is_started(&mut transaction).await?;
             let has_active_weekly = WeeklySchedule::for_event(&mut transaction, event.series, &event.event).await?.iter().any(|s| s.active);
-            if started || has_active_weekly { &mut ongoing_events } else { &mut upcoming_events }.push(event);
+            let has_started_qualifier = sqlx::query_scalar!(
+                r#"SELECT EXISTS (SELECT 1 FROM races WHERE series = $1 AND event = $2 AND phase = 'Qualifier' AND start <= NOW()) AS "exists!""#,
+                event.series as _, &event.event
+            ).fetch_one(&mut *transaction).await?;
+            if started || has_active_weekly || has_started_qualifier { &mut ongoing_events } else { &mut upcoming_events }.push(event);
         }
     }
     let page_content = html! {
