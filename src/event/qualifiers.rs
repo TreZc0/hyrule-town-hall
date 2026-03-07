@@ -1,5 +1,6 @@
 use crate::{
     cal::{Entrants, Race, RaceSchedule, Source},
+    discord_scheduled_events::DiscordCtx,
     event::{Data, Series, Tab},
     prelude::*,
     seed,
@@ -126,7 +127,7 @@ pub(crate) struct RaceForm {
 }
 
 #[rocket::post("/event/<series>/<event>/qualifiers/create-race", data = "<form>")]
-pub(crate) async fn post_race(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, RaceForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn post_race(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, http_client: &State<reqwest::Client>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, RaceForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let event_data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
@@ -169,7 +170,7 @@ pub(crate) async fn post_race(pool: &State<PgPool>, me: User, uri: Origin<'_>, c
                 None
             };
 
-            let race = Race {
+            let mut race = Race {
                 id: Id::<Races>::new(&mut transaction).await?,
                 series: event_data.series,
                 event: event_data.event.to_string(),
@@ -204,6 +205,10 @@ pub(crate) async fn post_race(pool: &State<PgPool>, me: User, uri: Origin<'_>, c
                 volunteer_request_message_id: None,
             };
             race.save(&mut transaction).await?;
+            match crate::discord_scheduled_events::create_discord_scheduled_event(&*discord_ctx.read().await, &mut transaction, &mut race, &event_data, http_client.inner()).await {
+                Ok(()) => { race.save(&mut transaction).await?; }
+                Err(e) => { eprintln!("Failed to create Discord scheduled event for qualifier race {}: {}", race.id, e); }
+            }
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
         }
@@ -417,7 +422,7 @@ pub(crate) struct EditRaceForm {
 }
 
 #[rocket::post("/event/<series>/<event>/qualifiers/<race_id>/edit", data = "<form>")]
-pub(crate) async fn post_edit_race(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, race_id: Id<Races>, form: Form<Contextual<'_, EditRaceForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn post_edit_race(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, http_client: &State<reqwest::Client>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, race_id: Id<Races>, form: Form<Contextual<'_, EditRaceForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let event_data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
@@ -479,6 +484,20 @@ pub(crate) async fn post_edit_race(pool: &State<PgPool>, discord_ctx: &State<RwF
             .await?;
 
             transaction.commit().await?;
+
+            // Update Discord scheduled event
+            {
+                let mut transaction = pool.begin().await?;
+                match Race::from_id(&mut transaction, http_client.inner(), race_id).await {
+                    Ok(race) => {
+                        if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&*discord_ctx.read().await, &mut transaction, &race, &event_data, http_client.inner()).await {
+                            eprintln!("Failed to update Discord scheduled event for qualifier race {}: {}", race_id, e);
+                        }
+                        let _ = transaction.commit().await;
+                    }
+                    Err(e) => eprintln!("Failed to load race {} for Discord event update: {}", race_id, e),
+                }
+            }
 
             // Update volunteer post if the time changed
             if time_changed {
