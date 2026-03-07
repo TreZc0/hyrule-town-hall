@@ -223,6 +223,8 @@ pub(crate) struct Data<'a> {
     pub(crate) force_custom_role_binding: bool,
     /// Controls when qualifier scores are hidden on the teams page.
     pub(crate) qualifier_score_hiding: QualifierScoreHiding,
+    /// Discord role to ping when a qualifier race room opens.
+    pub(crate) qualifier_notification_role_id: Option<RoleId>,
 }
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
@@ -289,7 +291,8 @@ impl<'a> Data<'a> {
             volunteer_requests_enabled,
             volunteer_request_lead_time_hours,
             force_custom_role_binding,
-            qualifier_score_hiding AS "qualifier_score_hiding: QualifierScoreHiding"
+            qualifier_score_hiding AS "qualifier_score_hiding: QualifierScoreHiding",
+            qualifier_notification_role_id
         FROM events WHERE series = $1 AND event = $2"#, series as _, &event).fetch_optional(&mut **transaction).await?
             .map(|row| Ok::<_, DataError>(Self {
                 display_name: row.display_name,
@@ -346,6 +349,7 @@ impl<'a> Data<'a> {
                 volunteer_request_lead_time_hours: row.volunteer_request_lead_time_hours,
                 force_custom_role_binding: row.force_custom_role_binding.unwrap_or(true),
                 qualifier_score_hiding: row.qualifier_score_hiding,
+                qualifier_notification_role_id: row.qualifier_notification_role_id.map(|id| RoleId::new(id as u64)),
             }))
             .transpose()
     }

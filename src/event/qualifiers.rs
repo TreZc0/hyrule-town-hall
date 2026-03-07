@@ -22,9 +22,24 @@ async fn qualifiers_form(mut transaction: Transaction<'_, Postgres>, me: User, u
     .fetch_all(&mut *transaction)
     .await?;
 
+    let current_role_str = event.qualifier_notification_role_id.map(|id| id.get().to_string()).unwrap_or_default();
     Ok(page(transaction, &Some(me), &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Qualifiers — {}", event.display_name), html! {
         : header;
         article {
+            h2 : "Qualifier Announcement Ping";
+            : full_form(uri!(post_notification_role(event.series, &*event.event)), csrf, html! {
+                : form_field("notification_role_id", &mut ctx.errors().collect_vec(), html! {
+                    label(for = "notification_role_id") : "Role ID to ping when a qualifier room opens:";
+                    input(type = "text", id = "notification_role_id", name = "notification_role_id", value = ctx.field_value("notification_role_id").unwrap_or(&current_role_str), placeholder = "Discord role ID (optional)", style = "width: 100%; max-width: 400px;");
+                });
+            }, ctx.errors().collect_vec(), "Save");
+            @if event.qualifier_notification_role_id.is_some() {
+                form(action = uri!(delete_notification_role(event.series, &*event.event)).to_string(), method = "post", style = "display: inline;") {
+                    input(type = "hidden", name = "csrf", value? = csrf.map(|token| token.authenticity_token()));
+                    button(type = "submit") : "Disable Ping";
+                }
+            }
+
             h2 : "Live Qualifier Races";
             @if races.is_empty() {
                 p : "No live qualifier races defined.";
@@ -240,6 +255,90 @@ pub(crate) async fn delete_race(pool: &State<PgPool>, me: User, csrf: Option<Csr
         .execute(&mut *transaction)
         .await?;
 
+        transaction.commit().await?;
+    }
+
+    Ok(Redirect::to(uri!(get(series, event))))
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct NotificationRoleForm {
+    #[field(default = String::new())]
+    csrf: String,
+    #[field(default = None)]
+    notification_role_id: Option<String>,
+}
+
+#[rocket::post("/event/<series>/<event>/qualifiers/notification-role", data = "<form>")]
+pub(crate) async fn post_notification_role(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, NotificationRoleForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let event_data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if !me.is_global_admin() && !event_data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+
+    Ok(if let Some(ref value) = form.value {
+        let role_id = value.notification_role_id.as_ref().and_then(|s| {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                match trimmed.parse::<u64>() {
+                    Ok(id) => Some(id as i64),
+                    Err(_) => {
+                        form.context.push_error(form::Error::validation("Invalid Discord role ID. Must be a number.").with_name("notification_role_id"));
+                        None
+                    }
+                }
+            }
+        });
+
+        if form.context.errors().next().is_some() {
+            let is_started = event_data.is_started(&mut transaction).await?;
+            return Ok(RedirectOrContent::Content(qualifiers_form(transaction, me, uri, csrf.as_ref(), event_data, is_started, form.context).await?));
+        }
+
+        sqlx::query!(
+            "UPDATE events SET qualifier_notification_role_id = $1 WHERE series = $2 AND event = $3",
+            role_id, series as _, event
+        )
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+    } else {
+        let is_started = event_data.is_started(&mut transaction).await?;
+        RedirectOrContent::Content(qualifiers_form(transaction, me, uri, csrf.as_ref(), event_data, is_started, form.context).await?)
+    })
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct DisableNotificationRoleForm {
+    #[field(default = String::new())]
+    csrf: String,
+}
+
+#[rocket::post("/event/<series>/<event>/qualifiers/notification-role/disable", data = "<form>")]
+pub(crate) async fn delete_notification_role(pool: &State<PgPool>, me: User, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, DisableNotificationRoleForm>>) -> Result<Redirect, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let event_data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if !me.is_global_admin() && !event_data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+
+    if form.value.is_some() {
+        sqlx::query!(
+            "UPDATE events SET qualifier_notification_role_id = NULL WHERE series = $1 AND event = $2",
+            series as _, event
+        )
+        .execute(&mut *transaction)
+        .await?;
         transaction.commit().await?;
     }
 
