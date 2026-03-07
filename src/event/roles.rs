@@ -2752,7 +2752,7 @@ async fn volunteer_page(
                     : render_language_content_box_end();
                 }
 
-                @if !my_approved_roles.is_empty() && !upcoming_races.is_empty() {
+                @if my_approved_roles.iter().any(|req| effective_role_bindings.iter().any(|b| b.id == req.role_binding_id)) && !upcoming_races.is_empty() {
                     h3 : "Sign Up for Matches";
                     p : "You have been approved for the following roles. You can now sign up for specific matches:";
 
