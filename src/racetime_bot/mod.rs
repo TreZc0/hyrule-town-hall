@@ -5289,13 +5289,21 @@ impl RaceHandler<GlobalState> for Handler {
                             "All restreams ready, unlocking auto-start…"
                         }
                     }).await?;
-                    let (access_token, _) = racetime::authorize_with_host(&ctx.global_state.host_info, &ctx.global_state.racetime_config.client_id, &ctx.global_state.racetime_config.client_secret, &ctx.global_state.http_client).await?;
+                    let race_url = ctx.data().await.url.clone();
+                    let category_slug = race_url.trim_start_matches('/').split('/').next().unwrap_or(CATEGORY).to_owned();
+                    let db_row = sqlx::query!("SELECT client_id, client_secret FROM game_racetime_connection WHERE category_slug = $1 LIMIT 1", category_slug)
+                        .fetch_optional(&ctx.global_state.db_pool).await.to_racetime()?;
+                    let (client_id, client_secret) = db_row.map_or_else(
+                        || (ctx.global_state.racetime_config.client_id.clone(), ctx.global_state.racetime_config.client_secret.clone()),
+                        |row| (row.client_id, row.client_secret),
+                    );
+                    let (access_token, _) = racetime::authorize_with_host(&ctx.global_state.host_info, &client_id, &client_secret, &ctx.global_state.http_client).await?;
                     room_options(
                         goal.as_str().to_owned(), goal.is_custom(), event, cal_event,
                         ctx.data().await.info_user.clone().unwrap_or_default(),
                         ctx.data().await.info_bot.clone().unwrap_or_default(),
                         true,
-                    ).await.edit_with_host(&ctx.global_state.host_info, &access_token, &ctx.global_state.http_client, CATEGORY, &ctx.data().await.slug).await?;
+                    ).await.edit_with_host(&ctx.global_state.host_info, &access_token, &ctx.global_state.http_client, &category_slug, &ctx.data().await.slug).await?;
                 } else {
                     ctx.say(format!("Restream ready, still waiting for other restreams.")).await?;
                 }
@@ -5319,13 +5327,21 @@ impl RaceHandler<GlobalState> for Handler {
                             match parse_user(&mut transaction, &ctx.global_state.http_client, restreamer).await {
                                 Ok(restreamer_racetime_id) => {
                                     if restreams.is_empty() {
-                                        let (access_token, _) = racetime::authorize_with_host(&ctx.global_state.host_info, &ctx.global_state.racetime_config.client_id, &ctx.global_state.racetime_config.client_secret, &ctx.global_state.http_client).await?;
+                                        let race_url = ctx.data().await.url.clone();
+                                        let category_slug = race_url.trim_start_matches('/').split('/').next().unwrap_or(CATEGORY).to_owned();
+                                        let db_row = sqlx::query!("SELECT client_id, client_secret FROM game_racetime_connection WHERE category_slug = $1 LIMIT 1", category_slug)
+                                            .fetch_optional(&ctx.global_state.db_pool).await.to_racetime()?;
+                                        let (client_id, client_secret) = db_row.map_or_else(
+                                            || (ctx.global_state.racetime_config.client_id.clone(), ctx.global_state.racetime_config.client_secret.clone()),
+                                            |row| (row.client_id, row.client_secret),
+                                        );
+                                        let (access_token, _) = racetime::authorize_with_host(&ctx.global_state.host_info, &client_id, &client_secret, &ctx.global_state.http_client).await?;
                                         room_options(
                                             goal.as_str().to_owned(), goal.is_custom(), event, cal_event,
                                             ctx.data().await.info_user.clone().unwrap_or_default(),
                                             ctx.data().await.info_bot.clone().unwrap_or_default(),
                                             false,
-                                        ).await.edit_with_host(&ctx.global_state.host_info, &access_token, &ctx.global_state.http_client, CATEGORY, &ctx.data().await.slug).await?;
+                                        ).await.edit_with_host(&ctx.global_state.host_info, &access_token, &ctx.global_state.http_client, &category_slug, &ctx.data().await.slug).await?;
                                     }
                                     restreams.entry(restream_url).or_default().restreamer_racetime_id = Some(restreamer_racetime_id.clone());
                                     ctx.say("Restreamer assigned. Use “!ready” once the restream is ready. Auto-start will be unlocked once all restreams are ready.").await?; //TODO mention restreamer
@@ -6162,7 +6178,8 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
         return Ok(None);
     }
     
-    // Check if this is a weekly race and get its notification channel/role from the database
+    // Check if this is a weekly race and get its notification channel/role from the database,
+    // or if it's a qualifier race, get the event-level qualifier notification role.
     let (weekly_notification_channel, weekly_notification_role) = if cal_event.race.phase.is_none() {
         if let Some(round) = cal_event.race.round.as_deref().and_then(|r| r.strip_suffix(" Weekly")) {
             let schedule = WeeklySchedule::for_round(&mut *transaction, event.series, &event.event, round)
@@ -6175,6 +6192,11 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
         } else {
             (None, None)
         }
+    } else if cal_event.race.phase.as_deref() == Some("Qualifier") {
+        (
+            None,
+            event.qualifier_notification_role_id.map(|id| PgSnowflake(id)),
+        )
     } else {
         (None, None)
     };
