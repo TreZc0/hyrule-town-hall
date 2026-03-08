@@ -3170,6 +3170,8 @@ pub(crate) struct AlttprDeRaceOptions {
     pub(crate) mode: Option<String>,
     /// Custom choices from player signups, merged together.
     pub(crate) custom_choices: HashMap<String, String>,
+    /// Choices that affect race rules display but not seed rolling.
+    pub(crate) display_only_choices: Vec<String>,
 }
 
 impl AlttprDeRaceOptions {
@@ -3198,6 +3200,7 @@ impl AlttprDeRaceOptions {
             "dmg" => Some("Damage Shuffle"),
             "bag" => Some("Progressive Bag"),
             "door" => Some("Door Shuffle"),
+            "gtskips" => Some("GT Skips"),
             _ => None,
         }
     }
@@ -3227,7 +3230,11 @@ impl AlttprDeRaceOptions {
     }
 
     pub(crate) fn as_race_options_str(&self) -> String {
-        format!("standard race rules")
+        if self.display_only_choices.is_empty() {
+            format!("standard race rules")
+        } else {
+            format!("standard race rules ({})", self.display_only_choices.join(", "))
+        }
     }
 
     /// Build the full URL for generating a seed from boothisman.de
@@ -3286,6 +3293,7 @@ impl AlttprDeRaceOptions {
 
         // Build URL params - only include choices where both players said yes
         let mut custom_choices = HashMap::new();
+        let mut display_only_choices = Vec::new();
         for (key, count) in choice_counts {
             if count >= num_teams && num_teams > 0 {
                 // Both players agreed to this option
@@ -3302,6 +3310,11 @@ impl AlttprDeRaceOptions {
                         custom_choices.insert("pool".to_owned(), "2".to_owned());
                         continue;
                     }
+                    // Display-only choices: shown in race room but not passed to the seed API
+                    "gtskips" => {
+                        display_only_choices.push("GT Skips".to_owned());
+                        continue;
+                    }
                     // All other boolean choices become "1"
                     _ => "1".to_owned(),
                 };
@@ -3309,7 +3322,7 @@ impl AlttprDeRaceOptions {
             }
         }
 
-        AlttprDeRaceOptions { mode, custom_choices }
+        AlttprDeRaceOptions { mode, custom_choices, display_only_choices }
     }
 }
 
