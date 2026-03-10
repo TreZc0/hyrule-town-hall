@@ -61,8 +61,11 @@ pub(crate) enum Requirement {
     /// Must have a Discord account connected to their Mido's House account
     Discord,
     /// Must be in the event's Discord guild
+    #[serde(rename_all = "camelCase")]
     DiscordGuild {
         name: String,
+        #[serde(default)]
+        role_id: Option<i64>,
     },
     /// Must have a Challonge account connected to their Mido's House account
     Challonge,
@@ -209,10 +212,18 @@ impl Requirement {
                 false
             }),
             Self::Discord => Some(me.discord.is_some()),
-            Self::DiscordGuild { .. } => Some({
+            Self::DiscordGuild { role_id, .. } => Some({
                 let discord_guild = data.discord_guild.ok_or(Error::DiscordGuild)?;
                 if let Some(ref discord) = me.discord {
-                    discord_guild.member(&*discord_ctx.read().await, discord.id).await.is_ok()
+                    if let Ok(member) = discord_guild.member(&*discord_ctx.read().await, discord.id).await {
+                        if let Some(required_role) = role_id {
+                            member.roles.contains(&serenity::model::id::RoleId::new(*required_role as u64))
+                        } else {
+                            true // No specific role required, just membership
+                        }
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 }
@@ -290,7 +301,7 @@ impl Requirement {
         })
     }
 
-    async fn check_get(&self, http_client: &reqwest::Client, data: &Data<'_>, is_checked: Option<bool>, redirect_uri: rocket::http::uri::Origin<'_>, defaults: &pic::EnterFormDefaults<'_>) -> Result<RequirementStatus, Error> {
+    async fn check_get(&self, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, data: &Data<'_>, is_checked: Option<bool>, redirect_uri: rocket::http::uri::Origin<'_>, defaults: &pic::EnterFormDefaults<'_>) -> Result<RequirementStatus, Error> {
         Ok(match self {
             Self::RaceTime => {
                 let mut html_content = html! {
@@ -349,22 +360,54 @@ impl Requirement {
                     html_content: Box::new(move |_| html_content),
                 }
             }
-            Self::DiscordGuild { name } => {
+            Self::DiscordGuild { name, role_id } => {
                 let name = name.clone();
+                let role_id = *role_id;
                 let invite_url = data.discord_invite_url.as_ref().map(|url| url.to_string());
+
+                // If a role_id is specified, fetch the role name from Discord
+                let role_name = if let Some(rid) = role_id {
+                    if let Some(discord_guild) = data.discord_guild {
+                        let role = discord_guild.roles.get(&serenity::model::id::RoleId::new(rid as u64));
+                        role.map(|r| r.name.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 RequirementStatus {
                     blocks_submit: !is_checked.unwrap(),
                     html_content: Box::new(move |_| html! {
-                        @if let Some(invite_url) = invite_url {
-                            a(href = invite_url, target = "_blank") {
-                                : "Join the ";
+                        @if let Some(role_name) = role_name {
+                            @if let Some(invite_url) = invite_url {
+                                a(href = invite_url, target = "_blank") {
+                                    : "You must have the ";
+                                    strong : role_name;
+                                    : " role in the ";
+                                    bdi : name;
+                                    : " Discord server";
+                                }
+                            } else {
+                                : "You must have the ";
+                                strong : role_name;
+                                : " role in the ";
                                 bdi : name;
                                 : " Discord server";
                             }
                         } else {
-                            : "Join the ";
-                            bdi : name;
-                            : " Discord server";
+                            @if let Some(invite_url) = invite_url {
+                                a(href = invite_url, target = "_blank") {
+                                    : "Join the ";
+                                    bdi : name;
+                                    : " Discord server";
+                                }
+                            } else {
+                                : "Join the ";
+                                bdi : name;
+                                : " Discord server";
+                            }
                         }
                     }),
                 }
@@ -1056,7 +1099,11 @@ impl Requirement {
                     },
                     Self::Twitch => Cow::Borrowed("A Twitch account is required to enter this event. Go to the 'Twitch & connections' section of your racetime.gg settings to connect one."), //TODO direct link?
                     Self::Discord => Cow::Borrowed("A Discord account is required to enter this event. Go to your Hyrule Town Hall profile and select 'Connect a Discord account'."), //TODO direct link?
-                    Self::DiscordGuild { .. } => Cow::Borrowed("You must join the event's Discord server to enter."), //TODO invite link?
+                    Self::DiscordGuild { role_id, .. } => if role_id.is_some() {
+                        Cow::Borrowed("You must have the required role in the event's Discord server to enter.")
+                    } else {
+                        Cow::Borrowed("You must join the event's Discord server to enter.")
+                    }, //TODO invite link?
                     Self::Challonge => Cow::Borrowed("A Challonge account is required to enter this event."), //TODO link to /login/challonge
                     Self::QualifierPlacement { .. } => Cow::Borrowed("You have not secured a qualifying placement."), //TODO different message if the player has overqualified or overqualifying due to opt-outs is still possible
                     Self::RslLeaderboard => Cow::Borrowed("You have not finished the required number of races on the RSL leaderboard."), //TODO link to rsl.one
@@ -1263,7 +1310,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                             let mut requirements_display = Vec::with_capacity(requirements.len());
                             for requirement in requirements {
                                 let is_checked = requirement.is_checked(&mut transaction, http_client, discord_ctx, me, &data).await?;
-                                let status = requirement.check_get(http_client, &data, is_checked, uri!(get(data.series, &*data.event, defaults.my_role(), defaults.teammate())), &defaults).await?;
+                                let status = requirement.check_get(http_client, discord_ctx, &data, is_checked, uri!(get(data.series, &*data.event, defaults.my_role(), defaults.teammate())), &defaults).await?;
                                 if status.blocks_submit { can_submit = false }
                                 if requirement.request_qualifier(&mut transaction, http_client, discord_ctx, me, &data).await?.is_some() { request_qualifier = true }
                                 requirements_display.push((is_checked, status.html_content));

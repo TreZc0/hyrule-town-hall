@@ -311,6 +311,19 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
   ]
 }"#;
                                     }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "Discord Guild with Specific Role:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "requirements": [
+    {
+      "type": "discordGuild",
+      "name": "My Discord Server",
+      "roleId": "123456789012345678"
+    }
+  ]
+}"#;
+                                    }
                                 }
                             }
                         });
