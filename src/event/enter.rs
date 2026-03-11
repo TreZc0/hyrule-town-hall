@@ -217,7 +217,7 @@ impl Requirement {
                 if let Some(ref discord) = me.discord {
                     if let Ok(member) = discord_guild.member(&*discord_ctx.read().await, discord.id).await {
                         if let Some(required_role) = role_id {
-                            member.roles.contains(&serenity::model::id::RoleId::new(*required_role as u64))
+                            member.roles.contains(&RoleId::new(*required_role as u64))
                         } else {
                             true // No specific role required, just membership
                         }
@@ -365,14 +365,9 @@ impl Requirement {
                 let role_id = *role_id;
                 let invite_url = data.discord_invite_url.as_ref().map(|url| url.to_string());
 
-                // If a role_id is specified, fetch the role name from Discord
-                let role_name = if let Some(rid) = role_id {
-                    if let Some(discord_guild) = data.discord_guild {
-                        let role = discord_guild.roles.get(&serenity::model::id::RoleId::new(rid as u64));
-                        role.map(|r| r.name.clone())
-                    } else {
-                        None
-                    }
+                let role_name = if let (Some(rid), Some(guild_id)) = (role_id, data.discord_guild) {
+                    guild_id.roles(&*discord_ctx.read().await).await.ok()
+                        .and_then(|roles| roles.get(&RoleId::new(rid as u64)).map(|r| r.name.clone()))
                 } else {
                     None
                 };
