@@ -32,7 +32,6 @@ pub(crate) struct AvianartGenerateResponse {
 #[derive(Debug, Deserialize)]
 pub(crate) struct AvianartPermlinkResponse {
     pub(crate) status: Option<String>, // e.g. "generating", "failure"
-    pub(crate) hash: String,
     pub(crate) message: String,
     pub(crate) spoiler: Option<AvianartSpoiler>,
 }
