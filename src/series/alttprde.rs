@@ -8,7 +8,6 @@ use crate::{
 };
 
 /// The 5 available modes for the German ALTTPR tournament season 9.
-/// Each mode corresponds to a different PHP file on boothisman.de.
 pub(crate) const MODES: [Mode; 5] = [
     Mode { name: "ambroz1a", display: "Ambroz1a" },
     Mode { name: "crosskeys", display: "Crosskeys" },
@@ -33,6 +32,22 @@ pub(crate) fn mode_for_game(picks: &draft::Picks, game: i16) -> Option<&'static 
     };
     MODES.iter().find(|m| m.name == mode_name.as_ref())
 }
+
+pub(crate) static RIVALS_CUP_PRESETS: &[draft::PresetOption] = &[
+    draft::PresetOption { display_name: "Open", preset: "ttchaos_open" },
+    draft::PresetOption { display_name: "Standard", preset: "ttchaos_standard" },
+    draft::PresetOption { display_name: "Casual Boots", preset: "ttchaos_casualboots" },
+    draft::PresetOption { display_name: "MC Boss", preset: "ttchaos_mcboss" },
+    draft::PresetOption { display_name: "AD Tournament Keys", preset: "ttchaos_adtournamentkeys" },
+];
+
+pub(crate) static RIVALS_CUP_BRACKETS_ORDER: &[draft::DraftPhase] = &[
+    draft::DraftPhase::Ban(draft::Team::HighSeed),
+    draft::DraftPhase::Ban(draft::Team::LowSeed),
+    draft::DraftPhase::Pick(draft::Team::LowSeed),
+    draft::DraftPhase::Pick(draft::Team::HighSeed),
+    // remaining → game 3 (auto-assigned when Done)
+];
 
 pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Data<'_>) -> Result<Option<RawHtml<String>>, InfoError> {
     Ok(match &*data.event {

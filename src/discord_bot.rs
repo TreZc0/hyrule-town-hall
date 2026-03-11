@@ -863,6 +863,16 @@ async fn send_draft_settings_page(ctx: &DiscordCtx, interaction: &impl GenericIn
             }
             interaction.create_response(ctx, CreateInteractionResponse::Message(response_msg)).await?;
         }
+        draft::StepKind::PickPreset { available_presets, game, .. } => {
+            let response_content = format!("Select the preset for Game {}:", game);
+            let mut response_msg = CreateInteractionResponseMessage::new()
+                .ephemeral(true)
+                .content(response_content);
+            for preset_opt in &available_presets {
+                response_msg = response_msg.button(CreateButton::new(format!("preset_pick_{}", preset_opt.preset)).label(preset_opt.display_name));
+            }
+            interaction.create_response(ctx, CreateInteractionResponse::Message(response_msg)).await?;
+        }
     }
     msg_ctx.into_transaction().commit().await?;
     Ok(())
@@ -938,7 +948,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     draft_kind = Some(new_kind);
                 }
             }
-            let ban = draft_kind.map(|draft_kind| {
+            let ban = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
                     draft::Kind::AlttprDe9 => CreateCommand::new("ban")
@@ -959,8 +969,13 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         .description("Verrouille un setting à sa valeur par défaut.")
                         .description_localized("en-GB", "Locks a setting for this race to its default value.")
                         .description_localized("en-US", "Locks a setting for this race to its default value."),
+                    draft::Kind::PickOnly { .. } => return None, // no bans in pick-only draft
+                    draft::Kind::BanPick { .. } => CreateCommand::new("ban")
+                        .kind(CommandType::ChatInput)
+                        .add_context(InteractionContext::Guild)
+                        .description("Bans a preset from being played in this match."),
                 });
-                idx
+                Some(idx)
             });
             let delete_after = {
                 let idx = commands.len();
@@ -998,13 +1013,17 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         .description("Choisit un setting pour la race (identique à /pick).")
                         .description_localized("en-GB", "Chooses a setting for this race (same as /pick).")
                         .description_localized("en-US", "Chooses a setting for this race (same as /pick)."),
+                    draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } => CreateCommand::new("draft")
+                        .kind(CommandType::ChatInput)
+                        .add_context(InteractionContext::Guild)
+                        .description("Picks a preset for a game (same as /pick)."),
                 });
                 Some(idx)
             });
             let first = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::AlttprDe9 => return None, // AlttprDe9 doesn't have a first/second choice, turn order is fixed
+                    draft::Kind::AlttprDe9 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } => return None, // turn order is fixed for these drafts
                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("first")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -1043,7 +1062,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let no = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::AlttprDe9 | draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::RslS7 => return None,
+                    draft::Kind::AlttprDe9 | draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::RslS7 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } => return None,
                     draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => CreateCommand::new("no")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -1074,6 +1093,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         .description("Choisit un setting pour la race.")
                         .description_localized("en-GB", "Chooses a setting for this race.")
                         .description_localized("en-US", "Chooses a setting for this race."),
+                    draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } => CreateCommand::new("pick")
+                        .kind(CommandType::ChatInput)
+                        .add_context(InteractionContext::Guild)
+                        .description("Picks a preset for a game in the match."),
                 });
                 idx
             });
@@ -1288,7 +1311,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let second = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::AlttprDe9 => return None, // AlttprDe9 doesn't have a first/second choice, turn order is fixed
+                    draft::Kind::AlttprDe9 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } => return None, // turn order is fixed for these drafts
                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("second")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -1327,7 +1350,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let skip = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::AlttprDe9 => return None, // AlttprDe9 doesn't allow skipping
+                    draft::Kind::AlttprDe9 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } => return None, // no skipping in these drafts
                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("skip")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -1384,7 +1407,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let yes = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::AlttprDe9 | draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::RslS7 => return None,
+                    draft::Kind::AlttprDe9 | draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::RslS7 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } => return None,
                     draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => CreateCommand::new("yes")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -1544,7 +1567,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             }
                                         }
                                     }
-                                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::AlttprDe9 => {}
+                                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::AlttprDe9 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } => {}
                                 }
                                 draft_action(ctx, interaction, draft::Action::GoFirst(true)).await?;
                             }
@@ -2616,7 +2639,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             }
                                         }
                                     }
-                                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::AlttprDe9 => {}
+                                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::AlttprDe9 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } => {}
                                 }
                                 draft_action(ctx, interaction, draft::Action::GoFirst(false)).await?;
                             }
@@ -3253,6 +3276,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             | draft::StepKind::Ban { .. }
                             | draft::StepKind::Pick { .. }
                             | draft::StepKind::BooleanChoice { .. }
+                            | draft::StepKind::PickPreset { .. }
                             | draft::StepKind::Done(_)
                             | draft::StepKind::DoneRsl { .. }
                                 => match race.draft.as_mut().unwrap().apply(draft_kind, race.game, &mut msg_ctx, draft::Action::Pick { setting: format!("@placeholder"), value: format!("@placeholder") }).await? {
@@ -3268,6 +3292,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         }
                     } else if let Some((setting, value)) = custom_id.strip_prefix("draft_option_").and_then(|setting_value| setting_value.split_once("__")) {
                         draft_action(ctx, interaction, draft::Action::Pick { setting: setting.to_owned(), value: value.to_owned() }).await?;
+                    } else if let Some(preset) = custom_id.strip_prefix("preset_pick_") {
+                        draft_action(ctx, interaction, draft::Action::Pick { setting: preset.to_owned(), value: preset.to_owned() }).await?;
                     } else if let Some(speedgaming_id) = custom_id.strip_prefix("sgdisambig_") {
                         let (mut transaction, http_client) = {
                             let data = ctx.data.read().await;

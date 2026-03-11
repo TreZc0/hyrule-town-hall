@@ -1202,7 +1202,7 @@ impl Race {
             match draft.next_step(draft_kind, None, &mut draft::MessageContext::None).await?.kind {
                 draft::StepKind::Done(settings) => Some(settings),
                 draft::StepKind::DoneRsl { .. } => None, //TODO
-                draft::StepKind::GoFirst | draft::StepKind::Ban { .. } | draft::StepKind::Pick { .. } | draft::StepKind::BooleanChoice { .. } => None,
+                draft::StepKind::GoFirst | draft::StepKind::Ban { .. } | draft::StepKind::Pick { .. } | draft::StepKind::BooleanChoice { .. } | draft::StepKind::PickPreset { .. } => None,
             }
         } else {
             None

@@ -513,6 +513,16 @@ impl<'a> Data<'a> {
                     Some(draft::Kind::AlttprDe9)
                 }
             }
+            (Series::AlttprDe, "rival26gr") => Some(draft::Kind::PickOnly {
+                options: alttprde::RIVALS_CUP_PRESETS,
+                who_starts: draft::Team::HighSeed,
+                picks_per_player: 1,
+                unique: true,
+            }),
+            (Series::AlttprDe, "rival26br") => Some(draft::Kind::BanPick {
+                options: alttprde::RIVALS_CUP_PRESETS,
+                order: alttprde::RIVALS_CUP_BRACKETS_ORDER,
+            }),
             (Series::Multiworld, "3") => Some(draft::Kind::MultiworldS3),
             (Series::Multiworld, "4") => Some(draft::Kind::MultiworldS4),
             (Series::Multiworld, "5") => Some(draft::Kind::MultiworldS5),

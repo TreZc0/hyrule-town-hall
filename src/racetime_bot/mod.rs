@@ -495,7 +495,16 @@ impl Goal {
     fn draft_kind(&self) -> Option<draft::Kind> {
         match self {
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => Some(draft::Kind::AlttprDe9),
-            Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups => None,
+            Self::AlttprDeRivalsCupGroups => Some(draft::Kind::PickOnly {
+                options: alttprde::RIVALS_CUP_PRESETS,
+                who_starts: draft::Team::HighSeed,
+                picks_per_player: 1,
+                unique: true,
+            }),
+            Self::AlttprDeRivalsCupBrackets => Some(draft::Kind::BanPick {
+                options: alttprde::RIVALS_CUP_PRESETS,
+                order: alttprde::RIVALS_CUP_BRACKETS_ORDER,
+            }),
             Self::Cc7 => Some(draft::Kind::S7),
             Self::MultiworldS3 => Some(draft::Kind::MultiworldS3),
             Self::MultiworldS4 => Some(draft::Kind::MultiworldS4),
@@ -3593,7 +3602,7 @@ impl Handler {
                     draft::StepKind::GoFirst => None,
                     draft::StepKind::Ban { available_settings, .. } => Some(available_settings.all().map(|setting| setting.description).collect()),
                     draft::StepKind::Pick { available_choices, .. } => Some(available_choices.all().map(|setting| setting.description).collect()),
-                    draft::StepKind::BooleanChoice { .. } | draft::StepKind::Done(_) | draft::StepKind::DoneRsl { .. } => Some(Vec::default()),
+                    draft::StepKind::BooleanChoice { .. } | draft::StepKind::Done(_) | draft::StepKind::DoneRsl { .. } | draft::StepKind::PickPreset { .. } => Some(Vec::default()),
                 }
             } else {
                 None
@@ -3610,6 +3619,7 @@ impl Handler {
                 draft::Kind::TournoiFrancoS3 => fr::S3_SETTINGS.into_iter().map(|fr::Setting { description, .. }| Cow::Borrowed(description)).collect(),
                 draft::Kind::TournoiFrancoS4 => fr::S4_SETTINGS.into_iter().map(|fr::Setting { description, .. }| Cow::Borrowed(description)).collect(),
                 draft::Kind::TournoiFrancoS5 => fr::S5_SETTINGS.into_iter().map(|fr::Setting { description, .. }| Cow::Borrowed(description)).collect(),
+                draft::Kind::PickOnly { options, .. } | draft::Kind::BanPick { options, .. } => options.iter().map(|p| Cow::Borrowed(p.display_name)).collect(),
             });
             if available_settings.is_empty() {
                 ctx.say(if let French = goal.language() {
@@ -3647,6 +3657,14 @@ impl Handler {
                         let cal_event = self.official_data.as_ref().expect("AlttprDe9 goal must have official_data").cal_event.clone();
                         self.roll_alttprde9_seed(ctx, cal_event, goal.language(), article).await;
                     }
+                    Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups => {
+                        let cal_event = self.official_data.as_ref().expect("RivalsCup goal must have official_data").cal_event.clone();
+                        let preset = settings.get("preset")
+                            .and_then(|v| v.as_str())
+                            .expect("RivalsCup Done settings missing preset")
+                            .to_owned();
+                        self.roll_rivals_cup_seed(ctx, cal_event, preset, goal.language(), article).await;
+                    }
                     Goal::Crosskeys2025 => {
                         let cal_event = self.official_data.as_ref().expect("Crosskeys2025 goal must have official_data").cal_event.clone();
                         self.roll_crosskeys2025_seed(ctx, cal_event, goal.language(), article).await;
@@ -3669,7 +3687,7 @@ impl Handler {
                 };
                 self.roll_rsl_seed(ctx, preset, world_count, unlock_spoiler_log, goal.language(), article, description).await;
             }
-            draft::StepKind::GoFirst | draft::StepKind::Ban { .. } | draft::StepKind::Pick { .. } | draft::StepKind::BooleanChoice { .. } => ctx.say(step.message).await?,
+            draft::StepKind::GoFirst | draft::StepKind::Ban { .. } | draft::StepKind::Pick { .. } | draft::StepKind::BooleanChoice { .. } | draft::StepKind::PickPreset { .. } => ctx.say(step.message).await?,
         }
         Ok(())
     }
@@ -3686,6 +3704,7 @@ impl Handler {
                         draft::Kind::RslS7 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use \"!seed draft\" to start one. For more info about these options, use !presets")).await?,
                         draft::Kind::TournoiFrancoS3 => ctx.say(format!("Désolé {reply_to}, le draft n'a pas débuté. Utilisez \"!seed draft\" pour en commencer un. Pour plus d'infos, utilisez !presets")).await?,
                         draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use \"!seed draft\" to start one. For more info about these options, use !presets / le draft n'a pas débuté. Utilisez \"!seed draft\" pour en commencer un. Pour plus d'infos, utilisez !presets")).await?,
+                        draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } => ctx.say(format!("Sorry {reply_to}, the preset draft for this event is done in Discord before the race starts.")).await?,
                     },
                     RaceState::Draft { state: ref mut draft, .. } => {
                         let is_active_team = if let Some(OfficialRaceData { ref cal_event, ref event, .. }) = self.official_data {
@@ -3728,6 +3747,7 @@ impl Handler {
                                 draft::Kind::RslS7 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the weights draft.")).await?,
                                 draft::Kind::TournoiFrancoS3 => ctx.say(format!("Désolé {reply_to}, mais ce n'est pas votre tour.")).await?,
                                 draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the settings draft. / mais ce n'est pas votre tour.")).await?,
+                                draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } => ctx.say(format!("Sorry {reply_to}, it's not your turn in the preset draft.")).await?,
                             }
                         }
                     }
@@ -3820,6 +3840,12 @@ impl Handler {
         ctx.send_message(format!("@entrants Remember: this race will be played with {}!",
                                     race_options_str
                                 ), true, Vec::default()).await.expect("failed to send race options");
+    }
+
+    async fn roll_rivals_cup_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, preset: String, language: Language, article: &'static str) {
+        let official_start = cal_event.start().expect("handling room for official race without start time");
+        let delay_until = official_start - TimeDelta::minutes(10);
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_avianart_seed(preset), language, article, format!("Avianart seed"), false).await;
     }
 
     async fn roll_crosskeys2025_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
@@ -5058,7 +5084,9 @@ impl RaceHandler<GlobalState> for Handler {
                             | Goal::AlttprDe9SwissA
                             | Goal::AlttprDe9SwissB
                                 => this.roll_alttprde9_seed(ctx, cal_event.clone(), English, "a").await,
-                            Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups => unreachable!("RivalsCup official room seed rolling not yet implemented"),
+                            Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups => {
+                                ctx.say("@entrants WARNING: The preset draft for this match is not complete! Please complete the draft in the scheduling Discord thread before the race.").await.to_racetime()?;
+                            }
                             | Goal::Crosskeys2025
                                 => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await,
                             Goal::TwwrMainWeekly

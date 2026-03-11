@@ -37,7 +37,7 @@ impl IsNetworkError for Error {
 
 pub(crate) type Picks = HashMap<Cow<'static, str>, Cow<'static, str>>;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Team {
     HighSeed,
     LowSeed,
@@ -62,6 +62,18 @@ impl fmt::Display for Team {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PresetOption {
+    pub(crate) display_name: &'static str,
+    pub(crate) preset: &'static str,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DraftPhase {
+    Ban(Team),
+    Pick(Team),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Kind {
     // when defining a new variant, make sure to add it to event::Data::draft_kind and racetime_bot::Goal::draft_kind
     AlttprDe9,
@@ -73,6 +85,18 @@ pub(crate) enum Kind {
     TournoiFrancoS3,
     TournoiFrancoS4,
     TournoiFrancoS5,
+    /// Pick-only draft: each player picks one or more presets in turn, no bans.
+    PickOnly {
+        options: &'static [PresetOption],
+        who_starts: Team,
+        picks_per_player: u8,
+        unique: bool,
+    },
+    /// Ban-then-pick draft: fixed sequence of ban/pick steps; remaining goes to game 3.
+    BanPick {
+        options: &'static [PresetOption],
+        order: &'static [DraftPhase],
+    },
 }
 
 impl Kind {
@@ -86,6 +110,8 @@ impl Kind {
             | Self::RslS7
             | Self::TournoiFrancoS4
             | Self::TournoiFrancoS5
+            | Self::PickOnly { .. }
+            | Self::BanPick { .. }
                 => English,
             | Self::TournoiFrancoS3
                 => French,
@@ -184,6 +210,12 @@ pub(crate) enum StepKind {
         preset: rsl::VersionedPreset,
         world_count: u8,
     },
+    /// A single-step preset picker: clicking one button picks the preset for the given game.
+    PickPreset {
+        team: Team,
+        available_presets: Vec<PresetOption>,
+        game: u8,
+    },
 }
 
 pub(crate) struct Step {
@@ -241,7 +273,7 @@ pub(crate) struct Draft {
 impl Draft {
     pub(crate) async fn for_game1(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, kind: Kind, event: &event::Data<'_>, phase: Option<&str>, [team1, team2]: [&team::Team; 2]) -> Result<Self, cal::Error> {
         let [high_seed, low_seed] = match kind {
-            Kind::AlttprDe9 | Kind::S7 | Kind::RslS7 => [
+            Kind::AlttprDe9 | Kind::S7 | Kind::RslS7 | Kind::PickOnly { .. } | Kind::BanPick { .. } => [
                 min_by_key(team1, team2, |team| team.qualifier_rank).id,
                 max_by_key(team1, team2, |team| team.qualifier_rank).id,
             ],
@@ -317,7 +349,7 @@ impl Draft {
             went_first: None,
             skipped_bans: 0,
             settings: match kind {
-                Kind::AlttprDe9 | Kind::S7 | Kind::MultiworldS3 | Kind::MultiworldS5 => HashMap::default(),
+                Kind::AlttprDe9 | Kind::S7 | Kind::MultiworldS3 | Kind::MultiworldS5 | Kind::PickOnly { .. } | Kind::BanPick { .. } => HashMap::default(),
                 // accessibility accommodation for The Aussie Boiiz in mw/4 to default to CSMC
                 Kind::MultiworldS4 => HashMap::from_iter(
                     (loser == Id::from(17814073240662869290_u64) || winner == Id::from(17814073240662869290_u64))
@@ -353,6 +385,28 @@ impl Draft {
                 if self.settings.contains_key("game1_mode") { count += 1; }
                 if self.settings.contains_key("game2_mode") { count += 1; }
                 count
+            }
+            Kind::PickOnly { picks_per_player, .. } => {
+                let total = picks_per_player as usize * 2;
+                u8::try_from((1..=total).filter(|&n| self.settings.contains_key(&*format!("game{n}_preset"))).count()).unwrap()
+            }
+            Kind::BanPick { order, .. } => {
+                let mut ban_count = 0usize;
+                let mut pick_count = 0usize;
+                let mut done = 0u8;
+                for phase in order {
+                    match phase {
+                        DraftPhase::Ban(_) => {
+                            ban_count += 1;
+                            if self.settings.contains_key(&*format!("ban{ban_count}")) { done += 1; }
+                        }
+                        DraftPhase::Pick(_) => {
+                            pick_count += 1;
+                            if self.settings.contains_key(&*format!("pick{pick_count}")) { done += 1; }
+                        }
+                    }
+                }
+                done
             }
             Kind::S7 => self.skipped_bans + u8::try_from(self.settings.len()).unwrap(),
             Kind::RslS7 => self.skipped_bans
@@ -1465,7 +1519,7 @@ impl Draft {
             Kind::TournoiFrancoS3 => &fr::S3_SETTINGS[..],
             Kind::TournoiFrancoS4 => &fr::S4_SETTINGS[..],
             Kind::TournoiFrancoS5 => &fr::S5_SETTINGS[..],
-            Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 => unreachable!(),
+            Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 | Kind::PickOnly { .. } | Kind::BanPick { .. } => unreachable!(),
         };
         Ok({
             if let Some(went_first) = self.went_first {
@@ -1478,12 +1532,13 @@ impl Draft {
                 let team = match (kind, pick_count, went_first) {
                     (_, 0, true) | (_, 1, false) | (_, 2, true) | (_, 3, false) | (_, 4, false) | (_, 5, true) | (_, 6, true) | (_, 7, false) | (Kind::TournoiFrancoS3, 8, true) | (Kind::TournoiFrancoS3, 9, false) => Team::HighSeed,
                     (_, 0, false) | (_, 1, true) | (_, 2, false) | (_, 3, true) | (_, 4, true) | (_, 5, false) | (_, 6, false) | (_, 7, true) | (Kind::TournoiFrancoS3, 8, false) | (Kind::TournoiFrancoS3, 9, true) => Team::LowSeed,
+                    (Kind::PickOnly { .. }, 8.., _) | (Kind::BanPick { .. }, 8.., _) => unreachable!(),
                     (Kind::TournoiFrancoS3, 10.., _) | (Kind::TournoiFrancoS4 | Kind::TournoiFrancoS5, 8.., _) => return Ok(Step {
                         kind: StepKind::Done(match kind {
                             Kind::TournoiFrancoS3 => fr::resolve_s3_draft_settings(&self.settings),
                             Kind::TournoiFrancoS4 => fr::resolve_s4_draft_settings(&self.settings),
                             Kind::TournoiFrancoS5 => fr::resolve_s5_draft_settings(&self.settings),
-                            Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 => unreachable!(),
+                            Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 | Kind::PickOnly { .. } | Kind::BanPick { .. } => unreachable!(),
                         }),
                         message: match msg_ctx {
                             MessageContext::None => String::default(),
@@ -1609,13 +1664,13 @@ impl Draft {
                                 Kind::TournoiFrancoS3 => 10,
                                 Kind::TournoiFrancoS4 => 8,
                                 Kind::TournoiFrancoS5 => 8,
-                                Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 => unreachable!(),
+                                Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 | Kind::PickOnly { .. } | Kind::BanPick { .. } => unreachable!(),
                             };
                             let hard_settings_ok = self.settings.get("hard_settings_ok").map(|hard_settings_ok| &**hard_settings_ok).unwrap_or("no") == "ok";
                             let can_ban = match kind {
                                 Kind::TournoiFrancoS3 | Kind::TournoiFrancoS4 => n < round_count - 2 || self.settings.get(team.choose("high_seed_has_picked", "low_seed_has_picked")).map(|has_picked| &**has_picked).unwrap_or("no") == "yes",
                                 Kind::TournoiFrancoS5 => n == 4 || n == 5,
-                                Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 => unreachable!(),
+                                Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 | Kind::PickOnly { .. } | Kind::BanPick { .. } => unreachable!(),
                             };
                             let skippable = n == round_count - 1 && can_ban;
                             let (hard_settings, classic_settings) = all_settings.iter()
@@ -1812,6 +1867,176 @@ impl Draft {
         })
     }
 
+    async fn next_step_pick_only(&self, options: &'static [PresetOption], who_starts: Team, picks_per_player: u8, unique: bool, game: Option<i16>, msg_ctx: &mut MessageContext<'_>) -> Result<Step, Error> {
+        let total_picks = picks_per_player as usize * 2;
+        let last_game_key = format!("game{total_picks}_preset");
+        if self.settings.contains_key(&*last_game_key) {
+            // Draft complete — return Done for the current game
+            let game_num = game.unwrap_or(1) as usize;
+            let preset_val = self.settings.get(&*format!("game{game_num}_preset"))
+                .expect("PickOnly draft complete but game preset missing");
+            let preset_display = options.iter().find(|p| p.preset == preset_val.as_ref()).map(|p| p.display_name).unwrap_or(preset_val.as_ref());
+            let mut settings = seed::Settings::new();
+            settings.insert(format!("preset"), json!(preset_val.as_ref()));
+            Ok(Step {
+                kind: StepKind::Done(settings),
+                message: match msg_ctx {
+                    MessageContext::None => String::default(),
+                    MessageContext::Discord { .. } => if game.unwrap_or(1) == 1 {
+                        let mut parts = Vec::with_capacity(total_picks + 1);
+                        parts.push("Preset draft completed.".to_owned());
+                        for n in 1..=total_picks {
+                            let v = self.settings.get(&*format!("game{n}_preset")).map(|s| s.as_ref()).unwrap_or("?");
+                            let display = options.iter().find(|p| p.preset == v).map(|p| p.display_name).unwrap_or(v);
+                            parts.push(format!("Game {n}: {display}"));
+                        }
+                        parts.join("\n")
+                    } else {
+                        String::default()
+                    },
+                    MessageContext::RaceTime { .. } => format!("Playing {} preset", preset_display),
+                },
+            })
+        } else {
+            // Determine how many picks have been made so far
+            let picks_made = (1..=total_picks).filter(|&n| self.settings.contains_key(&*format!("game{n}_preset"))).count();
+            // Whose turn: who_starts picks on even counts, the other on odd
+            let team = if picks_made % 2 == 0 { who_starts } else { match who_starts { Team::HighSeed => Team::LowSeed, Team::LowSeed => Team::HighSeed } };
+            let next_game = (picks_made + 1) as u8;
+            // Build available presets (filter already-taken if unique)
+            let available_presets: Vec<PresetOption> = if unique {
+                let taken: Vec<&str> = (1..=picks_made)
+                    .filter_map(|n| self.settings.get(&*format!("game{n}_preset")).map(|s| s.as_ref()))
+                    .collect();
+                options.iter().filter(|p| !taken.contains(&p.preset)).copied().collect()
+            } else {
+                options.to_vec()
+            };
+            let preset_list = available_presets.iter().map(|p| p.display_name).collect::<Vec<_>>().join(", ");
+            Ok(Step {
+                kind: StepKind::PickPreset { team, available_presets, game: next_game },
+                message: match msg_ctx {
+                    MessageContext::None => String::default(),
+                    MessageContext::Discord { transaction, guild_id, teams, .. } => {
+                        let (mut high, mut low): (Vec<_>, Vec<_>) = teams.iter().partition(|t| t.id == self.high_seed);
+                        let active = team.choose(high.remove(0), low.remove(0));
+                        MessageBuilder::default()
+                            .mention_team(transaction, Some(*guild_id), active).await?
+                            .push(format!(": Pick the preset for Game {next_game} using /pick."))
+                            .build()
+                    }
+                    MessageContext::RaceTime { high_seed_name, low_seed_name, .. } => {
+                        let name = team.choose(*high_seed_name, *low_seed_name);
+                        format!("{name}, pick the preset for Game {next_game}. Available: {preset_list}")
+                    }
+                },
+            })
+        }
+    }
+
+    async fn next_step_ban_pick(&self, options: &'static [PresetOption], order: &'static [DraftPhase], game: Option<i16>, msg_ctx: &mut MessageContext<'_>) -> Result<Step, Error> {
+        if self.settings.contains_key("game3_preset") {
+            // Draft complete (game3 auto-assigned in apply) — return Done for current game
+            let game_num = game.unwrap_or(1) as usize;
+            let preset_val = self.settings.get(&*format!("game{game_num}_preset"))
+                .expect("BanPick draft complete but game preset missing");
+            let preset_display = options.iter().find(|p| p.preset == preset_val.as_ref()).map(|p| p.display_name).unwrap_or(preset_val.as_ref());
+            let mut settings = seed::Settings::new();
+            settings.insert(format!("preset"), json!(preset_val.as_ref()));
+            Ok(Step {
+                kind: StepKind::Done(settings),
+                message: match msg_ctx {
+                    MessageContext::None => String::default(),
+                    MessageContext::Discord { .. } => if game.unwrap_or(1) == 1 {
+                        let total_picks = order.iter().filter(|p| matches!(p, DraftPhase::Pick(_))).count();
+                        let mut parts = vec!["Preset draft completed.".to_owned()];
+                        for n in 1..=total_picks { let v = self.settings.get(&*format!("game{n}_preset")).map(|s| s.as_ref()).unwrap_or("?"); let d = options.iter().find(|p| p.preset == v).map(|p| p.display_name).unwrap_or(v); parts.push(format!("Game {n}: {d}")); }
+                        if let Some(v) = self.settings.get("game3_preset") { let d = options.iter().find(|p| p.preset == v.as_ref()).map(|p| p.display_name).unwrap_or(v.as_ref()); parts.push(format!("Game 3: {d}")); }
+                        parts.join("\n")
+                    } else {
+                        String::default()
+                    },
+                    MessageContext::RaceTime { .. } => format!("Playing {} preset", preset_display),
+                },
+            })
+        } else {
+            // Walk through order to find the first unsatisfied step
+            let mut ban_count = 0usize;
+            let mut pick_count = 0usize;
+            for phase in order {
+                match phase {
+                    DraftPhase::Ban(team) => {
+                        ban_count += 1;
+                        if !self.settings.contains_key(&*format!("ban{ban_count}")) {
+                            // Current step: team bans
+                            let banned: Vec<&str> = (1..ban_count).filter_map(|n| self.settings.get(&*format!("ban{n}")).map(|s| s.as_ref())).collect();
+                            let picked: Vec<&str> = (1..=pick_count).filter_map(|n| self.settings.get(&*format!("game{n}_preset")).map(|s| s.as_ref())).collect();
+                            let available: Vec<BanSetting> = options.iter()
+                                .filter(|p| !banned.contains(&p.preset) && !picked.contains(&p.preset))
+                                .map(|p| BanSetting { name: p.preset, display: p.display_name, default: p.preset, default_display: p.display_name, description: Cow::Borrowed(p.display_name) })
+                                .collect();
+                            let avail_display = available.iter().map(|s| s.display).collect::<Vec<_>>().join(", ");
+                            return Ok(Step {
+                                kind: StepKind::Ban { team: *team, available_settings: BanSettings(vec![("Presets", available)]), skippable: false, rsl: false },
+                                message: match msg_ctx {
+                                    MessageContext::None => String::default(),
+                                    MessageContext::Discord { transaction, guild_id, teams, command_ids, .. } => {
+                                        let (mut high, mut low): (Vec<_>, Vec<_>) = teams.iter().partition(|t| t.id == self.high_seed);
+                                        let active = team.choose(high.remove(0), low.remove(0));
+                                        MessageBuilder::default()
+                                            .mention_team(transaction, Some(*guild_id), active).await?
+                                            .push(": Ban a preset using ")
+                                            .mention_command(command_ids.ban.unwrap(), "ban")
+                                            .push(".")
+                                            .build()
+                                    }
+                                    MessageContext::RaceTime { high_seed_name, low_seed_name, .. } => {
+                                        let name = team.choose(*high_seed_name, *low_seed_name);
+                                        format!("{name}, ban a preset using \"!ban <preset>\". Available: {avail_display}")
+                                    }
+                                },
+                            });
+                        }
+                    }
+                    DraftPhase::Pick(team) => {
+                        pick_count += 1;
+                        if !self.settings.contains_key(&*format!("pick{pick_count}")) {
+                            // Current step: team picks for game pick_count
+                            let banned: Vec<&str> = (1..=ban_count).filter_map(|n| self.settings.get(&*format!("ban{n}")).map(|s| s.as_ref())).collect();
+                            let picked: Vec<&str> = (1..pick_count).filter_map(|n| self.settings.get(&*format!("game{n}_preset")).map(|s| s.as_ref())).collect();
+                            let available_presets: Vec<PresetOption> = options.iter()
+                                .filter(|p| !banned.contains(&p.preset) && !picked.contains(&p.preset))
+                                .copied()
+                                .collect();
+                            let avail_display = available_presets.iter().map(|p| p.display_name).collect::<Vec<_>>().join(", ");
+                            let current_pick = pick_count as u8;
+                            return Ok(Step {
+                                kind: StepKind::PickPreset { team: *team, available_presets, game: current_pick },
+                                message: match msg_ctx {
+                                    MessageContext::None => String::default(),
+                                    MessageContext::Discord { transaction, guild_id, teams, .. } => {
+                                        let (mut high, mut low): (Vec<_>, Vec<_>) = teams.iter().partition(|t| t.id == self.high_seed);
+                                        let active = team.choose(high.remove(0), low.remove(0));
+                                        MessageBuilder::default()
+                                            .mention_team(transaction, Some(*guild_id), active).await?
+                                            .push(format!(": Pick the preset for Game {current_pick} using /pick."))
+                                            .build()
+                                    }
+                                    MessageContext::RaceTime { high_seed_name, low_seed_name, .. } => {
+                                        let name = team.choose(*high_seed_name, *low_seed_name);
+                                        format!("{name}, pick the preset for Game {current_pick}. Available: {avail_display}")
+                                    }
+                                },
+                            });
+                        }
+                    }
+                }
+            }
+            // Should not reach here (game3_preset check at top handles Done)
+            unreachable!("BanPick next_step reached end of order without Done check triggering")
+        }
+    }
+
     pub(crate) async fn next_step(&self, kind: Kind, game: Option<i16>, msg_ctx: &mut MessageContext<'_>) -> Result<Step, Error> {
         match kind {
             Kind::AlttprDe9 => self.next_step_alttpr_de9(game, msg_ctx).await,
@@ -1823,12 +2048,18 @@ impl Draft {
             Kind::TournoiFrancoS3 | Kind::TournoiFrancoS4 | Kind::TournoiFrancoS5 => {
                 self.next_step_tournoi_franco(kind, game, msg_ctx).await
             }
+            Kind::PickOnly { options, who_starts, picks_per_player, unique } => {
+                self.next_step_pick_only(options, who_starts, picks_per_player, unique, game, msg_ctx).await
+            }
+            Kind::BanPick { options, order } => {
+                self.next_step_ban_pick(options, order, game, msg_ctx).await
+            }
         }
     }
     pub(crate) async fn active_team(&self, kind: Kind, game: Option<i16>) -> Result<Option<Team>, Error> {
         Ok(match self.next_step(kind, game, &mut MessageContext::None).await?.kind {
             StepKind::GoFirst => Some(Team::HighSeed),
-            StepKind::Ban { team, .. } | StepKind::Pick { team, .. } | StepKind::BooleanChoice { team } => Some(team),
+            StepKind::Ban { team, .. } | StepKind::Pick { team, .. } | StepKind::BooleanChoice { team } | StepKind::PickPreset { team, .. } => Some(team),
             StepKind::Done(_) | StepKind::DoneRsl { .. } => None,
         })
     }
@@ -1999,9 +2230,9 @@ impl Draft {
                         })
                     }
                 }
-                StepKind::GoFirst | StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => {
+                StepKind::GoFirst | StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } | StepKind::PickPreset { .. } => {
                     // AlttprDe9 doesn't use these step types
-                    unreachable!("AlttprDe9 draft should not have GoFirst, BooleanChoice, or DoneRsl steps")
+                    unreachable!("AlttprDe9 draft should not have GoFirst, BooleanChoice, DoneRsl, or PickPreset steps")
                 }
         })
     }
@@ -2055,7 +2286,7 @@ impl Draft {
                         MessageContext::Discord { .. } => format!("Sorry, first pick has already been chosen."),
                         MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, first pick has already been chosen."),
                     }),
-                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => unreachable!(),
+                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::Done(_) => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => format!("Sorry, this settings draft is already completed."),
@@ -2192,7 +2423,7 @@ impl Draft {
                             ),
                         })
                     },
-                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => unreachable!(),
+                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::Done(_) => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => format!("Sorry, this settings draft is already completed."),
@@ -2233,7 +2464,7 @@ impl Draft {
                         MessageContext::Discord { .. } => format!("Sorry, this part of the draft can't be skipped."),
                         MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, this part of the draft can't be skipped."),
                     }),
-                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => unreachable!(),
+                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::Done(_) => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => format!("Sorry, this settings draft is already completed."),
@@ -2307,7 +2538,7 @@ impl Draft {
                         MessageContext::Discord { .. } => format!("Sorry, first pick has already been chosen."),
                         MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, first pick has already been chosen."),
                     }),
-                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => unreachable!(),
+                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::Done(_) => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => format!("Sorry, this settings draft is already completed."),
@@ -2444,7 +2675,7 @@ impl Draft {
                             ),
                         })
                     },
-                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => unreachable!(),
+                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::Done(_) => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => format!("Sorry, this settings draft is already completed."),
@@ -2485,7 +2716,7 @@ impl Draft {
                         MessageContext::Discord { .. } => format!("Sorry, this part of the draft can't be skipped."),
                         MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, this part of the draft can't be skipped."),
                     }),
-                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => unreachable!(),
+                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::Done(_) => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => format!("Sorry, this settings draft is already completed."),
@@ -2566,7 +2797,7 @@ impl Draft {
                         MessageContext::Discord { .. } => format!("Sorry, first pick has already been chosen."),
                         MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, first pick has already been chosen."),
                     }),
-                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => unreachable!(),
+                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::Done(_) => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => format!("Sorry, this settings draft is already completed."),
@@ -2703,7 +2934,7 @@ impl Draft {
                             ),
                         })
                     },
-                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => unreachable!(),
+                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::Done(_) => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => format!("Sorry, this settings draft is already completed."),
@@ -2745,7 +2976,7 @@ impl Draft {
                         MessageContext::Discord { .. } => format!("Sorry, this part of the draft can't be skipped."),
                         MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, this part of the draft can't be skipped."),
                     }),
-                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => unreachable!(),
+                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::Done(_) => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => format!("Sorry, this settings draft is already completed."),
@@ -2822,7 +3053,7 @@ impl Draft {
                         MessageContext::Discord { .. } => format!("Sorry, first pick has already been chosen."),
                         MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, first pick has already been chosen."),
                     }),
-                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => unreachable!(),
+                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::Done(_) => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => format!("Sorry, this settings draft is already completed."),
@@ -2959,7 +3190,7 @@ impl Draft {
                             ),
                         })
                     },
-                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => unreachable!(),
+                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::Done(_) => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => format!("Sorry, this settings draft is already completed."),
@@ -3001,7 +3232,7 @@ impl Draft {
                         MessageContext::Discord { .. } => format!("Sorry, this part of the draft can't be skipped."),
                         MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, this part of the draft can't be skipped."),
                     }),
-                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => unreachable!(),
+                    StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::Done(_) => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => format!("Sorry, this settings draft is already completed."),
@@ -3065,7 +3296,7 @@ impl Draft {
                         MessageContext::Discord { .. } => format!("Sorry, first pick has already been chosen."),
                         MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, first pick has already been chosen."),
                     }),
-                    StepKind::BooleanChoice { .. } | StepKind::Done(_) => unreachable!(),
+                    StepKind::BooleanChoice { .. } | StepKind::Done(_) | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::DoneRsl { .. } => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => format!("Sorry, this weights draft is already completed."),
@@ -3203,7 +3434,7 @@ impl Draft {
                             ),
                         })
                     },
-                    StepKind::BooleanChoice { .. } | StepKind::Done(_) => unreachable!(),
+                    StepKind::BooleanChoice { .. } | StepKind::Done(_) | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::DoneRsl { .. } => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => format!("Sorry, this weights draft is already completed."),
@@ -3245,7 +3476,7 @@ impl Draft {
                         MessageContext::Discord { .. } => format!("Sorry, this part of the draft can't be skipped."),
                         MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, this part of the draft can't be skipped."),
                     }),
-                    StepKind::BooleanChoice { .. } | StepKind::Done(_) => unreachable!(),
+                    StepKind::BooleanChoice { .. } | StepKind::Done(_) | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::DoneRsl { .. } => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => format!("Sorry, this weights draft is already completed."),
@@ -3276,7 +3507,7 @@ impl Draft {
                 Kind::TournoiFrancoS3 => &fr::S3_SETTINGS[..],
                 Kind::TournoiFrancoS4 => &fr::S4_SETTINGS[..],
                 Kind::TournoiFrancoS5 => &fr::S5_SETTINGS[..],
-                Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 => unreachable!(),
+                Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 | Kind::PickOnly { .. } | Kind::BanPick { .. } => unreachable!(),
             };
             let resolved_action = match action {
                 Action::Ban { setting } => if let Some(setting) = all_settings.iter().find(|&&fr::Setting { name, .. }| *name == setting) {
@@ -3387,7 +3618,7 @@ impl Draft {
                             format!("Sorry {reply_to}, before the settings draft can continue, you first have to choose whether dungeons entrances should be mixed. Use !yes or !no")
                         },
                     }),
-                    StepKind::DoneRsl { .. } => unreachable!(),
+                    StepKind::DoneRsl { .. } | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::Done(_) => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => if let French = kind.language() {
@@ -3583,7 +3814,7 @@ impl Draft {
                             format!("Sorry {reply_to}, before the settings draft can continue, you first have to choose whether dungeons entrances should be mixed. Use !yes or !no")
                         },
                     }),
-                    StepKind::DoneRsl { .. } => unreachable!(),
+                    StepKind::DoneRsl { .. } | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::Done(_) => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => if let French = kind.language() {
@@ -3657,7 +3888,7 @@ impl Draft {
                             format!("Sorry {reply_to}, before the settings draft can continue, you first have to choose whether dungeons entrances should be mixed. Use !yes or !no")
                         },
                     }),
-                    StepKind::DoneRsl { .. } => unreachable!(),
+                    StepKind::DoneRsl { .. } | StepKind::PickPreset { .. } => unreachable!(),
                     StepKind::Done(_) => Err(match msg_ctx {
                         MessageContext::None => String::default(),
                         MessageContext::Discord { .. } => if let French = kind.language() {
@@ -3729,6 +3960,149 @@ impl Draft {
         })
     }
 
+    async fn apply_pick_only(&mut self, options: &'static [PresetOption], who_starts: Team, picks_per_player: u8, unique: bool, game: Option<i16>, msg_ctx: &mut MessageContext<'_>, action: Action) -> Result<Result<String, String>, Error> {
+        let step = self.next_step_pick_only(options, who_starts, picks_per_player, unique, game, &mut MessageContext::None).await?;
+        Ok(match step.kind {
+            StepKind::Done(_) => Err(match msg_ctx {
+                MessageContext::None => String::default(),
+                MessageContext::Discord { .. } => format!("Sorry, the preset draft is already completed."),
+                MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, the preset draft is already completed."),
+            }),
+            StepKind::PickPreset { team: _team, available_presets, game: next_game } => {
+                let preset_name = match action {
+                    Action::Pick { setting, .. } => setting,
+                    Action::Ban { setting } => setting,
+                    _ => return Ok(Err(match msg_ctx {
+                        MessageContext::None => String::default(),
+                        MessageContext::Discord { .. } => format!("Please use /pick to choose a preset."),
+                        MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, please use \"!pick <preset>\" to pick a preset."),
+                    })),
+                };
+                let preset_opt = available_presets.iter().find(|p| p.preset == preset_name);
+                let Some(preset_opt) = preset_opt else {
+                    let avail = available_presets.iter().map(|p| p.display_name).collect::<Vec<_>>().join(", ");
+                    return Ok(Err(match msg_ctx {
+                        MessageContext::None => String::default(),
+                        MessageContext::Discord { .. } => format!("Sorry, that preset is not available. Use one of: {avail}"),
+                        MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, that preset is not available. Use one of: {avail}"),
+                    }));
+                };
+                let key = format!("game{next_game}_preset");
+                self.settings.insert(Cow::Owned(key), Cow::Borrowed(preset_opt.preset));
+                Ok(match msg_ctx {
+                    MessageContext::None | MessageContext::RaceTime { .. } => String::default(),
+                    MessageContext::Discord { transaction, guild_id, team: team_data, .. } => MessageBuilder::default()
+                        .mention_team(transaction, Some(*guild_id), team_data).await?
+                        .push(if team_data.name_is_plural() { " have picked " } else { " has picked " })
+                        .push(preset_opt.display_name)
+                        .push(format!(" for Game {next_game}."))
+                        .build(),
+                })
+            }
+            StepKind::GoFirst | StepKind::Ban { .. } | StepKind::Pick { .. } | StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => {
+                unreachable!("PickOnly draft should only produce PickPreset or Done steps")
+            }
+        })
+    }
+
+    async fn apply_ban_pick(&mut self, options: &'static [PresetOption], order: &'static [DraftPhase], game: Option<i16>, msg_ctx: &mut MessageContext<'_>, action: Action) -> Result<Result<String, String>, Error> {
+        let step = self.next_step_ban_pick(options, order, game, &mut MessageContext::None).await?;
+        Ok(match step.kind {
+            StepKind::Done(_) => Err(match msg_ctx {
+                MessageContext::None => String::default(),
+                MessageContext::Discord { .. } => format!("Sorry, the preset draft is already completed."),
+                MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, the preset draft is already completed."),
+            }),
+            StepKind::Ban { team: _team, available_settings, .. } => {
+                let preset_name = match action {
+                    Action::Ban { setting } => setting,
+                    Action::Pick { setting, .. } => setting,
+                    _ => return Ok(Err(match msg_ctx {
+                        MessageContext::None => String::default(),
+                        MessageContext::Discord { command_ids, .. } => MessageBuilder::default()
+                            .push("Please use ")
+                            .mention_command(command_ids.ban.unwrap(), "ban")
+                            .push(" to ban a preset.")
+                            .build(),
+                        MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, please use \"!ban <preset>\" to ban a preset."),
+                    })),
+                };
+                if available_settings.get(&preset_name).is_none() {
+                    let avail = available_settings.all().map(|s| s.display.to_owned()).collect::<Vec<_>>().join(", ");
+                    return Ok(Err(match msg_ctx {
+                        MessageContext::None => String::default(),
+                        MessageContext::Discord { .. } => format!("Sorry, that preset is not available to ban. Available: {avail}"),
+                        MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, that preset is not available to ban. Available: {avail}"),
+                    }));
+                }
+                // Store as ban{N}
+                let ban_count = (1..).find(|n| !self.settings.contains_key(&*format!("ban{n}"))).unwrap();
+                let display = options.iter().find(|p| p.preset == preset_name)
+                    .map(|p| p.display_name.to_owned())
+                    .unwrap_or_else(|| preset_name.clone());
+                self.settings.insert(Cow::Owned(format!("ban{ban_count}")), Cow::Owned(preset_name));
+                Ok(match msg_ctx {
+                    MessageContext::None | MessageContext::RaceTime { .. } => String::default(),
+                    MessageContext::Discord { transaction, guild_id, team: team_data, .. } => MessageBuilder::default()
+                        .mention_team(transaction, Some(*guild_id), team_data).await?
+                        .push(if team_data.name_is_plural() { " have banned " } else { " has banned " })
+                        .push(display)
+                        .push('.')
+                        .build(),
+                })
+            }
+            StepKind::PickPreset { team: _team, available_presets, game: current_pick } => {
+                let preset_name = match action {
+                    Action::Pick { setting, .. } => setting,
+                    Action::Ban { setting } => setting,
+                    _ => return Ok(Err(match msg_ctx {
+                        MessageContext::None => String::default(),
+                        MessageContext::Discord { .. } => format!("Please use /pick to choose a preset."),
+                        MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, please use \"!pick <preset>\" to pick a preset."),
+                    })),
+                };
+                let preset_opt = available_presets.iter().find(|p| p.preset == preset_name);
+                let Some(preset_opt) = preset_opt else {
+                    let avail = available_presets.iter().map(|p| p.display_name).collect::<Vec<_>>().join(", ");
+                    return Ok(Err(match msg_ctx {
+                        MessageContext::None => String::default(),
+                        MessageContext::Discord { .. } => format!("Sorry, that preset is not available. Use one of: {avail}"),
+                        MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, that preset is not available. Use one of: {avail}"),
+                    }));
+                };
+                let pick_num = (1..).find(|n| !self.settings.contains_key(&*format!("pick{n}"))).unwrap();
+                self.settings.insert(Cow::Owned(format!("pick{pick_num}")), Cow::Borrowed(preset_opt.preset));
+                self.settings.insert(Cow::Owned(format!("game{current_pick}_preset")), Cow::Borrowed(preset_opt.preset));
+
+                // Count pick phases in order
+                let total_picks = order.iter().filter(|p| matches!(p, DraftPhase::Pick(_))).count();
+                let response = Ok(match msg_ctx {
+                    MessageContext::None | MessageContext::RaceTime { .. } => String::default(),
+                    MessageContext::Discord { transaction, guild_id, team: team_data, .. } => MessageBuilder::default()
+                        .mention_team(transaction, Some(*guild_id), team_data).await?
+                        .push(if team_data.name_is_plural() { " have picked " } else { " has picked " })
+                        .push(preset_opt.display_name)
+                        .push(format!(" for Game {current_pick}."))
+                        .build(),
+                });
+
+                // If this is the last pick, auto-assign remaining preset to game3
+                if pick_num == total_picks {
+                    let ban_count = order.iter().filter(|p| matches!(p, DraftPhase::Ban(_))).count();
+                    let banned: Vec<&str> = (1..=ban_count).filter_map(|n| self.settings.get(&*format!("ban{n}")).map(|s| s.as_ref())).collect();
+                    let picked: Vec<&str> = (1..=total_picks).filter_map(|n| self.settings.get(&*format!("game{n}_preset")).map(|s| s.as_ref())).collect();
+                    let remaining = options.iter().find(|p| !banned.contains(&p.preset) && !picked.contains(&p.preset))
+                        .expect("no remaining preset for game3");
+                    self.settings.insert(Cow::Borrowed("game3_preset"), Cow::Borrowed(remaining.preset));
+                }
+                response
+            }
+            StepKind::GoFirst | StepKind::Pick { .. } | StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => {
+                unreachable!("BanPick draft should only produce Ban, PickPreset, or Done steps")
+            }
+        })
+    }
+
     pub(crate) async fn apply(&mut self, kind: Kind, game: Option<i16>, msg_ctx: &mut MessageContext<'_>, action: Action) -> Result<Result<String, String>, Error> {
         match kind {
             Kind::AlttprDe9 => self.apply_alttpr_de9(game, msg_ctx, action).await,
@@ -3739,6 +4113,12 @@ impl Draft {
             Kind::MultiworldS5 => self.apply_multiworld_s5(game, msg_ctx, action).await,
             Kind::TournoiFrancoS3 | Kind::TournoiFrancoS4 | Kind::TournoiFrancoS5 => {
                 self.apply_tournoi_franco(kind, game, msg_ctx, action).await
+            }
+            Kind::PickOnly { options, who_starts, picks_per_player, unique } => {
+                self.apply_pick_only(options, who_starts, picks_per_player, unique, game, msg_ctx, action).await
+            }
+            Kind::BanPick { options, order } => {
+                self.apply_ban_pick(options, order, game, msg_ctx, action).await
             }
         }
     }
@@ -3767,6 +4147,10 @@ impl Draft {
                     } else {
                         Action::Skip
                     }
+                }
+                StepKind::PickPreset { available_presets, .. } => {
+                    let preset = available_presets.into_iter().choose(&mut rng()).expect("no available presets for PickPreset step");
+                    Action::Pick { setting: preset.preset.to_owned(), value: preset.preset.to_owned() }
                 }
                 StepKind::BooleanChoice { .. } => Action::BooleanChoice(rng().random()),
                 StepKind::Done(_) | StepKind::DoneRsl { .. } => break self.settings,
