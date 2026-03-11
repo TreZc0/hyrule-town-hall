@@ -70,6 +70,7 @@ pub(crate) struct PresetOption {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DraftPhase {
     Ban(Team),
+    #[allow(dead_code)]
     Pick(Team),
 }
 
@@ -93,7 +94,13 @@ pub(crate) enum Kind {
         unique: bool,
     },
     /// Ban-then-pick draft: fixed sequence of ban/pick steps; remaining goes to game 3.
+    #[allow(dead_code)]
     BanPick {
+        options: &'static [PresetOption],
+        order: &'static [DraftPhase],
+    },
+    /// Ban-only draft: fixed sequence of bans; remaining presets randomly assigned by bot.
+    BanOnly {
         options: &'static [PresetOption],
         order: &'static [DraftPhase],
     },
@@ -112,6 +119,7 @@ impl Kind {
             | Self::TournoiFrancoS5
             | Self::PickOnly { .. }
             | Self::BanPick { .. }
+            | Self::BanOnly { .. }
                 => English,
             | Self::TournoiFrancoS3
                 => French,
@@ -273,7 +281,7 @@ pub(crate) struct Draft {
 impl Draft {
     pub(crate) async fn for_game1(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, kind: Kind, event: &event::Data<'_>, phase: Option<&str>, [team1, team2]: [&team::Team; 2]) -> Result<Self, cal::Error> {
         let [high_seed, low_seed] = match kind {
-            Kind::AlttprDe9 | Kind::S7 | Kind::RslS7 | Kind::PickOnly { .. } | Kind::BanPick { .. } => [
+            Kind::AlttprDe9 | Kind::S7 | Kind::RslS7 | Kind::PickOnly { .. } | Kind::BanPick { .. } | Kind::BanOnly { .. } => [
                 min_by_key(team1, team2, |team| team.qualifier_rank).id,
                 max_by_key(team1, team2, |team| team.qualifier_rank).id,
             ],
@@ -349,7 +357,7 @@ impl Draft {
             went_first: None,
             skipped_bans: 0,
             settings: match kind {
-                Kind::AlttprDe9 | Kind::S7 | Kind::MultiworldS3 | Kind::MultiworldS5 | Kind::PickOnly { .. } | Kind::BanPick { .. } => HashMap::default(),
+                Kind::AlttprDe9 | Kind::S7 | Kind::MultiworldS3 | Kind::MultiworldS5 | Kind::PickOnly { .. } | Kind::BanPick { .. } | Kind::BanOnly { .. } => HashMap::default(),
                 // accessibility accommodation for The Aussie Boiiz in mw/4 to default to CSMC
                 Kind::MultiworldS4 => HashMap::from_iter(
                     (loser == Id::from(17814073240662869290_u64) || winner == Id::from(17814073240662869290_u64))
@@ -404,6 +412,17 @@ impl Draft {
                             pick_count += 1;
                             if self.settings.contains_key(&*format!("pick{pick_count}")) { done += 1; }
                         }
+                    }
+                }
+                done
+            }
+            Kind::BanOnly { order, .. } => {
+                let mut ban_count = 0usize;
+                let mut done = 0u8;
+                for phase in order {
+                    if let DraftPhase::Ban(_) = phase {
+                        ban_count += 1;
+                        if self.settings.contains_key(&*format!("ban{ban_count}")) { done += 1; }
                     }
                 }
                 done
@@ -1519,7 +1538,7 @@ impl Draft {
             Kind::TournoiFrancoS3 => &fr::S3_SETTINGS[..],
             Kind::TournoiFrancoS4 => &fr::S4_SETTINGS[..],
             Kind::TournoiFrancoS5 => &fr::S5_SETTINGS[..],
-            Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 | Kind::PickOnly { .. } | Kind::BanPick { .. } => unreachable!(),
+            Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 | Kind::PickOnly { .. } | Kind::BanPick { .. } | Kind::BanOnly { .. } => unreachable!(),
         };
         Ok({
             if let Some(went_first) = self.went_first {
@@ -1532,13 +1551,13 @@ impl Draft {
                 let team = match (kind, pick_count, went_first) {
                     (_, 0, true) | (_, 1, false) | (_, 2, true) | (_, 3, false) | (_, 4, false) | (_, 5, true) | (_, 6, true) | (_, 7, false) | (Kind::TournoiFrancoS3, 8, true) | (Kind::TournoiFrancoS3, 9, false) => Team::HighSeed,
                     (_, 0, false) | (_, 1, true) | (_, 2, false) | (_, 3, true) | (_, 4, true) | (_, 5, false) | (_, 6, false) | (_, 7, true) | (Kind::TournoiFrancoS3, 8, false) | (Kind::TournoiFrancoS3, 9, true) => Team::LowSeed,
-                    (Kind::PickOnly { .. }, 8.., _) | (Kind::BanPick { .. }, 8.., _) => unreachable!(),
+                    (Kind::PickOnly { .. }, 8.., _) | (Kind::BanPick { .. }, 8.., _) | (Kind::BanOnly { .. }, 8.., _) => unreachable!(),
                     (Kind::TournoiFrancoS3, 10.., _) | (Kind::TournoiFrancoS4 | Kind::TournoiFrancoS5, 8.., _) => return Ok(Step {
                         kind: StepKind::Done(match kind {
                             Kind::TournoiFrancoS3 => fr::resolve_s3_draft_settings(&self.settings),
                             Kind::TournoiFrancoS4 => fr::resolve_s4_draft_settings(&self.settings),
                             Kind::TournoiFrancoS5 => fr::resolve_s5_draft_settings(&self.settings),
-                            Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 | Kind::PickOnly { .. } | Kind::BanPick { .. } => unreachable!(),
+                            Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 | Kind::PickOnly { .. } | Kind::BanPick { .. } | Kind::BanOnly { .. } => unreachable!(),
                         }),
                         message: match msg_ctx {
                             MessageContext::None => String::default(),
@@ -1664,13 +1683,13 @@ impl Draft {
                                 Kind::TournoiFrancoS3 => 10,
                                 Kind::TournoiFrancoS4 => 8,
                                 Kind::TournoiFrancoS5 => 8,
-                                Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 | Kind::PickOnly { .. } | Kind::BanPick { .. } => unreachable!(),
+                                Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 | Kind::PickOnly { .. } | Kind::BanPick { .. } | Kind::BanOnly { .. } => unreachable!(),
                             };
                             let hard_settings_ok = self.settings.get("hard_settings_ok").map(|hard_settings_ok| &**hard_settings_ok).unwrap_or("no") == "ok";
                             let can_ban = match kind {
                                 Kind::TournoiFrancoS3 | Kind::TournoiFrancoS4 => n < round_count - 2 || self.settings.get(team.choose("high_seed_has_picked", "low_seed_has_picked")).map(|has_picked| &**has_picked).unwrap_or("no") == "yes",
                                 Kind::TournoiFrancoS5 => n == 4 || n == 5,
-                                Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 | Kind::PickOnly { .. } | Kind::BanPick { .. } => unreachable!(),
+                                Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 | Kind::PickOnly { .. } | Kind::BanPick { .. } | Kind::BanOnly { .. } => unreachable!(),
                             };
                             let skippable = n == round_count - 1 && can_ban;
                             let (hard_settings, classic_settings) = all_settings.iter()
@@ -2037,6 +2056,77 @@ impl Draft {
         }
     }
 
+    async fn next_step_ban_only(&self, options: &'static [PresetOption], order: &'static [DraftPhase], game: Option<i16>, msg_ctx: &mut MessageContext<'_>) -> Result<Step, Error> {
+        if self.settings.contains_key("game3_preset") {
+            // Draft complete — presets were randomly assigned after final ban
+            let game_num = game.unwrap_or(1) as usize;
+            let preset_val = self.settings.get(&*format!("game{game_num}_preset"))
+                .expect("BanOnly draft complete but game preset missing");
+            let preset_display = options.iter().find(|p| p.preset == preset_val.as_ref()).map(|p| p.display_name).unwrap_or(preset_val.as_ref());
+            let mut settings = seed::Settings::new();
+            settings.insert(format!("preset"), json!(preset_val.as_ref()));
+            Ok(Step {
+                kind: StepKind::Done(settings),
+                message: match msg_ctx {
+                    MessageContext::None => String::default(),
+                    MessageContext::Discord { .. } => if game.unwrap_or(1) == 1 {
+                        let mut parts = vec!["Preset draft completed.".to_owned()];
+                        for n in 1..=3 {
+                            if let Some(v) = self.settings.get(&*format!("game{n}_preset")) {
+                                let d = options.iter().find(|p| p.preset == v.as_ref()).map(|p| p.display_name).unwrap_or(v.as_ref());
+                                parts.push(format!("Game {n}: {d}"));
+                            }
+                        }
+                        parts.join("\n")
+                    } else {
+                        String::default()
+                    },
+                    MessageContext::RaceTime { .. } => format!("Playing {} preset", preset_display),
+                },
+            })
+        } else {
+            // Walk through ban order to find the first unsatisfied step
+            let mut ban_count = 0usize;
+            for phase in order {
+                match phase {
+                    DraftPhase::Ban(team) => {
+                        ban_count += 1;
+                        if !self.settings.contains_key(&*format!("ban{ban_count}")) {
+                            let banned: Vec<&str> = (1..ban_count).filter_map(|n| self.settings.get(&*format!("ban{n}")).map(|s| s.as_ref())).collect();
+                            let available: Vec<BanSetting> = options.iter()
+                                .filter(|p| !banned.contains(&p.preset))
+                                .map(|p| BanSetting { name: p.preset, display: p.display_name, default: p.preset, default_display: p.display_name, description: Cow::Borrowed(p.display_name) })
+                                .collect();
+                            let avail_display = available.iter().map(|s| s.display).collect::<Vec<_>>().join(", ");
+                            return Ok(Step {
+                                kind: StepKind::Ban { team: *team, available_settings: BanSettings(vec![("Presets", available)]), skippable: false, rsl: false },
+                                message: match msg_ctx {
+                                    MessageContext::None => String::default(),
+                                    MessageContext::Discord { transaction, guild_id, teams, command_ids, .. } => {
+                                        let (mut high, mut low): (Vec<_>, Vec<_>) = teams.iter().partition(|t| t.id == self.high_seed);
+                                        let active = team.choose(high.remove(0), low.remove(0));
+                                        MessageBuilder::default()
+                                            .mention_team(transaction, Some(*guild_id), active).await?
+                                            .push(": Ban a preset using ")
+                                            .mention_command(command_ids.ban.unwrap(), "ban")
+                                            .push(".")
+                                            .build()
+                                    }
+                                    MessageContext::RaceTime { high_seed_name, low_seed_name, .. } => {
+                                        let name = team.choose(*high_seed_name, *low_seed_name);
+                                        format!("{name}, ban a preset using \"!ban <preset>\". Available: {avail_display}")
+                                    }
+                                },
+                            });
+                        }
+                    }
+                    DraftPhase::Pick(_) => unreachable!("BanOnly order should not contain Pick phases"),
+                }
+            }
+            unreachable!("BanOnly next_step reached end of order without Done check triggering")
+        }
+    }
+
     pub(crate) async fn next_step(&self, kind: Kind, game: Option<i16>, msg_ctx: &mut MessageContext<'_>) -> Result<Step, Error> {
         match kind {
             Kind::AlttprDe9 => self.next_step_alttpr_de9(game, msg_ctx).await,
@@ -2053,6 +2143,9 @@ impl Draft {
             }
             Kind::BanPick { options, order } => {
                 self.next_step_ban_pick(options, order, game, msg_ctx).await
+            }
+            Kind::BanOnly { options, order } => {
+                self.next_step_ban_only(options, order, game, msg_ctx).await
             }
         }
     }
@@ -3507,7 +3600,7 @@ impl Draft {
                 Kind::TournoiFrancoS3 => &fr::S3_SETTINGS[..],
                 Kind::TournoiFrancoS4 => &fr::S4_SETTINGS[..],
                 Kind::TournoiFrancoS5 => &fr::S5_SETTINGS[..],
-                Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 | Kind::PickOnly { .. } | Kind::BanPick { .. } => unreachable!(),
+                Kind::AlttprDe9 | Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 | Kind::RslS7 | Kind::S7 | Kind::PickOnly { .. } | Kind::BanPick { .. } | Kind::BanOnly { .. } => unreachable!(),
             };
             let resolved_action = match action {
                 Action::Ban { setting } => if let Some(setting) = all_settings.iter().find(|&&fr::Setting { name, .. }| *name == setting) {
@@ -4103,6 +4196,72 @@ impl Draft {
         })
     }
 
+    async fn apply_ban_only(&mut self, options: &'static [PresetOption], order: &'static [DraftPhase], game: Option<i16>, msg_ctx: &mut MessageContext<'_>, action: Action) -> Result<Result<String, String>, Error> {
+        let step = self.next_step_ban_only(options, order, game, &mut MessageContext::None).await?;
+        Ok(match step.kind {
+            StepKind::Done(_) => Err(match msg_ctx {
+                MessageContext::None => String::default(),
+                MessageContext::Discord { .. } => format!("Sorry, the preset draft is already completed."),
+                MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, the preset draft is already completed."),
+            }),
+            StepKind::Ban { team: _team, available_settings, .. } => {
+                let preset_name = match action {
+                    Action::Ban { setting } => setting,
+                    Action::Pick { setting, .. } => setting,
+                    _ => return Ok(Err(match msg_ctx {
+                        MessageContext::None => String::default(),
+                        MessageContext::Discord { command_ids, .. } => MessageBuilder::default()
+                            .push("Please use ")
+                            .mention_command(command_ids.ban.unwrap(), "ban")
+                            .push(" to ban a preset.")
+                            .build(),
+                        MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, please use \"!ban <preset>\" to ban a preset."),
+                    })),
+                };
+                if available_settings.get(&preset_name).is_none() {
+                    let avail = available_settings.all().map(|s| s.display.to_owned()).collect::<Vec<_>>().join(", ");
+                    return Ok(Err(match msg_ctx {
+                        MessageContext::None => String::default(),
+                        MessageContext::Discord { .. } => format!("Sorry, that preset is not available to ban. Available: {avail}"),
+                        MessageContext::RaceTime { reply_to, .. } => format!("Sorry {reply_to}, that preset is not available to ban. Available: {avail}"),
+                    }));
+                }
+                let ban_count = (1..).find(|n| !self.settings.contains_key(&*format!("ban{n}"))).unwrap();
+                let display = options.iter().find(|p| p.preset == preset_name)
+                    .map(|p| p.display_name.to_owned())
+                    .unwrap_or_else(|| preset_name.clone());
+                self.settings.insert(Cow::Owned(format!("ban{ban_count}")), Cow::Owned(preset_name));
+
+                // If all bans are done, randomly assign remaining presets to game slots
+                let total_bans = order.iter().filter(|p| matches!(p, DraftPhase::Ban(_))).count();
+                if ban_count == total_bans {
+                    let banned: Vec<&str> = (1..=total_bans).filter_map(|n| self.settings.get(&*format!("ban{n}")).map(|s| s.as_ref())).collect();
+                    let mut remaining: Vec<PresetOption> = options.iter()
+                        .filter(|p| !banned.contains(&p.preset))
+                        .copied()
+                        .collect();
+                    remaining.shuffle(&mut rng());
+                    for (i, preset) in remaining.iter().enumerate() {
+                        self.settings.insert(Cow::Owned(format!("game{}_preset", i + 1)), Cow::Borrowed(preset.preset));
+                    }
+                }
+
+                Ok(match msg_ctx {
+                    MessageContext::None | MessageContext::RaceTime { .. } => String::default(),
+                    MessageContext::Discord { transaction, guild_id, team: team_data, .. } => MessageBuilder::default()
+                        .mention_team(transaction, Some(*guild_id), team_data).await?
+                        .push(if team_data.name_is_plural() { " have banned " } else { " has banned " })
+                        .push(display)
+                        .push('.')
+                        .build(),
+                })
+            }
+            StepKind::GoFirst | StepKind::Pick { .. } | StepKind::PickPreset { .. } | StepKind::BooleanChoice { .. } | StepKind::DoneRsl { .. } => {
+                unreachable!("BanOnly draft should only produce Ban or Done steps")
+            }
+        })
+    }
+
     pub(crate) async fn apply(&mut self, kind: Kind, game: Option<i16>, msg_ctx: &mut MessageContext<'_>, action: Action) -> Result<Result<String, String>, Error> {
         match kind {
             Kind::AlttprDe9 => self.apply_alttpr_de9(game, msg_ctx, action).await,
@@ -4119,6 +4278,9 @@ impl Draft {
             }
             Kind::BanPick { options, order } => {
                 self.apply_ban_pick(options, order, game, msg_ctx, action).await
+            }
+            Kind::BanOnly { options, order } => {
+                self.apply_ban_only(options, order, game, msg_ctx, action).await
             }
         }
     }

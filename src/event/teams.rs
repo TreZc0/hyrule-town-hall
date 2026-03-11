@@ -1124,7 +1124,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                 th : "MQ OK";
             });
         }
-        Some(draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. }) => {}
+        Some(draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. }) => {}
     }
     if show_restream_consent {
         column_headers.push(html! {
@@ -1570,7 +1570,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                         }
                                     }
                                 }
-                                Some(draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. }) => {}
+                                Some(draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. }) => {}
                             }
                             @if show_restream_consent {
                                 td {

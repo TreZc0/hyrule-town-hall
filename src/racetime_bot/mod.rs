@@ -501,7 +501,7 @@ impl Goal {
                 picks_per_player: 1,
                 unique: true,
             }),
-            Self::AlttprDeRivalsCupBrackets => Some(draft::Kind::BanPick {
+            Self::AlttprDeRivalsCupBrackets => Some(draft::Kind::BanOnly {
                 options: alttprde::RIVALS_CUP_PRESETS,
                 order: alttprde::RIVALS_CUP_BRACKETS_ORDER,
             }),
@@ -3619,7 +3619,7 @@ impl Handler {
                 draft::Kind::TournoiFrancoS3 => fr::S3_SETTINGS.into_iter().map(|fr::Setting { description, .. }| Cow::Borrowed(description)).collect(),
                 draft::Kind::TournoiFrancoS4 => fr::S4_SETTINGS.into_iter().map(|fr::Setting { description, .. }| Cow::Borrowed(description)).collect(),
                 draft::Kind::TournoiFrancoS5 => fr::S5_SETTINGS.into_iter().map(|fr::Setting { description, .. }| Cow::Borrowed(description)).collect(),
-                draft::Kind::PickOnly { options, .. } | draft::Kind::BanPick { options, .. } => options.iter().map(|p| Cow::Borrowed(p.display_name)).collect(),
+                draft::Kind::PickOnly { options, .. } | draft::Kind::BanPick { options, .. } | draft::Kind::BanOnly { options, .. } => options.iter().map(|p| Cow::Borrowed(p.display_name)).collect(),
             });
             if available_settings.is_empty() {
                 ctx.say(if let French = goal.language() {
@@ -3704,7 +3704,7 @@ impl Handler {
                         draft::Kind::RslS7 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use \"!seed draft\" to start one. For more info about these options, use !presets")).await?,
                         draft::Kind::TournoiFrancoS3 => ctx.say(format!("Désolé {reply_to}, le draft n'a pas débuté. Utilisez \"!seed draft\" pour en commencer un. Pour plus d'infos, utilisez !presets")).await?,
                         draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use \"!seed draft\" to start one. For more info about these options, use !presets / le draft n'a pas débuté. Utilisez \"!seed draft\" pour en commencer un. Pour plus d'infos, utilisez !presets")).await?,
-                        draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } => ctx.say(format!("Sorry {reply_to}, the preset draft for this event is done in Discord before the race starts.")).await?,
+                        draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => ctx.say(format!("Sorry {reply_to}, the preset draft for this event is done in Discord before the race starts.")).await?,
                     },
                     RaceState::Draft { state: ref mut draft, .. } => {
                         let is_active_team = if let Some(OfficialRaceData { ref cal_event, ref event, .. }) = self.official_data {
@@ -3747,7 +3747,7 @@ impl Handler {
                                 draft::Kind::RslS7 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the weights draft.")).await?,
                                 draft::Kind::TournoiFrancoS3 => ctx.say(format!("Désolé {reply_to}, mais ce n'est pas votre tour.")).await?,
                                 draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the settings draft. / mais ce n'est pas votre tour.")).await?,
-                                draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } => ctx.say(format!("Sorry {reply_to}, it's not your turn in the preset draft.")).await?,
+                                draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => ctx.say(format!("Sorry {reply_to}, it's not your turn in the preset draft.")).await?,
                             }
                         }
                     }
@@ -3845,7 +3845,11 @@ impl Handler {
     async fn roll_rivals_cup_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, preset: String, language: Language, article: &'static str) {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(10);
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_avianart_seed(preset), language, article, format!("Avianart seed"), false).await;
+        let preset_display = alttprde::RIVALS_CUP_PRESETS.iter()
+            .find(|p| p.preset == preset)
+            .map(|p| p.display_name.to_owned())
+            .unwrap_or_else(|| preset.clone());
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_avianart_seed(preset), language, article, format!("{preset_display} seed"), false).await;
     }
 
     async fn roll_crosskeys2025_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {

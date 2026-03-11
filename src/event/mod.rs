@@ -519,7 +519,7 @@ impl<'a> Data<'a> {
                 picks_per_player: 1,
                 unique: true,
             }),
-            (Series::AlttprDe, "rival26br") => Some(draft::Kind::BanPick {
+            (Series::AlttprDe, "rival26br") => Some(draft::Kind::BanOnly {
                 options: alttprde::RIVALS_CUP_PRESETS,
                 order: alttprde::RIVALS_CUP_BRACKETS_ORDER,
             }),

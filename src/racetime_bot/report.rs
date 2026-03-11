@@ -464,7 +464,8 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                 let draft = match draft_kind {
                     draft::Kind::AlttprDe9
                     | draft::Kind::PickOnly { .. }
-                    | draft::Kind::BanPick { .. } => {
+                    | draft::Kind::BanPick { .. }
+                    | draft::Kind::BanOnly { .. } => {
                         cal_event.race.draft.clone().expect("series-draft race should have draft state")
                     },
                     _ => Draft::for_next_game(&mut transaction, draft_kind, loser.id, winner.id).await.to_racetime()?,

@@ -44,9 +44,7 @@ pub(crate) static RIVALS_CUP_PRESETS: &[draft::PresetOption] = &[
 pub(crate) static RIVALS_CUP_BRACKETS_ORDER: &[draft::DraftPhase] = &[
     draft::DraftPhase::Ban(draft::Team::HighSeed),
     draft::DraftPhase::Ban(draft::Team::LowSeed),
-    draft::DraftPhase::Pick(draft::Team::LowSeed),
-    draft::DraftPhase::Pick(draft::Team::HighSeed),
-    // remaining → game 3 (auto-assigned when Done)
+    // remaining presets randomly assigned by bot after bans
 ];
 
 pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Data<'_>) -> Result<Option<RawHtml<String>>, InfoError> {
