@@ -901,7 +901,9 @@ pub(crate) async fn update_volunteer_posts_for_event(
 ) -> Result<(), Error> {
     let mut transaction = pool.begin().await?;
 
-    // Find all unique message IDs for races in this event that haven't started yet
+    // Find all unique message IDs for races in this event that haven't started yet, plus
+    // races that started recently. The recent window ensures posts for just-finished races
+    // get cleaned up even when all races in the post have started.
     let message_ids = sqlx::query_scalar!(
         r#"SELECT DISTINCT volunteer_request_message_id AS "message_id: PgSnowflake<MessageId>"
         FROM races
@@ -909,7 +911,7 @@ pub(crate) async fn update_volunteer_posts_for_event(
           AND event = $2
           AND volunteer_request_message_id IS NOT NULL
           AND ignored = false
-          AND start > NOW()"#,
+          AND start > NOW() - interval '8 hours'"#,
         series as _,
         event
     )
