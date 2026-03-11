@@ -278,6 +278,8 @@ pub(crate) enum Goal {
     AlttprDe9Bracket,
     AlttprDe9SwissA,
     AlttprDe9SwissB,
+    AlttprDeRivalsCupBrackets,
+    AlttprDeRivalsCupGroups,
     Cc7,
     CoOpS3,
     CopaDoBrasil,
@@ -322,7 +324,7 @@ impl Goal {
     fn from_race_data(race_data: &RaceData) -> Option<Self> {
         let Ok(bot_goal) = race_data.goal.name.parse::<Self>() else { return None };
         if race_data.goal.custom != bot_goal.is_custom() { return None }
-        if let (Goal::StandardRuleset | Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::Crosskeys2025 | Goal::MysteryD20, Some(_)) = (bot_goal, &race_data.opened_by) { return None }
+        if let (Goal::StandardRuleset | Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Crosskeys2025 | Goal::MysteryD20, Some(_)) = (bot_goal, &race_data.opened_by) { return None }
         Some(bot_goal)
     }
 
@@ -331,6 +333,8 @@ impl Goal {
             Self::AlttprDe9Bracket => series == Series::AlttprDe && event == "9bracket",
             Self::AlttprDe9SwissA => series == Series::AlttprDe && event == "9swissa",
             Self::AlttprDe9SwissB => series == Series::AlttprDe && event == "9swissb",
+            Self::AlttprDeRivalsCupBrackets => series == Series::AlttprDe && event == "rival26br",
+            Self::AlttprDeRivalsCupGroups => series == Series::AlttprDe && event == "rival26gr",
             Self::Cc7 => series == Series::Standard && event == "7cc",
             Self::CoOpS3 => series == Series::CoOp && event == "3",
             Self::CopaDoBrasil => series == Series::CopaDoBrasil && event == "1",
@@ -375,6 +379,8 @@ impl Goal {
             | Self::AlttprDe9Bracket
             | Self::AlttprDe9SwissA
             | Self::AlttprDe9SwissB
+            | Self::AlttprDeRivalsCupBrackets
+            | Self::AlttprDeRivalsCupGroups
             | Self::Cc7
             | Self::CoOpS3
             | Self::CopaDoBrasil
@@ -407,6 +413,8 @@ impl Goal {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => "9. Deutsches ALTTPR Turnier",
+            Self::AlttprDeRivalsCupBrackets => "ALTTPRDE Rival Cup Brackets",
+            Self::AlttprDeRivalsCupGroups => "ALTTPRDE Rival Cup Groups",
             Self::Cc7 => "Standard Tournament Season 7 Challenge Cup",
             Self::CoOpS3 => "Co-op Tournament Season 3",
             Self::CopaDoBrasil => "Copa do Brasil",
@@ -445,6 +453,8 @@ impl Goal {
             | Self::AlttprDe9Bracket
             | Self::AlttprDe9SwissA
             | Self::AlttprDe9SwissB
+            | Self::AlttprDeRivalsCupBrackets
+            | Self::AlttprDeRivalsCupGroups
             | Self::Cc7
             | Self::CoOpS3
             | Self::Crosskeys2025
@@ -485,6 +495,7 @@ impl Goal {
     fn draft_kind(&self) -> Option<draft::Kind> {
         match self {
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => Some(draft::Kind::AlttprDe9),
+            Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups => None,
             Self::Cc7 => Some(draft::Kind::S7),
             Self::MultiworldS3 => Some(draft::Kind::MultiworldS3),
             Self::MultiworldS4 => Some(draft::Kind::MultiworldS4),
@@ -525,6 +536,8 @@ impl Goal {
             | Self::AlttprDe9Bracket
             | Self::AlttprDe9SwissA
             | Self::AlttprDe9SwissB
+            | Self::AlttprDeRivalsCupBrackets
+            | Self::AlttprDeRivalsCupGroups
             | Self::Crosskeys2025
             | Self::Sgl2023
             | Self::Sgl2024
@@ -617,6 +630,8 @@ impl Goal {
                 | Self::AlttprDe9Bracket
                 | Self::AlttprDe9SwissA
                 | Self::AlttprDe9SwissB
+                | Self::AlttprDeRivalsCupBrackets
+                | Self::AlttprDeRivalsCupGroups
                 | Self::Crosskeys2025
                 | Self::MysteryD20
                 | Self::TwwrMainWeekly
@@ -665,6 +680,7 @@ impl Goal {
             Self::WeTryToBeBetterS1 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 0, 11) },
             Self::WeTryToBeBetterS2 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 2, 0) },
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => panic!("randomizer version for this goal is unused"),
+            Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups => panic!("randomizer version for this goal is unused"),
             Self::Crosskeys2025 => panic!("randomizer version for this goal is unused"),
             Self::MysteryD20 => panic!("randomizer version for this goal is unused"),
             Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => if_chain! {
@@ -687,6 +703,7 @@ impl Goal {
     pub(crate) fn single_settings(&self) -> Option<seed::Settings> {
         match self {
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => None, // per-race settings
+            Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups => None, // per-race settings
             Self::Cc7 => None, // settings draft
             Self::CoOpS3 => Some(coop::s3_settings()),
             Self::CopaDoBrasil => Some(br::s1_settings()),
@@ -749,6 +766,8 @@ impl Goal {
             | Self::AlttprDe9Bracket
             | Self::AlttprDe9SwissA
             | Self::AlttprDe9SwissB
+            | Self::AlttprDeRivalsCupBrackets
+            | Self::AlttprDeRivalsCupGroups
             | Self::Crosskeys2025
                 => ctx.say("!seed base: The tournament's base settings.").await?,
             | Self::MysteryD20
@@ -999,7 +1018,7 @@ impl Goal {
                 };
                 SeedCommandParseResult::Regular { settings: s::resolve_s7_draft_settings(&settings), unlock_spoiler_log, language: English, article: "a", description: format!("seed with {}", s::display_s7_draft_picks(&settings)) }
             }
-            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB | Self::Crosskeys2025 | Self::MysteryD20 => match args {
+            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB | Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups | Self::Crosskeys2025 | Self::MysteryD20 => match args {
                 [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
                 [arg] if arg == "base" => SeedCommandParseResult::Alttpr,
                 [_] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I don't recognize that preset" }),
@@ -1523,6 +1542,8 @@ pub(crate) struct GlobalState {
     clean_shutdown: Arc<Mutex<CleanShutdown>>,
     seed_cache_tx: watch::Sender<()>,
     seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>,
+    #[cfg_attr(not(unix), allow(dead_code))]
+    avianart_api_key: Option<String>,
 }
 
 impl TypeMapKey for GlobalState {
@@ -1543,13 +1564,14 @@ impl GlobalState {
         clean_shutdown: Arc<Mutex<CleanShutdown>>,
         seed_cache_tx: watch::Sender<()>,
         seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>,
+        avianart_api_key: Option<String>,
     ) -> Self {
         Self {
             host_info: racetime::HostInfo {
                 hostname: Cow::Borrowed(racetime_host()),
                 ..racetime::HostInfo::default()
             },
-            new_room_lock, racetime_config, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, discord_ctx, clean_shutdown, seed_cache_tx, seed_metadata,
+            new_room_lock, racetime_config, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, discord_ctx, clean_shutdown, seed_cache_tx, seed_metadata, avianart_api_key,
         }
     }
 
@@ -1960,6 +1982,45 @@ impl GlobalState {
             match res {
                 Ok(()) => {}
                 Err(e) => update_tx2.send(SeedRollUpdate::Error(e)).await.allow_unreceived(),
+            }
+        }));
+        update_rx
+    }
+
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(crate) fn roll_avianart_seed(self: Arc<Self>, preset: String) -> mpsc::Receiver<SeedRollUpdate> {
+        let (update_tx, update_rx) = mpsc::channel(128);
+        let update_tx2 = update_tx.clone();
+        tokio::spawn(async move {
+            let client = crate::avianart::AvianartClient::new(
+                self.avianart_api_key.clone(),
+                self.http_client.clone(),
+            );
+            let hash = client.generate_seed(&preset).await
+                .map_err(|e| RollError::Avianart(e.to_string()))?;
+            let seed_data = client.wait_for_seed(&hash).await
+                .map_err(|e| RollError::Avianart(e.to_string()))?;
+            let seed_hash = if let Some(ref spoiler) = seed_data.spoiler {
+                Some(crate::avianart::parse_file_hash(&spoiler.meta.hash)
+                    .map_err(|e| RollError::Avianart(e.to_string()))?)
+            } else {
+                None
+            };
+            update_tx.send(SeedRollUpdate::Done {
+                seed: seed::Data {
+                    file_hash: None,
+                    password: None,
+                    files: Some(seed::Files::AvianartSeed { hash, seed_hash }),
+                    progression_spoiler: false,
+                },
+                rsl_preset: None,
+                version: None,
+                unlock_spoiler_log: UnlockSpoilerLog::Never,
+            }).await.allow_unreceived();
+            Ok::<_, RollError>(())
+        }.then(|res| async move {
+            if let Err(e) = res {
+                update_tx2.send(SeedRollUpdate::Error(e)).await.allow_unreceived();
             }
         }));
         update_rx
@@ -2594,6 +2655,9 @@ pub(crate) enum RollError {
     UserDirs,
     #[error("{0}")]
     AlttprDe(String),
+    #[cfg_attr(not(unix), allow(dead_code))]
+    #[error("{0}")]
+    Avianart(String),
 }
 
 impl From<mpsc::error::SendError<SeedRollUpdate>> for RollError {
@@ -2702,6 +2766,13 @@ impl SeedRollUpdate {
                                 json!({ "permalink": permalink, "seed_hash": seed_hash }), cal_event.race.id as _,
                             ).execute(db_pool).await.to_racetime()?;
                         }
+                        seed::Files::AvianartSeed { hash, seed_hash } => {
+                            sqlx::query!(
+                                "UPDATE races SET seed_data = $1 WHERE id = $2",
+                                json!({ "avianart_hash": hash, "avianart_seed_hash": seed_hash.as_ref().map(|h| h.join(", ")) }),
+                                cal_event.race.id as _,
+                            ).execute(db_pool).await.to_racetime()?;
+                        }
                     }
                     if let Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) = extra.file_hash {
                         sqlx::query!(
@@ -2725,6 +2796,7 @@ impl SeedRollUpdate {
                                 }
                                 seed::Files::TriforceBlitz { .. } | seed::Files::TfbSotd { .. } => unreachable!(), // no such thing as random settings Triforce Blitz
                                 seed::Files::TwwrPermalink { .. } => unreachable!(),
+                                seed::Files::AvianartSeed { .. } => unreachable!(),
                             }
                         }
                     }
@@ -2744,6 +2816,7 @@ impl SeedRollUpdate {
                     seed::Files::TriforceBlitz { is_dev: true, uuid } => format!("https://dev.triforceblitz.com/seeds/{uuid}"),
                     seed::Files::TfbSotd { ordinal, .. } => format!("https://www.triforceblitz.com/seed/daily/{ordinal}"),
                     seed::Files::TwwrPermalink { permalink, .. } => format!("Permalink {permalink}"),
+                    seed::Files::AvianartSeed { hash, .. } => format!("https://avianart.games/perm/{hash}"),
                 };
                 let message = if let French = language {
                     format!("@entrants Voici votre seed : {seed_url}")
@@ -3050,6 +3123,7 @@ async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl
             seed::Files::TwwrPermalink { permalink, seed_hash } => {
                 format!("Permalink: {permalink} | Seed Hash: {seed_hash}")
             },
+            seed::Files::AvianartSeed { hash, .. } => format!("https://avianart.games/perm/{hash}"),
         },
     )).await
 }
@@ -3833,6 +3907,7 @@ impl Handler {
                             }
                             seed::Files::TriforceBlitz { .. } | seed::Files::TfbSotd { .. } => {} // automatically unlocked by triforceblitz.com
                             seed::Files::TwwrPermalink { .. } => {} // already handled by triforceblitz.com
+                            seed::Files::AvianartSeed { .. } => {}
                         }
                     }
                 },
@@ -3960,7 +4035,7 @@ impl RaceHandler<GlobalState> for Handler {
                             )
                         }
                     }
-                }, !matches!(goal, Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::Crosskeys2025), Vec::default()).await?;
+                }, !matches!(goal, Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Crosskeys2025), Vec::default()).await?;
                 // Announce mode for events with round_modes set
                 match goal {
                     Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB => {
@@ -4056,7 +4131,7 @@ impl RaceHandler<GlobalState> for Handler {
                     }
                 }
                 let fpa_enabled = match goal {
-                    Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::Crosskeys2025 | Goal::MysteryD20 => false,
+                    Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Crosskeys2025 | Goal::MysteryD20 => false,
                     _ => {
                         match data.status.value {
                             RaceStatusValue::Invitational => {
@@ -4196,6 +4271,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 ],
                             ).await?,
                             Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB => unreachable!("attempted to handle a user-opened AlttprDe9 room"),
+                            Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups => unreachable!("attempted to handle a user-opened RivalsCup room"),
                             Goal::Crosskeys2025 => unreachable!("attempted to handle a user-opened Crosskeys2025 room"),
                             Goal::MysteryD20 => unreachable!("attempted to handle a user-opened MysteryD20 room"),
                             Goal::LeagueS8 => ctx.send_message(
@@ -4982,6 +5058,7 @@ impl RaceHandler<GlobalState> for Handler {
                             | Goal::AlttprDe9SwissA
                             | Goal::AlttprDe9SwissB
                                 => this.roll_alttprde9_seed(ctx, cal_event.clone(), English, "a").await,
+                            Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups => unreachable!("RivalsCup official room seed rolling not yet implemented"),
                             | Goal::Crosskeys2025
                                 => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await,
                             Goal::TwwrMainWeekly
@@ -5770,6 +5847,8 @@ impl RaceHandler<GlobalState> for Handler {
                     | Goal::AlttprDe9Bracket
                     | Goal::AlttprDe9SwissA
                     | Goal::AlttprDe9SwissB
+                    | Goal::AlttprDeRivalsCupBrackets
+                    | Goal::AlttprDeRivalsCupGroups
                     | Goal::Cc7
                     | Goal::CoOpS3
                     | Goal::CopaDoBrasil

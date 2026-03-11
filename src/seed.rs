@@ -73,6 +73,10 @@ pub(crate) enum Files {
         permalink: String,
         seed_hash: String,
     },
+    AvianartSeed {
+        hash: String,
+        seed_hash: Option<[String; 5]>,
+    },
 }
 
 impl Data {
@@ -115,6 +119,12 @@ impl Data {
                 (Some(file_stem), locked_spoiler_log_path, None, _, None, None, None) => Some(Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }),
                 (_, _, _, _, _, Some(uuid), None) => Some(Files::AlttprDoorRando { uuid }),
                 (_, _, _, _, _, _, Some(ref seed_data)) => (|| {
+                    if let Some(hash) = seed_data.get("avianart_hash").and_then(|v| v.as_str()) {
+                        let seed_hash = seed_data.get("avianart_seed_hash")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| crate::avianart::parse_file_hash(s).ok());
+                        return Some(Files::AvianartSeed { hash: hash.to_owned(), seed_hash });
+                    }
                     let permalink = seed_data.get("permalink")?.as_str()?.to_owned();
                     let seed_hash = seed_data.get("seed_hash")?.as_str()?.to_owned();
                     Some(Files::TwwrPermalink { permalink, seed_hash })
@@ -141,6 +151,7 @@ impl Data {
                 Some(Files::TriforceBlitz { .. }) => false,
                 Some(Files::TfbSotd { .. }) => false,
                 Some(Files::TwwrPermalink { .. }) => false,
+                Some(Files::AvianartSeed { .. }) => false,
                 None => false,
             };
             if let Some((spoiler_path, spoiler_file_name)) = match self.files {
@@ -187,9 +198,16 @@ impl Data {
             }
         }
         //TODO if file_hash.is_none() and a patch file is available, read the file hash from the patched rom?
+        let file_hash = self.file_hash.clone().or_else(|| {
+            if let Some(Files::AvianartSeed { ref seed_hash, .. }) = self.files {
+                seed_hash.clone()
+            } else {
+                None
+            }
+        });
         Ok(ExtraData {
             spoiler_status: SpoilerStatus::NotFound,
-            file_hash: self.file_hash.clone(),
+            file_hash,
             password: self.password,
             world_count: None,
             chests: ChestAppearances::random(),
@@ -289,6 +307,9 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
                     }
                 }
             }
+        }),
+        Some(Files::AvianartSeed { ref hash, .. }) => Some(html! {
+            a(href = format!("https://avianart.games/perm/{hash}"), target = "_blank") : "View Seed";
         }),
         None => None,
     };

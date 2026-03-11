@@ -26,6 +26,8 @@ pub(crate) struct Config {
     #[serde(rename = "startggOAuth")]
     pub(crate) startgg_oauth: ConfigOAuth,
     #[serde(default)]
+    pub(crate) avianart_api_key: Option<String>,
+    #[serde(default)]
     pub(crate) database: Option<ConfigDatabase>,
 }
 

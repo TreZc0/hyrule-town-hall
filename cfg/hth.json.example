@@ -25,5 +25,6 @@
     "clientID": "your-startgg-oauth-client-id",
     "clientSecret": "your-startgg-oauth-client-secret"
   },
-  "secretKey": "your-secret-key"
+  "secretKey": "your-secret-key",
+  "avianartApiKey": null
 }
