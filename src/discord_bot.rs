@@ -934,18 +934,29 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 guild_events.push(event::Data::new(&mut transaction, row.series, row.event).await?.expect("just received from database"));
             }
             let mut commands = Vec::default();
-            let mut draft_kind = None;
+            let mut draft_kind = None::<draft::Kind>;
             for event in &guild_events {
                 if let Some(new_kind) = event.draft_kind() {
-                    if draft_kind.is_some_and(|prev_kind| prev_kind != new_kind) {
-                        #[derive(Debug, thiserror::Error)]
-                        #[error("multiple conflicting draft kinds in the same Discord guild")]
-                        struct DraftKindsError;
+                    draft_kind = Some(match draft_kind {
+                        None => new_kind,
+                        Some(prev) if prev == new_kind => prev,
+                        // PickOnly, BanPick, and BanOnly have compatible command sets
+                        // (non-overlapping names or identical definitions). BanPick is the
+                        // superset, and field values are not read during command registration.
+                        Some(draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. })
+                            if matches!(new_kind, draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. }) =>
+                        {
+                            draft::Kind::BanPick { options: &[], order: &[] }
+                        }
+                        Some(_) => {
+                            #[derive(Debug, thiserror::Error)]
+                            #[error("multiple conflicting draft kinds in the same Discord guild")]
+                            struct DraftKindsError;
 
-                        ctx.data.write().await.entry::<CommandIds>().or_default().insert(guild.id, None);
-                        return Err(Box::new(DraftKindsError) as Box<dyn std::error::Error + Send + Sync>)
-                    }
-                    draft_kind = Some(new_kind);
+                            ctx.data.write().await.entry::<CommandIds>().or_default().insert(guild.id, None);
+                            return Err(Box::new(DraftKindsError) as Box<dyn std::error::Error + Send + Sync>)
+                        }
+                    });
                 }
             }
             let ban = draft_kind.and_then(|draft_kind| {
