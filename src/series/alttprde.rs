@@ -40,9 +40,9 @@ pub(crate) struct Mode {
 /// Given the draft picks, returns which mode should be used for the given game number.
 pub(crate) fn mode_for_game(picks: &draft::Picks, game: i16) -> Option<&'static Mode> {
     let mode_name = match game {
-        1 => picks.get("game1_mode")?,
-        2 => picks.get("game2_mode")?,
-        3 => picks.get("game3_mode")?,
+        1 => picks.get("game1_preset")?,
+        2 => picks.get("game2_preset")?,
+        3 => picks.get("game3_preset")?,
         _ => return None,
     };
     MODES.iter().find(|m| m.name == mode_name.as_ref())

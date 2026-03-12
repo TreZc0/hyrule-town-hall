@@ -3359,9 +3359,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                 CreateInteractionResponseMessage::new()
                                     .content("Any participant may click **Start Draft** to start the draft.")
-                                    .components(vec![CreateActionRow::Buttons(vec![
-                                        CreateButton::new("draft_start").label("Start Draft").style(ButtonStyle::Primary).disabled(true),
-                                    ])])
+                                    .components(vec![])
                             )).await?;
                             msg_ctx.into_transaction().commit().await?;
                             post_button_draft_step(ctx, interaction.channel_id(), step).await?;
