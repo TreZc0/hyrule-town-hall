@@ -20,6 +20,7 @@ use {
         CreateMessage,
         CreateThread,
         EditInteractionResponse,
+        EditMessage,
         EditRole,
     }, serenity_utils::{
         builder::ErrorNotifier,
@@ -903,21 +904,29 @@ async fn post_button_draft_step(ctx: &DiscordCtx, channel_id: ChannelId, step: d
     Ok(())
 }
 
-async fn draft_action(ctx: &DiscordCtx, interaction: &impl GenericInteraction, action: draft::Action) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn draft_action(ctx: &DiscordCtx, interaction: &impl GenericInteraction, action: draft::Action, step_msg_id: Option<MessageId>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let Some((_event, mut race, draft_kind, mut msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
     match race.draft.as_mut().unwrap().apply(draft_kind, race.game, &mut msg_ctx, action).await? {
         Ok(apply_response) => {
-            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                .ephemeral(false)
-                .content(apply_response)
-            )).await?;
             let step = race.draft.as_ref().unwrap().next_step(draft_kind, race.game, &mut msg_ctx).await?;
             let mut transaction = msg_ctx.into_transaction();
             sqlx::query!("UPDATE races SET draft_state = $1 WHERE id = $2", Json(race.draft.as_ref().unwrap()) as _, race.id as _).execute(&mut *transaction).await?;
             transaction.commit().await?;
             if draft_kind.uses_button_draft() {
+                // Clear the ephemeral confirm dialog.
+                interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                    CreateInteractionResponseMessage::new().content("✓").components(vec![])
+                )).await?;
+                // Remove buttons from the step message so old choices can't be clicked again.
+                if let Some(msg_id) = step_msg_id {
+                    interaction.channel_id().edit_message(ctx, msg_id, EditMessage::new().components(vec![])).await.ok();
+                }
                 post_button_draft_step(ctx, interaction.channel_id(), step).await?;
             } else {
+                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                    .ephemeral(false)
+                    .content(apply_response)
+                )).await?;
                 interaction.channel_id().say(ctx, step.message).await?;
             }
         }
@@ -1588,10 +1597,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     }
                                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => {}
                                 }
-                                draft_action(ctx, interaction, draft::Action::GoFirst(true)).await?;
+                                draft_action(ctx, interaction, draft::Action::GoFirst(true), None).await?;
                             }
                         } else if Some(interaction.data.id) == command_ids.no {
-                            draft_action(ctx, interaction, draft::Action::BooleanChoice(false)).await?;
+                            draft_action(ctx, interaction, draft::Action::BooleanChoice(false), None).await?;
                         } else if interaction.data.id == command_ids.post_status {
                             if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false).await? {
                                 let event = race.event(&mut transaction).await?;
@@ -1786,7 +1795,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         )).await?;
                                         if let Some(thread_id) = scheduling_thread {
                                             thread_id.send_message(ctx, CreateMessage::new()
-                                                .content("Both players: click **Start Draft** when ready.")
+                                                .content("Any participant may click **Start Draft** to start the draft.")
                                                 .button(CreateButton::new("draft_start").label("Start Draft").style(ButtonStyle::Primary))
                                             ).await?;
                                         }
@@ -1888,7 +1897,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         if reset_draft && event.draft_kind().is_some_and(|k| k.uses_button_draft()) {
                                             if let Some(thread_id) = scheduling_thread {
                                                 thread_id.send_message(ctx, CreateMessage::new()
-                                                    .content("Both players: click **Start Draft** when ready.")
+                                                    .content("Any participant may click **Start Draft** to start the draft.")
                                                     .button(CreateButton::new("draft_start").label("Start Draft").style(ButtonStyle::Primary))
                                                 ).await?;
                                             }
@@ -2677,10 +2686,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     }
                                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => {}
                                 }
-                                draft_action(ctx, interaction, draft::Action::GoFirst(false)).await?;
+                                draft_action(ctx, interaction, draft::Action::GoFirst(false), None).await?;
                             }
                         } else if Some(interaction.data.id) == command_ids.skip {
-                            draft_action(ctx, interaction, draft::Action::Skip).await?;
+                            draft_action(ctx, interaction, draft::Action::Skip, None).await?;
                         } else if interaction.data.id == command_ids.status {
                             if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false).await? {
                                 let event = race.event(&mut transaction).await?;
@@ -2754,7 +2763,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 .button(CreateButton::new("watchrole_party").label("watch party watcher"))
                             )).await?;
                         } else if Some(interaction.data.id) == command_ids.yes {
-                            draft_action(ctx, interaction, draft::Action::BooleanChoice(true)).await?;
+                            draft_action(ctx, interaction, draft::Action::BooleanChoice(true), None).await?;
                         } else {
                             panic!("unexpected slash command")
                         }
@@ -2999,7 +3008,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     ).await;
 
                                                     // Remove the REVERT button
-                                                    let _ = channel_id.edit_message(&ctx_clone, message_id, serenity::all::EditMessage::new()
+                                                    let _ = channel_id.edit_message(&ctx_clone, message_id, EditMessage::new()
                                                         .components(vec![])
                                                     ).await;
                                                 }
@@ -3104,7 +3113,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     // Check if this message contains "Good luck!" and has components
                                     if !message.components.is_empty() && message.content.contains("Good luck!") {
                                         // Edit this message to remove the buttons
-                                        let mut edit_msg = serenity::all::EditMessage::new();
+                                        let mut edit_msg = EditMessage::new();
                                         edit_msg = edit_msg.components(vec![]);
                                         let _ = message.edit(ctx, edit_msg).await;
                                         break;
@@ -3264,7 +3273,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     custom_id => if let Some(page) = custom_id.strip_prefix("ban_page_") {
                         send_draft_settings_page(ctx, interaction, "ban", page.parse().unwrap()).await?;
                     } else if let Some(setting) = custom_id.strip_prefix("ban_setting_") {
-                        draft_action(ctx, interaction, draft::Action::Ban { setting: setting.to_owned() }).await?;
+                        draft_action(ctx, interaction, draft::Action::Ban { setting: setting.to_owned() }, None).await?;
                     } else if let Some(page) = custom_id.strip_prefix("draft_page_") {
                         send_draft_settings_page(ctx, interaction, "draft", page.parse().unwrap()).await?;
                     } else if let Some(setting) = custom_id.strip_prefix("draft_setting_") {
@@ -3290,7 +3299,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 // For simple mode picks (like AlttprDe9) where there's only one option matching the setting name, skip the "select value" dialog and apply directly
                                 if setting.options.len() == 1 && setting.options[0].name == setting.name {
                                     drop(msg_ctx);
-                                    draft_action(ctx, interaction, draft::Action::Pick { setting: setting.name.to_owned(), value: setting.name.to_owned() }).await?;
+                                    draft_action(ctx, interaction, draft::Action::Pick { setting: setting.name.to_owned(), value: setting.name.to_owned() }, None).await?;
                                 } else {
                                     msg_ctx.into_transaction().commit().await?;
                                     let response_content = if let French = event.language {
@@ -3327,7 +3336,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 },
                         }
                     } else if let Some((setting, value)) = custom_id.strip_prefix("draft_option_").and_then(|setting_value| setting_value.split_once("__")) {
-                        draft_action(ctx, interaction, draft::Action::Pick { setting: setting.to_owned(), value: value.to_owned() }).await?;
+                        draft_action(ctx, interaction, draft::Action::Pick { setting: setting.to_owned(), value: value.to_owned() }, None).await?;
                     } else if custom_id == "draft_start" {
                         let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, None, false).await? else { return Ok(()) };
                         if team.is_none() {
@@ -3349,7 +3358,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             let step = race.draft.as_ref().expect("draft_start for race without draft state").next_step(draft_kind, race.game, &mut msg_ctx).await?;
                             interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                 CreateInteractionResponseMessage::new()
-                                    .content("Both players: click **Start Draft** when ready.")
+                                    .content("Any participant may click **Start Draft** to start the draft.")
                                     .components(vec![CreateActionRow::Buttons(vec![
                                         CreateButton::new("draft_start").label("Start Draft").style(ButtonStyle::Primary).disabled(true),
                                     ])])
@@ -3358,18 +3367,24 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             post_button_draft_step(ctx, interaction.channel_id(), step).await?;
                         }
                     } else if let Some(preset) = custom_id.strip_prefix("draft_ban_preview_") {
+                        let Some((_, _, _, msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
+                        msg_ctx.into_transaction().rollback().await?;
+                        let step_msg_id = interaction.message.id;
                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                             .ephemeral(true)
                             .content(format!("Confirm banning **{}**?", preset))
-                            .button(CreateButton::new(format!("ban_setting_{preset}")).label("Confirm").style(ButtonStyle::Danger))
+                            .button(CreateButton::new(format!("btn_ban_{step_msg_id}_{preset}")).label("Confirm").style(ButtonStyle::Danger))
                             .button(CreateButton::new("draft_cancel").label("Cancel").style(ButtonStyle::Secondary))
                         )).await?;
                     } else if let Some(params) = custom_id.strip_prefix("draft_pick_preview_") {
                         if let Some((game, preset)) = params.split_once('_') {
+                            let Some((_, _, _, msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
+                            msg_ctx.into_transaction().rollback().await?;
+                            let step_msg_id = interaction.message.id;
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                 .ephemeral(true)
                                 .content(format!("Confirm picking **{}** for Game {}?", preset, game))
-                                .button(CreateButton::new(format!("preset_pick_{preset}")).label("Confirm").style(ButtonStyle::Primary))
+                                .button(CreateButton::new(format!("btn_pick_{step_msg_id}_{preset}")).label("Confirm").style(ButtonStyle::Primary))
                                 .button(CreateButton::new("draft_cancel").label("Cancel").style(ButtonStyle::Secondary))
                             )).await?;
                         }
@@ -3377,8 +3392,20 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                             CreateInteractionResponseMessage::new().content("Cancelled.").components(vec![])
                         )).await?;
+                    } else if let Some(rest) = custom_id.strip_prefix("btn_ban_") {
+                        if let Some((msg_id_str, preset)) = rest.split_once('_') {
+                            if let Ok(msg_id) = msg_id_str.parse::<u64>().map(MessageId::new) {
+                                draft_action(ctx, interaction, draft::Action::Ban { setting: preset.to_owned() }, Some(msg_id)).await?;
+                            }
+                        }
+                    } else if let Some(rest) = custom_id.strip_prefix("btn_pick_") {
+                        if let Some((msg_id_str, preset)) = rest.split_once('_') {
+                            if let Ok(msg_id) = msg_id_str.parse::<u64>().map(MessageId::new) {
+                                draft_action(ctx, interaction, draft::Action::Pick { setting: preset.to_owned(), value: preset.to_owned() }, Some(msg_id)).await?;
+                            }
+                        }
                     } else if let Some(preset) = custom_id.strip_prefix("preset_pick_") {
-                        draft_action(ctx, interaction, draft::Action::Pick { setting: preset.to_owned(), value: preset.to_owned() }).await?;
+                        draft_action(ctx, interaction, draft::Action::Pick { setting: preset.to_owned(), value: preset.to_owned() }, None).await?;
                     } else if let Some(speedgaming_id) = custom_id.strip_prefix("sgdisambig_") {
                         let (mut transaction, http_client) = {
                             let data = ctx.data.read().await;
@@ -3734,7 +3761,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
 
                                                     if has_revert_button {
                                                         // Remove the REVERT button
-                                                        let _ = channel_id.edit_message(&ctx_clone, message_id, serenity::all::EditMessage::new()
+                                                        let _ = channel_id.edit_message(&ctx_clone, message_id, EditMessage::new()
                                                             .components(vec![])
                                                         ).await;
 
@@ -3841,7 +3868,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         // Check if this message contains "Good luck!" and has components
                                         if !message.components.is_empty() && message.content.contains("Good luck!") {
                                             // Edit this message to remove the buttons
-                                            let mut edit_msg = serenity::all::EditMessage::new();
+                                            let mut edit_msg = EditMessage::new();
                                             edit_msg = edit_msg.components(vec![]);
                                             let _ = message.edit(ctx, edit_msg).await;
                                             break;
@@ -4768,7 +4795,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
     if let Some(draft_kind) = event.draft_kind() {
         if draft_kind.uses_button_draft() {
             thread_id.send_message(ctx, CreateMessage::new()
-                .content("Both players: click **Start Draft** when ready.")
+                .content("Any participant may click **Start Draft** to start the draft.")
                 .button(CreateButton::new("draft_start").label("Start Draft").style(ButtonStyle::Primary))
             ).await?;
         }
