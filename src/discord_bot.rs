@@ -1772,6 +1772,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
 
                                     if new_draft.is_some() {
                                         // Apply the reset draft to all races
+                                        let scheduling_thread = races[0].scheduling_thread;
                                         for race in &mut races {
                                             race.draft = new_draft.clone();
                                             race.save(&mut transaction).await?;
@@ -1782,6 +1783,12 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             .ephemeral(false)
                                             .content("Draft has been reset.")
                                         )).await?;
+                                        if let Some(thread_id) = scheduling_thread {
+                                            thread_id.send_message(ctx, CreateMessage::new()
+                                                .content("Both players: click **Start Draft** when ready.")
+                                                .button(CreateButton::new("draft_start").label("Start Draft").style(ButtonStyle::Primary))
+                                            ).await?;
+                                        }
                                     } else {
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                             .ephemeral(true)
@@ -1865,6 +1872,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                 .execute(&mut *transaction).await?;
                                         }
 
+                                        let scheduling_thread = race.scheduling_thread;
                                         transaction.commit().await?;
                                         let verb = if aspects_reset.len() == NonZero::<usize>::MIN { " has" } else { " have" };
                                         let response_content = MessageBuilder::default()
@@ -1876,6 +1884,14 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             .ephemeral(false)
                                             .content(response_content)
                                         )).await?;
+                                        if reset_draft && event.draft_kind().is_some_and(|k| k.uses_button_draft()) {
+                                            if let Some(thread_id) = scheduling_thread {
+                                                thread_id.send_message(ctx, CreateMessage::new()
+                                                    .content("Both players: click **Start Draft** when ready.")
+                                                    .button(CreateButton::new("draft_start").label("Start Draft").style(ButtonStyle::Primary))
+                                                ).await?;
+                                            }
+                                        }
                                     }
                                         Err(_) => {
                                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
