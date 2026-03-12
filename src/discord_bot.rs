@@ -962,6 +962,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             }
             let mut commands = Vec::default();
             let mut draft_kind = None::<draft::Kind>;
+            let has_button_draft = guild_events.iter().any(|e| e.draft_kind().is_some_and(|k| k.uses_button_draft()));
             for event in &guild_events {
                 if let Some(new_kind) = event.draft_kind() {
                     if new_kind.uses_button_draft() { continue; } // button drafts need no slash commands
@@ -1170,7 +1171,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         .max_int_value(255)
                         .required(false)
                     );
-                if draft_kind.is_some() {
+                if draft_kind.is_some() || has_button_draft {
                     command = command.add_option(CreateCommandOption::new(
                         CommandOptionType::Boolean,
                         "draft",
