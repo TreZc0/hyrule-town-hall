@@ -1112,7 +1112,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
         }
     }
     match data.draft_kind() {
-        None | Some(draft::Kind::AlttprDe9 | draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5) => {}
+        None | Some(draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5) => {}
         Some(draft::Kind::RslS7) => column_headers.push(html! {
             th : "RSL-Lite OK";
         }),
@@ -1552,7 +1552,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                 }
                             }
                             @match data.draft_kind() {
-                                None | Some(draft::Kind::AlttprDe9 | draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5) => {}
+                                None | Some(draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5) => {}
                                 Some(draft::Kind::RslS7) => td {
                                     @if (custom_choices.get("lite").is_some_and(|v| v == "yes")) {
                                         : "✓";

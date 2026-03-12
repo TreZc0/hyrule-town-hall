@@ -494,16 +494,22 @@ impl Goal {
 
     fn draft_kind(&self) -> Option<draft::Kind> {
         match self {
-            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => Some(draft::Kind::AlttprDe9),
+            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => Some(draft::Kind::BanPick {
+                options: alttprde::DE9_PRESETS,
+                order: alttprde::DE9_ORDER,
+                label: "mode",
+            }),
             Self::AlttprDeRivalsCupGroups => Some(draft::Kind::PickOnly {
                 options: alttprde::RIVALS_CUP_PRESETS,
                 who_starts: draft::Team::HighSeed,
                 picks_per_player: 1,
                 unique: true,
+                label: "preset",
             }),
             Self::AlttprDeRivalsCupBrackets => Some(draft::Kind::BanOnly {
                 options: alttprde::RIVALS_CUP_PRESETS,
                 order: alttprde::RIVALS_CUP_BRACKETS_ORDER,
+                label: "preset",
             }),
             Self::Cc7 => Some(draft::Kind::S7),
             Self::MultiworldS3 => Some(draft::Kind::MultiworldS3),
@@ -3608,7 +3614,6 @@ impl Handler {
                 None
             });
             let available_settings = available_settings.unwrap_or_else(|| match draft_kind {
-                draft::Kind::AlttprDe9 => alttprde::MODES.iter().map(|m| Cow::Owned(format!("{}: {} mode", m.name, m.display))).collect(),
                 draft::Kind::S7 => s::S7_SETTINGS.into_iter().map(|setting| Cow::Owned(setting.description())).collect(),
                 draft::Kind::MultiworldS3 => mw::S3_SETTINGS.iter().copied().map(|mw::Setting { description, .. }| Cow::Borrowed(description)).collect(),
                 draft::Kind::MultiworldS4 => mw::S4_SETTINGS.iter().copied().map(|mw::Setting { description, .. }| Cow::Borrowed(description)).collect(),
@@ -3699,12 +3704,11 @@ impl Handler {
             lock!(@write state = self.race_state; if let Some(draft_kind) = goal.draft_kind() {
                 match *state {
                     RaceState::Init => match draft_kind {
-                        draft::Kind::AlttprDe9 => ctx.say(format!("Sorry {reply_to}, no mode draft has been started. Use \"!seed draft\" to start one. Available modes: Ambroz1a, Crosskeys, Enemizer, Inverted, Open")).await?,
                         draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use \"!seed draft\" to start one.")).await?,
                         draft::Kind::RslS7 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use \"!seed draft\" to start one. For more info about these options, use !presets")).await?,
                         draft::Kind::TournoiFrancoS3 => ctx.say(format!("Désolé {reply_to}, le draft n'a pas débuté. Utilisez \"!seed draft\" pour en commencer un. Pour plus d'infos, utilisez !presets")).await?,
                         draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use \"!seed draft\" to start one. For more info about these options, use !presets / le draft n'a pas débuté. Utilisez \"!seed draft\" pour en commencer un. Pour plus d'infos, utilisez !presets")).await?,
-                        draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => ctx.say(format!("Sorry {reply_to}, the preset draft for this event is done in Discord before the race starts.")).await?,
+                        draft::Kind::PickOnly { label, .. } | draft::Kind::BanPick { label, .. } | draft::Kind::BanOnly { label, .. } => ctx.say(format!("Sorry {reply_to}, the {label} draft for this event is done in Discord before the race starts.")).await?,
                     },
                     RaceState::Draft { state: ref mut draft, .. } => {
                         let is_active_team = if let Some(OfficialRaceData { ref cal_event, ref event, .. }) = self.official_data {
@@ -3742,12 +3746,11 @@ impl Handler {
                             }
                         } else {
                             match draft_kind {
-                                draft::Kind::AlttprDe9 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the mode draft.")).await?,
                                 draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the settings draft.")).await?,
                                 draft::Kind::RslS7 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the weights draft.")).await?,
                                 draft::Kind::TournoiFrancoS3 => ctx.say(format!("Désolé {reply_to}, mais ce n'est pas votre tour.")).await?,
                                 draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the settings draft. / mais ce n'est pas votre tour.")).await?,
-                                draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => ctx.say(format!("Sorry {reply_to}, it's not your turn in the preset draft.")).await?,
+                                draft::Kind::PickOnly { label, .. } | draft::Kind::BanPick { label, .. } | draft::Kind::BanOnly { label, .. } => ctx.say(format!("Sorry {reply_to}, it's not your turn in the {label} draft.")).await?,
                             }
                         }
                     }
@@ -5117,7 +5120,7 @@ impl RaceHandler<GlobalState> for Handler {
                             this.advance_draft(ctx, &state).await?;
                             // Warn if draft is incomplete for alttprde9bracket
                             if matches!(goal, Goal::AlttprDe9Bracket) {
-                                let step = draft_state.next_step(draft::Kind::AlttprDe9, cal_event.race.game, &mut draft::MessageContext::None).await.to_racetime()?;
+                                let step = draft_state.next_step(draft::Kind::BanPick { options: alttprde::DE9_PRESETS, order: alttprde::DE9_ORDER, label: "mode" }, cal_event.race.game, &mut draft::MessageContext::None).await.to_racetime()?;
                                 if !matches!(step.kind, draft::StepKind::Done(_)) {
                                     ctx.say("@entrants WARNING: The mode draft for this match is not complete! Please complete the draft as soon as possible. The seed cannot be rolled until the draft is finished.").await.to_racetime()?;
                                 }
@@ -6684,7 +6687,7 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                                 // Add warning if this is an alttprde9bracket race with incomplete draft
                                 if event.series == Series::AlttprDe && event.event == "9bracket" {
                                     if let Some(draft) = &cal_event.race.draft {
-                                        if let Ok(step) = draft.next_step(draft::Kind::AlttprDe9, cal_event.race.game, &mut draft::MessageContext::None).await {
+                                        if let Ok(step) = draft.next_step(draft::Kind::BanPick { options: alttprde::DE9_PRESETS, order: alttprde::DE9_ORDER, label: "mode" }, cal_event.race.game, &mut draft::MessageContext::None).await {
                                             if !matches!(step.kind, draft::StepKind::Done(_)) {
                                                 msg.push_str("\n\n⚠️ **WARNING**: The mode draft for this match is not complete! Please complete the draft as soon as possible. The seed cannot be rolled until the draft is finished.");
                                             }

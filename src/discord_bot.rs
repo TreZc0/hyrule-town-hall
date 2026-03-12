@@ -878,21 +878,48 @@ async fn send_draft_settings_page(ctx: &DiscordCtx, interaction: &impl GenericIn
     Ok(())
 }
 
+async fn post_button_draft_step(ctx: &DiscordCtx, channel_id: ChannelId, step: draft::Step) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match step.kind {
+        draft::StepKind::Ban { available_settings, .. } => {
+            let buttons = available_settings.all()
+                .map(|s| CreateButton::new(format!("draft_ban_preview_{}", s.name)).label(format!("Ban: {}", s.display)).style(ButtonStyle::Danger))
+                .collect::<Vec<_>>();
+            let rows = buttons.chunks(5).map(|chunk| CreateActionRow::Buttons(chunk.to_vec())).collect::<Vec<_>>();
+            channel_id.send_message(ctx, CreateMessage::new().content(step.message).components(rows)).await?;
+        }
+        draft::StepKind::PickPreset { available_presets, game, .. } => {
+            let buttons = available_presets.iter()
+                .map(|p| CreateButton::new(format!("draft_pick_preview_{game}_{}", p.preset)).label(format!("Pick: {}", p.display_name)).style(ButtonStyle::Primary))
+                .collect::<Vec<_>>();
+            let rows = buttons.chunks(5).map(|chunk| CreateActionRow::Buttons(chunk.to_vec())).collect::<Vec<_>>();
+            channel_id.send_message(ctx, CreateMessage::new().content(step.message).components(rows)).await?;
+        }
+        draft::StepKind::Done(_) => {
+            channel_id.say(ctx, step.message).await?;
+            //TODO: trigger seed roll
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 async fn draft_action(ctx: &DiscordCtx, interaction: &impl GenericInteraction, action: draft::Action) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let Some((event, mut race, draft_kind, mut msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
+    let Some((_event, mut race, draft_kind, mut msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
     match race.draft.as_mut().unwrap().apply(draft_kind, race.game, &mut msg_ctx, action).await? {
         Ok(apply_response) => {
             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                 .ephemeral(false)
                 .content(apply_response)
             )).await?;
-            if let Some(draft_kind) = event.draft_kind() {
-                interaction.channel_id()
-                    .say(ctx, race.draft.as_ref().unwrap().next_step(draft_kind, race.game, &mut msg_ctx).await?.message).await?;
-            }
+            let step = race.draft.as_ref().unwrap().next_step(draft_kind, race.game, &mut msg_ctx).await?;
             let mut transaction = msg_ctx.into_transaction();
             sqlx::query!("UPDATE races SET draft_state = $1 WHERE id = $2", Json(race.draft.as_ref().unwrap()) as _, race.id as _).execute(&mut *transaction).await?;
             transaction.commit().await?;
+            if draft_kind.uses_button_draft() {
+                post_button_draft_step(ctx, interaction.channel_id(), step).await?;
+            } else {
+                interaction.channel_id().say(ctx, step.message).await?;
+            }
         }
         Err(error_msg) => {
             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -937,35 +964,21 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let mut draft_kind = None::<draft::Kind>;
             for event in &guild_events {
                 if let Some(new_kind) = event.draft_kind() {
-                    draft_kind = Some(match draft_kind {
-                        None => new_kind,
-                        Some(prev) if prev == new_kind => prev,
-                        // PickOnly, BanPick, and BanOnly have compatible command sets
-                        // (non-overlapping names or identical definitions). BanPick is the
-                        // superset, and field values are not read during command registration.
-                        Some(draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. })
-                            if matches!(new_kind, draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. }) =>
-                        {
-                            draft::Kind::BanPick { options: &[], order: &[] }
-                        }
-                        Some(_) => {
-                            #[derive(Debug, thiserror::Error)]
-                            #[error("multiple conflicting draft kinds in the same Discord guild")]
-                            struct DraftKindsError;
+                    if new_kind.uses_button_draft() { continue; } // button drafts need no slash commands
+                    if draft_kind.is_some_and(|prev| prev != new_kind) {
+                        #[derive(Debug, thiserror::Error)]
+                        #[error("multiple conflicting draft kinds in the same Discord guild")]
+                        struct DraftKindsError;
 
-                            ctx.data.write().await.entry::<CommandIds>().or_default().insert(guild.id, None);
-                            return Err(Box::new(DraftKindsError) as Box<dyn std::error::Error + Send + Sync>)
-                        }
-                    });
+                        ctx.data.write().await.entry::<CommandIds>().or_default().insert(guild.id, None);
+                        return Err(Box::new(DraftKindsError) as Box<dyn std::error::Error + Send + Sync>)
+                    }
+                    draft_kind = Some(new_kind);
                 }
             }
             let ban = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::AlttprDe9 => CreateCommand::new("ban")
-                        .kind(CommandType::ChatInput)
-                        .add_context(InteractionContext::Guild)
-                        .description("Bans a mode from being played in this match."),
                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("ban")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -1009,10 +1022,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let draft = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::AlttprDe9 => CreateCommand::new("draft")
-                        .kind(CommandType::ChatInput)
-                        .add_context(InteractionContext::Guild)
-                        .description("Picks a mode for a game (same as /pick)."),
                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("draft")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -1035,7 +1044,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let first = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::AlttprDe9 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => return None, // turn order is fixed for these drafts
+                    draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => return None, // turn order is fixed for these drafts
                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("first")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -1074,7 +1083,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let no = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::AlttprDe9 | draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::RslS7 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => return None,
+                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::RslS7 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => return None,
                     draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => CreateCommand::new("no")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -1088,10 +1097,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 let idx = commands.len();
                 commands.push(match draft_kind {
                     draft::Kind::BanOnly { .. } => return None, // no picks in ban-only draft
-                    draft::Kind::AlttprDe9 => CreateCommand::new("pick")
-                        .kind(CommandType::ChatInput)
-                        .add_context(InteractionContext::Guild)
-                        .description("Picks a mode for a game in the match."),
                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("pick")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -1324,7 +1329,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let second = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::AlttprDe9 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => return None, // turn order is fixed for these drafts
+                    draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => return None, // turn order is fixed for these drafts
                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("second")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -1363,7 +1368,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let skip = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::AlttprDe9 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => return None, // no skipping in these drafts
+                    draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => return None, // no skipping in these drafts
                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => CreateCommand::new("skip")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -1420,7 +1425,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             let yes = draft_kind.and_then(|draft_kind| {
                 let idx = commands.len();
                 commands.push(match draft_kind {
-                    draft::Kind::AlttprDe9 | draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::RslS7 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => return None,
+                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::RslS7 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => return None,
                     draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => CreateCommand::new("yes")
                         .kind(CommandType::ChatInput)
                         .add_context(InteractionContext::Guild)
@@ -1580,7 +1585,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             }
                                         }
                                     }
-                                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::AlttprDe9 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => {}
+                                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => {}
                                 }
                                 draft_action(ctx, interaction, draft::Action::GoFirst(true)).await?;
                             }
@@ -1744,11 +1749,12 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     return Ok(())
                                 }
 
-                                // For AlttprDe9 events, allow resetting draft across all games without specifying game number
-                                let is_alttprde9_draft_reset = game.is_none() && reset_draft && event.draft_kind() == Some(draft::Kind::AlttprDe9);
+                                // For button-draft events (BanPick/BanOnly/PickOnly), the draft covers all games,
+                                // so allow resetting it across all games without specifying a game number.
+                                let is_button_draft_reset = game.is_none() && reset_draft && event.draft_kind().is_some_and(|k| k.uses_button_draft());
 
-                                if races.len() > 1 && is_alttprde9_draft_reset {
-                                    // Reset draft for all races in AlttprDe9 BO3
+                                if races.len() > 1 && is_button_draft_reset {
+                                    // Reset draft for all races in the BO3
                                     let new_draft = if_chain! {
                                         if let Some(draft_kind) = event.draft_kind();
                                         if let Some(draft) = races[0].draft.clone();
@@ -2652,7 +2658,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             }
                                         }
                                     }
-                                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::AlttprDe9 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => {}
+                                    draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => {}
                                 }
                                 draft_action(ctx, interaction, draft::Action::GoFirst(false)).await?;
                             }
@@ -3305,6 +3311,55 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         }
                     } else if let Some((setting, value)) = custom_id.strip_prefix("draft_option_").and_then(|setting_value| setting_value.split_once("__")) {
                         draft_action(ctx, interaction, draft::Action::Pick { setting: setting.to_owned(), value: value.to_owned() }).await?;
+                    } else if custom_id == "draft_start" {
+                        let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, None, false).await? else { return Ok(()) };
+                        if team.is_none() {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                .ephemeral(true)
+                                .content("Sorry, only participants in this race can start the draft.")
+                            )).await?;
+                            transaction.rollback().await?;
+                        } else {
+                            let event = race.event(&mut transaction).await?;
+                            let guild_id = interaction.guild_id().expect("draft_start outside guild");
+                            let draft_kind = event.draft_kind().expect("draft_start for event without draft");
+                            let mut msg_ctx = draft::MessageContext::Discord {
+                                command_ids: ctx.data.read().await.get::<CommandIds>().and_then(|ids| ids.get(&guild_id)).expect("guild not registered").expect("guild has conflicting draft kinds"),
+                                teams: race.teams().cloned().collect(),
+                                team: Team::dummy(),
+                                transaction, guild_id,
+                            };
+                            let step = race.draft.as_ref().expect("draft_start for race without draft state").next_step(draft_kind, race.game, &mut msg_ctx).await?;
+                            interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                CreateInteractionResponseMessage::new()
+                                    .content("Both players: click **Start Draft** when ready.")
+                                    .components(vec![CreateActionRow::Buttons(vec![
+                                        CreateButton::new("draft_start").label("Start Draft").style(ButtonStyle::Primary).disabled(true),
+                                    ])])
+                            )).await?;
+                            msg_ctx.into_transaction().commit().await?;
+                            post_button_draft_step(ctx, interaction.channel_id(), step).await?;
+                        }
+                    } else if let Some(preset) = custom_id.strip_prefix("draft_ban_preview_") {
+                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                            .ephemeral(true)
+                            .content(format!("Confirm banning **{}**?", preset))
+                            .button(CreateButton::new(format!("ban_setting_{preset}")).label("Confirm").style(ButtonStyle::Danger))
+                            .button(CreateButton::new("draft_cancel").label("Cancel").style(ButtonStyle::Secondary))
+                        )).await?;
+                    } else if let Some(params) = custom_id.strip_prefix("draft_pick_preview_") {
+                        if let Some((game, preset)) = params.split_once('_') {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                .ephemeral(true)
+                                .content(format!("Confirm picking **{}** for Game {}?", preset, game))
+                                .button(CreateButton::new(format!("preset_pick_{preset}")).label("Confirm").style(ButtonStyle::Primary))
+                                .button(CreateButton::new("draft_cancel").label("Cancel").style(ButtonStyle::Secondary))
+                            )).await?;
+                        }
+                    } else if custom_id == "draft_cancel" {
+                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                            CreateInteractionResponseMessage::new().content("Cancelled.").components(vec![])
+                        )).await?;
                     } else if let Some(preset) = custom_id.strip_prefix("preset_pick_") {
                         draft_action(ctx, interaction, draft::Action::Pick { setting: preset.to_owned(), value: preset.to_owned() }).await?;
                     } else if let Some(speedgaming_id) = custom_id.strip_prefix("sgdisambig_") {
@@ -4616,6 +4671,33 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             }
         }
     };
+    // Show any custom choices that both players agreed on when entering the event.
+    let boolean_choices = event.boolean_choice_requirements();
+    if !boolean_choices.is_empty() {
+        let team_ids = race.teams().map(|t| t.id).collect_vec();
+        if team_ids.len() > 1 {
+            let rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", team_ids as _)
+                .fetch_all(&mut *transaction).await?;
+            let num_teams = rows.len();
+            let agreed = boolean_choices.into_iter()
+                .filter(|(key, _)| {
+                    rows.iter().filter(|r| {
+                        r.custom_choices.as_object()
+                            .and_then(|obj| obj.get(*key))
+                            .is_some_and(|v| v == "yes")
+                    }).count() >= num_teams
+                })
+                .map(|(_, label)| label)
+                .collect_vec();
+            if !agreed.is_empty() {
+                content.push_line("");
+                content.push_line("");
+                content.push("Both players agreed on: ");
+                content.push_safe(agreed.join(", "));
+                content.push('.');
+            }
+        }
+    }
     if title.len() > 100 {
         // Discord thread titles are limited to 100 characters, unclear on specifics, limit to 100 bytes to be safe
         let mut cutoff = 100 - "[…]".len();
@@ -4624,16 +4706,18 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
         title.push_str("[…]");
     }
     if let Some(draft_kind) = event.draft_kind() {
-        if let Some(ref draft) = race.draft {
-            let mut msg_ctx = draft::MessageContext::Discord {
-                teams: race.teams().cloned().collect(),
-                team: Team::dummy(),
-                transaction, guild_id, command_ids,
-            };
-            content.push_line("");
-            content.push_line("");
-            content.push(draft.next_step(draft_kind, race.game, &mut msg_ctx).await?.message);
-            transaction = msg_ctx.into_transaction();
+        if !draft_kind.uses_button_draft() {
+            if let Some(ref draft) = race.draft {
+                let mut msg_ctx = draft::MessageContext::Discord {
+                    teams: race.teams().cloned().collect(),
+                    team: Team::dummy(),
+                    transaction, guild_id, command_ids,
+                };
+                content.push_line("");
+                content.push_line("");
+                content.push(draft.next_step(draft_kind, race.game, &mut msg_ctx).await?.message);
+                transaction = msg_ctx.into_transaction();
+            }
         }
     }
     if matches!(racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event"), racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB) {
@@ -4651,7 +4735,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
         content.push_line("");
         content.push(format!("This race will be played with {} as settings.\n\nThis race will be played with {}.", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str()));
     }
-    race.scheduling_thread = Some(if let Some(ChannelType::Forum) = scheduling_channel.to_channel(ctx).await?.guild().map(|c| c.kind) {
+    let thread_id = if let Some(ChannelType::Forum) = scheduling_channel.to_channel(ctx).await?.guild().map(|c| c.kind) {
         scheduling_channel.create_forum_post(ctx, CreateForumPost::new(
             title,
             CreateMessage::default().content(content.build()),
@@ -4662,7 +4746,16 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
         ).kind(ChannelType::PublicThread).auto_archive_duration(AutoArchiveDuration::OneWeek)).await?;
         thread.say(ctx, content.build()).await?;
         thread.id
-    });
+    };
+    race.scheduling_thread = Some(thread_id);
+    if let Some(draft_kind) = event.draft_kind() {
+        if draft_kind.uses_button_draft() {
+            thread_id.send_message(ctx, CreateMessage::new()
+                .content("Both players: click **Start Draft** when ready.")
+                .button(CreateButton::new("draft_start").label("Start Draft").style(ButtonStyle::Primary))
+            ).await?;
+        }
+    }
     Ok(transaction)
 }
 

@@ -16,6 +16,21 @@ pub(crate) const MODES: [Mode; 5] = [
     Mode { name: "open", display: "Open" },
 ];
 
+pub(crate) static DE9_PRESETS: &[draft::PresetOption] = &[
+    draft::PresetOption { display_name: "Ambroz1a", preset: "ambroz1a" },
+    draft::PresetOption { display_name: "Crosskeys", preset: "crosskeys" },
+    draft::PresetOption { display_name: "Enemizer", preset: "enemizer" },
+    draft::PresetOption { display_name: "Inverted", preset: "inverted" },
+    draft::PresetOption { display_name: "Open", preset: "open" },
+];
+
+pub(crate) static DE9_ORDER: &[draft::DraftPhase] = &[
+    draft::DraftPhase::Ban(draft::Team::LowSeed),
+    draft::DraftPhase::Ban(draft::Team::HighSeed),
+    draft::DraftPhase::Pick(draft::Team::HighSeed),
+    draft::DraftPhase::Pick(draft::Team::LowSeed),
+];
+
 #[derive(Clone, Copy)]
 pub(crate) struct Mode {
     pub(crate) name: &'static str,
