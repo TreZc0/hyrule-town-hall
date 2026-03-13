@@ -467,7 +467,7 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                     | draft::Kind::BanOnly { .. } => {
                         cal_event.race.draft.clone().expect("series-draft race should have draft state")
                     },
-                    _ => Draft::for_next_game(&mut transaction, draft_kind, loser.id, winner.id).await.to_racetime()?,
+                    _ => Draft::for_next_game(&mut transaction, &draft_kind, loser.id, winner.id).await.to_racetime()?,
                 };
                 sqlx::query!("UPDATE races SET draft_state = $1 WHERE id = $2", sqlx::types::Json(&draft) as _, next_game.id as _).execute(&mut *transaction).await.to_racetime()?;
                 if_chain! {
@@ -482,7 +482,7 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                             team: Team::dummy(),
                             transaction, guild_id, command_ids,
                         };
-                        scheduling_thread.say(&*discord_ctx, draft.next_step(draft_kind, next_game.game, &mut msg_ctx).await.to_racetime()?.message).await.to_racetime()?;
+                        scheduling_thread.say(&*discord_ctx, draft.next_step(&draft_kind, next_game.game, &mut msg_ctx).await.to_racetime()?.message).await.to_racetime()?;
                         transaction = msg_ctx.into_transaction();
                     }
                 }

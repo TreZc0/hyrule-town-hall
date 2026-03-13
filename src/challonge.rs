@@ -101,7 +101,7 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
                     fpa_invoked: false,
                     breaks_used: false,
                     draft: if let Some(draft_kind) = event.draft_kind() {
-                        Some(Draft::for_game1(transaction, http_client, draft_kind, event, None, [&team1, &team2]).await?)
+                        Some(Draft::for_game1(transaction, http_client, &draft_kind, event, None, [&team1, &team2]).await?)
                     } else {
                         None
                     },
@@ -119,6 +119,7 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
                     discord_scheduled_event_id: None,
                     volunteer_request_sent: false,
                     volunteer_request_message_id: None,
+                    goal_slug: None,
                 });
             }
         }

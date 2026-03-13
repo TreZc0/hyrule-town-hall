@@ -266,7 +266,7 @@ impl AsyncRaceManager {
         content.push(" of this round.");
 
         // Add settings information for Crosskeys2025 events only
-        let goal = racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event");
+        let goal = race.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug).expect("Goal not found for event");
         if matches!(goal, racetime_bot::Goal::Crosskeys2025) {
             let crosskeys_options = racetime_bot::CrosskeysRaceOptions::for_race(db_pool, race).await;
 

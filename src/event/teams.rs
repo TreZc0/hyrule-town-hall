@@ -43,6 +43,28 @@ pub(crate) enum QualifierScoreKind {
 }
 
 impl QualifierScoreKind {
+    #[allow(dead_code)] // will be used in admin UI
+    pub(crate) fn slug(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Sgl2023Online => "sgl_2023_online",
+            Self::Sgl2024Online => "sgl_2024_online",
+            Self::Sgl2025Online => "sgl_2025_online",
+            Self::TwwrMiniblins26 => "twwr_miniblins26",
+        }
+    }
+
+    pub(crate) fn from_slug(s: &str) -> Option<Self> {
+        match s {
+            "standard" => Some(Self::Standard),
+            "sgl_2023_online" => Some(Self::Sgl2023Online),
+            "sgl_2024_online" => Some(Self::Sgl2024Online),
+            "sgl_2025_online" => Some(Self::Sgl2025Online),
+            "twwr_miniblins26" => Some(Self::TwwrMiniblins26),
+            _ => None,
+        }
+    }
+
     pub(crate) fn required_qualifiers(self) -> usize {
         match self {
             Self::Standard => 5,

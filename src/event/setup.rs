@@ -21,6 +21,12 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
         None => String::new(),
     };
 
+    // Format draft_config JSON for display
+    let draft_config_string = match &event.draft_config {
+        Some(json) => serde_json::to_string_pretty(json).unwrap_or_default(),
+        None => String::new(),
+    };
+
     let content = if event.is_ended() {
         html! {
             article {
@@ -252,6 +258,70 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             label(for = "force_custom_role_binding") : "Use event-specific volunteer roles";
                             label(class = "help") : " (When enabled, uses event-specific role bindings. When disabled, uses game-level volunteer roles.)";
                         });
+
+                        h3 : "Racetime Bot Configuration";
+
+                        : form_field("goal_slug", &mut errors, html! {
+                            label(for = "goal_slug") : "Goal Slug";
+                            select(id = "goal_slug", name = "goal_slug", style = "width: 100%; max-width: 600px;") {
+                                option(value = "", selected? = ctx.field_value("goal_slug").map_or(event.goal_slug.is_none(), |v| v.is_empty())) : "None";
+                                @for (slug, display_name) in racetime_bot::Goal::all_slugs() {
+                                    option(value = slug, selected? = ctx.field_value("goal_slug").map_or(event.goal_slug.as_deref() == Some(slug), |v| v == slug)) : display_name;
+                                }
+                            }
+                        });
+
+                        : form_field("draft_kind", &mut errors, html! {
+                            label(for = "draft_kind") : "Draft Kind";
+                            input(type = "text", id = "draft_kind", name = "draft_kind", value = ctx.field_value("draft_kind").unwrap_or(
+                                &event.draft_kind_str.clone().unwrap_or_default()
+                            ), style = "width: 100%; max-width: 600px;");
+                            label(class = "help") : " (e.g. s7, ban_only, pick_only, ban_pick, or empty for none)";
+                        });
+
+                        : form_field("draft_config", &mut errors, html! {
+                            label(for = "draft_config") : "Draft Config JSON";
+                            textarea(id = "draft_config", name = "draft_config", rows = "6", style = "font-family: monospace; width: 100%; max-width: 800px;") {
+                                : ctx.field_value("draft_config").unwrap_or(&draft_config_string);
+                            }
+                            label(class = "help") : " (JSON configuration for generic draft modes. Leave empty if not applicable.)";
+                        });
+
+                        : form_field("qualifier_score_kind", &mut errors, html! {
+                            label(for = "qualifier_score_kind") : "Qualifier Score Kind";
+                            input(type = "text", id = "qualifier_score_kind", name = "qualifier_score_kind", value = ctx.field_value("qualifier_score_kind").unwrap_or(
+                                &event.qualifier_score_kind_str.clone().unwrap_or_default()
+                            ), style = "width: 100%; max-width: 600px;");
+                            label(class = "help") : " (e.g. standard, twwr_miniblins26, or empty for none)";
+                        });
+
+                        : form_field("is_single_race", &mut errors, html! {
+                            input(type = "checkbox", id = "is_single_race", name = "is_single_race", checked? = ctx.field_value("is_single_race").map_or(event.is_single_race, |value| value == "on"));
+                            label(for = "is_single_race") : "Single Race Event";
+                        });
+
+                        : form_field("hide_entrants", &mut errors, html! {
+                            input(type = "checkbox", id = "hide_entrants", name = "hide_entrants", checked? = ctx.field_value("hide_entrants").map_or(event.hide_entrants, |value| value == "on"));
+                            label(for = "hide_entrants") : "Hide Entrants";
+                        });
+
+                        : form_field("start_delay", &mut errors, html! {
+                            label(for = "start_delay") : "Start Delay (seconds)";
+                            input(type = "number", id = "start_delay", name = "start_delay", value = ctx.field_value("start_delay").unwrap_or(&event.start_delay.to_string()), style = "width: 100%; max-width: 600px;");
+                        });
+
+                        : form_field("start_delay_open", &mut errors, html! {
+                            label(for = "start_delay_open") : "Start Delay Open (seconds)";
+                            input(type = "text", id = "start_delay_open", name = "start_delay_open", value = ctx.field_value("start_delay_open").unwrap_or(
+                                &event.start_delay_open.map(|d| d.to_string()).unwrap_or_default()
+                            ), style = "width: 100%; max-width: 600px;");
+                            label(class = "help") : " (Leave empty to use same as Start Delay)";
+                        });
+
+                        : form_field("restrict_chat_in_qualifiers", &mut errors, html! {
+                            input(type = "checkbox", id = "restrict_chat_in_qualifiers", name = "restrict_chat_in_qualifiers", checked? = ctx.field_value("restrict_chat_in_qualifiers").map_or(event.restrict_chat_in_qualifiers, |value| value == "on"));
+                            label(for = "restrict_chat_in_qualifiers") : "Restrict Chat in Qualifiers";
+                        });
                     }, errors.clone(), "Save Basic Info");
                     
                     h3 : "Enter Flow Configuration";
@@ -430,6 +500,16 @@ pub(crate) struct SetupForm {
     automated_asyncs: bool,
     show_opt_out: bool,
     force_custom_role_binding: bool,
+    goal_slug: Option<String>,
+    draft_kind: Option<String>,
+    draft_config: Option<String>,
+    qualifier_score_kind: Option<String>,
+    is_single_race: bool,
+    hide_entrants: bool,
+    #[field(default = 15)]
+    start_delay: i32,
+    start_delay_open: Option<String>,
+    restrict_chat_in_qualifiers: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/setup", data = "<form>")]
@@ -651,6 +731,43 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             let speedgaming_slug = value.speedgaming_slug.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
             let challonge_community = value.challonge_community.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
 
+            // Parse new racetime bot config fields
+            let goal_slug = value.goal_slug.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+            let draft_kind = value.draft_kind.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+            let qualifier_score_kind = value.qualifier_score_kind.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+
+            let draft_config_json: Option<serde_json::Value> = if let Some(ref dc_str) = value.draft_config {
+                if dc_str.trim().is_empty() {
+                    None
+                } else {
+                    match serde_json::from_str(dc_str) {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            form.context.push_error(form::Error::validation(format!("Invalid draft config JSON: {e}")).with_name("draft_config"));
+                            None
+                        }
+                    }
+                }
+            } else {
+                None
+            };
+
+            let start_delay_open: Option<i32> = if let Some(ref sdo_str) = value.start_delay_open {
+                if sdo_str.trim().is_empty() {
+                    None
+                } else {
+                    match sdo_str.trim().parse::<i32>() {
+                        Ok(v) => Some(v),
+                        Err(_) => {
+                            form.context.push_error(form::Error::validation("Invalid start delay open value").with_name("start_delay_open"));
+                            None
+                        }
+                    }
+                }
+            } else {
+                None
+            };
+
             // Parse additional URLs
             let enter_url = if let Some(enter_url_str) = &value.enter_url {
                 if !enter_url_str.is_empty() {
@@ -741,7 +858,10 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                     challonge_community = $21, team_config = $22, language = $23,
                     default_game_count = $24, open_stream_delay = $25, invitational_stream_delay = $26,
                     hide_teams_tab = $27, hide_races_tab = $28, show_qualifier_times = $29,
-                    automated_asyncs = $30, show_opt_out = $31, force_custom_role_binding = $32
+                    automated_asyncs = $30, show_opt_out = $31, force_custom_role_binding = $32,
+                    goal_slug = $35, draft_kind = $36, draft_config = $37,
+                    qualifier_score_kind = $38, is_single_race = $39, hide_entrants = $40,
+                    start_delay = $41, start_delay_open = $42, restrict_chat_in_qualifiers = $43
                 WHERE series = $33 AND event = $34
             "#,
                 value.display_name,
@@ -778,6 +898,15 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 value.force_custom_role_binding,
                 event_data.series as _,
                 &event_data.event,
+                goal_slug,
+                draft_kind,
+                draft_config_json as _,
+                qualifier_score_kind,
+                value.is_single_race,
+                value.hide_entrants,
+                value.start_delay,
+                start_delay_open,
+                value.restrict_chat_in_qualifiers,
             ).execute(&mut *transaction).await?;
             
             transaction.commit().await?;
@@ -997,4 +1126,306 @@ struct UserSearchRow {
     racetime_id: Option<String>,
     discord_display_name: Option<String>,
     discord_username: Option<String>,
+}
+
+fn create_form_content(me: &Option<User>, _uri: &Origin<'_>, csrf: Option<&CsrfToken>, ctx: Context<'_>) -> RawHtml<String> {
+    if let Some(me) = me {
+        if me.is_global_admin() {
+            let mut errors = ctx.errors().collect_vec();
+            html! {
+                article {
+                    h2 : "Create New Event";
+
+                    : full_form(uri!(create_post), csrf, html! {
+                        : form_field("series", &mut errors, html! {
+                            label(for = "series") : "Series";
+                            select(id = "series", name = "series", style = "width: 100%; max-width: 600px;") {
+                                @for series in all::<Series>() {
+                                    option(value = series.slug(), selected? = ctx.field_value("series").map_or(false, |v| v == series.slug())) : series.display_name();
+                                }
+                            }
+                        });
+
+                        : form_field("event", &mut errors, html! {
+                            label(for = "event") : "Event Slug";
+                            input(type = "text", id = "event", name = "event", value = ctx.field_value("event").unwrap_or(&String::new()), style = "width: 100%; max-width: 600px;");
+                            label(class = "help") : " (e.g. \"2025\", \"s1\")";
+                        });
+
+                        : form_field("display_name", &mut errors, html! {
+                            label(for = "display_name") : "Display Name";
+                            input(type = "text", id = "display_name", name = "display_name", value = ctx.field_value("display_name").unwrap_or(&String::new()), style = "width: 100%; max-width: 600px;");
+                        });
+
+                        : form_field("team_config", &mut errors, html! {
+                            label(for = "team_config") : "Team Configuration";
+                            select(id = "team_config", name = "team_config", style = "width: 100%; max-width: 600px;") {
+                                option(value = "solo", selected? = ctx.field_value("team_config").map_or(true, |v| v == "solo")) : "Solo";
+                                option(value = "coop", selected? = ctx.field_value("team_config").map_or(false, |v| v == "coop")) : "Co-op";
+                                option(value = "tfbcoop", selected? = ctx.field_value("team_config").map_or(false, |v| v == "tfbcoop")) : "TFB Co-op";
+                                option(value = "pictionary", selected? = ctx.field_value("team_config").map_or(false, |v| v == "pictionary")) : "Pictionary";
+                                option(value = "multiworld", selected? = ctx.field_value("team_config").map_or(false, |v| v == "multiworld")) : "Multiworld";
+                            }
+                        });
+
+                        : form_field("language", &mut errors, html! {
+                            label(for = "language") : "Language";
+                            select(id = "language", name = "language", style = "width: 100%; max-width: 600px;") {
+                                option(value = "en", selected? = ctx.field_value("language").map_or(true, |v| v == "en")) : "English";
+                                option(value = "fr", selected? = ctx.field_value("language").map_or(false, |v| v == "fr")) : "French";
+                                option(value = "de", selected? = ctx.field_value("language").map_or(false, |v| v == "de")) : "German";
+                                option(value = "pt", selected? = ctx.field_value("language").map_or(false, |v| v == "pt")) : "Portuguese";
+                            }
+                        });
+
+                        : form_field("listed", &mut errors, html! {
+                            input(type = "checkbox", id = "listed", name = "listed", checked? = ctx.field_value("listed").map_or(false, |value| value == "on"));
+                            label(for = "listed") : "Listed";
+                            label(class = "help") : " (Show this event on the main page)";
+                        });
+
+                        h3 : "Racetime Bot Configuration";
+
+                        : form_field("goal_slug", &mut errors, html! {
+                            label(for = "goal_slug") : "Goal Slug";
+                            select(id = "goal_slug", name = "goal_slug", style = "width: 100%; max-width: 600px;") {
+                                option(value = "", selected? = ctx.field_value("goal_slug").map_or(true, |v| v.is_empty())) : "None";
+                                @for (slug, display_name) in racetime_bot::Goal::all_slugs() {
+                                    option(value = slug, selected? = ctx.field_value("goal_slug").map_or(false, |v| v == slug)) : display_name;
+                                }
+                            }
+                        });
+
+                        : form_field("draft_kind", &mut errors, html! {
+                            label(for = "draft_kind") : "Draft Kind";
+                            input(type = "text", id = "draft_kind", name = "draft_kind", value = ctx.field_value("draft_kind").unwrap_or(&String::new()), style = "width: 100%; max-width: 600px;");
+                            label(class = "help") : " (e.g. s7, ban_only, pick_only, ban_pick, or empty for none)";
+                        });
+
+                        : form_field("draft_config", &mut errors, html! {
+                            label(for = "draft_config") : "Draft Config JSON";
+                            textarea(id = "draft_config", name = "draft_config", rows = "6", style = "font-family: monospace; width: 100%; max-width: 800px;") {
+                                : ctx.field_value("draft_config").unwrap_or(&String::new());
+                            }
+                            label(class = "help") : " (JSON configuration for generic draft modes. Leave empty if not applicable.)";
+                        });
+
+                        : form_field("qualifier_score_kind", &mut errors, html! {
+                            label(for = "qualifier_score_kind") : "Qualifier Score Kind";
+                            input(type = "text", id = "qualifier_score_kind", name = "qualifier_score_kind", value = ctx.field_value("qualifier_score_kind").unwrap_or(&String::new()), style = "width: 100%; max-width: 600px;");
+                            label(class = "help") : " (e.g. standard, twwr_miniblins26, or empty for none)";
+                        });
+
+                        : form_field("is_single_race", &mut errors, html! {
+                            input(type = "checkbox", id = "is_single_race", name = "is_single_race", checked? = ctx.field_value("is_single_race").map_or(false, |value| value == "on"));
+                            label(for = "is_single_race") : "Single Race Event";
+                        });
+
+                        : form_field("hide_entrants", &mut errors, html! {
+                            input(type = "checkbox", id = "hide_entrants", name = "hide_entrants", checked? = ctx.field_value("hide_entrants").map_or(false, |value| value == "on"));
+                            label(for = "hide_entrants") : "Hide Entrants";
+                        });
+
+                        : form_field("start_delay", &mut errors, html! {
+                            label(for = "start_delay") : "Start Delay (seconds)";
+                            input(type = "number", id = "start_delay", name = "start_delay", value = ctx.field_value("start_delay").unwrap_or(&"15".to_owned()), style = "width: 100%; max-width: 600px;");
+                        });
+
+                        : form_field("start_delay_open", &mut errors, html! {
+                            label(for = "start_delay_open") : "Start Delay Open (seconds)";
+                            input(type = "text", id = "start_delay_open", name = "start_delay_open", value = ctx.field_value("start_delay_open").unwrap_or(&String::new()), style = "width: 100%; max-width: 600px;");
+                            label(class = "help") : " (Leave empty to use same as Start Delay)";
+                        });
+
+                        : form_field("restrict_chat_in_qualifiers", &mut errors, html! {
+                            input(type = "checkbox", id = "restrict_chat_in_qualifiers", name = "restrict_chat_in_qualifiers", checked? = ctx.field_value("restrict_chat_in_qualifiers").map_or(false, |value| value == "on"));
+                            label(for = "restrict_chat_in_qualifiers") : "Restrict Chat in Qualifiers";
+                        });
+                    }, errors.clone(), "Create Event");
+                }
+            }
+        } else {
+            html! {
+                article {
+                    p : "You must be a global admin to access this page.";
+                }
+            }
+        }
+    } else {
+        html! {
+            article {
+                p {
+                    a(href = uri!(auth::login(Some(uri!(create_get))))) : "Sign in or create a Hyrule Town Hall account";
+                    : " to access this page.";
+                }
+            }
+        }
+    }
+}
+
+#[rocket::get("/event/new")]
+pub(crate) async fn create_get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+    let transaction = pool.begin().await?;
+    let content = create_form_content(&me, &uri, csrf.as_ref(), Context::default());
+    Ok(page(transaction, &me, &uri, PageStyle::default(), "Create New Event", content).await?)
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct CreateEventForm {
+    #[field(default = String::new())]
+    csrf: String,
+    series: String,
+    event: String,
+    display_name: String,
+    team_config: String,
+    language: String,
+    listed: bool,
+    goal_slug: Option<String>,
+    draft_kind: Option<String>,
+    draft_config: Option<String>,
+    qualifier_score_kind: Option<String>,
+    is_single_race: bool,
+    hide_entrants: bool,
+    #[field(default = 15)]
+    start_delay: i32,
+    start_delay_open: Option<String>,
+    restrict_chat_in_qualifiers: bool,
+}
+
+#[rocket::post("/event/new", data = "<form>")]
+pub(crate) async fn create_post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, form: Form<Contextual<'_, CreateEventForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    Ok(if let Some(ref value) = form.value {
+        if !me.is_global_admin() {
+            form.context.push_error(form::Error::validation("You must be a global admin to create events."));
+        }
+
+        // Parse series
+        let series = match value.series.parse::<Series>() {
+            Ok(s) => Some(s),
+            Err(()) => {
+                form.context.push_error(form::Error::validation("Invalid series.").with_name("series"));
+                None
+            }
+        };
+
+        // Validate event slug is non-empty
+        if value.event.is_empty() {
+            form.context.push_error(form::Error::validation("Event slug is required.").with_name("event"));
+        }
+
+        // Validate display name is non-empty
+        if value.display_name.is_empty() {
+            form.context.push_error(form::Error::validation("Display name is required.").with_name("display_name"));
+        }
+
+        // Parse team_config
+        let team_config = match value.team_config.as_str() {
+            "solo" => TeamConfig::Solo,
+            "coop" => TeamConfig::CoOp,
+            "tfbcoop" => TeamConfig::TfbCoOp,
+            "pictionary" => TeamConfig::Pictionary,
+            "multiworld" => TeamConfig::Multiworld,
+            _ => {
+                form.context.push_error(form::Error::validation("Invalid team configuration.").with_name("team_config"));
+                TeamConfig::Solo
+            }
+        };
+
+        // Parse language
+        let language = match value.language.as_str() {
+            "en" => English,
+            "fr" => French,
+            "de" => German,
+            "pt" => Portuguese,
+            _ => {
+                form.context.push_error(form::Error::validation("Invalid language.").with_name("language"));
+                English
+            }
+        };
+
+        // Parse optional string fields
+        let goal_slug = value.goal_slug.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+        let draft_kind = value.draft_kind.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+        let qualifier_score_kind = value.qualifier_score_kind.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+
+        // Parse draft_config JSON
+        let draft_config_json: Option<serde_json::Value> = if let Some(ref dc_str) = value.draft_config {
+            if dc_str.trim().is_empty() {
+                None
+            } else {
+                match serde_json::from_str(dc_str) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        form.context.push_error(form::Error::validation(format!("Invalid draft config JSON: {e}")).with_name("draft_config"));
+                        None
+                    }
+                }
+            }
+        } else {
+            None
+        };
+
+        // Parse start_delay_open
+        let start_delay_open: Option<i32> = if let Some(ref sdo_str) = value.start_delay_open {
+            if sdo_str.trim().is_empty() {
+                None
+            } else {
+                match sdo_str.trim().parse::<i32>() {
+                    Ok(v) => Some(v),
+                    Err(_) => {
+                        form.context.push_error(form::Error::validation("Invalid start delay open value.").with_name("start_delay_open"));
+                        None
+                    }
+                }
+            }
+        } else {
+            None
+        };
+
+        if form.context.errors().next().is_some() {
+            let me = Some(me);
+            let transaction = pool.begin().await?;
+            let content = create_form_content(&me, &uri, csrf.as_ref(), form.context);
+            return Ok(RedirectOrContent::Content(page(transaction, &me, &uri, PageStyle::default(), "Create New Event", content).await?));
+        }
+
+        let series = series.expect("series should be valid if no errors");
+
+        let mut transaction = pool.begin().await?;
+
+        // Insert the new event
+        sqlx::query!(r#"
+            INSERT INTO events (series, event, display_name, team_config, language, listed,
+                goal_slug, draft_kind, draft_config, qualifier_score_kind,
+                is_single_race, hide_entrants, start_delay, start_delay_open, restrict_chat_in_qualifiers)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        "#,
+            series as _,
+            &value.event,
+            &value.display_name,
+            team_config as _,
+            language as _,
+            value.listed,
+            goal_slug,
+            draft_kind,
+            draft_config_json as _,
+            qualifier_score_kind,
+            value.is_single_race,
+            value.hide_entrants,
+            value.start_delay,
+            start_delay_open,
+            value.restrict_chat_in_qualifiers,
+        ).execute(&mut *transaction).await?;
+
+        transaction.commit().await?;
+        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, &*value.event))))
+    } else {
+        let me = Some(me);
+        let transaction = pool.begin().await?;
+        let content = create_form_content(&me, &uri, csrf.as_ref(), form.context);
+        RedirectOrContent::Content(page(transaction, &me, &uri, PageStyle::default(), "Create New Event", content).await?)
+    })
 } 

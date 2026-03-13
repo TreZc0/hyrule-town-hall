@@ -386,13 +386,14 @@ pub(crate) struct Race {
     pub(crate) discord_scheduled_event_id: Option<PgSnowflake<ScheduledEventId>>,
     pub(crate) volunteer_request_sent: bool,
     pub(crate) volunteer_request_message_id: Option<PgSnowflake<MessageId>>,
+    pub(crate) goal_slug: Option<String>,
 }
 
 impl Race {
     pub(crate) async fn from_id(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, id: Id<Races>) -> Result<Self, Error> {
         let row = sqlx::query!(r#"SELECT
-            series AS "series: Series",
-            event,
+            r.series AS "series: Series",
+            r.event,
             challonge_match,
             league_id,
             sheet_timestamp,
@@ -418,11 +419,11 @@ impl Race {
             round,
             scheduling_thread AS "scheduling_thread: PgSnowflake<ChannelId>",
             draft_state AS "draft_state: Json<Draft>",
-            start,
+            r.start,
             async_start1,
             async_start2,
             async_start3,
-            end_time,
+            r.end_time,
             async_end1,
             async_end2,
             async_end3,
@@ -447,7 +448,7 @@ impl Race {
             hash4,
             hash5,
             seed_password,
-            video_url,
+            r.video_url,
             restreamer,
             video_url_fr,
             restreamer_fr,
@@ -465,8 +466,10 @@ impl Race {
             async_notified_3,
             discord_scheduled_event_id AS "discord_scheduled_event_id: PgSnowflake<ScheduledEventId>",
             volunteer_request_sent,
-            volunteer_request_message_id AS "volunteer_request_message_id: PgSnowflake<MessageId>"
-        FROM races WHERE id = $1"#, id as _).fetch_one(&mut **transaction).await?;
+            volunteer_request_message_id AS "volunteer_request_message_id: PgSnowflake<MessageId>",
+            e.goal_slug
+        FROM races r LEFT JOIN events e ON r.series = e.series AND r.event = e.event
+        WHERE r.id = $1"#, id as _).fetch_one(&mut **transaction).await?;
         let source = if let Some(id) = row.challonge_match {
             Source::Challonge { id }
         } else if let Some(id) = row.league_id {
@@ -622,6 +625,7 @@ impl Race {
             discord_scheduled_event_id: row.discord_scheduled_event_id.map(|PgSnowflake(id)| PgSnowflake(id)),
             volunteer_request_sent: row.volunteer_request_sent,
             volunteer_request_message_id: row.volunteer_request_message_id.map(|PgSnowflake(id)| PgSnowflake(id)),
+            goal_slug: row.goal_slug,
             id, source, entrants,
         })
     }
@@ -693,6 +697,7 @@ impl Race {
                     discord_scheduled_event_id: None,
                     volunteer_request_sent: false,
                     volunteer_request_message_id: None,
+                    goal_slug: None,
                 });
                 races.last_mut().expect("just pushed")
             }.save(&mut *transaction).await?,
@@ -1199,7 +1204,7 @@ impl Race {
             Some(settings)
         } else if let Some(draft) = &self.draft {
             let Some(draft_kind) = event.draft_kind() else { return Ok(None) };
-            match draft.next_step(draft_kind, None, &mut draft::MessageContext::None).await?.kind {
+            match draft.next_step(&draft_kind, None, &mut draft::MessageContext::None).await?.kind {
                 draft::StepKind::Done(settings) => Some(settings),
                 draft::StepKind::DoneRsl { .. } => None, //TODO
                 draft::StepKind::GoFirst | draft::StepKind::Ban { .. } | draft::StepKind::Pick { .. } | draft::StepKind::BooleanChoice { .. } | draft::StepKind::PickPreset { .. } => None,
@@ -1560,7 +1565,7 @@ impl Event {
     }
 
     pub(crate) async fn should_create_room(&self, transaction: &mut Transaction<'_, Postgres>, event: &event::Data<'_>) -> Result<RaceHandleMode, event::DataError> {
-        Ok(if racetime_bot::Goal::for_event(self.race.series, &self.race.event).is_some() {
+        Ok(if self.race.goal_slug.is_some() {
             if_chain! {
                 if self.race.series == Series::SpeedGaming && self.race.event.ends_with("live");
                 if let Some(race_start) = self.start();
@@ -2090,7 +2095,7 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
             let draft = if team3.is_some() {
                 None
             } else if let Some(draft_kind) = event.draft_kind() {
-                Some(Draft::for_game1(&mut transaction, http_client, draft_kind, &event, phase.as_deref(), [&team1, &team2]).await?)
+                Some(Draft::for_game1(&mut transaction, http_client, &draft_kind, &event, phase.as_deref(), [&team1, &team2]).await?)
             } else {
                 None
             };
@@ -2135,6 +2140,7 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
                     discord_scheduled_event_id: None,
                     volunteer_request_sent: false,
                     volunteer_request_message_id: None,
+                    goal_slug: None,
                     scheduling_thread,
                 };
                 if game == 1 {
@@ -2210,7 +2216,7 @@ pub(crate) async fn race_table(
         for race in races {
             if !race.show_seed() {
                 // Check for Crosskeys2025 races
-                if let Some(racetime_bot::Goal::Crosskeys2025) = racetime_bot::Goal::for_event(race.series, &race.event) {
+                if race.goal_slug.as_deref() == Some("crosskeys_2025") {
                     break 'has_settings true
                 }
             }
@@ -2476,7 +2482,7 @@ pub(crate) async fn race_table(
                                 
                                 // Add Settings link for races with custom options
                                 @if race.show_seed() || race.is_ended() || matches!(race.schedule, RaceSchedule::Unscheduled | RaceSchedule::Async { .. } | RaceSchedule::Live { .. }) {
-                                    @if let Some(racetime_bot::Goal::Crosskeys2025) = racetime_bot::Goal::for_event(race.series, &race.event) {
+                                    @if race.goal_slug.as_deref() == Some("crosskeys_2025") {
                                         @if let Ok(crosskeys_options) = racetime_bot::CrosskeysRaceOptions::for_race_with_transaction(&mut *transaction, race).await {
                                             span(class = "settings-link", data_tooltip = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str_no_delay())) {
                                                 : " -Hover for Settings- ";
@@ -2489,7 +2495,7 @@ pub(crate) async fn race_table(
                         @if !has_seeds && has_settings {
                             td {
                                 // Check for Crosskeys2025 races
-                                @if let Some(racetime_bot::Goal::Crosskeys2025) = racetime_bot::Goal::for_event(race.series, &race.event) {
+                                @if race.goal_slug.as_deref() == Some("crosskeys_2025") {
                                     @if let Ok(crosskeys_options) = racetime_bot::CrosskeysRaceOptions::for_race_with_transaction(&mut *transaction, race).await {
                                         span(class = "settings-link", data_tooltip = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str_no_delay())) {
                                             : "-Hover for Settings-";
@@ -3073,6 +3079,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                     discord_scheduled_event_id: None,
                                     volunteer_request_sent: false,
                                     volunteer_request_message_id: None,
+                                    goal_slug: None,
                                 };
                                 if let Some(race) = races.iter_mut().find(|race| if let Source::League { id } = race.source { id == match_data.id } else { false }) {
                                     if !race.schedule_locked {
@@ -3314,6 +3321,7 @@ pub(crate) async fn ensure_weekly_races(
                     discord_scheduled_event_id: None,
                     volunteer_request_sent: false,
                     volunteer_request_message_id: None,
+                    goal_slug: None,
                     schedule,
                 };
                 race.save(&mut *transaction).await?;

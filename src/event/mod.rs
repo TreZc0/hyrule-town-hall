@@ -225,6 +225,19 @@ pub(crate) struct Data<'a> {
     pub(crate) qualifier_score_hiding: QualifierScoreHiding,
     /// Discord role to ping when a qualifier race room opens.
     pub(crate) qualifier_notification_role_id: Option<RoleId>,
+    pub(crate) goal_slug: Option<String>,
+    pub(crate) draft_kind_str: Option<String>,
+    pub(crate) draft_config: Option<serde_json::Value>,
+    pub(crate) qualifier_score_kind_str: Option<String>,
+    pub(crate) is_single_race: bool,
+    pub(crate) hide_entrants: bool,
+    pub(crate) start_delay: i32,
+    pub(crate) start_delay_open: Option<i32>,
+    pub(crate) restrict_chat_in_qualifiers: bool,
+    pub(crate) racetime_goal_name: Option<String>,
+    pub(crate) is_custom_goal: bool,
+    pub(crate) preroll_mode: String,
+    pub(crate) spoiler_unlock: String,
 }
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
@@ -292,23 +305,36 @@ impl<'a> Data<'a> {
             volunteer_request_lead_time_hours,
             force_custom_role_binding,
             qualifier_score_hiding AS "qualifier_score_hiding: QualifierScoreHiding",
-            qualifier_notification_role_id
+            qualifier_notification_role_id,
+            goal_slug,
+            draft_kind,
+            draft_config AS "draft_config: Json<serde_json::Value>",
+            qualifier_score_kind,
+            is_single_race,
+            hide_entrants,
+            start_delay,
+            start_delay_open,
+            restrict_chat_in_qualifiers,
+            racetime_goal_name,
+            is_custom_goal,
+            preroll_mode AS "preroll_mode!",
+            spoiler_unlock AS "spoiler_unlock!"
         FROM events WHERE series = $1 AND event = $2"#, series as _, &event).fetch_optional(&mut **transaction).await?
             .map(|row| Ok::<_, DataError>(Self {
                 display_name: row.display_name,
                 short_name: row.short_name,
                 base_start: row.start,
                 end: row.end_time,
-                url: row.url.map(|url| url.parse()).transpose()?,
+                url: row.url.map(|url: String| url.parse()).transpose()?,
                 challonge_community: row.challonge_community,
                 speedgaming_slug: row.speedgaming_slug,
                 hide_races_tab: row.hide_races_tab,
                 hide_teams_tab: row.hide_teams_tab,
-                teams_url: row.teams_url.map(|url| url.parse()).transpose()?,
-                enter_url: row.enter_url.map(|url| url.parse()).transpose()?,
-                video_url: row.video_url.map(|url| url.parse()).transpose()?,
+                teams_url: row.teams_url.map(|url: String| url.parse()).transpose()?,
+                enter_url: row.enter_url.map(|url: String| url.parse()).transpose()?,
+                video_url: row.video_url.map(|url: String| url.parse()).transpose()?,
                 discord_guild: row.discord_guild.map(|PgSnowflake(id)| id),
-                discord_invite_url: row.discord_invite_url.map(|url| url.parse()).transpose()?,
+                discord_invite_url: row.discord_invite_url.map(|url: String| url.parse()).transpose()?,
                 discord_race_room_channel: row.discord_race_room_channel.map(|PgSnowflake(id)| id),
                 discord_race_results_channel: row.discord_race_results_channel.map(|PgSnowflake(id)| id),
                 discord_organizer_channel: row.discord_organizer_channel.map(|PgSnowflake(id)| id),
@@ -350,6 +376,19 @@ impl<'a> Data<'a> {
                 force_custom_role_binding: row.force_custom_role_binding.unwrap_or(true),
                 qualifier_score_hiding: row.qualifier_score_hiding,
                 qualifier_notification_role_id: row.qualifier_notification_role_id.map(|id| RoleId::new(id as u64)),
+                goal_slug: row.goal_slug,
+                draft_kind_str: row.draft_kind,
+                draft_config: row.draft_config.map(|Json(v)| v),
+                qualifier_score_kind_str: row.qualifier_score_kind,
+                is_single_race: row.is_single_race,
+                hide_entrants: row.hide_entrants,
+                start_delay: row.start_delay,
+                start_delay_open: row.start_delay_open,
+                restrict_chat_in_qualifiers: row.restrict_chat_in_qualifiers,
+                racetime_goal_name: row.racetime_goal_name,
+                is_custom_goal: row.is_custom_goal,
+                preroll_mode: row.preroll_mode,
+                spoiler_unlock: row.spoiler_unlock,
             }))
             .transpose()
     }
@@ -389,7 +428,7 @@ impl<'a> Data<'a> {
                 went_first: None,
                 skipped_bans: 0,
                 settings: HashMap::default(),
-            }.complete_randomly(draft::Kind::MultiworldS3).await.unwrap()),
+            }.complete_randomly(&draft::Kind::MultiworldS3).await.unwrap()),
             (Series::Multiworld, "4") => from_file!("../../assets/event/mw/chests-4-7.1.198.json"),
             (Series::Multiworld, "5") => from_file!("../../assets/event/mw/chests-5-8.2.63.json"),
             (Series::NineDaysOfSaws, _) => ChestAppearances::VANILLA, // no CAMC in SAWS
@@ -459,29 +498,7 @@ impl<'a> Data<'a> {
     }
 
     pub(crate) fn is_single_race(&self) -> bool {
-        match self.series {
-            Series::AlttprDe => false,
-            Series::BattleRoyale => false,
-            Series::CoOp => false,
-            Series::CopaDoBrasil => false,
-            Series::Crosskeys => false,
-            Series::League => false,
-            Series::MixedPools => false,
-            Series::Mq => false,
-            Series::Multiworld => false,
-            Series::MysteryD => false,
-            Series::NineDaysOfSaws => true,
-            Series::Pictionary => true,
-            Series::Rsl => false,
-            Series::Scrubs => false,
-            Series::SongsOfHope => false,
-            Series::SpeedGaming => false,
-            Series::Standard => false,
-            Series::TournoiFrancophone => false,
-            Series::TriforceBlitz => false,
-            Series::WeTryToBeBetter => false,
-            Series::TwwrMain => false,
-        }
+        self.is_single_race
     }
 
     pub(crate) fn match_source(&self) -> MatchSource<'_> {
@@ -501,69 +518,30 @@ impl<'a> Data<'a> {
     }
 
     pub(crate) async fn qualifier_kind(&self, transaction: &mut Transaction<'_, Postgres>, me: Option<&User>) -> Result<QualifierKind, DataError> {
-        Ok(match (self.series, &*self.event) {
-            (Series::SongsOfHope, "1") => QualifierKind::SongsOfHope,
-            (Series::SpeedGaming, "2023onl" | "2024onl" | "2025onl") | (Series::Standard, "8") | (Series::TwwrMain, "miniblins26") => {
-                QualifierKind::Score(match (self.series, &*self.event) {
-                    (Series::SpeedGaming, "2023onl") => teams::QualifierScoreKind::Sgl2023Online,
-                    (Series::SpeedGaming, "2024onl") => teams::QualifierScoreKind::Sgl2024Online,
-                    (Series::SpeedGaming, "2025onl") => teams::QualifierScoreKind::Sgl2025Online,
-                    (Series::Standard, "8") => teams::QualifierScoreKind::Standard,
-                    (Series::TwwrMain, "miniblins26") => teams::QualifierScoreKind::TwwrMiniblins26,
-                    _ => unreachable!("checked by outer match"),
-                })
+        Ok(if let Some(score_kind) = self.qualifier_score_kind_str.as_deref().and_then(teams::QualifierScoreKind::from_slug) {
+            QualifierKind::Score(score_kind)
+        } else if self.series == Series::SongsOfHope && self.event == "1" {
+            QualifierKind::SongsOfHope
+        } else if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams WHERE series = $1 AND event = $2 AND qualifier_rank IS NOT NULL) AS "exists!""#, self.series as _, &*self.event).fetch_one(&mut **transaction).await? {
+            QualifierKind::Rank
+        } else if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM asyncs WHERE series = $1 AND event = $2 AND kind = 'qualifier') AS "exists!""#, self.series as _, &*self.event).fetch_one(&mut **transaction).await? {
+            QualifierKind::Single {
+                show_times: self.show_qualifier_times && (
+                    sqlx::query_scalar!(r#"SELECT submitted IS NOT NULL AS "qualified!" FROM teams, async_teams, team_members WHERE async_teams.team = teams.id AND teams.series = $1 AND teams.event = $2 AND async_teams.team = team_members.team AND member = $3 AND kind = 'qualifier'"#, self.series as _, &*self.event, me.map(|me| PgSnowflake(me.id)) as _).fetch_optional(&mut **transaction).await?.unwrap_or(false)
+                    || self.is_started(transaction).await?
+                ),
             }
-            (_, _) => if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams WHERE series = $1 AND event = $2 AND qualifier_rank IS NOT NULL) AS "exists!""#, self.series as _, &*self.event).fetch_one(&mut **transaction).await? {
-                QualifierKind::Rank
-            } else if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM asyncs WHERE series = $1 AND event = $2 AND kind = 'qualifier') AS "exists!""#, self.series as _, &*self.event).fetch_one(&mut **transaction).await? {
-                QualifierKind::Single {
-                    show_times: self.show_qualifier_times && (
-                        sqlx::query_scalar!(r#"SELECT submitted IS NOT NULL AS "qualified!" FROM teams, async_teams, team_members WHERE async_teams.team = teams.id AND teams.series = $1 AND teams.event = $2 AND async_teams.team = team_members.team AND member = $3 AND kind = 'qualifier'"#, self.series as _, &*self.event, me.map(|me| PgSnowflake(me.id)) as _).fetch_optional(&mut **transaction).await?.unwrap_or(false)
-                        || self.is_started(transaction).await?
-                    ),
-                }
-            } else {
-                QualifierKind::None
-            },
+        } else {
+            QualifierKind::None
         })
     }
 
     pub(crate) fn draft_kind(&self) -> Option<draft::Kind> {
-        match (self.series, &*self.event) {
-            // AlttprDe events: only need draft if round_modes is not set
-            (Series::AlttprDe, "9bracket" | "9swissa" | "9swissb") => {
-                if self.round_modes.is_some() {
-                    None // Mode is fixed per round, no draft needed
-                } else {
-                    Some(draft::Kind::BanPick {
-                        options: alttprde::DE9_PRESETS,
-                        order: alttprde::DE9_ORDER,
-                        label: "mode",
-                    })
-                }
-            }
-            (Series::AlttprDe, "rival26gr") => Some(draft::Kind::PickOnly {
-                options: alttprde::RIVALS_CUP_PRESETS,
-                who_starts: draft::Team::HighSeed,
-                picks_per_player: 1,
-                unique: true,
-                label: "preset",
-            }),
-            (Series::AlttprDe, "rival26br") => Some(draft::Kind::BanOnly {
-                options: alttprde::RIVALS_CUP_PRESETS,
-                order: alttprde::RIVALS_CUP_BRACKETS_ORDER,
-                label: "preset",
-            }),
-            (Series::Multiworld, "3") => Some(draft::Kind::MultiworldS3),
-            (Series::Multiworld, "4") => Some(draft::Kind::MultiworldS4),
-            (Series::Multiworld, "5") => Some(draft::Kind::MultiworldS5),
-            (Series::Rsl, "7") => Some(draft::Kind::RslS7),
-            (Series::Standard, "7" | "7cc") => Some(draft::Kind::S7),
-            (Series::TournoiFrancophone, "3") => Some(draft::Kind::TournoiFrancoS3),
-            (Series::TournoiFrancophone, "4") => Some(draft::Kind::TournoiFrancoS4),
-            (Series::TournoiFrancophone, "5") => Some(draft::Kind::TournoiFrancoS5),
-            (_, _) => None,
+        // AlttprDe: suppress draft when round_modes is set (mode is fixed per round)
+        if self.round_modes.is_some() {
+            return None;
         }
+        draft::Kind::from_db(self.draft_kind_str.as_deref(), self.draft_config.as_ref())
     }
 
     pub(crate) async fn start(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Option<DateTime<Utc>>, DataError> {
@@ -838,7 +816,7 @@ impl<'a> Data<'a> {
                 @let practice_seed_url = (is_ootr && self.single_settings.is_some()).then(|| uri!(practice_seed(self.series, &*self.event)));
                 @let practice_race_url = if_chain! {
                     if is_ootr;
-                    if let Some(goal) = racetime_bot::Goal::for_event(self.series, &self.event);
+                    if let Some(goal) = self.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug);
                     if goal.is_custom(); //TODO also support non-custom goals, see https://github.com/racetimeGG/racetime-app/issues/215
                     then {
                         let mut practice_url = Url::parse(&format!("https://{}/{}/startrace", racetime_host(), racetime_bot::CATEGORY))?;

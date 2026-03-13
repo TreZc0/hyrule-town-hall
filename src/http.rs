@@ -684,6 +684,8 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::roles::delete_ping_workflow,
         event::roles::add_ping_workflow_lead_time,
         event::roles::delete_ping_workflow_lead_time,
+        event::setup::create_get,
+        event::setup::create_post,
         event::setup::get,
         event::setup::post,
         event::setup::add_organizer,
