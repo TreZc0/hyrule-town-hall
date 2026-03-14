@@ -3961,13 +3961,6 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
 }
 
 pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, event: event::Data<'_>) -> Result<(),Error > {
-    // This is a temporary implementation. It checks the race and sees if a seed is rolled.
-    // If it is not, it rolls a seed and adds it to the database.
-    // If it is, it pulls the seed from the database instead.
-    // It posts in the event.discord_organizer_channel channel a link to the seed, the player who is playing in the async, and gives admin instructions.
-    // Use previous mechanisms (async channels/etc) to manage race manually.
-    // If the race is the second half, remind admin in the message to post the race result when it's over and report it on start.gg
-    // Set "notified" on the race to avoid this being called again.
 
     let discord_ctx = discord_ctx.clone();
     let cal_event = cal_event.clone();
@@ -3977,11 +3970,9 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         let discord_data = discord_ctx.data.read().await;
         discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
     };
-
-    // Check if this is the second part of an async (seed already exists)
+    
     let is_second_part = cal_event.race.seed.files.is_some();
 
-    // If no seed exists, roll a new one
     if !is_second_part {
         let discord_data = discord_ctx.data.read().await;
         let global_state = discord_data.get::<GlobalState>().expect("Global State missing from Discord context");
