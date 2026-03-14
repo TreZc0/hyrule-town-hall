@@ -140,8 +140,9 @@ impl AsyncRaceManager {
             _ => return Ok(()),
         };
         
+        let run = AsyncRun::BracketRace { race_id: race.id.into(), async_part };
         let ready_button = CreateActionRow::Buttons(vec![
-            CreateButton::new("async_ready")
+            CreateButton::new(run.button_id("ready"))
                 .label("READY!")
                 .style(ButtonStyle::Primary)
         ]);
@@ -634,8 +635,9 @@ impl AsyncRaceManager {
             async_kind as _
         ).execute(&mut **transaction).await?;
 
+        let run = AsyncRun::Qualifier { team_id: team.id.into(), async_kind };
         let ready_button = CreateActionRow::Buttons(vec![
-            CreateButton::new(format!("async_ready_qualifier_{}_{}", team.id, async_kind as i32))
+            CreateButton::new(run.button_id("ready"))
                 .label("READY!")
                 .style(ButtonStyle::Primary)
         ]);
@@ -852,8 +854,9 @@ impl AsyncRaceManager {
                 }
             }
 
+            let run = AsyncRun::BracketRace { race_id, async_part };
             let start_countdown_button = CreateActionRow::Buttons(vec![
-                CreateButton::new("async_start_countdown")
+                CreateButton::new(run.button_id("start_countdown"))
                     .label("START COUNTDOWN")
                     .style(ButtonStyle::Success)
             ]);
@@ -1392,8 +1395,9 @@ pub(crate) async fn handle_ready_qualifier(
         }
     }
 
+    let run = AsyncRun::Qualifier { team_id: *team_id, async_kind: *async_kind };
     let start_button = CreateActionRow::Buttons(vec![
-        CreateButton::new(format!("async_start_qualifier_{}_{}", team_id, *async_kind as i32))
+        CreateButton::new(run.button_id("start_countdown"))
             .label("START COUNTDOWN")
             .style(ButtonStyle::Success)
     ]);
