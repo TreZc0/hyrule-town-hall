@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT finish_time FROM async_times WHERE race_id = $1 AND async_part = $2 AND recorded_at IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "finish_time",
+        "type_info": "Interval"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "a32840c76e9693707d29b2e0ce1156c46a1934a85ae294a1590c33e0486d28ad"
+}

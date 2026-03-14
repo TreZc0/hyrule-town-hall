@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE teams SET resigned = FALSE, restream_consent = $2, text_field = $3, text_field2 = $4, yes_no = $5, mw_impl = $6, custom_choices = $7 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bool",
+        "Text",
+        "Text",
+        "Bool",
+        {
+          "Custom": {
+            "name": "mw_impl",
+            "kind": {
+              "Enum": [
+                "bizhawk_co_op",
+                "midos_house"
+              ]
+            }
+          }
+        },
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1af2dc57933d0a1c4419fa79a18022faec54cbe50021d9e30aa49d36a5cc8b47"
+}

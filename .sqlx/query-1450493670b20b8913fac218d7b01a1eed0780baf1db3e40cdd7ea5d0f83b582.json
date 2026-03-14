@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n            series,\n            event,\n            display_name,\n            discord_volunteer_info_channel,\n            discord_guild,\n            volunteer_request_lead_time_hours\n        FROM events\n        WHERE volunteer_requests_enabled = true",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "event",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "display_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "discord_volunteer_info_channel",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "discord_guild",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "volunteer_request_lead_time_hours",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "1450493670b20b8913fac218d7b01a1eed0780baf1db3e40cdd7ea5d0f83b582"
+}

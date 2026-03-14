@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT start_time, finish_time, player_finished_at FROM async_times WHERE race_id = $1 AND async_part = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "start_time",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "finish_time",
+        "type_info": "Interval"
+      },
+      {
+        "ordinal": 2,
+        "name": "player_finished_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "50d7d9e4e78e9298d57725f9d01b7c75e784f0da3042e270d99f719d36e7de60"
+}

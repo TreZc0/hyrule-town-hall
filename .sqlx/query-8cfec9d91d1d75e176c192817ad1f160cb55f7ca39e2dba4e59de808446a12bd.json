@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT volunteer_request_message_id AS \"message_id: PgSnowflake<MessageId>\"\n        FROM races\n        WHERE series = $1\n          AND event = $2\n          AND volunteer_request_message_id IS NOT NULL\n          AND ignored = false\n          AND start > NOW() - interval '8 hours'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "message_id: PgSnowflake<MessageId>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "8cfec9d91d1d75e176c192817ad1f160cb55f7ca39e2dba4e59de808446a12bd"
+}

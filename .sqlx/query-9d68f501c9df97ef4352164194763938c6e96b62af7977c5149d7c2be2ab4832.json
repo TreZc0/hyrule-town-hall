@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n            series AS \"series: Series\",\n            event,\n            volunteer_request_lead_time_hours,\n            discord_volunteer_info_channel AS \"discord_volunteer_info_channel: PgSnowflake<ChannelId>\"\n        FROM events\n        WHERE volunteer_requests_enabled = true\n          AND discord_volunteer_info_channel IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "series: Series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "event",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "volunteer_request_lead_time_hours",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "discord_volunteer_info_channel: PgSnowflake<ChannelId>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "9d68f501c9df97ef4352164194763938c6e96b62af7977c5149d7c2be2ab4832"
+}

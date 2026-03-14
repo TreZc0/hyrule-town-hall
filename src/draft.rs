@@ -83,7 +83,6 @@ pub(crate) enum Kind {
     TournoiFrancoS3,
     TournoiFrancoS4,
     TournoiFrancoS5,
-    /// Pick-only draft: each player picks one or more presets in turn, no bans.
     PickOnly {
         options: Vec<PresetOption>,
         who_starts: Team,
@@ -91,13 +90,11 @@ pub(crate) enum Kind {
         unique: bool,
         label: String,
     },
-    /// Ban-then-pick draft: fixed sequence of ban/pick steps; remaining goes to game 3.
     BanPick {
         options: Vec<PresetOption>,
         order: Vec<DraftPhase>,
         label: String,
     },
-    /// Ban-only draft: fixed sequence of bans; remaining presets randomly assigned by bot.
     BanOnly {
         options: Vec<PresetOption>,
         order: Vec<DraftPhase>,
@@ -106,10 +103,16 @@ pub(crate) enum Kind {
 }
 
 impl Kind {
-    /// Whether this draft kind uses Discord buttons rather than slash commands.
-    /// Button drafts don't register guild slash commands and use a guided click flow instead.
     pub(crate) fn uses_button_draft(&self) -> bool {
         matches!(self, Self::PickOnly { .. } | Self::BanPick { .. } | Self::BanOnly { .. })
+    }
+
+    pub(crate) fn preset_display_name(&self, preset: &str) -> Option<&'static str> {
+        let options: &[PresetOption] = match self {
+            Self::PickOnly { options, .. } | Self::BanPick { options, .. } | Self::BanOnly { options, .. } => options,
+            _ => return None,
+        };
+        options.iter().find(|p| p.preset == preset).map(|p| p.display_name)
     }
 
     fn language(&self) -> Language {
@@ -1820,10 +1823,15 @@ impl Draft {
                     MessageContext::Discord { transaction, guild_id, teams, .. } => {
                         let (mut high, mut low): (Vec<_>, Vec<_>) = teams.iter().partition(|t| t.id == self.high_seed);
                         let active = team.choose(high.remove(0), low.remove(0));
-                        MessageBuilder::default()
-                            .mention_team(transaction, Some(*guild_id), active).await?
-                            .push(format!(": Pick the {label} for Game {next_game}."))
-                            .build()
+                        let mut builder = MessageBuilder::default();
+                        if picks_made > 0 {
+                            let prev_preset = self.settings.get(&*format!("game{picks_made}_preset")).map(|s| s.as_ref()).unwrap_or("?");
+                            let prev_display = options.iter().find(|p| p.preset == prev_preset).map(|p| p.display_name).unwrap_or(prev_preset);
+                            builder.push(format!("**{prev_display}** was picked for Game {picks_made}.\n"));
+                        }
+                        builder.mention_team(transaction, Some(*guild_id), active).await?;
+                        builder.push(format!(": Pick the {label} for Game {next_game}."));
+                        builder.build()
                     }
                     MessageContext::RaceTime { high_seed_name, low_seed_name, .. } => {
                         let name = team.choose(*high_seed_name, *low_seed_name);
@@ -1863,6 +1871,7 @@ impl Draft {
             // Walk through order to find the first unsatisfied step
             let mut ban_count = 0usize;
             let mut pick_count = 0usize;
+            let mut prev_action: Option<String> = None;
             for phase in order {
                 match phase {
                     DraftPhase::Ban(team) => {
@@ -1883,10 +1892,13 @@ impl Draft {
                                     MessageContext::Discord { transaction, guild_id, teams, .. } => {
                                         let (mut high, mut low): (Vec<_>, Vec<_>) = teams.iter().partition(|t| t.id == self.high_seed);
                                         let active = team.choose(high.remove(0), low.remove(0));
-                                        MessageBuilder::default()
-                                            .mention_team(transaction, Some(*guild_id), active).await?
-                                            .push(format!(": Ban a {label}."))
-                                            .build()
+                                        let mut builder = MessageBuilder::default();
+                                        if let Some(prev) = &prev_action {
+                                            builder.push(format!("{prev}\n"));
+                                        }
+                                        builder.mention_team(transaction, Some(*guild_id), active).await?;
+                                        builder.push(format!(": Ban a {label}."));
+                                        builder.build()
                                     }
                                     MessageContext::RaceTime { high_seed_name, low_seed_name, .. } => {
                                         let name = team.choose(*high_seed_name, *low_seed_name);
@@ -1895,6 +1907,9 @@ impl Draft {
                                 },
                             });
                         }
+                        let val = self.settings.get(&*format!("ban{ban_count}")).map(|s| s.as_ref()).unwrap_or("?");
+                        let display = options.iter().find(|p| p.preset == val).map(|p| p.display_name).unwrap_or(val);
+                        prev_action = Some(format!("**{display}** was banned."));
                     }
                     DraftPhase::Pick(team) => {
                         pick_count += 1;
@@ -1915,10 +1930,13 @@ impl Draft {
                                     MessageContext::Discord { transaction, guild_id, teams, .. } => {
                                         let (mut high, mut low): (Vec<_>, Vec<_>) = teams.iter().partition(|t| t.id == self.high_seed);
                                         let active = team.choose(high.remove(0), low.remove(0));
-                                        MessageBuilder::default()
-                                            .mention_team(transaction, Some(*guild_id), active).await?
-                                            .push(format!(": Pick the preset for Game {current_pick}."))
-                                            .build()
+                                        let mut builder = MessageBuilder::default();
+                                        if let Some(prev) = &prev_action {
+                                            builder.push(format!("{prev}\n"));
+                                        }
+                                        builder.mention_team(transaction, Some(*guild_id), active).await?;
+                                        builder.push(format!(": Pick the {label} for Game {current_pick}."));
+                                        builder.build()
                                     }
                                     MessageContext::RaceTime { high_seed_name, low_seed_name, .. } => {
                                         let name = team.choose(*high_seed_name, *low_seed_name);
@@ -1927,6 +1945,9 @@ impl Draft {
                                 },
                             });
                         }
+                        let val = self.settings.get(&*format!("game{pick_count}_preset")).map(|s| s.as_ref()).unwrap_or("?");
+                        let display = options.iter().find(|p| p.preset == val).map(|p| p.display_name).unwrap_or(val);
+                        prev_action = Some(format!("**{display}** was picked for Game {pick_count}."));
                     }
                 }
             }
@@ -1966,6 +1987,7 @@ impl Draft {
         } else {
             // Walk through ban order to find the first unsatisfied step
             let mut ban_count = 0usize;
+            let mut prev_action: Option<String> = None;
             for phase in order {
                 match phase {
                     DraftPhase::Ban(team) => {
@@ -1984,10 +2006,13 @@ impl Draft {
                                     MessageContext::Discord { transaction, guild_id, teams, .. } => {
                                         let (mut high, mut low): (Vec<_>, Vec<_>) = teams.iter().partition(|t| t.id == self.high_seed);
                                         let active = team.choose(high.remove(0), low.remove(0));
-                                        MessageBuilder::default()
-                                            .mention_team(transaction, Some(*guild_id), active).await?
-                                            .push(format!(": Ban a {label}."))
-                                            .build()
+                                        let mut builder = MessageBuilder::default();
+                                        if let Some(prev) = &prev_action {
+                                            builder.push(format!("{prev}\n"));
+                                        }
+                                        builder.mention_team(transaction, Some(*guild_id), active).await?;
+                                        builder.push(format!(": Ban a {label}."));
+                                        builder.build()
                                     }
                                     MessageContext::RaceTime { high_seed_name, low_seed_name, .. } => {
                                         let name = team.choose(*high_seed_name, *low_seed_name);
@@ -1996,6 +2021,9 @@ impl Draft {
                                 },
                             });
                         }
+                        let val = self.settings.get(&*format!("ban{ban_count}")).map(|s| s.as_ref()).unwrap_or("?");
+                        let display = options.iter().find(|p| p.preset == val).map(|p| p.display_name).unwrap_or(val);
+                        prev_action = Some(format!("**{display}** was banned."));
                     }
                     DraftPhase::Pick(_) => unreachable!("BanOnly order should not contain Pick phases"),
                 }

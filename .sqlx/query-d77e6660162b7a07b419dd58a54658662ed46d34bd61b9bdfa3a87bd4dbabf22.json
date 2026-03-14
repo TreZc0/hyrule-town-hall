@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT volunteer_request_message_id AS \"volunteer_request_message_id: PgSnowflake<MessageId>\"\n        FROM races\n        WHERE series = $1\n          AND event = $2\n          AND volunteer_request_message_id IS NOT NULL\n          AND start > $3\n          AND ignored = false\n        ORDER BY start ASC\n        LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "volunteer_request_message_id: PgSnowflake<MessageId>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "d77e6660162b7a07b419dd58a54658662ed46d34bd61b9bdfa3a87bd4dbabf22"
+}

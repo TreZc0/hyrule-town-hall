@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT e.series AS \"series: Series\", e.event\n        FROM events e\n        JOIN game_series gs ON e.series = gs.series\n        WHERE gs.game_id = $1\n          AND e.volunteer_requests_enabled = true\n          AND e.discord_volunteer_info_channel IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "series: Series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "event",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "5b45b7356e22fa6f8a95a3ac9add1553b8d3589dd35e27bd33d1d8e16b578a2d"
+}

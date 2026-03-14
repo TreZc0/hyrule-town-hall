@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT workflow_type AS \"workflow_type: crate::volunteer_pings::PingWorkflowTypeDb\"\n               FROM volunteer_ping_workflows WHERE id = $1 AND series = $2 AND event = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "workflow_type: crate::volunteer_pings::PingWorkflowTypeDb",
+        "type_info": {
+          "Custom": {
+            "name": "ping_workflow_type",
+            "kind": {
+              "Enum": [
+                "scheduled",
+                "per_race"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1438b2990255824c7540d61b0087f854da2a5742d5df5597d74ce943f05059fc"
+}

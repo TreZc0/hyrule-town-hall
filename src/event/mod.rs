@@ -238,6 +238,7 @@ pub(crate) struct Data<'a> {
     pub(crate) is_custom_goal: bool,
     pub(crate) preroll_mode: String,
     pub(crate) spoiler_unlock: String,
+    pub(crate) async_start_delay: Option<i32>,
 }
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
@@ -319,6 +320,7 @@ impl<'a> Data<'a> {
             is_custom_goal,
             preroll_mode AS "preroll_mode!",
             spoiler_unlock AS "spoiler_unlock!"
+            async_start_delay
         FROM events WHERE series = $1 AND event = $2"#, series as _, &event).fetch_optional(&mut **transaction).await?
             .map(|row| Ok::<_, DataError>(Self {
                 display_name: row.display_name,
@@ -389,6 +391,7 @@ impl<'a> Data<'a> {
                 is_custom_goal: row.is_custom_goal,
                 preroll_mode: row.preroll_mode,
                 spoiler_unlock: row.spoiler_unlock,
+                async_start_delay: row.async_start_delay,
             }))
             .transpose()
     }
@@ -617,9 +620,9 @@ impl<'a> Data<'a> {
         for kind in sqlx::query_scalar!(r#"SELECT kind AS "kind: AsyncKind" FROM asyncs WHERE series = $1 AND event = $2 AND (start IS NULL OR start <= NOW()) AND (end_time IS NULL OR end_time > NOW())"#, self.series as _, &self.event).fetch_all(&mut **transaction).await? {
             match kind {
                 AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 => if !self.is_started(&mut *transaction).await? {
-                    // Skip qualifiers the team has already submitted
+                    // Skip qualifiers the team has already finished (or submitted)
                     if let Some(team_id) = team_id {
-                        if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM async_teams WHERE team = $1 AND kind = $2 AND submitted IS NOT NULL) AS "submitted!""#, team_id as _, kind as _).fetch_one(&mut **transaction).await? {
+                        if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM async_teams WHERE team = $1 AND kind = $2 AND (player_finished_at IS NOT NULL OR submitted IS NOT NULL)) AS "finished!""#, team_id as _, kind as _).fetch_one(&mut **transaction).await? {
                             continue;
                         }
                     }

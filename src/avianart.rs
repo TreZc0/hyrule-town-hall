@@ -1,5 +1,3 @@
-#![cfg_attr(not(unix), allow(dead_code))]
-
 use {
     reqwest::Client,
     crate::prelude::*,
@@ -15,23 +13,20 @@ pub(crate) struct AvianartClient {
     client: Client,
 }
 
-/// Top-level envelope for all API responses
 #[derive(Debug, Deserialize)]
 pub(crate) struct AvianartEnvelope<T> {
     pub(crate) status: u16,
     pub(crate) response: T,
 }
 
-/// `response` body from the generate endpoint
 #[derive(Debug, Deserialize)]
 pub(crate) struct AvianartGenerateResponse {
     pub(crate) hash: String,
 }
 
-/// `response` body from the permlink endpoint (in-progress or complete)
 #[derive(Debug, Deserialize)]
 pub(crate) struct AvianartPermlinkResponse {
-    pub(crate) status: Option<String>, // e.g. "generating", "failure"
+    pub(crate) status: Option<String>,
     pub(crate) message: String,
     pub(crate) spoiler: Option<AvianartSpoiler>,
 }
@@ -43,7 +38,7 @@ pub(crate) struct AvianartSpoiler {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct SpoilerMeta {
-    pub(crate) hash: String, // e.g. "Bomb, Powder, Rod, Ocarina, Bug Net"
+    pub(crate) hash: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -71,7 +66,6 @@ impl AvianartClient {
         }
     }
 
-    /// POST to generate endpoint; returns the hash for polling.
     pub(crate) async fn generate_seed(&self, preset: &str) -> Result<String, AvianartError> {
         let url = format!("{}?action=generate&preset={}", API_URL, preset);
         let body = json!([{"args": {"race": true}}]);
@@ -81,8 +75,6 @@ impl AvianartClient {
         Ok(result.response.hash)
     }
 
-    /// Poll the permlink endpoint until the top-level status is 200 (seed ready).
-    /// Returns the complete permlink response.
     pub(crate) async fn wait_for_seed(&self, hash: &str) -> Result<AvianartPermlinkResponse, AvianartError> {
         let url = format!("{}?action=permlink&hash={}", API_URL, hash);
         for _ in 0..MAX_POLL_ATTEMPTS {
@@ -94,18 +86,14 @@ impl AvianartClient {
             if envelope.response.status.as_deref() == Some("failure") {
                 return Err(AvianartError::GenerationFailed(envelope.response.message));
             }
-            // Outer status 200 means the seed is ready for players
             if envelope.status == 200 {
                 return Ok(envelope.response);
             }
-            // Otherwise still generating — keep polling
         }
         Err(AvianartError::Timeout(MAX_POLL_ATTEMPTS))
     }
 }
 
-/// Parse file hash from Avianart's `", "`-separated format.
-/// Example: "Bomb, Powder, Rod, Ocarina, Bug Net" → ["Bomb", "Powder", "Rod", "Ocarina", "BugNet"]
 pub(crate) fn parse_file_hash(hash_str: &str) -> Result<[String; 5], AvianartError> {
     let parts: Vec<String> = hash_str
         .split(", ")

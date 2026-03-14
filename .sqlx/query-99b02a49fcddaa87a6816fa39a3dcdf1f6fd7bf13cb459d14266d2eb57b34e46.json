@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(\n                SELECT 1 FROM volunteer_ping_messages\n                WHERE workflow_id = $1 AND race_id = $2 AND lead_time_hours = $3\n            ) AS \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "99b02a49fcddaa87a6816fa39a3dcdf1f6fd7bf13cb459d14266d2eb57b34e46"
+}
