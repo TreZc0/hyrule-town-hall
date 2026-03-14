@@ -8,13 +8,27 @@ use crate::{
 };
 
 /// The 5 available modes for the German ALTTPR tournament season 9.
-/// Each mode corresponds to a different PHP file on boothisman.de.
 pub(crate) const MODES: [Mode; 5] = [
     Mode { name: "ambroz1a", display: "Ambroz1a" },
     Mode { name: "crosskeys", display: "Crosskeys" },
     Mode { name: "enemizer", display: "Enemizer" },
     Mode { name: "inverted", display: "Inverted" },
     Mode { name: "open", display: "Open" },
+];
+
+pub(crate) static DE9_PRESETS: &[draft::PresetOption] = &[
+    draft::PresetOption { display_name: "Ambroz1a", preset: "ambroz1a" },
+    draft::PresetOption { display_name: "Crosskeys", preset: "crosskeys" },
+    draft::PresetOption { display_name: "Enemizer", preset: "enemizer" },
+    draft::PresetOption { display_name: "Inverted", preset: "inverted" },
+    draft::PresetOption { display_name: "Open", preset: "open" },
+];
+
+pub(crate) static DE9_ORDER: &[draft::DraftPhase] = &[
+    draft::DraftPhase::Ban(draft::Team::LowSeed),
+    draft::DraftPhase::Ban(draft::Team::HighSeed),
+    draft::DraftPhase::Pick(draft::Team::HighSeed),
+    draft::DraftPhase::Pick(draft::Team::LowSeed),
 ];
 
 #[derive(Clone, Copy)]
@@ -26,13 +40,27 @@ pub(crate) struct Mode {
 /// Given the draft picks, returns which mode should be used for the given game number.
 pub(crate) fn mode_for_game(picks: &draft::Picks, game: i16) -> Option<&'static Mode> {
     let mode_name = match game {
-        1 => picks.get("game1_mode")?,
-        2 => picks.get("game2_mode")?,
-        3 => picks.get("game3_mode")?,
+        1 => picks.get("game1_preset")?,
+        2 => picks.get("game2_preset")?,
+        3 => picks.get("game3_preset")?,
         _ => return None,
     };
     MODES.iter().find(|m| m.name == mode_name.as_ref())
 }
+
+pub(crate) static RIVALS_CUP_PRESETS: &[draft::PresetOption] = &[
+    draft::PresetOption { display_name: "Open", preset: "ttchaos_open" },
+    draft::PresetOption { display_name: "Standard", preset: "ttchaos_standard" },
+    draft::PresetOption { display_name: "Casual Boots", preset: "ttchaos_casualboots" },
+    draft::PresetOption { display_name: "MC Boss", preset: "ttchaos_mcboss" },
+    draft::PresetOption { display_name: "AD Tournament Keys", preset: "ttchaos_adtournamentkeys" },
+];
+
+pub(crate) static RIVALS_CUP_BRACKETS_ORDER: &[draft::DraftPhase] = &[
+    draft::DraftPhase::Ban(draft::Team::HighSeed),
+    draft::DraftPhase::Ban(draft::Team::LowSeed),
+    // remaining presets randomly assigned by bot after bans
+];
 
 pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Data<'_>) -> Result<Option<RawHtml<String>>, InfoError> {
     Ok(match &*data.event {

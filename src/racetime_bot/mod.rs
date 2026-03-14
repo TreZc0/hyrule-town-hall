@@ -278,6 +278,8 @@ pub(crate) enum Goal {
     AlttprDe9Bracket,
     AlttprDe9SwissA,
     AlttprDe9SwissB,
+    AlttprDeRivalsCupBrackets,
+    AlttprDeRivalsCupGroups,
     Cc7,
     CoOpS3,
     CopaDoBrasil,
@@ -322,7 +324,7 @@ impl Goal {
     fn from_race_data(race_data: &RaceData) -> Option<Self> {
         let Ok(bot_goal) = race_data.goal.name.parse::<Self>() else { return None };
         if race_data.goal.custom != bot_goal.is_custom() { return None }
-        if let (Goal::StandardRuleset | Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::Crosskeys2025 | Goal::MysteryD20, Some(_)) = (bot_goal, &race_data.opened_by) { return None }
+        if let (Goal::StandardRuleset | Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Crosskeys2025 | Goal::MysteryD20, Some(_)) = (bot_goal, &race_data.opened_by) { return None }
         Some(bot_goal)
     }
 
@@ -331,6 +333,8 @@ impl Goal {
             Self::AlttprDe9Bracket => series == Series::AlttprDe && event == "9bracket",
             Self::AlttprDe9SwissA => series == Series::AlttprDe && event == "9swissa",
             Self::AlttprDe9SwissB => series == Series::AlttprDe && event == "9swissb",
+            Self::AlttprDeRivalsCupBrackets => series == Series::AlttprDe && event == "rival26br",
+            Self::AlttprDeRivalsCupGroups => series == Series::AlttprDe && event == "rival26gr",
             Self::Cc7 => series == Series::Standard && event == "7cc",
             Self::CoOpS3 => series == Series::CoOp && event == "3",
             Self::CopaDoBrasil => series == Series::CopaDoBrasil && event == "1",
@@ -375,6 +379,8 @@ impl Goal {
             | Self::AlttprDe9Bracket
             | Self::AlttprDe9SwissA
             | Self::AlttprDe9SwissB
+            | Self::AlttprDeRivalsCupBrackets
+            | Self::AlttprDeRivalsCupGroups
             | Self::Cc7
             | Self::CoOpS3
             | Self::CopaDoBrasil
@@ -407,6 +413,8 @@ impl Goal {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => "9. Deutsches ALTTPR Turnier",
+            Self::AlttprDeRivalsCupBrackets => "ALTTPRDE Rival Cup Brackets",
+            Self::AlttprDeRivalsCupGroups => "ALTTPRDE Rival Cup Groups",
             Self::Cc7 => "Standard Tournament Season 7 Challenge Cup",
             Self::CoOpS3 => "Co-op Tournament Season 3",
             Self::CopaDoBrasil => "Copa do Brasil",
@@ -445,6 +453,8 @@ impl Goal {
             | Self::AlttprDe9Bracket
             | Self::AlttprDe9SwissA
             | Self::AlttprDe9SwissB
+            | Self::AlttprDeRivalsCupBrackets
+            | Self::AlttprDeRivalsCupGroups
             | Self::Cc7
             | Self::CoOpS3
             | Self::Crosskeys2025
@@ -484,7 +494,23 @@ impl Goal {
 
     fn draft_kind(&self) -> Option<draft::Kind> {
         match self {
-            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => Some(draft::Kind::AlttprDe9),
+            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => Some(draft::Kind::BanPick {
+                options: alttprde::DE9_PRESETS,
+                order: alttprde::DE9_ORDER,
+                label: "mode",
+            }),
+            Self::AlttprDeRivalsCupGroups => Some(draft::Kind::PickOnly {
+                options: alttprde::RIVALS_CUP_PRESETS,
+                who_starts: draft::Team::HighSeed,
+                picks_per_player: 1,
+                unique: true,
+                label: "preset",
+            }),
+            Self::AlttprDeRivalsCupBrackets => Some(draft::Kind::BanOnly {
+                options: alttprde::RIVALS_CUP_PRESETS,
+                order: alttprde::RIVALS_CUP_BRACKETS_ORDER,
+                label: "preset",
+            }),
             Self::Cc7 => Some(draft::Kind::S7),
             Self::MultiworldS3 => Some(draft::Kind::MultiworldS3),
             Self::MultiworldS4 => Some(draft::Kind::MultiworldS4),
@@ -525,6 +551,8 @@ impl Goal {
             | Self::AlttprDe9Bracket
             | Self::AlttprDe9SwissA
             | Self::AlttprDe9SwissB
+            | Self::AlttprDeRivalsCupBrackets
+            | Self::AlttprDeRivalsCupGroups
             | Self::Crosskeys2025
             | Self::Sgl2023
             | Self::Sgl2024
@@ -617,6 +645,8 @@ impl Goal {
                 | Self::AlttprDe9Bracket
                 | Self::AlttprDe9SwissA
                 | Self::AlttprDe9SwissB
+                | Self::AlttprDeRivalsCupBrackets
+                | Self::AlttprDeRivalsCupGroups
                 | Self::Crosskeys2025
                 | Self::MysteryD20
                 | Self::TwwrMainWeekly
@@ -665,6 +695,7 @@ impl Goal {
             Self::WeTryToBeBetterS1 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 0, 11) },
             Self::WeTryToBeBetterS2 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 2, 0) },
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => panic!("randomizer version for this goal is unused"),
+            Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups => panic!("randomizer version for this goal is unused"),
             Self::Crosskeys2025 => panic!("randomizer version for this goal is unused"),
             Self::MysteryD20 => panic!("randomizer version for this goal is unused"),
             Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => if_chain! {
@@ -687,6 +718,7 @@ impl Goal {
     pub(crate) fn single_settings(&self) -> Option<seed::Settings> {
         match self {
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => None, // per-race settings
+            Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups => None, // per-race settings
             Self::Cc7 => None, // settings draft
             Self::CoOpS3 => Some(coop::s3_settings()),
             Self::CopaDoBrasil => Some(br::s1_settings()),
@@ -749,6 +781,8 @@ impl Goal {
             | Self::AlttprDe9Bracket
             | Self::AlttprDe9SwissA
             | Self::AlttprDe9SwissB
+            | Self::AlttprDeRivalsCupBrackets
+            | Self::AlttprDeRivalsCupGroups
             | Self::Crosskeys2025
                 => ctx.say("!seed base: The tournament's base settings.").await?,
             | Self::MysteryD20
@@ -999,7 +1033,7 @@ impl Goal {
                 };
                 SeedCommandParseResult::Regular { settings: s::resolve_s7_draft_settings(&settings), unlock_spoiler_log, language: English, article: "a", description: format!("seed with {}", s::display_s7_draft_picks(&settings)) }
             }
-            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB | Self::Crosskeys2025 | Self::MysteryD20 => match args {
+            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB | Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups | Self::Crosskeys2025 | Self::MysteryD20 => match args {
                 [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
                 [arg] if arg == "base" => SeedCommandParseResult::Alttpr,
                 [_] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I don't recognize that preset" }),
@@ -1523,6 +1557,8 @@ pub(crate) struct GlobalState {
     clean_shutdown: Arc<Mutex<CleanShutdown>>,
     seed_cache_tx: watch::Sender<()>,
     seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>,
+    #[cfg_attr(not(unix), allow(dead_code))]
+    avianart_api_key: Option<String>,
 }
 
 impl TypeMapKey for GlobalState {
@@ -1543,13 +1579,14 @@ impl GlobalState {
         clean_shutdown: Arc<Mutex<CleanShutdown>>,
         seed_cache_tx: watch::Sender<()>,
         seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>,
+        avianart_api_key: Option<String>,
     ) -> Self {
         Self {
             host_info: racetime::HostInfo {
                 hostname: Cow::Borrowed(racetime_host()),
                 ..racetime::HostInfo::default()
             },
-            new_room_lock, racetime_config, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, discord_ctx, clean_shutdown, seed_cache_tx, seed_metadata,
+            new_room_lock, racetime_config, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, discord_ctx, clean_shutdown, seed_cache_tx, seed_metadata, avianart_api_key,
         }
     }
 
@@ -1960,6 +1997,45 @@ impl GlobalState {
             match res {
                 Ok(()) => {}
                 Err(e) => update_tx2.send(SeedRollUpdate::Error(e)).await.allow_unreceived(),
+            }
+        }));
+        update_rx
+    }
+
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(crate) fn roll_avianart_seed(self: Arc<Self>, preset: String) -> mpsc::Receiver<SeedRollUpdate> {
+        let (update_tx, update_rx) = mpsc::channel(128);
+        let update_tx2 = update_tx.clone();
+        tokio::spawn(async move {
+            let client = crate::avianart::AvianartClient::new(
+                self.avianart_api_key.clone(),
+                self.http_client.clone(),
+            );
+            let hash = client.generate_seed(&preset).await
+                .map_err(|e| RollError::Avianart(e.to_string()))?;
+            let seed_data = client.wait_for_seed(&hash).await
+                .map_err(|e| RollError::Avianart(e.to_string()))?;
+            let seed_hash = if let Some(ref spoiler) = seed_data.spoiler {
+                Some(crate::avianart::parse_file_hash(&spoiler.meta.hash)
+                    .map_err(|e| RollError::Avianart(e.to_string()))?)
+            } else {
+                None
+            };
+            update_tx.send(SeedRollUpdate::Done {
+                seed: seed::Data {
+                    file_hash: None,
+                    password: None,
+                    files: Some(seed::Files::AvianartSeed { hash, seed_hash }),
+                    progression_spoiler: false,
+                },
+                rsl_preset: None,
+                version: None,
+                unlock_spoiler_log: UnlockSpoilerLog::Never,
+            }).await.allow_unreceived();
+            Ok::<_, RollError>(())
+        }.then(|res| async move {
+            if let Err(e) = res {
+                update_tx2.send(SeedRollUpdate::Error(e)).await.allow_unreceived();
             }
         }));
         update_rx
@@ -2594,6 +2670,9 @@ pub(crate) enum RollError {
     UserDirs,
     #[error("{0}")]
     AlttprDe(String),
+    #[cfg_attr(not(unix), allow(dead_code))]
+    #[error("{0}")]
+    Avianart(String),
 }
 
 impl From<mpsc::error::SendError<SeedRollUpdate>> for RollError {
@@ -2702,6 +2781,13 @@ impl SeedRollUpdate {
                                 json!({ "permalink": permalink, "seed_hash": seed_hash }), cal_event.race.id as _,
                             ).execute(db_pool).await.to_racetime()?;
                         }
+                        seed::Files::AvianartSeed { hash, seed_hash } => {
+                            sqlx::query!(
+                                "UPDATE races SET seed_data = $1 WHERE id = $2",
+                                json!({ "avianart_hash": hash, "avianart_seed_hash": seed_hash.as_ref().map(|h| h.join(", ")) }),
+                                cal_event.race.id as _,
+                            ).execute(db_pool).await.to_racetime()?;
+                        }
                     }
                     if let Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) = extra.file_hash {
                         sqlx::query!(
@@ -2725,6 +2811,7 @@ impl SeedRollUpdate {
                                 }
                                 seed::Files::TriforceBlitz { .. } | seed::Files::TfbSotd { .. } => unreachable!(), // no such thing as random settings Triforce Blitz
                                 seed::Files::TwwrPermalink { .. } => unreachable!(),
+                                seed::Files::AvianartSeed { .. } => unreachable!(),
                             }
                         }
                     }
@@ -2744,6 +2831,7 @@ impl SeedRollUpdate {
                     seed::Files::TriforceBlitz { is_dev: true, uuid } => format!("https://dev.triforceblitz.com/seeds/{uuid}"),
                     seed::Files::TfbSotd { ordinal, .. } => format!("https://www.triforceblitz.com/seed/daily/{ordinal}"),
                     seed::Files::TwwrPermalink { permalink, .. } => format!("Permalink {permalink}"),
+                    seed::Files::AvianartSeed { hash, .. } => format!("https://avianart.games/perm/{hash}"),
                 };
                 let message = if let French = language {
                     format!("@entrants Voici votre seed : {seed_url}")
@@ -3050,6 +3138,7 @@ async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl
             seed::Files::TwwrPermalink { permalink, seed_hash } => {
                 format!("Permalink: {permalink} | Seed Hash: {seed_hash}")
             },
+            seed::Files::AvianartSeed { hash, .. } => format!("https://avianart.games/perm/{hash}"),
         },
     )).await
 }
@@ -3519,13 +3608,12 @@ impl Handler {
                     draft::StepKind::GoFirst => None,
                     draft::StepKind::Ban { available_settings, .. } => Some(available_settings.all().map(|setting| setting.description).collect()),
                     draft::StepKind::Pick { available_choices, .. } => Some(available_choices.all().map(|setting| setting.description).collect()),
-                    draft::StepKind::BooleanChoice { .. } | draft::StepKind::Done(_) | draft::StepKind::DoneRsl { .. } => Some(Vec::default()),
+                    draft::StepKind::BooleanChoice { .. } | draft::StepKind::Done(_) | draft::StepKind::DoneRsl { .. } | draft::StepKind::PickPreset { .. } => Some(Vec::default()),
                 }
             } else {
                 None
             });
             let available_settings = available_settings.unwrap_or_else(|| match draft_kind {
-                draft::Kind::AlttprDe9 => alttprde::MODES.iter().map(|m| Cow::Owned(format!("{}: {} mode", m.name, m.display))).collect(),
                 draft::Kind::S7 => s::S7_SETTINGS.into_iter().map(|setting| Cow::Owned(setting.description())).collect(),
                 draft::Kind::MultiworldS3 => mw::S3_SETTINGS.iter().copied().map(|mw::Setting { description, .. }| Cow::Borrowed(description)).collect(),
                 draft::Kind::MultiworldS4 => mw::S4_SETTINGS.iter().copied().map(|mw::Setting { description, .. }| Cow::Borrowed(description)).collect(),
@@ -3536,6 +3624,7 @@ impl Handler {
                 draft::Kind::TournoiFrancoS3 => fr::S3_SETTINGS.into_iter().map(|fr::Setting { description, .. }| Cow::Borrowed(description)).collect(),
                 draft::Kind::TournoiFrancoS4 => fr::S4_SETTINGS.into_iter().map(|fr::Setting { description, .. }| Cow::Borrowed(description)).collect(),
                 draft::Kind::TournoiFrancoS5 => fr::S5_SETTINGS.into_iter().map(|fr::Setting { description, .. }| Cow::Borrowed(description)).collect(),
+                draft::Kind::PickOnly { options, .. } | draft::Kind::BanPick { options, .. } | draft::Kind::BanOnly { options, .. } => options.iter().map(|p| Cow::Borrowed(p.display_name)).collect(),
             });
             if available_settings.is_empty() {
                 ctx.say(if let French = goal.language() {
@@ -3573,6 +3662,14 @@ impl Handler {
                         let cal_event = self.official_data.as_ref().expect("AlttprDe9 goal must have official_data").cal_event.clone();
                         self.roll_alttprde9_seed(ctx, cal_event, goal.language(), article).await;
                     }
+                    Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups => {
+                        let cal_event = self.official_data.as_ref().expect("RivalsCup goal must have official_data").cal_event.clone();
+                        let preset = settings.get("preset")
+                            .and_then(|v| v.as_str())
+                            .expect("RivalsCup Done settings missing preset")
+                            .to_owned();
+                        self.roll_rivals_cup_seed(ctx, cal_event, preset, goal.language(), article).await;
+                    }
                     Goal::Crosskeys2025 => {
                         let cal_event = self.official_data.as_ref().expect("Crosskeys2025 goal must have official_data").cal_event.clone();
                         self.roll_crosskeys2025_seed(ctx, cal_event, goal.language(), article).await;
@@ -3595,7 +3692,7 @@ impl Handler {
                 };
                 self.roll_rsl_seed(ctx, preset, world_count, unlock_spoiler_log, goal.language(), article, description).await;
             }
-            draft::StepKind::GoFirst | draft::StepKind::Ban { .. } | draft::StepKind::Pick { .. } | draft::StepKind::BooleanChoice { .. } => ctx.say(step.message).await?,
+            draft::StepKind::GoFirst | draft::StepKind::Ban { .. } | draft::StepKind::Pick { .. } | draft::StepKind::BooleanChoice { .. } | draft::StepKind::PickPreset { .. } => ctx.say(step.message).await?,
         }
         Ok(())
     }
@@ -3607,11 +3704,11 @@ impl Handler {
             lock!(@write state = self.race_state; if let Some(draft_kind) = goal.draft_kind() {
                 match *state {
                     RaceState::Init => match draft_kind {
-                        draft::Kind::AlttprDe9 => ctx.say(format!("Sorry {reply_to}, no mode draft has been started. Use \"!seed draft\" to start one. Available modes: Ambroz1a, Crosskeys, Enemizer, Inverted, Open")).await?,
                         draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use \"!seed draft\" to start one.")).await?,
                         draft::Kind::RslS7 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use \"!seed draft\" to start one. For more info about these options, use !presets")).await?,
                         draft::Kind::TournoiFrancoS3 => ctx.say(format!("Désolé {reply_to}, le draft n'a pas débuté. Utilisez \"!seed draft\" pour en commencer un. Pour plus d'infos, utilisez !presets")).await?,
                         draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use \"!seed draft\" to start one. For more info about these options, use !presets / le draft n'a pas débuté. Utilisez \"!seed draft\" pour en commencer un. Pour plus d'infos, utilisez !presets")).await?,
+                        draft::Kind::PickOnly { label, .. } | draft::Kind::BanPick { label, .. } | draft::Kind::BanOnly { label, .. } => ctx.say(format!("Sorry {reply_to}, the {label} draft for this event is done in Discord before the race starts.")).await?,
                     },
                     RaceState::Draft { state: ref mut draft, .. } => {
                         let is_active_team = if let Some(OfficialRaceData { ref cal_event, ref event, .. }) = self.official_data {
@@ -3649,11 +3746,11 @@ impl Handler {
                             }
                         } else {
                             match draft_kind {
-                                draft::Kind::AlttprDe9 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the mode draft.")).await?,
                                 draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the settings draft.")).await?,
                                 draft::Kind::RslS7 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the weights draft.")).await?,
                                 draft::Kind::TournoiFrancoS3 => ctx.say(format!("Désolé {reply_to}, mais ce n'est pas votre tour.")).await?,
                                 draft::Kind::TournoiFrancoS4 | draft::Kind::TournoiFrancoS5 => ctx.say(format!("Sorry {reply_to}, it's not your turn in the settings draft. / mais ce n'est pas votre tour.")).await?,
+                                draft::Kind::PickOnly { label, .. } | draft::Kind::BanPick { label, .. } | draft::Kind::BanOnly { label, .. } => ctx.say(format!("Sorry {reply_to}, it's not your turn in the {label} draft.")).await?,
                             }
                         }
                     }
@@ -3748,6 +3845,16 @@ impl Handler {
                                 ), true, Vec::default()).await.expect("failed to send race options");
     }
 
+    async fn roll_rivals_cup_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, preset: String, language: Language, article: &'static str) {
+        let official_start = cal_event.start().expect("handling room for official race without start time");
+        let delay_until = official_start - TimeDelta::minutes(10);
+        let preset_display = alttprde::RIVALS_CUP_PRESETS.iter()
+            .find(|p| p.preset == preset)
+            .map(|p| p.display_name.to_owned())
+            .unwrap_or_else(|| preset.clone());
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_avianart_seed(preset), language, article, format!("{preset_display} seed"), false).await;
+    }
+
     async fn roll_crosskeys2025_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(10);
@@ -3833,6 +3940,7 @@ impl Handler {
                             }
                             seed::Files::TriforceBlitz { .. } | seed::Files::TfbSotd { .. } => {} // automatically unlocked by triforceblitz.com
                             seed::Files::TwwrPermalink { .. } => {} // already handled by triforceblitz.com
+                            seed::Files::AvianartSeed { .. } => {}
                         }
                     }
                 },
@@ -3960,7 +4068,7 @@ impl RaceHandler<GlobalState> for Handler {
                             )
                         }
                     }
-                }, !matches!(goal, Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::Crosskeys2025), Vec::default()).await?;
+                }, !matches!(goal, Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Crosskeys2025), Vec::default()).await?;
                 // Announce mode for events with round_modes set
                 match goal {
                     Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB => {
@@ -4056,7 +4164,7 @@ impl RaceHandler<GlobalState> for Handler {
                     }
                 }
                 let fpa_enabled = match goal {
-                    Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::Crosskeys2025 | Goal::MysteryD20 => false,
+                    Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Crosskeys2025 | Goal::MysteryD20 => false,
                     _ => {
                         match data.status.value {
                             RaceStatusValue::Invitational => {
@@ -4196,6 +4304,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 ],
                             ).await?,
                             Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB => unreachable!("attempted to handle a user-opened AlttprDe9 room"),
+                            Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups => unreachable!("attempted to handle a user-opened RivalsCup room"),
                             Goal::Crosskeys2025 => unreachable!("attempted to handle a user-opened Crosskeys2025 room"),
                             Goal::MysteryD20 => unreachable!("attempted to handle a user-opened MysteryD20 room"),
                             Goal::LeagueS8 => ctx.send_message(
@@ -4982,6 +5091,9 @@ impl RaceHandler<GlobalState> for Handler {
                             | Goal::AlttprDe9SwissA
                             | Goal::AlttprDe9SwissB
                                 => this.roll_alttprde9_seed(ctx, cal_event.clone(), English, "a").await,
+                            Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups => {
+                                ctx.say("@entrants WARNING: The preset draft for this match is not complete! Please complete the draft in the scheduling Discord thread before the race.").await.to_racetime()?;
+                            }
                             | Goal::Crosskeys2025
                                 => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await,
                             Goal::TwwrMainWeekly
@@ -5008,7 +5120,7 @@ impl RaceHandler<GlobalState> for Handler {
                             this.advance_draft(ctx, &state).await?;
                             // Warn if draft is incomplete for alttprde9bracket
                             if matches!(goal, Goal::AlttprDe9Bracket) {
-                                let step = draft_state.next_step(draft::Kind::AlttprDe9, cal_event.race.game, &mut draft::MessageContext::None).await.to_racetime()?;
+                                let step = draft_state.next_step(draft::Kind::BanPick { options: alttprde::DE9_PRESETS, order: alttprde::DE9_ORDER, label: "mode" }, cal_event.race.game, &mut draft::MessageContext::None).await.to_racetime()?;
                                 if !matches!(step.kind, draft::StepKind::Done(_)) {
                                     ctx.say("@entrants WARNING: The mode draft for this match is not complete! Please complete the draft as soon as possible. The seed cannot be rolled until the draft is finished.").await.to_racetime()?;
                                 }
@@ -5770,6 +5882,8 @@ impl RaceHandler<GlobalState> for Handler {
                     | Goal::AlttprDe9Bracket
                     | Goal::AlttprDe9SwissA
                     | Goal::AlttprDe9SwissB
+                    | Goal::AlttprDeRivalsCupBrackets
+                    | Goal::AlttprDeRivalsCupGroups
                     | Goal::Cc7
                     | Goal::CoOpS3
                     | Goal::CopaDoBrasil
@@ -6573,7 +6687,7 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                                 // Add warning if this is an alttprde9bracket race with incomplete draft
                                 if event.series == Series::AlttprDe && event.event == "9bracket" {
                                     if let Some(draft) = &cal_event.race.draft {
-                                        if let Ok(step) = draft.next_step(draft::Kind::AlttprDe9, cal_event.race.game, &mut draft::MessageContext::None).await {
+                                        if let Ok(step) = draft.next_step(draft::Kind::BanPick { options: alttprde::DE9_PRESETS, order: alttprde::DE9_ORDER, label: "mode" }, cal_event.race.game, &mut draft::MessageContext::None).await {
                                             if !matches!(step.kind, draft::StepKind::Done(_)) {
                                                 msg.push_str("\n\n⚠️ **WARNING**: The mode draft for this match is not complete! Please complete the draft as soon as possible. The seed cannot be rolled until the draft is finished.");
                                             }

@@ -1202,7 +1202,7 @@ impl Race {
             match draft.next_step(draft_kind, None, &mut draft::MessageContext::None).await?.kind {
                 draft::StepKind::Done(settings) => Some(settings),
                 draft::StepKind::DoneRsl { .. } => None, //TODO
-                draft::StepKind::GoFirst | draft::StepKind::Ban { .. } | draft::StepKind::Pick { .. } | draft::StepKind::BooleanChoice { .. } => None,
+                draft::StepKind::GoFirst | draft::StepKind::Ban { .. } | draft::StepKind::Pick { .. } | draft::StepKind::BooleanChoice { .. } | draft::StepKind::PickPreset { .. } => None,
             }
         } else {
             None
@@ -1231,6 +1231,7 @@ impl Race {
             Some(seed::Files::TriforceBlitz { is_dev, uuid }) => (None, None, None, None, is_dev, Some(uuid), None),
             Some(seed::Files::TfbSotd { .. }) => unimplemented!("Triforce Blitz seed of the day not supported for official races"),
             Some(seed::Files::TwwrPermalink { .. }) => (None, None, None, None, false, None, None),
+            Some(seed::Files::AvianartSeed { .. }) => (None, None, None, None, false, None, None),
             None => (None, None, None, None, false, None, None),
         };
         sqlx::query!("

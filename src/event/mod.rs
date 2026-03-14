@@ -437,6 +437,31 @@ impl<'a> Data<'a> {
         self.asyncs_active
     }
 
+    /// Returns `(key, plain_text_label)` for every `BooleanChoice` requirement in the enter flow.
+    pub(crate) fn boolean_choice_requirements(&self) -> Vec<(&str, String)> {
+        let Some(ref flow) = self.enter_flow else { return vec![] };
+        flow.requirements.iter()
+            .filter_map(|req| {
+                if let enter::Requirement::BooleanChoice { key, label } = req {
+                    // Strip HTML tags so the label is safe for plain-text contexts (Discord).
+                    let mut plain = String::new();
+                    let mut in_tag = false;
+                    for c in label.0.chars() {
+                        match c {
+                            '<' => in_tag = true,
+                            '>' => in_tag = false,
+                            c if !in_tag => plain.push(c),
+                            _ => {}
+                        }
+                    }
+                    Some((key.as_str(), plain))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     pub(crate) fn is_single_race(&self) -> bool {
         match self.series {
             Series::AlttprDe => false,
@@ -514,9 +539,25 @@ impl<'a> Data<'a> {
                 if self.round_modes.is_some() {
                     None // Mode is fixed per round, no draft needed
                 } else {
-                    Some(draft::Kind::AlttprDe9)
+                    Some(draft::Kind::BanPick {
+                        options: alttprde::DE9_PRESETS,
+                        order: alttprde::DE9_ORDER,
+                        label: "mode",
+                    })
                 }
             }
+            (Series::AlttprDe, "rival26gr") => Some(draft::Kind::PickOnly {
+                options: alttprde::RIVALS_CUP_PRESETS,
+                who_starts: draft::Team::HighSeed,
+                picks_per_player: 1,
+                unique: true,
+                label: "preset",
+            }),
+            (Series::AlttprDe, "rival26br") => Some(draft::Kind::BanOnly {
+                options: alttprde::RIVALS_CUP_PRESETS,
+                order: alttprde::RIVALS_CUP_BRACKETS_ORDER,
+                label: "preset",
+            }),
             (Series::Multiworld, "3") => Some(draft::Kind::MultiworldS3),
             (Series::Multiworld, "4") => Some(draft::Kind::MultiworldS4),
             (Series::Multiworld, "5") => Some(draft::Kind::MultiworldS5),
