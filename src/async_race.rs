@@ -24,7 +24,6 @@ use {
 pub(crate) struct AsyncRaceManager;
 
 impl AsyncRaceManager {
-    /// Creates async threads 30 minutes before the scheduled start time
     pub(crate) async fn create_async_threads(
         pool: &PgPool,
         discord_ctx: &DiscordCtx,
@@ -32,7 +31,6 @@ impl AsyncRaceManager {
     ) -> Result<(), Error> {
         let mut transaction = pool.begin().await?;
         
-        // Find races that need async threads created (bracket races)
         let races = Self::get_races_needing_threads(&mut transaction).await?;
         
         for race in races {
@@ -45,9 +43,6 @@ impl AsyncRaceManager {
                 for (async_part, start_time) in Self::get_async_parts(&race) {
                     if let Some(start_time) = start_time {
                         let time_until_start = start_time - Utc::now();
-                        // Only create the thread for this part if:
-                        // - The thread does not exist
-                        // - The start time is in the future and less than 30 minutes away
                         let thread_exists = match async_part {
                             1 => sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM races WHERE id = $1 AND async_thread1 IS NOT NULL) AS "exists!""#, race.id as _).fetch_one(&mut *transaction).await?,
                             2 => sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM races WHERE id = $1 AND async_thread2 IS NOT NULL) AS "exists!""#, race.id as _).fetch_one(&mut *transaction).await?,
@@ -71,14 +66,12 @@ impl AsyncRaceManager {
             }
         }
         
-        // Also create threads for qualifier asyncs (automated_asyncs = true)
         Self::create_qualifier_threads(&mut transaction, discord_ctx, pool).await?;
         
         transaction.commit().await?;
         Ok(())
     }
 
-    /// Creates a private thread for an async race part
     async fn create_async_thread(
         transaction: &mut Transaction<'_, Postgres>,
         discord_ctx: &DiscordCtx,
@@ -93,10 +86,8 @@ impl AsyncRaceManager {
         let player = team.members(transaction).await?.into_iter().next()
             .ok_or(Error::NoTeamMembers)?;
         
-        // Determine if this is first or second half based on scheduled start times
         let is_first_half = Self::is_first_half(race, async_part, start_time);
         
-        // Build matchup string
         let teams: Vec<_> = race.teams().collect();
         let mut matchup = String::new();
         for (i, _team) in teams.iter().enumerate() {
@@ -106,10 +97,7 @@ impl AsyncRaceManager {
             matchup.push_str(&format!("P{}", i + 1));
         }
         
-        // Get player name
         let player_name = player.display_name();
-        
-        // Build thread name: Async <Round>: <player> (<1st/2nd>) if round/phase exists, else Async <Matchup>: <player> (<1st/2nd>)
         let display_order = Self::get_display_order(race, async_part);
         let thread_name = if race.phase.is_some() || race.round.is_some() {
             let round_str = if let Some(phase) = &race.phase {
@@ -144,7 +132,6 @@ impl AsyncRaceManager {
             .auto_archive_duration(AutoArchiveDuration::OneWeek)
         ).await?;
         
-        // Store thread ID in database
         let thread_id = thread.id.get() as i64;
         match async_part {
             1 => sqlx::query!("UPDATE races SET async_thread1 = $1 WHERE id = $2", thread_id, race.id as _).execute(&mut **transaction).await?,
@@ -153,24 +140,20 @@ impl AsyncRaceManager {
             _ => return Ok(()),
         };
         
-        // Create the READY button
         let ready_button = CreateActionRow::Buttons(vec![
             CreateButton::new("async_ready")
                 .label("READY!")
                 .style(ButtonStyle::Primary)
         ]);
 
-        // Send the initial message with the READY button
         thread.send_message(discord_ctx, CreateMessage::new()
             .content(content.build())
             .components(vec![ready_button])
         ).await?;
         
-        // Add organizers and player to thread (but exclude organizers who are opponents)
         let organizers = event.organizers(transaction).await.map_err(Error::Event)?;
         let current_team = Self::get_team_for_async_part(race, async_part)?;
         
-        // Track which Discord users we've already added to avoid duplicates
         let mut added_users = HashSet::new();
         
         // First, add the current player
@@ -181,19 +164,16 @@ impl AsyncRaceManager {
             }
         }
         
-        // Then add organizers who are not opponents
         for organizer in organizers {
             if let Some(discord) = &organizer.discord {
-                // Skip if we already added this user (e.g., if they're the current player)
                 if added_users.contains(&discord.id) {
                     continue;
                 }
                 
-                // Check if this organizer is part of any opponent team (not the current team)
                 let mut is_opponent = false;
                 for team in race.teams() {
                     if team.id == current_team.id {
-                        continue; // Skip current team
+                        continue;
                     } else {
                         // Check if organizer is a member of this opponent team
                         if let Ok(members) = team.members(transaction).await {
@@ -207,7 +187,6 @@ impl AsyncRaceManager {
                     }
                 }
                 
-                // Only add organizers who are NOT opponents
                 if !is_opponent {
                     if let Ok(member) = thread.guild_id.member(discord_ctx, discord.id).await {
                         let _ = thread.id.add_thread_member(discord_ctx, member.user.id).await;
@@ -220,7 +199,6 @@ impl AsyncRaceManager {
         Ok(())
     }
 
-    /// Builds the content for the async thread
     async fn build_async_thread_content(
         transaction: &mut Transaction<'_, Postgres>,
         event: &EventData<'_>,
@@ -233,7 +211,6 @@ impl AsyncRaceManager {
     ) -> Result<MessageBuilder, Error> {
         let mut content = MessageBuilder::default();
         
-        // Header with player mention and race info
         content.push("Hey ");
         content.mention_user(player);
         content.push(", this thread will be used to handle your part of the async for this race: ");
@@ -251,10 +228,8 @@ impl AsyncRaceManager {
         let teams: Vec<_> = race.teams().collect();
         for (i, team) in teams.iter().enumerate() {
             if team.id == Self::get_team_for_async_part(race, async_part)?.id {
-                // Mention (ping) the current player's team
                 content.mention_team(transaction, event.discord_guild, team).await?;
             } else {
-                // Just show the opponent's team name without pinging
                 content.push_safe(team.name(transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()));
             }
             if i < teams.len() - 1 {
@@ -269,7 +244,6 @@ impl AsyncRaceManager {
         content.push(display_order.to_string());
         content.push(" of this round.");
 
-        // Add settings information for Crosskeys2025 events only
         let goal = racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event");
         if matches!(goal, racetime_bot::Goal::Crosskeys2025) {
             let crosskeys_options = racetime_bot::CrosskeysRaceOptions::for_race(db_pool, race).await;
@@ -281,7 +255,6 @@ impl AsyncRaceManager {
             content.push(format!("**Seed Settings:** {}", crosskeys_options.as_seed_options_str()));
             content.push_line("");
 
-            // Use the new method that excludes delay setting
             let race_options_str = crosskeys_options.as_race_options_str_no_delay();
 
             content.push(format!("**Race Rules:** {}", race_options_str));
@@ -289,7 +262,6 @@ impl AsyncRaceManager {
             content.push("---");
         }
 
-        // Add round mode and settings information for AlttprDe events (9swissX and 9bracket)
         if race.series == Series::AlttprDe {
             let alttprde_options = racetime_bot::AlttprDeRaceOptions::for_race(db_pool, race, event.round_modes.as_ref()).await;
 
@@ -298,10 +270,8 @@ impl AsyncRaceManager {
             content.push("---");
             content.push_line("");
 
-            // Display round mode for swiss events (9swissX)
             if let Some(ref round) = race.round {
                 if event.round_modes.is_some() {
-                    // This is a swiss event with fixed round modes
                     if let Some(mode_display) = alttprde_options.mode_display() {
                         content.push(format!("**Round Mode:** {} - {}", round, mode_display));
                     } else {
@@ -311,14 +281,12 @@ impl AsyncRaceManager {
                 }
             }
 
-            // Display mode and custom settings for bracket events (9bracket)
             if event.event == "9bracket" {
                 if let Some(mode_display) = alttprde_options.mode_display() {
                     content.push(format!("**Mode:** {}", mode_display));
                     content.push_line("");
                 }
 
-                // Display custom settings picked by both runners
                 if !alttprde_options.custom_choices.is_empty() {
                     content.push("**Settings chosen by both runners:** ");
                     let choices = alttprde_options.custom_choices_labels();
@@ -343,7 +311,6 @@ impl AsyncRaceManager {
         content.push_line("");
         content.push("To maintain fairness, the final match results will only be shared after both players have completed the seed and organizers have confirmed the results.");
         
-        // Instructions based on display order
         let is_alttpr = sqlx::query_scalar!(
             r#"SELECT EXISTS (
                 SELECT 1 FROM game_series gs
@@ -396,7 +363,6 @@ impl AsyncRaceManager {
         Ok(content)
     }
 
-    /// Distributes seed to a specific async thread
     async fn distribute_seed_to_thread(
         transaction: &mut Transaction<'_, Postgres>,
         discord_ctx: &DiscordCtx,
@@ -406,7 +372,6 @@ impl AsyncRaceManager {
     ) -> Result<(), Error> {
         let seed_url = Self::get_seed_url(race)?;
         
-        // Get the player for this async part
         let team = Self::get_team_for_async_part(race, async_part)?;
         let player = team.members(transaction).await?.into_iter().next()
             .ok_or(Error::NoTeamMembers)?;
@@ -436,7 +401,6 @@ impl AsyncRaceManager {
             }
         }
         
-        // Get thread ID from database
         let thread_id = match async_part {
             1 => sqlx::query_scalar!("SELECT async_thread1 FROM races WHERE id = $1", race.id as _).fetch_one(&mut **transaction).await?,
             2 => sqlx::query_scalar!("SELECT async_thread2 FROM races WHERE id = $1", race.id as _).fetch_one(&mut **transaction).await?,
@@ -448,7 +412,6 @@ impl AsyncRaceManager {
             let thread = ChannelId::new(thread_id as u64);
             thread.say(discord_ctx, content.build()).await?;
             
-            // Mark seed as distributed
             match async_part {
                 1 => sqlx::query!("UPDATE races SET async_seed1 = TRUE WHERE id = $1", race.id as _).execute(&mut **transaction).await?,
                 2 => sqlx::query!("UPDATE races SET async_seed2 = TRUE WHERE id = $1", race.id as _).execute(&mut **transaction).await?,
@@ -460,7 +423,6 @@ impl AsyncRaceManager {
         Ok(())
     }
 
-    /// Gets async parts and their start times
     fn get_async_parts(race: &Race) -> Vec<(u8, Option<DateTime<Utc>>)> {
         match &race.schedule {
             RaceSchedule::Async { start1, start2, start3, .. } => {
@@ -474,7 +436,6 @@ impl AsyncRaceManager {
         }
     }
 
-    /// Gets the team for a specific async part (database mapping - team order)
     fn get_team_for_async_part(race: &Race, async_part: u8) -> Result<&Team, Error> {
         let teams: Vec<_> = race.teams().collect();
         match async_part {
@@ -485,59 +446,47 @@ impl AsyncRaceManager {
         }
     }
 
-    /// Determines if this async part is the first half based on scheduled start times
     fn is_first_half(race: &Race, async_part: u8, _start_time: DateTime<Utc>) -> bool {
         match &race.schedule {
             RaceSchedule::Async { start1, start2, start3, .. } => {
-                // Get all scheduled start times that are not None
                 let mut scheduled_times = Vec::new();
                 if let Some(time) = start1 { scheduled_times.push((1, *time)); }
                 if let Some(time) = start2 { scheduled_times.push((2, *time)); }
                 if let Some(time) = start3 { scheduled_times.push((3, *time)); }
                 
-                // Sort by start time
                 scheduled_times.sort_by_key(|&(_, time)| time);
                 
-                // Find the position of this async part in the sorted list
                 if let Some(position) = scheduled_times.iter().position(|&(part, _)| part == async_part) {
-                    position == 0 // First position (earliest time) = first half
+                    position == 0
                 } else {
-                    // Fallback to async_part number if not found
                     async_part == 1
                 }
             }
-            _ => async_part == 1, // Fallback
+            _ => async_part == 1,
         }
     }
 
-    /// Gets the display order (1st, 2nd, 3rd) for an async part based on scheduled start times
     fn get_display_order(race: &Race, async_part: u8) -> u8 {
         match &race.schedule {
             RaceSchedule::Async { start1, start2, start3, .. } => {
-                // Get all scheduled start times that are not None
                 let mut scheduled_times = Vec::new();
                 if let Some(time) = start1 { scheduled_times.push((1, *time)); }
                 if let Some(time) = start2 { scheduled_times.push((2, *time)); }
                 if let Some(time) = start3 { scheduled_times.push((3, *time)); }
                 
-                // Sort by start time
                 scheduled_times.sort_by_key(|&(_, time)| time);
                 
-                // Find the position of this async part in the sorted list
                 if let Some(position) = scheduled_times.iter().position(|&(part, _)| part == async_part) {
-                    (position + 1) as u8 // Convert to 1-based display order
+                    (position + 1) as u8
                 } else {
-                    // Fallback to async_part number if not found
                     async_part
                 }
             }
-            _ => async_part, // Fallback
+            _ => async_part,
         }
     }
 
-    /// Gets the seed URL for a race
     fn get_seed_url(race: &Race) -> Result<String, Error> {
-        // Check if race has a seed
         if let Some(seed_files) = &race.seed.files {
             match seed_files {
                 seed::Files::AlttprDoorRando { uuid } => {
@@ -555,7 +504,6 @@ impl AsyncRaceManager {
         }
     }
 
-    /// Gets races that need async threads created
     async fn get_races_needing_threads(
         transaction: &mut Transaction<'_, Postgres>,
     ) -> Result<Vec<Race>, Error> {
@@ -585,19 +533,11 @@ impl AsyncRaceManager {
         Ok(races)
     }
 
-    /// Creates threads for qualifier teams that have requested but not yet received a thread
     async fn create_qualifier_threads(
         transaction: &mut Transaction<'_, Postgres>,
         discord_ctx: &DiscordCtx,
         _pool: &PgPool,
     ) -> Result<(), Error> {
-        // Query teams that need qualifier threads:
-        // - requested IS NOT NULL (team has requested the qualifier)
-        // - submitted IS NULL (team hasn't submitted yet)
-        // - discord_thread IS NULL (no thread created yet)
-        // - event has automated_asyncs = true
-        // - event has discord_async_channel configured
-        // - async has a seed available (web_id, tfb_uuid, xkeys_uuid, file_stem, or seed_data)
         let teams_needing_threads = sqlx::query!(
             r#"
             SELECT
@@ -638,7 +578,6 @@ impl AsyncRaceManager {
                     row.async_kind,
                     async_channel,
                 ).await {
-                    // Log error but continue processing other teams
                     log::error!("Failed to create qualifier thread for team {}: {:?}", row.team_id, e);
                 }
             }
@@ -647,7 +586,6 @@ impl AsyncRaceManager {
         Ok(())
     }
 
-    /// Creates a private thread for a qualifier async
     async fn create_qualifier_thread(
         transaction: &mut Transaction<'_, Postgres>,
         discord_ctx: &DiscordCtx,
@@ -656,11 +594,9 @@ impl AsyncRaceManager {
         async_kind: AsyncKind,
         async_channel: ChannelId,
     ) -> Result<(), Error> {
-        // Get team name
         let team_name = team.name(transaction).await?
             .unwrap_or_else(|| "Unknown Team".to_string().into());
 
-        // Build thread name
         let kind_str = match async_kind {
             AsyncKind::Qualifier1 => "Qualifier",
             AsyncKind::Qualifier2 => "Qualifier 2",
@@ -671,7 +607,6 @@ impl AsyncRaceManager {
         };
         let thread_name = format!("{}: {}", kind_str, team_name);
 
-        // Build thread content
         let mut content = Self::build_qualifier_thread_content(
             transaction,
             event,
@@ -679,13 +614,11 @@ impl AsyncRaceManager {
             async_kind,
         ).await?;
 
-        // Create the thread
         let thread = async_channel.create_thread(discord_ctx, CreateThread::new(&thread_name)
             .kind(ChannelType::PrivateThread)
             .auto_archive_duration(AutoArchiveDuration::OneWeek)
         ).await?;
 
-        // Store thread ID in async_teams
         let thread_id = thread.id.get() as i64;
         sqlx::query!(
             "UPDATE async_teams SET discord_thread = $1 WHERE team = $2 AND kind = $3",
@@ -694,20 +627,17 @@ impl AsyncRaceManager {
             async_kind as _
         ).execute(&mut **transaction).await?;
 
-        // Create the READY button
         let ready_button = CreateActionRow::Buttons(vec![
             CreateButton::new(format!("async_ready_qualifier_{}_{}", team.id, async_kind as i32))
                 .label("READY!")
                 .style(ButtonStyle::Primary)
         ]);
 
-        // Send the initial message with the READY button
         thread.send_message(discord_ctx, CreateMessage::new()
             .content(content.build())
             .components(vec![ready_button])
         ).await?;
 
-        // Add team members to thread
         let members = team.members(transaction).await?;
         for member in &members {
             if let Some(discord) = &member.discord {
@@ -717,7 +647,6 @@ impl AsyncRaceManager {
             }
         }
 
-        // Add organizers to thread
         let organizers = event.organizers(transaction).await.map_err(Error::Event)?;
         for organizer in organizers {
             if let Some(discord) = &organizer.discord {
@@ -730,7 +659,6 @@ impl AsyncRaceManager {
         Ok(())
     }
 
-    /// Builds the content for a qualifier async thread
     async fn build_qualifier_thread_content(
         transaction: &mut Transaction<'_, Postgres>,
         event: &EventData<'_>,
@@ -739,10 +667,8 @@ impl AsyncRaceManager {
     ) -> Result<MessageBuilder, Error> {
         let mut content = MessageBuilder::default();
 
-        // Get team members for mention
         let members = team.members(transaction).await?;
 
-        // Header
         content.push("Welcome ");
         for (i, member) in members.iter().enumerate() {
             content.mention_user(member);
@@ -819,7 +745,6 @@ impl AsyncRaceManager {
         Ok(content)
     }
 
-    /// Handles the READY button click for async races
     pub(crate) async fn handle_ready_button(
         pool: &PgPool,
         discord_ctx: &DiscordCtx,
@@ -829,10 +754,8 @@ impl AsyncRaceManager {
     ) -> Result<(), Error> {
         let mut transaction = pool.begin().await?;
         
-        // Load the race
         let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await?;
         
-        // Verify the user is a member of the team for this async part
         let team = Self::get_team_for_async_part(&race, async_part)?;
         let members = team.members(&mut transaction).await?;
         if !members.iter().any(|m| m.discord.as_ref().map(|d| d.id) == Some(user_id)) {
@@ -840,7 +763,6 @@ impl AsyncRaceManager {
         }
         let player = members.into_iter().next().ok_or(Error::NoTeamMembers)?;
         
-        // Check if already ready
         let already_ready = match async_part {
             1 => sqlx::query_scalar!("SELECT async_ready1 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
             2 => sqlx::query_scalar!("SELECT async_ready2 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
@@ -852,7 +774,6 @@ impl AsyncRaceManager {
             return Err(Error::AlreadyReady);
         }
         
-        // Mark as ready
         match async_part {
             1 => sqlx::query!("UPDATE races SET async_ready1 = TRUE WHERE id = $1", race_id).execute(&mut *transaction).await?,
             2 => sqlx::query!("UPDATE races SET async_ready2 = TRUE WHERE id = $1", race_id).execute(&mut *transaction).await?,
@@ -860,8 +781,6 @@ impl AsyncRaceManager {
             _ => return Ok(()),
         };
         
-        // Create initial async_times record (without start_time)
-        // Ready records should have recorded_by and recorded_at as NULL to distinguish them from reported records
         sqlx::query!(
             "INSERT INTO async_times (race_id, async_part, recorded_by, recorded_at) VALUES ($1, $2, NULL, NULL) ON CONFLICT (race_id, async_part) DO NOTHING",
             race_id,
@@ -874,7 +793,6 @@ impl AsyncRaceManager {
             .map_err(|e| Error::Event(event::Error::Data(e)))?
             .ok_or(Error::EventNotFound)?;
         
-        // Distribute seed and notify organizers
         Self::distribute_seed_to_thread(
             &mut transaction,
             discord_ctx,
@@ -883,7 +801,6 @@ impl AsyncRaceManager {
             async_part,
         ).await?;
         
-        // Notify in the async thread
         let thread_id = match async_part {
             1 => sqlx::query_scalar!("SELECT async_thread1 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
             2 => sqlx::query_scalar!("SELECT async_thread2 FROM races WHERE id = $1", race_id).fetch_one(&mut *transaction).await?,
@@ -920,7 +837,6 @@ impl AsyncRaceManager {
             content.push_line("");
             content.push("Click the START COUNTDOWN button when you're ready to begin your run.");
 
-            // Check for force-start delay
             let async_start_delay = event.async_start_delay;
             if let Some(delay) = async_start_delay {
                 if delay > 0 {
@@ -929,7 +845,6 @@ impl AsyncRaceManager {
                 }
             }
 
-            // Create the START COUNTDOWN button
             let start_countdown_button = CreateActionRow::Buttons(vec![
                 CreateButton::new("async_start_countdown")
                     .label("START COUNTDOWN")
@@ -941,7 +856,6 @@ impl AsyncRaceManager {
                 .components(vec![start_countdown_button])
             ).await?;
 
-            // Spawn force-start task if configured
             if let Some(delay) = async_start_delay {
                 let run = AsyncRun::BracketRace { race_id, async_part };
                 let player_id = player.discord.as_ref().map(|d| d.id).ok_or(Error::NoTeamMembers)?;
@@ -994,7 +908,6 @@ pub(crate) enum Error {
     AlreadyFinished,
 }
 
-/// Unified abstraction for both bracket async races and qualifier asyncs.
 #[derive(Debug, Clone)]
 pub(crate) enum AsyncRun {
     BracketRace { race_id: i64, async_part: u8 },
@@ -1002,8 +915,6 @@ pub(crate) enum AsyncRun {
 }
 
 impl AsyncRun {
-    /// Parse a unified button custom_id.
-    /// Returns (action, run, optional nonce).
     pub(crate) fn parse_button(custom_id: &str) -> Option<(String, AsyncRun, Option<i64>)> {
         let rest = custom_id.strip_prefix("async:")?;
         let mut parts = rest.splitn(2, ':');
@@ -1028,7 +939,6 @@ impl AsyncRun {
         }
     }
 
-    /// Generate a button custom_id for a given action.
     pub(crate) fn button_id(&self, action: &str) -> String {
         match self {
             AsyncRun::BracketRace { race_id, async_part } => {
@@ -1040,7 +950,6 @@ impl AsyncRun {
         }
     }
 
-    /// Generate a button custom_id with a nonce (for revert buttons).
     pub(crate) fn button_id_with_nonce(&self, action: &str, nonce: i64) -> String {
         match self {
             AsyncRun::BracketRace { race_id, async_part } => {
@@ -1052,8 +961,6 @@ impl AsyncRun {
         }
     }
 
-    /// Verify that the Discord user is authorized to click buttons for this run.
-    /// For both bracket and qualifier: checks team membership.
     pub(crate) async fn verify_user(&self, pool: &PgPool, user_id: UserId) -> Result<(), Error> {
         let is_member = match self {
             AsyncRun::BracketRace { race_id, async_part } => {
@@ -1078,7 +985,6 @@ impl AsyncRun {
         if is_member { Ok(()) } else { Err(Error::UnauthorizedUser) }
     }
 
-    /// Check whether the countdown has already been started.
     pub(crate) async fn is_started(&self, pool: &PgPool) -> Result<bool, Error> {
         match self {
             AsyncRun::BracketRace { race_id, async_part } => {
@@ -1100,7 +1006,6 @@ impl AsyncRun {
         }
     }
 
-    /// Record start_time = NOW().
     pub(crate) async fn record_start_time(&self, pool: &PgPool) -> Result<(), Error> {
         let now = Utc::now();
         match self {
@@ -1120,7 +1025,6 @@ impl AsyncRun {
         Ok(())
     }
 
-    /// Check that finish is allowed (started and not already finished).
     pub(crate) async fn check_finish_allowed(&self, pool: &PgPool) -> Result<(), Error> {
         match self {
             AsyncRun::BracketRace { race_id, async_part } => {
@@ -1157,7 +1061,6 @@ impl AsyncRun {
         }
     }
 
-    /// Calculate the elapsed time since start and return formatted HH:MM:SS.
     pub(crate) async fn calculate_finish_time(&self, pool: &PgPool) -> Result<String, Error> {
         let start_time = match self {
             AsyncRun::BracketRace { race_id, async_part } => {
@@ -1182,7 +1085,6 @@ impl AsyncRun {
         Ok(format!("{:02}:{:02}:{:02}", hours, minutes, seconds))
     }
 
-    /// Set player_finished_at = NOW().
     pub(crate) async fn set_player_finished_at(&self, pool: &PgPool) -> Result<(), Error> {
         match self {
             AsyncRun::BracketRace { race_id, async_part } => {
@@ -1201,7 +1103,6 @@ impl AsyncRun {
         Ok(())
     }
 
-    /// Query whether the event's game matches a given game name.
     pub(crate) async fn is_game(&self, pool: &PgPool, game_name: &str) -> Result<bool, Error> {
         match self {
             AsyncRun::BracketRace { race_id, .. } => {
@@ -1229,50 +1130,8 @@ impl AsyncRun {
         }
     }
 
-    /// Get the Discord thread/channel ID for this run.
-    #[allow(dead_code)]
-    pub(crate) async fn get_channel_id(&self, pool: &PgPool) -> Result<Option<ChannelId>, Error> {
-        match self {
-            AsyncRun::BracketRace { race_id, async_part } => {
-                let thread_id = match async_part {
-                    1 => sqlx::query_scalar!("SELECT async_thread1 FROM races WHERE id = $1", *race_id).fetch_one(pool).await?,
-                    2 => sqlx::query_scalar!("SELECT async_thread2 FROM races WHERE id = $1", *race_id).fetch_one(pool).await?,
-                    3 => sqlx::query_scalar!("SELECT async_thread3 FROM races WHERE id = $1", *race_id).fetch_one(pool).await?,
-                    _ => return Err(Error::InvalidAsyncPart),
-                };
-                Ok(thread_id.map(|id| ChannelId::new(id as u64)))
-            }
-            AsyncRun::Qualifier { team_id, async_kind } => {
-                let thread_id = sqlx::query_scalar!(
-                    "SELECT discord_thread FROM async_teams WHERE team = $1 AND kind = $2",
-                    *team_id, *async_kind as _
-                ).fetch_optional(pool).await?.flatten();
-                Ok(thread_id.map(|id| ChannelId::new(id as u64)))
-            }
-        }
-    }
-
-    /// Get the event's configured async_start_delay.
-    #[allow(dead_code)]
-    pub(crate) async fn get_async_start_delay(&self, pool: &PgPool) -> Result<Option<i32>, Error> {
-        match self {
-            AsyncRun::BracketRace { race_id, .. } => {
-                Ok(sqlx::query_scalar!(
-                    "SELECT e.async_start_delay FROM events e JOIN races r ON r.series = e.series AND r.event = e.event WHERE r.id = $1",
-                    *race_id
-                ).fetch_optional(pool).await?.flatten())
-            }
-            AsyncRun::Qualifier { team_id, .. } => {
-                Ok(sqlx::query_scalar!(
-                    "SELECT e.async_start_delay FROM events e JOIN teams t ON t.series = e.series AND t.event = e.event WHERE t.id = $1",
-                    *team_id
-                ).fetch_optional(pool).await?.flatten())
-            }
-        }
-    }
 }
 
-/// Create FINISH and FORFEIT buttons for a run.
 pub(crate) fn create_finish_forfeit_buttons(run: &AsyncRun) -> CreateActionRow {
     CreateActionRow::Buttons(vec![
         CreateButton::new(run.button_id("finish"))
@@ -1284,8 +1143,6 @@ pub(crate) fn create_finish_forfeit_buttons(run: &AsyncRun) -> CreateActionRow {
     ])
 }
 
-/// Run the 5-4-3-2-1-GO countdown and record start_time.
-/// Returns false if already started.
 pub(crate) async fn run_countdown(
     pool: &PgPool,
     http: &Arc<Http>,
@@ -1308,7 +1165,6 @@ pub(crate) async fn run_countdown(
 
     run.record_start_time(pool).await?;
 
-    // Send FINISH / Forfeit buttons
     let race_buttons = create_finish_forfeit_buttons(run);
     channel_id.send_message(http, CreateMessage::new()
         .content("**Good luck!** Click the FINISH button once you have completed your run.\nIf you need to forfeit, click the Forfeit button.")
@@ -1318,7 +1174,6 @@ pub(crate) async fn run_countdown(
     Ok(true)
 }
 
-/// Send the game-specific completion message after finish is finalized.
 pub(crate) async fn send_completion_message(
     pool: &PgPool,
     http: &Arc<Http>,
@@ -1358,8 +1213,6 @@ pub(crate) async fn send_completion_message(
     Ok(())
 }
 
-/// Spawn the force-start timer task.
-/// After the seed is distributed, warns the player and auto-starts if they don't click START COUNTDOWN.
 pub(crate) fn spawn_force_start_task(
     pool: PgPool,
     http: Arc<Http>,
@@ -1370,7 +1223,6 @@ pub(crate) fn spawn_force_start_task(
 ) {
     tokio::spawn(async move {
         if delay_minutes <= 0 {
-            // Immediate force-start
             if !run.is_started(&pool).await.unwrap_or(true) {
                 let _ = channel_id.say(&http, format!("<@{}> **The seed is being automatically started!**", player_id.get())).await;
                 let _ = run_countdown(&pool, &http, channel_id, &run).await;
@@ -1380,11 +1232,8 @@ pub(crate) fn spawn_force_start_task(
 
         let total_secs = delay_minutes as u64 * 60;
 
-        // Calculate warning times
         let warning_2min = if delay_minutes > 2 { Some((total_secs - 120) as u64) } else { None };
         let warning_30s = if total_secs > 30 { Some((total_secs - 30) as u64) } else { None };
-
-        // Wait and send warnings
         let mut elapsed: u64 = 0;
 
         if let Some(t) = warning_2min {
@@ -1411,12 +1260,10 @@ pub(crate) fn spawn_force_start_task(
             }
         }
 
-        // Wait for the final stretch
         if total_secs > elapsed {
             sleep(Duration::from_secs(total_secs - elapsed)).await;
         }
 
-        // Force start
         if run.is_started(&pool).await.unwrap_or(true) { return; }
         let _ = channel_id.say(&http, format!(
             "<@{}> **The seed is being automatically started!**",
@@ -1426,30 +1273,155 @@ pub(crate) fn spawn_force_start_task(
     });
 }
 
-/// Shared handler for START COUNTDOWN button click.
-/// Performs auth check, countdown, records start time, sends FINISH/FORFEIT buttons.
-/// Removes the START COUNTDOWN button on success.
+pub(crate) async fn handle_ready_bracket(
+    ctx: &DiscordCtx,
+    interaction: &ComponentInteraction,
+    pool: &PgPool,
+    run: &AsyncRun,
+) -> Result<(), Error> {
+    let AsyncRun::BracketRace { race_id, async_part } = run else {
+        return Err(Error::InvalidAsyncPart);
+    };
+    AsyncRaceManager::handle_ready_button(pool, ctx, *race_id, *async_part, interaction.user.id).await?;
+    interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+        CreateInteractionResponseMessage::new().components(vec![])
+    )).await?;
+    Ok(())
+}
+
+pub(crate) async fn handle_ready_qualifier(
+    ctx: &DiscordCtx,
+    interaction: &ComponentInteraction,
+    pool: &PgPool,
+    run: &AsyncRun,
+) -> Result<(), Error> {
+    let AsyncRun::Qualifier { team_id, async_kind } = run else {
+        return Err(Error::InvalidAsyncPart);
+    };
+
+    run.verify_user(pool, interaction.user.id).await?;
+
+    let mut transaction = pool.begin().await?;
+
+    let seed_info = sqlx::query!(
+        r#"
+        SELECT a.web_id, a.tfb_uuid, a.xkeys_uuid, a.file_stem,
+               a.hash1, a.hash2, a.hash3, a.hash4, a.hash5, a.seed_password,
+               a.seed_data,
+               t.series AS "series: crate::series::Series", t.event
+        FROM async_teams at
+        JOIN teams t ON at.team = t.id
+        JOIN asyncs a ON t.series = a.series AND t.event = a.event AND at.kind = a.kind
+        WHERE at.team = $1 AND at.kind = $2
+        "#,
+        *team_id,
+        *async_kind as _
+    ).fetch_optional(&mut *transaction).await?;
+
+    let Some(seed) = seed_info else {
+        return Err(Error::NoSeedAvailable);
+    };
+
+    let mut seed_msg = MessageBuilder::default();
+    seed_msg.push("**Your seed is ready!**\n\n");
+
+    if let Some(web_id) = seed.web_id {
+        seed_msg.push(format!("Seed URL: https://ootrandomizer.com/seed/get?id={}\n", web_id));
+    }
+    if let Some(tfb_uuid) = seed.tfb_uuid {
+        seed_msg.push(format!("Triforce Blitz Seed: https://tfb.midos.house/seed/{}\n", tfb_uuid));
+    }
+    if let Some(xkeys_uuid) = seed.xkeys_uuid {
+        let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").unwrap();
+        patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{xkeys_uuid}.bps", base_uri()));
+        seed_msg.push(format!("Door Rando Seed: {}\n", patcher_url));
+    }
+    if let Some(file_stem) = &seed.file_stem {
+        seed_msg.push(format!("Seed file: {}/seed/{}.zpfz\n", base_uri(), file_stem));
+    }
+
+    if seed.hash1.is_some() {
+        seed_msg.push("\nHash: ");
+        if let (Some(h1), Some(h2), Some(h3), Some(h4), Some(h5)) = (&seed.hash1, &seed.hash2, &seed.hash3, &seed.hash4, &seed.hash5) {
+            seed_msg.push(format!("{}, {}, {}, {}, {}\n", h1, h2, h3, h4, h5));
+        }
+    }
+
+    if let Some(ref seed_data) = seed.seed_data {
+        if let Some(permalink) = seed_data.get("permalink").and_then(|v| v.as_str()) {
+            if !permalink.is_empty() {
+                seed_msg.push(format!("**Permalink:** `{}`\n", permalink));
+            }
+        }
+        if let Some(seed_hash) = seed_data.get("seed_hash").and_then(|v| v.as_str()) {
+            if !seed_hash.is_empty() {
+                seed_msg.push(format!("**Seed Hash:** {}\n", seed_hash));
+            }
+        }
+    }
+
+    if let Some(password) = &seed.seed_password {
+        seed_msg.push(format!("\nPassword: {}\n", password));
+    }
+
+    let async_start_delay = sqlx::query_scalar!(
+        "SELECT e.async_start_delay FROM events e JOIN teams t ON t.series = e.series AND t.event = e.event WHERE t.id = $1",
+        *team_id
+    ).fetch_optional(&mut *transaction).await?.flatten();
+
+    if let Some(delay) = async_start_delay {
+        if delay > 0 {
+            seed_msg.push(format!("\nYou have **{} minutes** to click START COUNTDOWN before the seed is automatically started.", delay));
+        }
+    }
+
+    let start_button = CreateActionRow::Buttons(vec![
+        CreateButton::new(format!("async_start_qualifier_{}_{}", team_id, *async_kind as i32))
+            .label("START COUNTDOWN")
+            .style(ButtonStyle::Success)
+    ]);
+
+    interaction.channel_id.send_message(ctx, CreateMessage::new()
+        .content(seed_msg.build())
+        .components(vec![start_button])
+    ).await?;
+
+    interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+        CreateInteractionResponseMessage::new().components(vec![])
+    )).await?;
+
+    transaction.commit().await?;
+
+    if let Some(delay) = async_start_delay {
+        spawn_force_start_task(
+            pool.clone(),
+            Arc::clone(&ctx.http),
+            interaction.channel_id,
+            run.clone(),
+            interaction.user.id,
+            delay,
+        );
+    }
+
+    Ok(())
+}
+
 pub(crate) async fn handle_start_countdown(
     ctx: &DiscordCtx,
     interaction: &ComponentInteraction,
     pool: &PgPool,
     run: &AsyncRun,
 ) -> Result<(), Error> {
-    // Auth
     run.verify_user(pool, interaction.user.id).await?;
 
-    // Already started?
     if run.is_started(pool).await? {
         return Err(Error::AlreadyStarted);
     }
 
-    // Defer so we can send multiple messages during countdown
     interaction.defer(&ctx.http).await?;
 
-    // Countdown + record start + send FINISH/FORFEIT
     run_countdown(pool, &ctx.http, interaction.channel_id, run).await?;
 
-    // Remove the START COUNTDOWN button
     interaction.edit_response(ctx, EditInteractionResponse::new()
         .components(vec![])
     ).await?;
@@ -1457,24 +1429,18 @@ pub(crate) async fn handle_start_countdown(
     Ok(())
 }
 
-/// Shared handler for FINISH button click.
-/// Auth check, calculate time, replace buttons with REVERT, spawn 30s finalize task.
 pub(crate) async fn handle_finish(
     ctx: &DiscordCtx,
     interaction: &ComponentInteraction,
     pool: &PgPool,
     run: AsyncRun,
 ) -> Result<(), Error> {
-    // Auth
     run.verify_user(pool, interaction.user.id).await?;
 
-    // Check finish is allowed
     run.check_finish_allowed(pool).await?;
 
-    // Calculate time
     let formatted_time = run.calculate_finish_time(pool).await?;
 
-    // Show REVERT button with nonce
     let revert_nonce = Utc::now().timestamp_millis();
     let revert_button_id = run.button_id_with_nonce("revert", revert_nonce);
     let revert_button = CreateActionRow::Buttons(vec![
@@ -1489,7 +1455,6 @@ pub(crate) async fn handle_finish(
             .components(vec![revert_button])
     )).await?;
 
-    // Spawn 30s finalize task
     let ctx_clone = ctx.clone();
     let pool_clone = pool.clone();
     let channel_id = interaction.channel_id;
@@ -1499,7 +1464,6 @@ pub(crate) async fn handle_finish(
     tokio::spawn(async move {
         sleep(Duration::from_secs(30)).await;
 
-        // Check if REVERT button still present (matching nonce)
         if let Ok(message) = channel_id.message(&ctx_clone, message_id).await {
             let has_revert = message.components.first()
                 .map_or(false, |row| row.components.iter().any(|c| {
@@ -1508,12 +1472,10 @@ pub(crate) async fn handle_finish(
                 }));
 
             if has_revert {
-                // Remove REVERT button
                 let _ = channel_id.edit_message(&ctx_clone, message_id, serenity::all::EditMessage::new()
                     .components(vec![])
                 ).await;
 
-                // Finalize: set player_finished_at + send completion message
                 let _ = run_clone.set_player_finished_at(&pool_clone).await;
                 let _ = send_completion_message(&pool_clone, &ctx_clone.http, channel_id, &run_clone, &formatted_time).await;
             }
@@ -1523,8 +1485,6 @@ pub(crate) async fn handle_finish(
     Ok(())
 }
 
-/// Shared handler for REVERT button click.
-/// Restores FINISH/FORFEIT buttons.
 pub(crate) async fn handle_revert(
     ctx: &DiscordCtx,
     interaction: &ComponentInteraction,
@@ -1539,13 +1499,14 @@ pub(crate) async fn handle_revert(
     Ok(())
 }
 
-/// Shared handler for FORFEIT button click.
-/// Shows ephemeral confirmation dialog.
 pub(crate) async fn handle_forfeit(
     ctx: &DiscordCtx,
     interaction: &ComponentInteraction,
+    pool: &PgPool,
     run: &AsyncRun,
 ) -> Result<(), Error> {
+    run.verify_user(pool, interaction.user.id).await?;
+
     let confirm_button = CreateActionRow::Buttons(vec![
         CreateButton::new(run.button_id("forfeit_confirm"))
             .label("Yes, forfeit")
@@ -1564,18 +1525,14 @@ pub(crate) async fn handle_forfeit(
     Ok(())
 }
 
-/// Shared handler for confirmed FORFEIT.
-/// Sends @here ping, removes FINISH/FORFEIT buttons.
 pub(crate) async fn handle_forfeit_confirm(
     ctx: &DiscordCtx,
     interaction: &ComponentInteraction,
     pool: &PgPool,
     run: &AsyncRun,
 ) -> Result<(), Error> {
-    // Auth
     run.verify_user(pool, interaction.user.id).await?;
 
-    // Send @here forfeit message
     let mut msg = MessageBuilder::default();
     msg.push("@here - ");
     msg.mention(&interaction.user);
@@ -1584,7 +1541,6 @@ pub(crate) async fn handle_forfeit_confirm(
 
     interaction.channel_id.say(ctx, msg.build()).await?;
 
-    // Find and remove FINISH/FORFEIT buttons from recent messages
     let messages = interaction.channel_id.messages(ctx, serenity::all::GetMessages::new().limit(50)).await?;
     for mut message in messages {
         if !message.components.is_empty() && message.content.contains("Good luck!") {
@@ -1593,7 +1549,6 @@ pub(crate) async fn handle_forfeit_confirm(
         }
     }
 
-    // Update the ephemeral
     interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
         CreateInteractionResponseMessage::new()
             .content("Forfeit request sent. An organizer will confirm it shortly.")
@@ -1602,7 +1557,6 @@ pub(crate) async fn handle_forfeit_confirm(
     Ok(())
 }
 
-/// Shared handler for FORFEIT cancel.
 pub(crate) async fn handle_forfeit_cancel(
     ctx: &DiscordCtx,
     interaction: &ComponentInteraction,
@@ -1615,22 +1569,42 @@ pub(crate) async fn handle_forfeit_cancel(
     Ok(())
 }
 
-/// Resolve an `AsyncRun::BracketRace` from a thread ID.
-pub(crate) async fn bracket_run_from_thread(pool: &PgPool, thread_id: i64) -> Result<Option<AsyncRun>, Error> {
-    let race_info = sqlx::query!(
-        r#"
-        SELECT id,
-               CASE
-                   WHEN async_thread1 = $1 THEN 1
-                   WHEN async_thread2 = $1 THEN 2
-                   WHEN async_thread3 = $1 THEN 3
-                   ELSE NULL
-               END as async_part
-        FROM races
-        WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
-        "#,
-        thread_id
-    ).fetch_optional(pool).await?;
+/// Unified button dispatcher. Returns true if the button was handled.
+/// Handles `async:{action}:{type}:{params}` button formats.
+pub(crate) async fn dispatch_button(
+    ctx: &DiscordCtx,
+    interaction: &ComponentInteraction,
+    pool: &PgPool,
+    custom_id: &str,
+) -> Result<bool, Error> {
+    let Some((action, run, _nonce)) = AsyncRun::parse_button(custom_id) else { return Ok(false) };
 
-    Ok(race_info.and_then(|r| r.async_part.map(|p| AsyncRun::BracketRace { race_id: r.id, async_part: p as u8 })))
+    match action.as_str() {
+        "ready" => {
+            match &run {
+                AsyncRun::BracketRace { .. } => handle_ready_bracket(ctx, interaction, pool, &run).await?,
+                AsyncRun::Qualifier { .. } => handle_ready_qualifier(ctx, interaction, pool, &run).await?,
+            }
+        }
+        "start_countdown" => {
+            handle_start_countdown(ctx, interaction, pool, &run).await?;
+        }
+        "finish" => {
+            handle_finish(ctx, interaction, pool, run).await?;
+        }
+        "revert" => {
+            handle_revert(ctx, interaction, &run).await?;
+        }
+        "forfeit" => {
+            handle_forfeit(ctx, interaction, pool, &run).await?;
+        }
+        "forfeit_confirm" => {
+            handle_forfeit_confirm(ctx, interaction, pool, &run).await?;
+        }
+        "forfeit_cancel" => {
+            handle_forfeit_cancel(ctx, interaction).await?;
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
 }

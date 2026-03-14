@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                                        SELECT a.web_id, a.tfb_uuid, a.xkeys_uuid, a.file_stem,\n                                               a.hash1, a.hash2, a.hash3, a.hash4, a.hash5, a.seed_password,\n                                               a.seed_data,\n                                               t.series AS \"series: Series\", t.event\n                                        FROM async_teams at\n                                        JOIN teams t ON at.team = t.id\n                                        JOIN asyncs a ON t.series = a.series AND t.event = a.event AND at.kind = a.kind\n                                        WHERE at.team = $1 AND at.kind = $2\n                                        ",
+  "query": "\n        SELECT a.web_id, a.tfb_uuid, a.xkeys_uuid, a.file_stem,\n               a.hash1, a.hash2, a.hash3, a.hash4, a.hash5, a.seed_password,\n               a.seed_data,\n               t.series AS \"series: crate::series::Series\", t.event\n        FROM async_teams at\n        JOIN teams t ON at.team = t.id\n        JOIN asyncs a ON t.series = a.series AND t.event = a.event AND at.kind = a.kind\n        WHERE at.team = $1 AND at.kind = $2\n        ",
   "describe": {
     "columns": [
       {
@@ -60,7 +60,7 @@
       },
       {
         "ordinal": 11,
-        "name": "series: Series",
+        "name": "series: crate::series::Series",
         "type_info": "Varchar"
       },
       {
@@ -104,5 +104,5 @@
       false
     ]
   },
-  "hash": "1f06f1eb788c8bcb964851499bb2aff70f7cd2e6dccc3d8f9519bfb07e0b5344"
+  "hash": "26e8ad4d17520918aab62e5f8ee479a8b42b1d16c3a2c61388616d0058c480bf"
 }

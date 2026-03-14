@@ -3,7 +3,7 @@ use {
         config::ConfigRaceTime,
         prelude::*,
         racetime_bot::{AlttprDeRaceOptions, CleanShutdown, CrosskeysRaceOptions, GlobalState},
-        async_race::{self, AsyncRaceManager, Error as AsyncRaceError},
+        async_race::{self, Error as AsyncRaceError},
         volunteer_requests,
     }, serenity::all::{
         CacheHttp,
@@ -2770,144 +2770,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     }
                 }
                 Interaction::Component(interaction) => match &*interaction.data.custom_id {
-                    "async_ready" => {
-                        // Handle async ready button
-                        let mut transaction = {
-                            let discord_data = ctx.data.read().await;
-                            discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
-                        };
-
-                        // Extract race_id and async_part from the button's custom_id
-                        // We'll need to encode this in the button's custom_id
-                        // For now, we'll need to find the race by thread ID
-                        let thread_id = interaction.channel_id.get() as i64;
-
-                        // Find the race and async part for this thread
-                        let race_info = sqlx::query!(
-                            r#"
-                            SELECT id,
-                                   CASE
-                                       WHEN async_thread1 = $1 THEN 1
-                                       WHEN async_thread2 = $1 THEN 2
-                                       WHEN async_thread3 = $1 THEN 3
-                                       ELSE NULL
-                                   END as async_part
-                            FROM races
-                            WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
-                            "#,
-                            thread_id
-                        ).fetch_optional(&mut *transaction).await?;
-
-                        if let Some(race_info) = race_info {
-                            if let Some(async_part) = race_info.async_part {
-                                match AsyncRaceManager::handle_ready_button(
-                                    &ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"),
-                                    ctx,
-                                    race_info.id,
-                                    async_part as u8,
-                                    interaction.user.id,
-                                ).await {
-                                    Ok(()) => {
-                                        // Remove the button completely by editing the original message
-                                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                                            CreateInteractionResponseMessage::new()
-                                                .components(vec![]) // Empty components removes all buttons
-                                        )).await?;
-                                    }
-                                    Err(e) => {
-                                        let error_msg = match e {
-                                            AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
-                                            AsyncRaceError::AlreadyReady => "You have already clicked ready for this race.",
-                                            _ => {
-                                                eprintln!("Async ready error: {:?}", e);
-                                                "An error occurred while processing your ready status."
-                                            },
-                                        };
-                                        interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                            CreateInteractionResponseMessage::new()
-                                                .ephemeral(true)
-                                                .content(error_msg)
-                                        )).await?;
-                                    }
-                                }
-                            } else {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Could not determine which async part this thread is for.")
-                                )).await?;
-                            }
-                        } else {
-                            interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content("This thread is not associated with an async race.")
-                            )).await?;
-                        }
-
-                        transaction.rollback().await?;
-                    }
-                    "async_start_countdown" => {
-                        let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-                        let thread_id = interaction.channel_id.get() as i64;
-                        if let Some(run) = async_race::bracket_run_from_thread(&pool, thread_id).await? {
-                            if let Err(e) = async_race::handle_start_countdown(ctx, &interaction, &pool, &run).await {
-                                let error_msg = match e {
-                                    AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
-                                    AsyncRaceError::AlreadyStarted => "The countdown has already been started for this race.",
-                                    _ => { eprintln!("Async countdown error: {:?}", e); "An error occurred while processing your countdown request." },
-                                };
-                                // May have already deferred, try edit then create
-                                if interaction.edit_response(ctx, EditInteractionResponse::new().content(error_msg)).await.is_err() {
-                                    let _ = interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                        CreateInteractionResponseMessage::new().ephemeral(true).content(error_msg)
-                                    )).await;
-                                }
-                            }
-                        } else {
-                            interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                CreateInteractionResponseMessage::new().ephemeral(true).content("This thread is not associated with an async race.")
-                            )).await?;
-                        }
-                    }
-                    "async_finish" => {
-                        let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-                        let thread_id = interaction.channel_id.get() as i64;
-                        if let Some(run) = async_race::bracket_run_from_thread(&pool, thread_id).await? {
-                            if let Err(e) = async_race::handle_finish(ctx, &interaction, &pool, run).await {
-                                let error_msg = match e {
-                                    AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
-                                    AsyncRaceError::NotStarted => "You must start the countdown before finishing.",
-                                    AsyncRaceError::AlreadyFinished => "You have already finished this race.",
-                                    _ => { eprintln!("Async finish error: {:?}", e); "An error occurred while processing your finish request." },
-                                };
-                                let _ = interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new().ephemeral(true).content(error_msg)
-                                )).await;
-                            }
-                        } else {
-                            interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                CreateInteractionResponseMessage::new().ephemeral(true).content("This thread is not associated with an async race.")
-                            )).await?;
-                        }
-                    }
-                    "async_forfeit" => {
-                        let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-                        let thread_id = interaction.channel_id.get() as i64;
-                        if let Some(run) = async_race::bracket_run_from_thread(&pool, thread_id).await? {
-                            async_race::handle_forfeit(ctx, &interaction, &run).await?;
-                        }
-                    }
-                    "async_forfeit_confirm" => {
-                        let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-                        let thread_id = interaction.channel_id.get() as i64;
-                        if let Some(run) = async_race::bracket_run_from_thread(&pool, thread_id).await? {
-                            async_race::handle_forfeit_confirm(ctx, &interaction, &pool, &run).await?;
-                        }
-                    }
-                    "async_forfeit_cancel" => {
-                        async_race::handle_forfeit_cancel(ctx, &interaction).await?;
-                    }
+                    // All async buttons (async_ready, async_start_countdown, async_finish,
+                    // async_forfeit, etc.) handled by catch-all via dispatch_button
                     "pronouns_he" => {
                         let member = interaction.member.clone().expect("/pronoun-roles called outside of a guild");
                         let role = member.guild_id.roles(ctx).await?.into_values().find(|role| role.name == "he/him").expect("missing 'he/him' role");
@@ -3122,23 +2986,25 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             post_button_draft_step(ctx, interaction.channel_id(), step).await?;
                         }
                     } else if let Some(preset) = custom_id.strip_prefix("draft_ban_preview_") {
-                        let Some((_, _, _, msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
+                        let Some((_, _, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
                         msg_ctx.into_transaction().rollback().await?;
+                        let display = draft_kind.preset_display_name(preset).unwrap_or(preset);
                         let step_msg_id = interaction.message.id;
                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                             .ephemeral(true)
-                            .content(format!("Confirm banning **{}**?", preset))
+                            .content(format!("Confirm banning **{}**?", display))
                             .button(CreateButton::new(format!("btn_ban_{step_msg_id}_{preset}")).label("Confirm").style(ButtonStyle::Danger))
                             .button(CreateButton::new("draft_cancel").label("Cancel").style(ButtonStyle::Secondary))
                         )).await?;
                     } else if let Some(params) = custom_id.strip_prefix("draft_pick_preview_") {
                         if let Some((game, preset)) = params.split_once('_') {
-                            let Some((_, _, _, msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
+                            let Some((_, _, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
                             msg_ctx.into_transaction().rollback().await?;
+                            let display = draft_kind.preset_display_name(preset).unwrap_or(preset);
                             let step_msg_id = interaction.message.id;
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                 .ephemeral(true)
-                                .content(format!("Confirm picking **{}** for Game {}?", preset, game))
+                                .content(format!("Confirm picking **{}** for Game {}?", display, game))
                                 .button(CreateButton::new(format!("btn_pick_{step_msg_id}_{preset}")).label("Confirm").style(ButtonStyle::Primary))
                                 .button(CreateButton::new("draft_cancel").label("Cancel").style(ButtonStyle::Secondary))
                             )).await?;
@@ -3179,212 +3045,21 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         restream.update_race(&mut race, speedgaming_id)?;
                         race.save(&mut transaction).await?;
                         transaction.commit().await?;
-                    } else if let Some(_nonce) = custom_id.strip_prefix("async_revert_bracket_") {
-                        // Handle bracket REVERT — restore old-format FINISH/FORFEIT buttons
+                    } else if (custom_id.starts_with("async_") && !custom_id.starts_with("async_override_")) || custom_id.starts_with("async:") {
+                        // All player-facing async buttons dispatched here (bracket + qualifier + new format)
                         let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-                        let thread_id = interaction.channel_id.get() as i64;
-                        if let Some(run) = async_race::bracket_run_from_thread(&pool, thread_id).await? {
-                            async_race::handle_revert(ctx, &interaction, &run).await?;
-                        }
-                    } else if let Some(params) = custom_id.strip_prefix("async_ready_qualifier_") {
-                        // Handle qualifier READY button: format is "async_ready_qualifier_{team_id}_{async_kind}"
-                        if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
-                            if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
-                                let Some(async_kind) = AsyncKind::from_i32(async_kind_int) else { return Ok(()) };
-                                let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-                                let mut transaction = pool.begin().await?;
-
-                                // Verify user is a member of the team
-                                let is_team_member = sqlx::query_scalar!(
-                                    r#"SELECT EXISTS (
-                                        SELECT 1 FROM team_members tm
-                                        JOIN users u ON tm.member = u.id
-                                        WHERE tm.team = $1 AND u.discord_id = $2
-                                    ) AS "exists!""#,
-                                    team_id as i64,
-                                    interaction.user.id.get() as i64
-                                ).fetch_one(&mut *transaction).await?;
-
-                                if !is_team_member {
-                                    interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                        CreateInteractionResponseMessage::new()
-                                            .ephemeral(true)
-                                            .content("You are not authorized to click this button.")
-                                    )).await?;
-                                } else {
-                                    // Get seed info and distribute it
-                                    let seed_info = sqlx::query!(
-                                        r#"
-                                        SELECT a.web_id, a.tfb_uuid, a.xkeys_uuid, a.file_stem,
-                                               a.hash1, a.hash2, a.hash3, a.hash4, a.hash5, a.seed_password,
-                                               a.seed_data,
-                                               t.series AS "series: Series", t.event
-                                        FROM async_teams at
-                                        JOIN teams t ON at.team = t.id
-                                        JOIN asyncs a ON t.series = a.series AND t.event = a.event AND at.kind = a.kind
-                                        WHERE at.team = $1 AND at.kind = $2
-                                        "#,
-                                        team_id as i64,
-                                        async_kind as _
-                                    ).fetch_optional(&mut *transaction).await?;
-
-                                    if let Some(seed) = seed_info {
-                                        // Build seed message
-                                        let mut seed_msg = MessageBuilder::default();
-                                        seed_msg.push("**Your seed is ready!**\n\n");
-
-                                        if let Some(web_id) = seed.web_id {
-                                            seed_msg.push(format!("Seed URL: https://ootrandomizer.com/seed/get?id={}\n", web_id));
-                                        }
-                                        if let Some(tfb_uuid) = seed.tfb_uuid {
-                                            seed_msg.push(format!("Triforce Blitz Seed: https://tfb.midos.house/seed/{}\n", tfb_uuid));
-                                        }
-                                        if let Some(xkeys_uuid) = seed.xkeys_uuid {
-                                            let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").unwrap();
-                                            patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{xkeys_uuid}.bps", base_uri()));
-                                            seed_msg.push(format!("Door Rando Seed: {}\n", patcher_url));
-                                        }
-                                        if let Some(file_stem) = &seed.file_stem {
-                                            seed_msg.push(format!("Seed file: {}/seed/{}.zpfz\n", base_uri(), file_stem));
-                                        }
-
-                                        // Add hash if available
-                                        if seed.hash1.is_some() {
-                                            seed_msg.push("\nHash: ");
-                                            if let (Some(h1), Some(h2), Some(h3), Some(h4), Some(h5)) = (&seed.hash1, &seed.hash2, &seed.hash3, &seed.hash4, &seed.hash5) {
-                                                seed_msg.push(format!("{}, {}, {}, {}, {}\n", h1, h2, h3, h4, h5));
-                                            }
-                                        }
-
-                                        if let Some(ref seed_data) = seed.seed_data {
-                                            if let Some(permalink) = seed_data.get("permalink").and_then(|v| v.as_str()) {
-                                                if !permalink.is_empty() {
-                                                    seed_msg.push(format!("**Permalink:** `{}`\n", permalink));
-                                                }
-                                            }
-                                            if let Some(seed_hash) = seed_data.get("seed_hash").and_then(|v| v.as_str()) {
-                                                if !seed_hash.is_empty() {
-                                                    seed_msg.push(format!("**Seed Hash:** {}\n", seed_hash));
-                                                }
-                                            }
-                                        }
-
-                                        if let Some(password) = &seed.seed_password {
-                                            seed_msg.push(format!("\nPassword: {}\n", password));
-                                        }
-
-                                        // Check for force-start delay
-                                        let async_start_delay = sqlx::query_scalar!(
-                                            "SELECT e.async_start_delay FROM events e JOIN teams t ON t.series = e.series AND t.event = e.event WHERE t.id = $1",
-                                            team_id as i64
-                                        ).fetch_optional(&mut *transaction).await?.flatten();
-
-                                        if let Some(delay) = async_start_delay {
-                                            if delay > 0 {
-                                                seed_msg.push(format!("\nYou have **{} minutes** to click START COUNTDOWN before the seed is automatically started.", delay));
-                                            }
-                                        }
-
-                                        // Send seed message and START button
-                                        let start_button = CreateActionRow::Buttons(vec![
-                                            CreateButton::new(format!("async_start_qualifier_{}_{}", team_id, async_kind as i32))
-                                                .label("START COUNTDOWN")
-                                                .style(ButtonStyle::Success)
-                                        ]);
-
-                                        interaction.channel_id.send_message(ctx, CreateMessage::new()
-                                            .content(seed_msg.build())
-                                            .components(vec![start_button])
-                                        ).await?;
-
-                                        // Remove the READY button
-                                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                                            CreateInteractionResponseMessage::new()
-                                                .components(vec![])
-                                        )).await?;
-
-                                        // Spawn force-start task if configured
-                                        if let Some(delay) = async_start_delay {
-                                            let run = async_race::AsyncRun::Qualifier { team_id: team_id as i64, async_kind };
-                                            async_race::spawn_force_start_task(
-                                                pool.clone(),
-                                                Arc::clone(&ctx.http),
-                                                interaction.channel_id,
-                                                run,
-                                                interaction.user.id,
-                                                delay,
-                                            );
-                                        }
-                                    } else {
-                                        interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                            CreateInteractionResponseMessage::new()
-                                                .ephemeral(true)
-                                                .content("Could not find seed information for this qualifier.")
-                                        )).await?;
-                                    }
-                                }
-                                transaction.commit().await?;
-                            }
-                        }
-                    } else if let Some(params) = custom_id.strip_prefix("async_start_qualifier_") {
-                        if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
-                            if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
-                                let Some(async_kind) = AsyncKind::from_i32(async_kind_int) else { return Ok(()) };
-                                let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-                                let run = async_race::AsyncRun::Qualifier { team_id: team_id as i64, async_kind };
-                                if let Err(e) = async_race::handle_start_countdown(ctx, &interaction, &pool, &run).await {
-                                    let error_msg = match e {
-                                        AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
-                                        AsyncRaceError::AlreadyStarted => "The countdown has already been started.",
-                                        _ => { eprintln!("Async countdown error: {:?}", e); "An error occurred while processing your countdown request." },
-                                    };
-                                    if interaction.edit_response(ctx, EditInteractionResponse::new().content(error_msg)).await.is_err() {
-                                        let _ = interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                            CreateInteractionResponseMessage::new().ephemeral(true).content(error_msg)
-                                        )).await;
-                                    }
-                                }
-                            }
-                        }
-                    } else if let Some(params) = custom_id.strip_prefix("async_finish_qualifier_") {
-                        if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
-                            if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
-                                let Some(async_kind) = AsyncKind::from_i32(async_kind_int) else { return Ok(()) };
-                                let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-                                let run = async_race::AsyncRun::Qualifier { team_id: team_id as i64, async_kind };
-                                if let Err(e) = async_race::handle_finish(ctx, &interaction, &pool, run).await {
-                                    let error_msg = match e {
-                                        AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
-                                        AsyncRaceError::NotStarted => "You must start the countdown before finishing.",
-                                        AsyncRaceError::AlreadyFinished => "You have already clicked finish.",
-                                        _ => { eprintln!("Async finish error: {:?}", e); "An error occurred while processing your finish request." },
-                                    };
-                                    let _ = interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                        CreateInteractionResponseMessage::new().ephemeral(true).content(error_msg)
-                                    )).await;
-                                }
-                            }
-                        }
-                    } else if let Some(params) = custom_id.strip_prefix("async_revert_qualifier_") {
-                        let parts: Vec<&str> = params.splitn(3, '_').collect();
-                        if let (Some(team_id_str), Some(async_kind_str)) = (parts.first(), parts.get(1)) {
-                            if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
-                                if let Some(async_kind) = AsyncKind::from_i32(async_kind_int) {
-                                    let run = async_race::AsyncRun::Qualifier { team_id: team_id as i64, async_kind };
-                                    async_race::handle_revert(ctx, &interaction, &run).await?;
-                                }
-                            }
-                        }
-                    } else if custom_id == "async_forfeit_qualifier_cancel" {
-                        async_race::handle_forfeit_cancel(ctx, &interaction).await?;
-                    } else if let Some(params) = custom_id.strip_prefix("async_forfeit_qualifier_confirm_") {
-                        if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
-                            if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
-                                if let Some(async_kind) = AsyncKind::from_i32(async_kind_int) {
-                                    let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-                                    let run = async_race::AsyncRun::Qualifier { team_id: team_id as i64, async_kind };
-                                    async_race::handle_forfeit_confirm(ctx, &interaction, &pool, &run).await?;
-                                }
+                        if let Err(e) = async_race::dispatch_button(ctx, &interaction, &pool, &custom_id).await {
+                            let error_msg = match e {
+                                AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
+                                AsyncRaceError::AlreadyStarted => "The countdown has already been started.",
+                                AsyncRaceError::NotStarted => "You must start the countdown before finishing.",
+                                AsyncRaceError::AlreadyFinished => "You have already finished this race.",
+                                _ => { eprintln!("Async button error: {:?}", e); "An error occurred." },
+                            };
+                            if interaction.edit_response(ctx, EditInteractionResponse::new().content(error_msg)).await.is_err() {
+                                let _ = interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new().ephemeral(true).content(error_msg)
+                                )).await;
                             }
                         }
                     } else if custom_id == "async_override_cancel" {
@@ -3574,27 +3249,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     ).await?;
                                 }
                             }
-                        }
-                    } else if let Some(params) = custom_id.strip_prefix("async_forfeit_qualifier_") {
-                        if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
-                            if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
-                                if let Some(async_kind) = AsyncKind::from_i32(async_kind_int) {
-                                    let run = async_race::AsyncRun::Qualifier { team_id: team_id as i64, async_kind };
-                                    async_race::handle_forfeit(ctx, &interaction, &run).await?;
-                                }
-                            }
-                        }
-                    } else if let Some(parsed) = async_race::AsyncRun::parse_button(&custom_id) {
-                        // Handle unified async:{action}:{type}:{params} button format
-                        let (action, run, _nonce) = parsed;
-                        let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-                        match action.as_str() {
-                            "finish" => { let _ = async_race::handle_finish(ctx, &interaction, &pool, run).await; }
-                            "revert" => { let _ = async_race::handle_revert(ctx, &interaction, &run).await; }
-                            "forfeit" => { let _ = async_race::handle_forfeit(ctx, &interaction, &run).await; }
-                            "forfeit_confirm" => { let _ = async_race::handle_forfeit_confirm(ctx, &interaction, &pool, &run).await; }
-                            "forfeit_cancel" => { let _ = async_race::handle_forfeit_cancel(ctx, &interaction).await; }
-                            _ => {}
                         }
                     } else if let Some(race_id_str) = custom_id.strip_prefix("volunteer_signup_") {
                         // Handle volunteer signup button - shows available roles for the user
