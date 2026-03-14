@@ -242,6 +242,14 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             label(class = "help") : " (When enabled, qualifier requests create private Discord threads with READY/countdown/FINISH buttons)";
                         });
 
+                        : form_field("async_start_delay", &mut errors, html! {
+                            label(for = "async_start_delay") : "Force-Start Delay (minutes)";
+                            input(type = "number", id = "async_start_delay", name = "async_start_delay", min = "0", value = ctx.field_value("async_start_delay").unwrap_or(
+                                &event.async_start_delay.map(|d| d.to_string()).unwrap_or_default()
+                            ), style = "width: 100%; max-width: 200px;");
+                            label(class = "help") : " (After seed is distributed, auto-start after this many minutes. Leave empty to disable.)";
+                        });
+
                         : form_field("show_opt_out", &mut errors, html! {
                             input(type = "checkbox", id = "show_opt_out", name = "show_opt_out", checked? = ctx.field_value("show_opt_out").map_or(event.show_opt_out, |value| value == "on"));
                             label(for = "show_opt_out") : "Show Opt-Out";
@@ -428,6 +436,7 @@ pub(crate) struct SetupForm {
     hide_races_tab: bool,
     show_qualifier_times: bool,
     automated_asyncs: bool,
+    async_start_delay: Option<i32>,
     show_opt_out: bool,
     force_custom_role_binding: bool,
 }
@@ -741,8 +750,9 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                     challonge_community = $21, team_config = $22, language = $23,
                     default_game_count = $24, open_stream_delay = $25, invitational_stream_delay = $26,
                     hide_teams_tab = $27, hide_races_tab = $28, show_qualifier_times = $29,
-                    automated_asyncs = $30, show_opt_out = $31, force_custom_role_binding = $32
-                WHERE series = $33 AND event = $34
+                    automated_asyncs = $30, show_opt_out = $31, force_custom_role_binding = $32,
+                    async_start_delay = $33
+                WHERE series = $34 AND event = $35
             "#,
                 value.display_name,
                 start,
@@ -776,6 +786,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 value.automated_asyncs,
                 value.show_opt_out,
                 value.force_custom_role_binding,
+                value.async_start_delay,
                 event_data.series as _,
                 &event_data.event,
             ).execute(&mut *transaction).await?;

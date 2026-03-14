@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND start = $3 AND round = $4) AS \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b03c9aff643e4016f8e8ddc9e266e9743a216ae8771eadbed7f17dd5b3d2a1b6"
+}

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(SELECT 1 FROM organizers eo JOIN users u ON eo.organizer = u.id WHERE u.discord_id = $1) as \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ec7a7a970e7a8005643dff17e965db888a6d4309a08221e577651bf4880983c6"
+}

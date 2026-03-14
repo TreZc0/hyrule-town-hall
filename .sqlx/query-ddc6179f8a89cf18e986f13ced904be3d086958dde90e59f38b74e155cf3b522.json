@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE volunteer_ping_workflows SET discord_ping_channel = $1, delete_after_race = $2, updated_at = NOW() WHERE id = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bool",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ddc6179f8a89cf18e986f13ced904be3d086958dde90e59f38b74e155cf3b522"
+}

@@ -225,6 +225,8 @@ pub(crate) struct Data<'a> {
     pub(crate) qualifier_score_hiding: QualifierScoreHiding,
     /// Discord role to ping when a qualifier race room opens.
     pub(crate) qualifier_notification_role_id: Option<RoleId>,
+    /// How many minutes a player has to click START COUNTDOWN before auto-start.
+    pub(crate) async_start_delay: Option<i32>,
 }
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
@@ -292,7 +294,8 @@ impl<'a> Data<'a> {
             volunteer_request_lead_time_hours,
             force_custom_role_binding,
             qualifier_score_hiding AS "qualifier_score_hiding: QualifierScoreHiding",
-            qualifier_notification_role_id
+            qualifier_notification_role_id,
+            async_start_delay
         FROM events WHERE series = $1 AND event = $2"#, series as _, &event).fetch_optional(&mut **transaction).await?
             .map(|row| Ok::<_, DataError>(Self {
                 display_name: row.display_name,
@@ -350,6 +353,7 @@ impl<'a> Data<'a> {
                 force_custom_role_binding: row.force_custom_role_binding.unwrap_or(true),
                 qualifier_score_hiding: row.qualifier_score_hiding,
                 qualifier_notification_role_id: row.qualifier_notification_role_id.map(|id| RoleId::new(id as u64)),
+                async_start_delay: row.async_start_delay,
             }))
             .transpose()
     }
@@ -600,7 +604,7 @@ impl<'a> Data<'a> {
                 AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 => if !self.is_started(&mut *transaction).await? {
                     // Skip qualifiers the team has already finished (or submitted)
                     if let Some(team_id) = team_id {
-                        if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM async_teams WHERE team = $1 AND kind = $2 AND (finished_at IS NOT NULL OR submitted IS NOT NULL)) AS "finished!""#, team_id as _, kind as _).fetch_one(&mut **transaction).await? {
+                        if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM async_teams WHERE team = $1 AND kind = $2 AND (player_finished_at IS NOT NULL OR submitted IS NOT NULL)) AS "finished!""#, team_id as _, kind as _).fetch_one(&mut **transaction).await? {
                             continue;
                         }
                     }

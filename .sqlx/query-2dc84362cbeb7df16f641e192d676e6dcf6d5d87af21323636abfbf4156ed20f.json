@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT alias FROM zsr_channel_aliases WHERE channel_url = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "alias",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2dc84362cbeb7df16f641e192d676e6dcf6d5d87af21323636abfbf4156ed20f"
+}

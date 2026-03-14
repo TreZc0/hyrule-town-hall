@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO event_disabled_role_bindings (series, event, role_binding_id)\n               VALUES ($1, $2, $3) RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fbfb7e66bed347c442c1222f99d824a14330a768e7bb324ff862e84c6a97ce7a"
+}

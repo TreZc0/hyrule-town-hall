@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n                SELECT 1 FROM game_series gs\n                JOIN games g ON g.id = gs.game_id\n                WHERE gs.series = $1 AND g.name = 'alttpr'\n            ) AS \"is_alttpr!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_alttpr!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "6731f1a3bd7be45e648044d5af170ceb082d9a46fc6a962783545a5a8ae0cea9"
+}

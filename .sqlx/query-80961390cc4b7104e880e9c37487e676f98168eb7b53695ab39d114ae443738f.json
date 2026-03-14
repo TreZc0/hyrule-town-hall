@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n                SELECT 1 FROM game_series gs\n                JOIN games g ON g.id = gs.game_id\n                WHERE gs.series = $1 AND g.name = 'twwr'\n            ) AS \"is_twwr!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_twwr!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "80961390cc4b7104e880e9c37487e676f98168eb7b53695ab39d114ae443738f"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE events SET async_start_delay = $1 WHERE series = $2 AND event = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "44e5daf258ea7f54ef54614c9da6d9f8f32b50b37ae0a68b7a815c5e8caf1504"
+}

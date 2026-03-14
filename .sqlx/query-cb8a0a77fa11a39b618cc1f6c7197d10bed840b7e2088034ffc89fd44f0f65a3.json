@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE async_times SET finish_time = $1, recorded_at = NOW(), recorded_by = $2 WHERE race_id = $3 AND async_part = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Interval",
+        "Int8",
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cb8a0a77fa11a39b618cc1f6c7197d10bed840b7e2088034ffc89fd44f0f65a3"
+}

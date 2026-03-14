@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM volunteer_ping_workflows WHERE id = $1 AND series = $2 AND event = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "204517101a6117157eae0638f2e71c706a6e6dff40f295f0315ed707524e8d5a"
+}

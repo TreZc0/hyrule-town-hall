@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO volunteer_ping_workflows\n                    (game_id, language, discord_ping_channel, delete_after_race, workflow_type, ping_interval, schedule_time, schedule_day_of_week)\n                VALUES ($1, $2, $3, $4, 'scheduled', $5::ping_interval, $6::time, $7)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        },
+        "Int8",
+        "Bool",
+        {
+          "Custom": {
+            "name": "ping_interval",
+            "kind": {
+              "Enum": [
+                "daily",
+                "weekly"
+              ]
+            }
+          }
+        },
+        "Time",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ef40d9a0cbe8aeb86d4d3ec6753598d00108ee3b7c2ae216d2e759029d6edf10"
+}

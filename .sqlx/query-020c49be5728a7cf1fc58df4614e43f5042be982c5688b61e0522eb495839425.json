@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE volunteer_ping_messages SET deleted_at = $1 WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "020c49be5728a7cf1fc58df4614e43f5042be982c5688b61e0522eb495839425"
+}

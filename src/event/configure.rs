@@ -175,6 +175,13 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                                 label(for = "automated_asyncs") : "Use automated Discord threads for qualifier asyncs";
                                 label(class = "help") : "(When enabled, qualifier requests create private Discord threads with READY/countdown/FINISH buttons. Staff validate results via /result-async command.)";
                             });
+                            : form_field("async_start_delay", &mut errors, html! {
+                                label(for = "async_start_delay") : "Force-Start Delay (minutes)";
+                                input(type = "number", id = "async_start_delay", name = "async_start_delay", min = "0", value = ctx.field_value("async_start_delay").unwrap_or(
+                                    &event.async_start_delay.map(|d| d.to_string()).unwrap_or_default()
+                                ), style = "width: 100%; max-width: 200px;");
+                                label(class = "help") : "(After seed is distributed, auto-start after this many minutes. Leave empty to disable.)";
+                            });
                         }
                         : form_field("qualifier_score_hiding", &mut errors, html! {
                             label(for = "qualifier_score_hiding") : "Qualifier Score Hiding";
@@ -256,6 +263,7 @@ pub(crate) struct ConfigureForm {
     discord_events_enabled: bool,
     discord_events_require_restream: bool,
     automated_asyncs: bool,
+    async_start_delay: Option<i32>,
     settings_string: Option<String>,
     qualifier_score_hiding: String,
 }
@@ -348,6 +356,9 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             }
             if value.automated_asyncs != data.automated_asyncs {
                 sqlx::query!("UPDATE events SET automated_asyncs = $1 WHERE series = $2 AND event = $3", value.automated_asyncs, data.series as _, &data.event).execute(&mut *transaction).await?;
+            }
+            if value.async_start_delay != data.async_start_delay {
+                sqlx::query!("UPDATE events SET async_start_delay = $1 WHERE series = $2 AND event = $3", value.async_start_delay, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
             // Parse and update qualifier_score_hiding
             let qualifier_score_hiding = match value.qualifier_score_hiding.as_str() {

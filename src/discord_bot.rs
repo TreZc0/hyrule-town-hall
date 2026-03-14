@@ -3,7 +3,7 @@ use {
         config::ConfigRaceTime,
         prelude::*,
         racetime_bot::{AlttprDeRaceOptions, CleanShutdown, CrosskeysRaceOptions, GlobalState},
-        async_race::{AsyncRaceManager, Error as AsyncRaceError},
+        async_race::{self, AsyncRaceManager, Error as AsyncRaceError},
         volunteer_requests,
     }, serenity::all::{
         CacheHttp,
@@ -2780,308 +2780,65 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         transaction.rollback().await?;
                     }
                     "async_start_countdown" => {
-                        // Handle async start countdown button
-                        let mut transaction = {
-                            let discord_data = ctx.data.read().await;
-                            discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
-                        };
-
+                        let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
                         let thread_id = interaction.channel_id.get() as i64;
-
-                        // Find the race and async part for this thread
-                        let race_info = sqlx::query!(
-                            r#"
-                            SELECT id,
-                                   CASE
-                                       WHEN async_thread1 = $1 THEN 1
-                                       WHEN async_thread2 = $1 THEN 2
-                                       WHEN async_thread3 = $1 THEN 3
-                                       ELSE NULL
-                                   END as async_part
-                            FROM races
-                            WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
-                            "#,
-                            thread_id
-                        ).fetch_optional(&mut *transaction).await?;
-
-                        if let Some(race_info) = race_info {
-                            if let Some(async_part) = race_info.async_part {
-                                // Defer the interaction to prevent timeout
-                                interaction.defer(&ctx.http).await?;
-
-                                match AsyncRaceManager::handle_start_countdown_button(
-                                    &ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"),
-                                    ctx,
-                                    race_info.id,
-                                    async_part as u8,
-                                    interaction.user.id,
-                                ).await {
-                                    Ok(()) => {
-                                        // Remove the button completely by editing the original message
-                                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                                            .components(vec![]) // Empty components removes all buttons
-                                        ).await?;
-                                    }
-                                    Err(e) => {
-                                        let error_msg = match e {
-                                            AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
-                                            AsyncRaceError::AlreadyStarted => "The countdown has already been started for this race.",
-                                            _ => {
-                                                eprintln!("Async countdown error: {:?}", e);
-                                                "An error occurred while processing your countdown request."
-                                            },
-                                        };
-                                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                                            .content(error_msg)
-                                        ).await?;
-                                    }
+                        if let Some(run) = async_race::bracket_run_from_thread(&pool, thread_id).await? {
+                            if let Err(e) = async_race::handle_start_countdown(ctx, &interaction, &pool, &run).await {
+                                let error_msg = match e {
+                                    AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
+                                    AsyncRaceError::AlreadyStarted => "The countdown has already been started for this race.",
+                                    _ => { eprintln!("Async countdown error: {:?}", e); "An error occurred while processing your countdown request." },
+                                };
+                                // May have already deferred, try edit then create
+                                if interaction.edit_response(ctx, EditInteractionResponse::new().content(error_msg)).await.is_err() {
+                                    let _ = interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                        CreateInteractionResponseMessage::new().ephemeral(true).content(error_msg)
+                                    )).await;
                                 }
-                            } else {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Could not determine which async part this thread is for.")
-                                )).await?;
                             }
                         } else {
                             interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content("This thread is not associated with an async race.")
+                                CreateInteractionResponseMessage::new().ephemeral(true).content("This thread is not associated with an async race.")
                             )).await?;
                         }
-
-                        transaction.rollback().await?;
                     }
                     "async_finish" => {
-                        // Handle async finish button - start revert period
-                        let mut transaction = {
-                            let discord_data = ctx.data.read().await;
-                            discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
-                        };
-
+                        let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
                         let thread_id = interaction.channel_id.get() as i64;
-
-                        // Find the race and async part for this thread
-                        let race_info = sqlx::query!(
-                            r#"
-                            SELECT id,
-                                   CASE
-                                       WHEN async_thread1 = $1 THEN 1
-                                       WHEN async_thread2 = $1 THEN 2
-                                       WHEN async_thread3 = $1 THEN 3
-                                       ELSE NULL
-                                   END as async_part
-                            FROM races
-                            WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
-                            "#,
-                            thread_id
-                        ).fetch_optional(&mut *transaction).await?;
-
-                        if let Some(race_info) = race_info {
-                            if let Some(async_part) = race_info.async_part {
-                                // Defer the interaction to prevent timeout
-                                interaction.defer(&ctx.http).await?;
-
-                                match AsyncRaceManager::handle_finish_button(
-                                    &ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"),
-                                    ctx,
-                                    race_info.id,
-                                    async_part as u8,
-                                    interaction.user.id,
-                                ).await {
-                                    Ok(formatted_time) => {
-                                        // Replace FINISH/FORFEIT buttons with REVERT button.
-                                        // Include a nonce in the button ID so the background task can verify
-                                        // it's still the same finish (not a stale task from a reverted finish).
-                                        let revert_nonce = Utc::now().timestamp_millis();
-                                        let revert_button_id = format!("async_revert_bracket_{}", revert_nonce);
-                                        let revert_button = CreateActionRow::Buttons(vec![
-                                            CreateButton::new(&revert_button_id)
-                                                .label("REVERT")
-                                                .style(ButtonStyle::Secondary)
-                                        ]);
-
-                                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                                            .content(format!("✅ **Finished in {}**\nYou have 30 seconds to revert if needed.", formatted_time))
-                                            .components(vec![revert_button])
-                                        ).await?;
-
-                                        // Spawn a background task to finalize after 30 seconds
-                                        let ctx_clone = ctx.clone();
-                                        let pool_clone = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-                                        let race_id = race_info.id;
-                                        let async_part = async_part as u8;
-                                        let channel_id = interaction.channel_id;
-                                        let message_id = interaction.get_response(&ctx.http).await?.id;
-
-                                        tokio::spawn(async move {
-                                            sleep(Duration::from_secs(30)).await;
-
-                                            // Check if the message still has the REVERT button (wasn't clicked)
-                                            if let Ok(message) = channel_id.message(&ctx_clone, message_id).await {
-                                                // Verify the button's custom_id matches this task's nonce.
-                                                // If the user reverted and finished again, a new nonce is generated,
-                                                // so only the latest task will match.
-                                                let has_revert_button = message.components.first()
-                                                    .map_or(false, |row| row.components.iter().any(|c| {
-                                                        matches!(c, ActionRowComponent::Button(b)
-                                                            if matches!(&b.data, ButtonKind::NonLink { custom_id, .. } if custom_id == &revert_button_id))
-                                                    }));
-
-                                                if has_revert_button {
-                                                    // Finalize the finish
-                                                    let _ = AsyncRaceManager::finalize_finish(
-                                                        &pool_clone,
-                                                        &ctx_clone,
-                                                        race_id,
-                                                        async_part,
-                                                        formatted_time.clone(),
-                                                    ).await;
-
-                                                    // Remove the REVERT button
-                                                    let _ = channel_id.edit_message(&ctx_clone, message_id, serenity::all::EditMessage::new()
-                                                        .components(vec![])
-                                                    ).await;
-                                                }
-                                            }
-                                        });
-                                    }
-                                    Err(e) => {
-                                        let error_msg = match e {
-                                            AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
-                                            AsyncRaceError::NotStarted => "You must start the countdown before finishing.",
-                                            AsyncRaceError::AlreadyFinished => "You have already finished this race.",
-                                            _ => {
-                                                eprintln!("Async finish error: {:?}", e);
-                                                "An error occurred while processing your finish request."
-                                            },
-                                        };
-                                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                                            .content(error_msg)
-                                        ).await?;
-                                    }
-                                }
-                            } else {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Could not determine which async part this thread is for.")
-                                )).await?;
+                        if let Some(run) = async_race::bracket_run_from_thread(&pool, thread_id).await? {
+                            if let Err(e) = async_race::handle_finish(ctx, &interaction, &pool, run).await {
+                                let error_msg = match e {
+                                    AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
+                                    AsyncRaceError::NotStarted => "You must start the countdown before finishing.",
+                                    AsyncRaceError::AlreadyFinished => "You have already finished this race.",
+                                    _ => { eprintln!("Async finish error: {:?}", e); "An error occurred while processing your finish request." },
+                                };
+                                let _ = interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new().ephemeral(true).content(error_msg)
+                                )).await;
                             }
                         } else {
                             interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content("This thread is not associated with an async race.")
+                                CreateInteractionResponseMessage::new().ephemeral(true).content("This thread is not associated with an async race.")
                             )).await?;
                         }
-
-                        transaction.rollback().await?;
                     }
                     "async_forfeit" => {
-                        // Show confirmation for bracket async forfeit
-                        let confirm_button = CreateActionRow::Buttons(vec![
-                            CreateButton::new("async_forfeit_confirm")
-                                .label("Yes, forfeit")
-                                .style(ButtonStyle::Danger),
-                            CreateButton::new("async_forfeit_cancel")
-                                .label("Cancel")
-                                .style(ButtonStyle::Secondary),
-                        ]);
-
-                        interaction.create_response(ctx, CreateInteractionResponse::Message(
-                            CreateInteractionResponseMessage::new()
-                                .ephemeral(true)
-                                .content("⚠️ **Are you sure you want to forfeit?**\n\nThis will notify the organizers that you are forfeiting this async race.")
-                                .components(vec![confirm_button])
-                        )).await?;
+                        let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+                        let thread_id = interaction.channel_id.get() as i64;
+                        if let Some(run) = async_race::bracket_run_from_thread(&pool, thread_id).await? {
+                            async_race::handle_forfeit(ctx, &interaction, &run).await?;
+                        }
                     }
                     "async_forfeit_confirm" => {
-                        // Handle confirmed bracket async forfeit
-                        let mut transaction = {
-                            let discord_data = ctx.data.read().await;
-                            discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
-                        };
-
+                        let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
                         let thread_id = interaction.channel_id.get() as i64;
-
-                        // Find the race for this thread
-                        let race_info = sqlx::query!(
-                            r#"
-                            SELECT id, async_thread1, async_thread2, async_thread3
-                            FROM races
-                            WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
-                            "#,
-                            thread_id
-                        ).fetch_optional(&mut *transaction).await?;
-
-                        if let Some(race_info) = race_info {
-                            let async_part = if race_info.async_thread1 == Some(thread_id) {
-                                1
-                            } else if race_info.async_thread2 == Some(thread_id) {
-                                2
-                            } else if race_info.async_thread3 == Some(thread_id) {
-                                3
-                            } else {
-                                0
-                            };
-
-                            if async_part > 0 {
-                                // Send @here ping to the thread informing of forfeit
-                                let mut msg = MessageBuilder::default();
-                                msg.push("@here - ");
-                                msg.mention(&interaction.user);
-                                msg.push(" has indicated they want to **forfeit** this async race.\n\n");
-                                msg.push("**Organizers:** To confirm this forfeit, use the `/forfeit-async` command in this thread.");
-
-                                interaction.channel_id.say(ctx, msg.build()).await?;
-
-                                // Find and edit the message with FINISH/FORFEIT buttons to remove them
-                                // Get messages from the channel and find the one with the buttons
-                                // We look for the message that contains the text "Good luck!" which is sent with the FINISH/FORFEIT buttons
-                                let messages = interaction.channel_id.messages(ctx, serenity::all::GetMessages::new().limit(50)).await?;
-                                for mut message in messages {
-                                    // Check if this message contains "Good luck!" and has components
-                                    if !message.components.is_empty() && message.content.contains("Good luck!") {
-                                        // Edit this message to remove the buttons
-                                        let mut edit_msg = serenity::all::EditMessage::new();
-                                        edit_msg = edit_msg.components(vec![]);
-                                        let _ = message.edit(ctx, edit_msg).await;
-                                        break;
-                                    }
-                                }
-
-                                // Update the ephemeral response to confirm
-                                interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                                    CreateInteractionResponseMessage::new()
-                                        .content("✅ Forfeit request sent. An organizer will confirm it shortly.")
-                                        .components(vec![])
-                                )).await?;
-                            } else {
-                                interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                                    CreateInteractionResponseMessage::new()
-                                        .content("Could not determine which async part this thread is for.")
-                                        .components(vec![])
-                                )).await?;
-                            }
-                        } else {
-                            interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                                CreateInteractionResponseMessage::new()
-                                    .content("This thread is not associated with an async race.")
-                                    .components(vec![])
-                            )).await?;
+                        if let Some(run) = async_race::bracket_run_from_thread(&pool, thread_id).await? {
+                            async_race::handle_forfeit_confirm(ctx, &interaction, &pool, &run).await?;
                         }
-
-                        transaction.rollback().await?;
                     }
                     "async_forfeit_cancel" => {
-                        // Cancel the forfeit
-                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                            CreateInteractionResponseMessage::new()
-                                .content("Forfeit cancelled.")
-                                .components(vec![])
-                        )).await?;
+                        async_race::handle_forfeit_cancel(ctx, &interaction).await?;
                     }
                     "pronouns_he" => {
                         let member = interaction.member.clone().expect("/pronoun-roles called outside of a guild");
@@ -3287,22 +3044,12 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         race.save(&mut transaction).await?;
                         transaction.commit().await?;
                     } else if let Some(_nonce) = custom_id.strip_prefix("async_revert_bracket_") {
-                        // Handle bracket REVERT button - restore FINISH/FORFEIT buttons
-                        // The nonce is only used by the background task to identify stale finishes
-                        let race_buttons = CreateActionRow::Buttons(vec![
-                            CreateButton::new("async_finish")
-                                .label("FINISH")
-                                .style(ButtonStyle::Danger),
-                            CreateButton::new("async_forfeit")
-                                .label("FORFEIT")
-                                .style(ButtonStyle::Secondary),
-                        ]);
-
-                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                            CreateInteractionResponseMessage::new()
-                                .content("**Finish reverted!** Continue playing and click the FINISH button once you have completed your run.\nIf you need to forfeit, click the FORFEIT button.")
-                                .components(vec![race_buttons])
-                        )).await?;
+                        // Handle bracket REVERT — restore old-format FINISH/FORFEIT buttons
+                        let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+                        let thread_id = interaction.channel_id.get() as i64;
+                        if let Some(run) = async_race::bracket_run_from_thread(&pool, thread_id).await? {
+                            async_race::handle_revert(ctx, &interaction, &run).await?;
+                        }
                     } else if let Some(params) = custom_id.strip_prefix("async_ready_qualifier_") {
                         // Handle qualifier READY button: format is "async_ready_qualifier_{team_id}_{async_kind}"
                         if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
@@ -3390,6 +3137,18 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             seed_msg.push(format!("\nPassword: {}\n", password));
                                         }
 
+                                        // Check for force-start delay
+                                        let async_start_delay = sqlx::query_scalar!(
+                                            "SELECT e.async_start_delay FROM events e JOIN teams t ON t.series = e.series AND t.event = e.event WHERE t.id = $1",
+                                            team_id as i64
+                                        ).fetch_optional(&mut *transaction).await?.flatten();
+
+                                        if let Some(delay) = async_start_delay {
+                                            if delay > 0 {
+                                                seed_msg.push(format!("\nYou have **{} minutes** to click START COUNTDOWN before the seed is automatically started.", delay));
+                                            }
+                                        }
+
                                         // Send seed message and START button
                                         let start_button = CreateActionRow::Buttons(vec![
                                             CreateButton::new(format!("async_start_qualifier_{}_{}", team_id, async_kind as i32))
@@ -3407,6 +3166,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             CreateInteractionResponseMessage::new()
                                                 .components(vec![])
                                         )).await?;
+
+                                        // Spawn force-start task if configured
+                                        if let Some(delay) = async_start_delay {
+                                            let run = async_race::AsyncRun::Qualifier { team_id: team_id as i64, async_kind };
+                                            async_race::spawn_force_start_task(
+                                                pool.clone(),
+                                                Arc::clone(&ctx.http),
+                                                interaction.channel_id,
+                                                run,
+                                                interaction.user.id,
+                                                delay,
+                                            );
+                                        }
                                     } else {
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(
                                             CreateInteractionResponseMessage::new()
@@ -3419,338 +3191,63 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             }
                         }
                     } else if let Some(params) = custom_id.strip_prefix("async_start_qualifier_") {
-                        // Handle qualifier START COUNTDOWN button
                         if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
                             if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
                                 let Some(async_kind) = AsyncKind::from_i32(async_kind_int) else { return Ok(()) };
                                 let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-                                let mut transaction = pool.begin().await?;
-
-                                // Verify user is a member of the team
-                                let is_team_member = sqlx::query_scalar!(
-                                    r#"SELECT EXISTS (
-                                        SELECT 1 FROM team_members tm
-                                        JOIN users u ON tm.member = u.id
-                                        WHERE tm.team = $1 AND u.discord_id = $2
-                                    ) AS "exists!""#,
-                                    team_id as i64,
-                                    interaction.user.id.get() as i64
-                                ).fetch_one(&mut *transaction).await?;
-
-                                if !is_team_member {
-                                    interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                        CreateInteractionResponseMessage::new()
-                                            .ephemeral(true)
-                                            .content("You are not authorized to click this button.")
-                                    )).await?;
-                                    transaction.rollback().await?;
-                                } else {
-                                    // Check if already started
-                                    let already_started = sqlx::query_scalar!(
-                                        r#"SELECT start_time IS NOT NULL AS "started!" FROM async_teams WHERE team = $1 AND kind = $2"#,
-                                        team_id as i64,
-                                        async_kind as _
-                                    ).fetch_optional(&mut *transaction).await?.unwrap_or(false);
-
-                                    if already_started {
-                                        interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                            CreateInteractionResponseMessage::new()
-                                                .ephemeral(true)
-                                                .content("The countdown has already been started.")
-                                        )).await?;
-                                        transaction.rollback().await?;
-                                    } else {
-                                        // Defer interaction for countdown
-                                        interaction.defer(&ctx.http).await?;
-
-                                        // Send countdown messages
-                                        interaction.channel_id.say(ctx, "**Your async is about to start!**").await?;
-                                        sleep(Duration::from_secs(1)).await;
-
-                                        for i in (1..=5).rev() {
-                                            interaction.channel_id.say(ctx, format!("**{}**", i)).await?;
-                                            sleep(Duration::from_secs(1)).await;
-                                        }
-
-                                        interaction.channel_id.say(ctx, "**GO!** 🏃‍♂️").await?;
-
-                                        // Record start time
-                                        let now = Utc::now();
-                                        sqlx::query!(
-                                            "UPDATE async_teams SET start_time = $1 WHERE team = $2 AND kind = $3",
-                                            now,
-                                            team_id as i64,
-                                            async_kind as _
-                                        ).execute(&mut *transaction).await?;
-
-                                        // Send FINISH and FORFEIT buttons
-                                        let race_buttons = CreateActionRow::Buttons(vec![
-                                            CreateButton::new(format!("async_finish_qualifier_{}_{}", team_id, async_kind as i32))
-                                                .label("FINISH")
-                                                .style(ButtonStyle::Danger),
-                                            CreateButton::new(format!("async_forfeit_qualifier_{}_{}", team_id, async_kind as i32))
-                                                .label("FORFEIT")
-                                                .style(ButtonStyle::Secondary),
-                                        ]);
-
-                                        interaction.channel_id.send_message(ctx, CreateMessage::new()
-                                            .content("**Good luck!** Click the FINISH button once you have completed your run.\nIf you need to forfeit, click the FORFEIT button.")
-                                            .components(vec![race_buttons])
-                                        ).await?;
-
-                                        // Remove the START button
-                                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                                            .components(vec![])
-                                        ).await?;
-
-                                        transaction.commit().await?;
+                                let run = async_race::AsyncRun::Qualifier { team_id: team_id as i64, async_kind };
+                                if let Err(e) = async_race::handle_start_countdown(ctx, &interaction, &pool, &run).await {
+                                    let error_msg = match e {
+                                        AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
+                                        AsyncRaceError::AlreadyStarted => "The countdown has already been started.",
+                                        _ => { eprintln!("Async countdown error: {:?}", e); "An error occurred while processing your countdown request." },
+                                    };
+                                    if interaction.edit_response(ctx, EditInteractionResponse::new().content(error_msg)).await.is_err() {
+                                        let _ = interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                            CreateInteractionResponseMessage::new().ephemeral(true).content(error_msg)
+                                        )).await;
                                     }
                                 }
                             }
                         }
                     } else if let Some(params) = custom_id.strip_prefix("async_finish_qualifier_") {
-                        // Handle qualifier FINISH button
                         if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
                             if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
                                 let Some(async_kind) = AsyncKind::from_i32(async_kind_int) else { return Ok(()) };
                                 let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-                                let mut transaction = pool.begin().await?;
-
-                                // Verify user is a member of the team
-                                let is_team_member = sqlx::query_scalar!(
-                                    r#"SELECT EXISTS (
-                                        SELECT 1 FROM team_members tm
-                                        JOIN users u ON tm.member = u.id
-                                        WHERE tm.team = $1 AND u.discord_id = $2
-                                    ) AS "exists!""#,
-                                    team_id as i64,
-                                    interaction.user.id.get() as i64
-                                ).fetch_one(&mut *transaction).await?;
-
-                                if !is_team_member {
-                                    interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                        CreateInteractionResponseMessage::new()
-                                            .ephemeral(true)
-                                            .content("You are not authorized to click this button.")
-                                    )).await?;
-                                    transaction.rollback().await?;
-                                } else {
-                                    // Get start time and check state
-                                    let async_team = sqlx::query!(
-                                        r#"SELECT start_time, finish_time, finished_at FROM async_teams WHERE team = $1 AND kind = $2"#,
-                                        team_id as i64,
-                                        async_kind as _
-                                    ).fetch_optional(&mut *transaction).await?;
-
-                                    if let Some(record) = async_team {
-                                        if record.start_time.is_none() {
-                                            interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                                CreateInteractionResponseMessage::new()
-                                                    .ephemeral(true)
-                                                    .content("You must start the countdown before finishing.")
-                                            )).await?;
-                                            transaction.rollback().await?;
-                                        } else if record.finish_time.is_some() || record.finished_at.is_some() {
-                                            interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                                CreateInteractionResponseMessage::new()
-                                                    .ephemeral(true)
-                                                    .content("You have already clicked finish.")
-                                            )).await?;
-                                            transaction.rollback().await?;
-                                        } else {
-                                            // Calculate estimated finish time
-                                            let now = Utc::now();
-                                            let start_time = record.start_time.unwrap();
-                                            let duration = now.signed_duration_since(start_time);
-
-                                            let total_seconds = duration.num_seconds();
-                                            let hours = total_seconds / 3600;
-                                            let minutes = (total_seconds % 3600) / 60;
-                                            let seconds = total_seconds % 60;
-                                            let formatted_time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
-
-                                            // Replace FINISH/FORFEIT buttons with REVERT button.
-                                            // Include a nonce so the background task can verify it's the same finish.
-                                            let revert_nonce = Utc::now().timestamp_millis();
-                                            let revert_button_id = format!("async_revert_qualifier_{}_{}_{}", team_id, async_kind as i32, revert_nonce);
-                                            let revert_button = CreateActionRow::Buttons(vec![
-                                                CreateButton::new(&revert_button_id)
-                                                    .label("REVERT")
-                                                    .style(ButtonStyle::Secondary)
-                                            ]);
-
-                                            interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                                                CreateInteractionResponseMessage::new()
-                                                    .content(format!("✅ **Finished in {}**\nYou have 30 seconds to revert if needed.", formatted_time))
-                                                    .components(vec![revert_button])
-                                            )).await?;
-
-                                            // Spawn a background task to finalize after 30 seconds
-                                            let ctx_clone = ctx.clone();
-                                            let pool_clone = pool.clone();
-                                            let channel_id = interaction.channel_id;
-                                            let message_id = interaction.message.id;
-
-                                            let is_alttpr = sqlx::query_scalar!(
-                                                r#"SELECT EXISTS (
-                                                    SELECT 1 FROM teams t
-                                                    JOIN game_series gs ON gs.series = t.series
-                                                    JOIN games g ON g.id = gs.game_id
-                                                    WHERE t.id = $1 AND g.name = 'alttpr'
-                                                ) AS "is_alttpr!""#,
-                                                team_id as i64
-                                            ).fetch_one(&mut *transaction).await.unwrap_or(false);
-
-                                            let is_twwr = sqlx::query_scalar!(
-                                                r#"SELECT EXISTS (
-                                                    SELECT 1 FROM teams t
-                                                    JOIN game_series gs ON gs.series = t.series
-                                                    JOIN games g ON g.id = gs.game_id
-                                                    WHERE t.id = $1 AND g.name = 'twwr'
-                                                ) AS "is_twwr!""#,
-                                                team_id as i64
-                                            ).fetch_one(&mut *transaction).await.unwrap_or(false);
-
-                                            tokio::spawn(async move {
-                                                sleep(Duration::from_secs(30)).await;
-
-                                                // Check if the message still has the REVERT button with matching nonce
-                                                if let Ok(message) = channel_id.message(&ctx_clone, message_id).await {
-                                                    let has_revert_button = message.components.first()
-                                                        .map_or(false, |row| row.components.iter().any(|c| {
-                                                            matches!(c, ActionRowComponent::Button(b)
-                                                                if matches!(&b.data, ButtonKind::NonLink { custom_id, .. } if custom_id == &revert_button_id))
-                                                        }));
-
-                                                    if has_revert_button {
-                                                        // Remove the REVERT button
-                                                        let _ = channel_id.edit_message(&ctx_clone, message_id, serenity::all::EditMessage::new()
-                                                            .components(vec![])
-                                                        ).await;
-
-                                                        // Record that the runner has finished (unverified — allows requesting next qualifier)
-                                                        let _ = sqlx::query!(
-                                                            "UPDATE async_teams SET finished_at = NOW() WHERE team = $1 AND kind = $2 AND finished_at IS NULL",
-                                                            team_id as i64, async_kind as _
-                                                        ).execute(&pool_clone).await;
-
-                                                        // Send completion message
-                                                        let mut msg = MessageBuilder::default();
-                                                        msg.push("@here - **Qualifier run complete!**\n\n");
-                                                        msg.push(format!("**Estimated finish time:** {}\n\n", formatted_time));
-                                                        msg.push("Please provide:\n");
-                                                        msg.push("• A link to your VOD/recording\n");
-                                                        if is_alttpr {
-                                                            msg.push("• A screenshot of your final time & collection rate\n\n");
-                                                        } else if is_twwr {
-                                                            msg.push("• A screenshot showing your final time together with the sword in Ganondorf's head\n\n");
-                                                        } else {
-                                                            msg.push("• A screenshot of your final time and indication of seed completion\n\n");
-                                                        }
-                                                        msg.push("Staff will verify and record your official time using `/result-async`.");
-
-                                                        let _ = channel_id.say(&ctx_clone, msg.build()).await;
-                                                    }
-                                                }
-                                            });
-
-                                            transaction.rollback().await?;
-                                        }
-                                    } else {
-                                        interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                            CreateInteractionResponseMessage::new()
-                                                .ephemeral(true)
-                                                .content("Could not find your qualifier submission.")
-                                        )).await?;
-                                        transaction.rollback().await?;
-                                    }
+                                let run = async_race::AsyncRun::Qualifier { team_id: team_id as i64, async_kind };
+                                if let Err(e) = async_race::handle_finish(ctx, &interaction, &pool, run).await {
+                                    let error_msg = match e {
+                                        AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
+                                        AsyncRaceError::NotStarted => "You must start the countdown before finishing.",
+                                        AsyncRaceError::AlreadyFinished => "You have already clicked finish.",
+                                        _ => { eprintln!("Async finish error: {:?}", e); "An error occurred while processing your finish request." },
+                                    };
+                                    let _ = interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                        CreateInteractionResponseMessage::new().ephemeral(true).content(error_msg)
+                                    )).await;
                                 }
                             }
                         }
                     } else if let Some(params) = custom_id.strip_prefix("async_revert_qualifier_") {
-                        // Handle qualifier REVERT button - restore FINISH/FORFEIT buttons
-                        // Format: {team_id}_{async_kind}_{nonce} (nonce is ignored here)
                         let parts: Vec<&str> = params.splitn(3, '_').collect();
                         if let (Some(team_id_str), Some(async_kind_str)) = (parts.first(), parts.get(1)) {
                             if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
-                                let race_buttons = CreateActionRow::Buttons(vec![
-                                    CreateButton::new(format!("async_finish_qualifier_{}_{}", team_id, async_kind_int))
-                                        .label("FINISH")
-                                        .style(ButtonStyle::Danger),
-                                    CreateButton::new(format!("async_forfeit_qualifier_{}_{}", team_id, async_kind_int))
-                                        .label("FORFEIT")
-                                        .style(ButtonStyle::Secondary),
-                                ]);
-
-                                interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                                    CreateInteractionResponseMessage::new()
-                                        .content("**Finish reverted!** Continue playing and click the FINISH button once you have completed your run.\nIf you need to forfeit, click the FORFEIT button.")
-                                        .components(vec![race_buttons])
-                                )).await?;
+                                if let Some(async_kind) = AsyncKind::from_i32(async_kind_int) {
+                                    let run = async_race::AsyncRun::Qualifier { team_id: team_id as i64, async_kind };
+                                    async_race::handle_revert(ctx, &interaction, &run).await?;
+                                }
                             }
                         }
                     } else if custom_id == "async_forfeit_qualifier_cancel" {
-                        // Cancel the qualifier forfeit
-                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                            CreateInteractionResponseMessage::new()
-                                .content("Forfeit cancelled.")
-                                .components(vec![])
-                        )).await?;
+                        async_race::handle_forfeit_cancel(ctx, &interaction).await?;
                     } else if let Some(params) = custom_id.strip_prefix("async_forfeit_qualifier_confirm_") {
-                        // Handle confirmed qualifier forfeit
                         if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
-                            if let (Ok(team_id), Ok(_async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
-                                let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-                                let mut transaction = pool.begin().await?;
-
-                                // Verify user is a member of the team
-                                let is_team_member = sqlx::query_scalar!(
-                                    r#"SELECT EXISTS (
-                                        SELECT 1 FROM team_members tm
-                                        JOIN users u ON tm.member = u.id
-                                        WHERE tm.team = $1 AND u.discord_id = $2
-                                    ) AS "exists!""#,
-                                    team_id as i64,
-                                    interaction.user.id.get() as i64
-                                ).fetch_one(&mut *transaction).await?;
-
-                                if !is_team_member {
-                                    interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                                        CreateInteractionResponseMessage::new()
-                                            .content("You are not authorized to forfeit for this team.")
-                                            .components(vec![])
-                                    )).await?;
-                                    transaction.rollback().await?;
-                                } else {
-                                    let mut msg = MessageBuilder::default();
-                                    msg.push("@here - ");
-                                    msg.mention(&interaction.user);
-                                    msg.push(" has indicated they want to **forfeit** this qualifier.\n\n");
-                                    msg.push("**Organizers:** To confirm this forfeit, use the `/forfeit-async` command in this thread.");
-
-                                    interaction.channel_id.say(ctx, msg.build()).await?;
-
-                                    // Find and edit the message with FINISH/FORFEIT buttons to remove them
-                                    // Look for the message that contains "Good luck!" which is sent with the FINISH/FORFEIT buttons
-                                    let messages = interaction.channel_id.messages(ctx, serenity::all::GetMessages::new().limit(50)).await?;
-                                    for mut message in messages {
-                                        // Check if this message contains "Good luck!" and has components
-                                        if !message.components.is_empty() && message.content.contains("Good luck!") {
-                                            // Edit this message to remove the buttons
-                                            let mut edit_msg = serenity::all::EditMessage::new();
-                                            edit_msg = edit_msg.components(vec![]);
-                                            let _ = message.edit(ctx, edit_msg).await;
-                                            break;
-                                        }
-                                    }
-
-                                    interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                                        CreateInteractionResponseMessage::new()
-                                            .content("Forfeit request sent. An organizer will confirm it shortly.")
-                                            .components(vec![])
-                                    )).await?;
-
-                                    transaction.rollback().await?;
+                            if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
+                                if let Some(async_kind) = AsyncKind::from_i32(async_kind_int) {
+                                    let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+                                    let run = async_race::AsyncRun::Qualifier { team_id: team_id as i64, async_kind };
+                                    async_race::handle_forfeit_confirm(ctx, &interaction, &pool, &run).await?;
                                 }
                             }
                         }
@@ -3943,25 +3440,25 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             }
                         }
                     } else if let Some(params) = custom_id.strip_prefix("async_forfeit_qualifier_") {
-                        // Handle qualifier FORFEIT button - show confirmation
                         if let Some((team_id_str, async_kind_str)) = params.split_once('_') {
                             if let (Ok(team_id), Ok(async_kind_int)) = (team_id_str.parse::<u64>(), async_kind_str.parse::<i32>()) {
-                                let confirm_button = CreateActionRow::Buttons(vec![
-                                    CreateButton::new(format!("async_forfeit_qualifier_confirm_{}_{}", team_id, async_kind_int))
-                                        .label("Yes, forfeit")
-                                        .style(ButtonStyle::Danger),
-                                    CreateButton::new("async_forfeit_qualifier_cancel")
-                                        .label("Cancel")
-                                        .style(ButtonStyle::Secondary),
-                                ]);
-
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("**Are you sure you want to forfeit?**\n\nThis will notify the organizers that you are forfeiting this qualifier.")
-                                        .components(vec![confirm_button])
-                                )).await?;
+                                if let Some(async_kind) = AsyncKind::from_i32(async_kind_int) {
+                                    let run = async_race::AsyncRun::Qualifier { team_id: team_id as i64, async_kind };
+                                    async_race::handle_forfeit(ctx, &interaction, &run).await?;
+                                }
                             }
+                        }
+                    } else if let Some(parsed) = async_race::AsyncRun::parse_button(&custom_id) {
+                        // Handle unified async:{action}:{type}:{params} button format
+                        let (action, run, _nonce) = parsed;
+                        let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+                        match action.as_str() {
+                            "finish" => { let _ = async_race::handle_finish(ctx, &interaction, &pool, run).await; }
+                            "revert" => { let _ = async_race::handle_revert(ctx, &interaction, &run).await; }
+                            "forfeit" => { let _ = async_race::handle_forfeit(ctx, &interaction, &run).await; }
+                            "forfeit_confirm" => { let _ = async_race::handle_forfeit_confirm(ctx, &interaction, &pool, &run).await; }
+                            "forfeit_cancel" => { let _ = async_race::handle_forfeit_cancel(ctx, &interaction).await; }
+                            _ => {}
                         }
                     } else if let Some(race_id_str) = custom_id.strip_prefix("volunteer_signup_") {
                         // Handle volunteer signup button - shows available roles for the user
