@@ -265,37 +265,41 @@ impl AsyncRaceManager {
         if race.series == Series::AlttprDe {
             let alttprde_options = racetime_bot::AlttprDeRaceOptions::for_race(db_pool, race, event.round_modes.as_ref()).await;
 
-            content.push_line("");
-            content.push_line("");
-            content.push("---");
-            content.push_line("");
-
+            let mut details = MessageBuilder::default();
             if let Some(ref round) = race.round {
                 if event.round_modes.is_some() {
                     if let Some(mode_display) = alttprde_options.mode_display() {
-                        content.push(format!("**Round Mode:** {} - {}", round, mode_display));
+                        details.push(format!("**Round Mode:** {} - {}", round, mode_display));
                     } else {
-                        content.push(format!("**Round Mode:** {} - not yet set", round));
+                        details.push(format!("**Round Mode:** {} - not yet set", round));
                     }
-                    content.push_line("");
+                    details.push_line("");
                 }
             }
 
             if event.event == "9bracket" {
                 if let Some(mode_display) = alttprde_options.mode_display() {
-                    content.push(format!("**Mode:** {}", mode_display));
-                    content.push_line("");
+                    details.push(format!("**Mode:** {}", mode_display));
+                    details.push_line("");
                 }
 
                 if !alttprde_options.custom_choices.is_empty() {
-                    content.push("**Settings chosen by both runners:** ");
+                    details.push("**Settings chosen by both runners:** ");
                     let choices = alttprde_options.custom_choices_labels();
-                    content.push(choices.join(", "));
-                    content.push_line("");
+                    details.push(choices.join(", "));
+                    details.push_line("");
                 }
             }
 
-            content.push("---");
+            let details_str = details.build();
+            if !details_str.is_empty() {
+                content.push_line("");
+                content.push_line("");
+                content.push("---");
+                content.push_line("");
+                content.push(details_str);
+                content.push("---");
+            }
         }
         
         content.push_line("");

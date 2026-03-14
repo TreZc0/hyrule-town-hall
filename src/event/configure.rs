@@ -149,17 +149,24 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                                 label(class = "help") : format!("(needs to be compatible with version {})", identifier);
                             });
                         }
-                        : form_field("asyncs_active", &mut errors, html! {
-                            input(type = "checkbox", id = "asyncs_active", name = "asyncs_active", checked? = ctx.field_value("asyncs_active").map_or(event.asyncs_active, |value| value == "on"));
-                            label(for = "asyncs_active") : "Allow async races";
-                            label(class = "help") : "(If disabled, Discord scheduling threads will not mention the /schedule-async command and async races will not be possible)";
-                        });
                         : form_field("swiss_standings", &mut errors, html! {
                             input(type = "checkbox", id = "swiss_standings", name = "swiss_standings", checked? = ctx.field_value("swiss_standings").map_or(event.swiss_standings, |value| value == "on"));
                             label(for = "swiss_standings") : "Show Swiss standings tab";
                             label(class = "help") : "(If enabled, the Swiss standings tab will be visible for this event)";
                         });
                         @if event.discord_guild.is_some() {
+                            : form_field("asyncs_active", &mut errors, html! {
+                                input(type = "checkbox", id = "asyncs_active", name = "asyncs_active", checked? = ctx.field_value("asyncs_active").map_or(event.asyncs_active, |value| value == "on"));
+                                label(for = "asyncs_active") : "Allow async races";
+                                label(class = "help") : "(If disabled, Discord scheduling threads will not mention the /schedule-async command and async races will not be possible)";
+                            });
+                            : form_field("async_start_delay", &mut errors, html! {
+                                label(for = "async_start_delay") : "Force-Start Delay (minutes)";
+                                input(type = "number", id = "async_start_delay", name = "async_start_delay", min = "0", value = ctx.field_value("async_start_delay").unwrap_or(
+                                    &event.async_start_delay.map(|d| d.to_string()).unwrap_or_default()
+                                ), style = "width: 100%; max-width: 200px;");
+                                label(class = "help") : "(After seed is distributed, auto-start after this many minutes. Leave empty to disable.)";
+                            });
                             : form_field("discord_events_enabled", &mut errors, html! {
                                 input(type = "checkbox", id = "discord_events_enabled", name = "discord_events_enabled", checked? = ctx.field_value("discord_events_enabled").map_or(event.discord_events_enabled, |value| value == "on"));
                                 label(for = "discord_events_enabled") : "Create Discord scheduled events for races";
@@ -174,13 +181,6 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                                 input(type = "checkbox", id = "automated_asyncs", name = "automated_asyncs", checked? = ctx.field_value("automated_asyncs").map_or(event.automated_asyncs, |value| value == "on"));
                                 label(for = "automated_asyncs") : "Use automated Discord threads for qualifier asyncs";
                                 label(class = "help") : "(When enabled, qualifier requests create private Discord threads with READY/countdown/FINISH buttons. Staff validate results via /result-async command.)";
-                            });
-                            : form_field("async_start_delay", &mut errors, html! {
-                                label(for = "async_start_delay") : "Force-Start Delay (minutes)";
-                                input(type = "number", id = "async_start_delay", name = "async_start_delay", min = "0", value = ctx.field_value("async_start_delay").unwrap_or(
-                                    &event.async_start_delay.map(|d| d.to_string()).unwrap_or_default()
-                                ), style = "width: 100%; max-width: 200px;");
-                                label(class = "help") : "(After seed is distributed, auto-start after this many minutes. Leave empty to disable.)";
                             });
                         }
                         : form_field("qualifier_score_hiding", &mut errors, html! {
