@@ -3960,13 +3960,6 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
 }
 
 pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, event: event::Data<'_>) -> Result<(),Error > {
-    // This is a temporary implementation. It checks the race and sees if a seed is rolled.
-    // If it is not, it rolls a seed and adds it to the database.
-    // If it is, it pulls the seed from the database instead.
-    // It posts in the event.discord_organizer_channel channel a link to the seed, the player who is playing in the async, and gives admin instructions.
-    // Use previous mechanisms (async channels/etc) to manage race manually.
-    // If the race is the second half, remind admin in the message to post the race result when it's over and report it on start.gg
-    // Set "notified" on the race to avoid this being called again.
 
     let discord_ctx = discord_ctx.clone();
     let cal_event = cal_event.clone();
@@ -3989,6 +3982,14 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
             racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB => {
                 let alttprde_options = AlttprDeRaceOptions::for_race(&global_state.db_pool, &cal_event.race, event.round_modes.as_ref()).await;
                 global_state.clone().roll_alttprde9_seed(alttprde_options)
+            }
+            racetime_bot::Goal::AlttprDeRivalsCupBrackets | racetime_bot::Goal::AlttprDeRivalsCupGroups => {
+                let game_num = cal_event.race.game.unwrap_or(1);
+                let preset = cal_event.race.draft.as_ref()
+                    .and_then(|d| d.settings.get(&*format!("game{game_num}_preset")))
+                    .expect("RivalsCup async race missing preset in draft state")
+                    .as_ref().to_owned();
+                global_state.clone().roll_avianart_seed(preset)
             }
             racetime_bot::Goal::Crosskeys2025 => {
                 let crosskeys_options = CrosskeysRaceOptions::for_race(&global_state.db_pool, &cal_event.race).await;
@@ -4025,6 +4026,9 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
             }
             Some(seed::Files::TwwrPermalink { ref permalink, ref seed_hash }) => {
                 sqlx::query!("UPDATE races SET seed_data = $1 WHERE id = $2", serde_json::json!({ "permalink": permalink, "seed_hash": seed_hash }), cal_event.race.id as _,).execute(&mut *transaction).await?;
+            }
+            Some(seed::Files::AvianartSeed { ref hash, ref seed_hash }) => {
+                sqlx::query!("UPDATE races SET seed_data = $1 WHERE id = $2", serde_json::json!({ "avianart_hash": hash, "avianart_seed_hash": seed_hash.as_ref().map(|h| h.join(", ")) }), cal_event.race.id as _,).execute(&mut *transaction).await?;
             }
             _ => unimplemented!("unexpected seed type for async rolling"),
         }

@@ -501,6 +501,9 @@ impl AsyncRaceManager {
                 seed::Files::TwwrPermalink { permalink, .. } => {
                     Ok(format!("Permalink: {permalink}"))
                 }
+                seed::Files::AvianartSeed { hash, .. } => {
+                    Ok(format!("https://avianart.games/perm/{hash}"))
+                }
                 _ => Err(Error::UnsupportedSeedType),
             }
         } else {
@@ -1352,6 +1355,16 @@ pub(crate) async fn handle_ready_qualifier(
     }
 
     if let Some(ref seed_data) = seed.seed_data {
+        if let Some(avianart_hash) = seed_data.get("avianart_hash").and_then(|v| v.as_str()) {
+            if !avianart_hash.is_empty() {
+                seed_msg.push(format!("Seed URL: https://avianart.games/perm/{}\n", avianart_hash));
+            }
+            if let Some(seed_hash) = seed_data.get("avianart_seed_hash").and_then(|v| v.as_str()) {
+                if !seed_hash.is_empty() {
+                    seed_msg.push(format!("**Seed Hash:** {}\n", seed_hash));
+                }
+            }
+        }
         if let Some(permalink) = seed_data.get("permalink").and_then(|v| v.as_str()) {
             if !permalink.is_empty() {
                 seed_msg.push(format!("**Permalink:** `{}`\n", permalink));
