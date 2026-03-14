@@ -3537,7 +3537,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 } else {
                                     // Get start time and check state
                                     let async_team = sqlx::query!(
-                                        r#"SELECT start_time, finish_time FROM async_teams WHERE team = $1 AND kind = $2"#,
+                                        r#"SELECT start_time, finish_time, finished_at FROM async_teams WHERE team = $1 AND kind = $2"#,
                                         team_id as i64,
                                         async_kind as _
                                     ).fetch_optional(&mut *transaction).await?;
@@ -3550,7 +3550,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     .content("You must start the countdown before finishing.")
                                             )).await?;
                                             transaction.rollback().await?;
-                                        } else if record.finish_time.is_some() {
+                                        } else if record.finish_time.is_some() || record.finished_at.is_some() {
                                             interaction.create_response(ctx, CreateInteractionResponse::Message(
                                                 CreateInteractionResponseMessage::new()
                                                     .ephemeral(true)
@@ -3587,6 +3587,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
 
                                             // Spawn a background task to finalize after 30 seconds
                                             let ctx_clone = ctx.clone();
+                                            let pool_clone = pool.clone();
                                             let channel_id = interaction.channel_id;
                                             let message_id = interaction.message.id;
 
@@ -3626,6 +3627,12 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         let _ = channel_id.edit_message(&ctx_clone, message_id, serenity::all::EditMessage::new()
                                                             .components(vec![])
                                                         ).await;
+
+                                                        // Record that the runner has finished (unverified — allows requesting next qualifier)
+                                                        let _ = sqlx::query!(
+                                                            "UPDATE async_teams SET finished_at = NOW() WHERE team = $1 AND kind = $2 AND finished_at IS NULL",
+                                                            team_id as i64, async_kind as _
+                                                        ).execute(&pool_clone).await;
 
                                                         // Send completion message
                                                         let mut msg = MessageBuilder::default();

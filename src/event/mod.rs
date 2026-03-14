@@ -598,9 +598,9 @@ impl<'a> Data<'a> {
         for kind in sqlx::query_scalar!(r#"SELECT kind AS "kind: AsyncKind" FROM asyncs WHERE series = $1 AND event = $2 AND (start IS NULL OR start <= NOW()) AND (end_time IS NULL OR end_time > NOW())"#, self.series as _, &self.event).fetch_all(&mut **transaction).await? {
             match kind {
                 AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 => if !self.is_started(&mut *transaction).await? {
-                    // Skip qualifiers the team has already submitted
+                    // Skip qualifiers the team has already finished (or submitted)
                     if let Some(team_id) = team_id {
-                        if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM async_teams WHERE team = $1 AND kind = $2 AND submitted IS NOT NULL) AS "submitted!""#, team_id as _, kind as _).fetch_one(&mut **transaction).await? {
+                        if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM async_teams WHERE team = $1 AND kind = $2 AND (finished_at IS NOT NULL OR submitted IS NOT NULL)) AS "finished!""#, team_id as _, kind as _).fetch_one(&mut **transaction).await? {
                             continue;
                         }
                     }
