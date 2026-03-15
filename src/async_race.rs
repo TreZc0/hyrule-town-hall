@@ -335,6 +335,7 @@ impl AsyncRaceManager {
         let display_order = Self::get_display_order(race, async_part);
         if display_order == 1 {
             content.push_line("");
+            content.push_line("");
             content.push("**First Player Instructions:**");
             content.push_line("");
             content.push("• Local record from OBS and upload to YouTube as unlisted.");
@@ -349,6 +350,7 @@ impl AsyncRaceManager {
             content.push_line("");
             content.push("• We suggest using MKV format for recording (more crash-resistant than MP4).");
         } else {
+            content.push_line("");
             content.push_line("");
             content.push("**Second Player Instructions:**");
             content.push_line("");
@@ -823,24 +825,30 @@ impl AsyncRaceManager {
             let mut content = MessageBuilder::default();
             content.push("**This part of the async is ready to start!**");
             content.push_line("");
-            content.push("Player ");
-            content.mention_user(&player);
-            content.push(" is ready for their portion of the async ");
-            
-            content.push("(");
+            content.push_line("");
+
             let teams: Vec<_> = race.teams().collect();
+            content.push("**Matchup:** ");
             for (i, team) in teams.iter().enumerate() {
                 content.push_safe(team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()));
                 if i < teams.len() - 1 {
                     content.push(" vs. ");
                 }
             }
+            content.push_line("");
 
             if let Some(round) = &race.round {
-                content.push(", ");
+                content.push("**Round:** ");
                 content.push_safe(round.clone());
+                content.push_line("");
             }
-            content.push(")");
+
+            let part_label = match async_part {
+                1 => "First",
+                2 => "Second",
+                _ => "Third",
+            };
+            content.push(format!("**Part:** {} part of async", part_label));
             
             content.push_line("");
             content.push_line("");
@@ -850,7 +858,7 @@ impl AsyncRaceManager {
             if let Some(delay) = async_start_delay {
                 if delay > 0 {
                     content.push_line("");
-                    content.push(format!("You have **{} minutes** to click the start button before the seed is automatically started.", delay));
+                    content.push(format!("You have **{} minutes** to click the start button before the seed is force started.", delay));
                 }
             }
 
@@ -1269,7 +1277,7 @@ pub(crate) fn spawn_force_start_task(
                 elapsed = t;
                 if run.is_started(&pool).await.unwrap_or(true) { return; }
                 let _ = channel_id.say(&http, format!(
-                    "<@{}> **2 minutes remaining** before the seed is automatically started!",
+                    "<@{}> **2 minutes remaining** before the seed is force started!",
                     player_id.get()
                 )).await;
             }
@@ -1281,7 +1289,7 @@ pub(crate) fn spawn_force_start_task(
                 elapsed = t;
                 if run.is_started(&pool).await.unwrap_or(true) { return; }
                 let _ = channel_id.say(&http, format!(
-                    "<@{}> **30 seconds remaining** before the seed is automatically started!",
+                    "<@{}> **30 seconds remaining** before the seed is force started!",
                     player_id.get()
                 )).await;
             }
@@ -1292,10 +1300,7 @@ pub(crate) fn spawn_force_start_task(
         }
 
         if run.is_started(&pool).await.unwrap_or(true) { return; }
-        let _ = channel_id.say(&http, format!(
-            "<@{}> **The seed is being automatically started!**",
-            player_id.get()
-        )).await;
+        let _ = channel_id.say(&http, "@here **The seed is being force started right now!**").await;
         let _ = run_countdown(&pool, &http, channel_id, &run).await;
         remove_start_button(&http, channel_id, &run).await;
     });
