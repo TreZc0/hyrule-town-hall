@@ -821,7 +821,7 @@ impl AsyncRaceManager {
             let thread = ChannelId::new(thread_id as u64);
             
             let mut content = MessageBuilder::default();
-            content.push("@here **This part of the async is ready to start!**");
+            content.push("**This part of the async is ready to start!**");
             content.push_line("");
             content.push("Player ");
             content.mention_user(&player);
@@ -844,13 +844,13 @@ impl AsyncRaceManager {
             
             content.push_line("");
             content.push_line("");
-            content.push("Click the START COUNTDOWN button when you're ready to begin your run.");
+            content.push("Click the 'Start Countdown' button when you're ready to begin your run.");
 
             let async_start_delay = event.async_start_delay;
             if let Some(delay) = async_start_delay {
                 if delay > 0 {
                     content.push_line("");
-                    content.push(format!("You have **{} minutes** to click START COUNTDOWN before the seed is automatically started.", delay));
+                    content.push(format!("You have **{} minutes** to click the start button before the seed is automatically started.", delay));
                 }
             }
 
@@ -1197,7 +1197,7 @@ pub(crate) async fn send_completion_message(
     let mut msg = MessageBuilder::default();
     match run {
         AsyncRun::BracketRace { .. } => {
-            msg.push("@here - **This part of the async race is complete!**\n\n");
+            msg.push("**This part of the async race is complete!**\n\n");
             msg.push(format!("**Estimated finish time:** {}\n\n", formatted_time));
             msg.push("Please provide:\n");
             msg.push("• A link to your VOD/recording\n");
@@ -1223,6 +1223,22 @@ pub(crate) async fn send_completion_message(
     Ok(())
 }
 
+async fn remove_start_button(http: &Http, channel_id: ChannelId, run: &AsyncRun) {
+    let button_id = run.button_id("start_countdown");
+    if let Ok(messages) = channel_id.messages(http, serenity::all::GetMessages::new().limit(50)).await {
+        for message in messages {
+            let has_button = message.components.iter().any(|row| row.components.iter().any(|c| {
+                matches!(c, ActionRowComponent::Button(b)
+                    if matches!(&b.data, ButtonKind::NonLink { custom_id, .. } if custom_id == &button_id))
+            }));
+            if has_button {
+                let _ = channel_id.edit_message(http, message.id, serenity::all::EditMessage::new().components(vec![])).await;
+                break;
+            }
+        }
+    }
+}
+
 pub(crate) fn spawn_force_start_task(
     pool: PgPool,
     http: Arc<Http>,
@@ -1234,8 +1250,9 @@ pub(crate) fn spawn_force_start_task(
     tokio::spawn(async move {
         if delay_minutes <= 0 {
             if !run.is_started(&pool).await.unwrap_or(true) {
-                let _ = channel_id.say(&http, format!("<@{}> **The seed is being automatically started!**", player_id.get())).await;
+                let _ = channel_id.say(&http, "@here **The seed is being force started right now!**").await;
                 let _ = run_countdown(&pool, &http, channel_id, &run).await;
+                remove_start_button(&http, channel_id, &run).await;
             }
             return;
         }
@@ -1280,6 +1297,7 @@ pub(crate) fn spawn_force_start_task(
             player_id.get()
         )).await;
         let _ = run_countdown(&pool, &http, channel_id, &run).await;
+        remove_start_button(&http, channel_id, &run).await;
     });
 }
 
