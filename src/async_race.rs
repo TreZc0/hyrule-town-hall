@@ -140,8 +140,9 @@ impl AsyncRaceManager {
             _ => return Ok(()),
         };
         
+        let run = AsyncRun::BracketRace { race_id: race.id.into(), async_part };
         let ready_button = CreateActionRow::Buttons(vec![
-            CreateButton::new("async_ready")
+            CreateButton::new(run.button_id("ready"))
                 .label("READY!")
                 .style(ButtonStyle::Primary)
         ]);
@@ -335,6 +336,7 @@ impl AsyncRaceManager {
         let display_order = Self::get_display_order(race, async_part);
         if display_order == 1 {
             content.push_line("");
+            content.push_line("");
             content.push("**First Player Instructions:**");
             content.push_line("");
             content.push("• Local record from OBS and upload to YouTube as unlisted.");
@@ -349,6 +351,7 @@ impl AsyncRaceManager {
             content.push_line("");
             content.push("• We suggest using MKV format for recording (more crash-resistant than MP4).");
         } else {
+            content.push_line("");
             content.push_line("");
             content.push("**Second Player Instructions:**");
             content.push_line("");
@@ -635,8 +638,9 @@ impl AsyncRaceManager {
             async_kind as _
         ).execute(&mut **transaction).await?;
 
+        let run = AsyncRun::Qualifier { team_id: team.id.into(), async_kind };
         let ready_button = CreateActionRow::Buttons(vec![
-            CreateButton::new(format!("async_ready_qualifier_{}_{}", team.id, async_kind as i32))
+            CreateButton::new(run.button_id("ready"))
                 .label("READY!")
                 .style(ButtonStyle::Primary)
         ]);
@@ -820,41 +824,48 @@ impl AsyncRaceManager {
             let thread = ChannelId::new(thread_id as u64);
             
             let mut content = MessageBuilder::default();
-            content.push("@here **This part of the async is ready to start!**");
+            content.push("**This part of the async is ready to start!**");
             content.push_line("");
-            content.push("Player ");
-            content.mention_user(&player);
-            content.push(" is ready for their portion of the async ");
-            
-            content.push("(");
+            content.push_line("");
+
             let teams: Vec<_> = race.teams().collect();
+            content.push("**Matchup:** ");
             for (i, team) in teams.iter().enumerate() {
                 content.push_safe(team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()));
                 if i < teams.len() - 1 {
                     content.push(" vs. ");
                 }
             }
+            content.push_line("");
 
             if let Some(round) = &race.round {
-                content.push(", ");
+                content.push("**Round:** ");
                 content.push_safe(round.clone());
+                content.push_line("");
             }
-            content.push(")");
+
+            let part_label = match async_part {
+                1 => "First",
+                2 => "Second",
+                _ => "Third",
+            };
+            content.push(format!("**Part:** {} part of async", part_label));
             
             content.push_line("");
             content.push_line("");
-            content.push("Click the START COUNTDOWN button when you're ready to begin your run.");
+            content.push("Click the 'Start Countdown' button when you're ready to begin your run.");
 
             let async_start_delay = event.async_start_delay;
             if let Some(delay) = async_start_delay {
                 if delay > 0 {
                     content.push_line("");
-                    content.push(format!("You have **{} minutes** to click START COUNTDOWN before the seed is automatically started.", delay));
+                    content.push(format!("You have **{} minutes** to click the start button before the seed is force started.", delay));
                 }
             }
 
+            let run = AsyncRun::BracketRace { race_id, async_part };
             let start_countdown_button = CreateActionRow::Buttons(vec![
-                CreateButton::new("async_start_countdown")
+                CreateButton::new(run.button_id("start_countdown"))
                     .label("START COUNTDOWN")
                     .style(ButtonStyle::Success)
             ]);
@@ -1195,7 +1206,7 @@ pub(crate) async fn send_completion_message(
     let mut msg = MessageBuilder::default();
     match run {
         AsyncRun::BracketRace { .. } => {
-            msg.push("@here - **This part of the async race is complete!**\n\n");
+            msg.push("**This part of the async race is complete!**\n\n");
             msg.push(format!("**Estimated finish time:** {}\n\n", formatted_time));
             msg.push("Please provide:\n");
             msg.push("• A link to your VOD/recording\n");
@@ -1221,6 +1232,22 @@ pub(crate) async fn send_completion_message(
     Ok(())
 }
 
+async fn remove_start_button(http: &Http, channel_id: ChannelId, run: &AsyncRun) {
+    let button_id = run.button_id("start_countdown");
+    if let Ok(messages) = channel_id.messages(http, serenity::all::GetMessages::new().limit(50)).await {
+        for message in messages {
+            let has_button = message.components.iter().any(|row| row.components.iter().any(|c| {
+                matches!(c, ActionRowComponent::Button(b)
+                    if matches!(&b.data, ButtonKind::NonLink { custom_id, .. } if custom_id == &button_id))
+            }));
+            if has_button {
+                let _ = channel_id.edit_message(http, message.id, serenity::all::EditMessage::new().components(vec![])).await;
+                break;
+            }
+        }
+    }
+}
+
 pub(crate) fn spawn_force_start_task(
     pool: PgPool,
     http: Arc<Http>,
@@ -1232,8 +1259,9 @@ pub(crate) fn spawn_force_start_task(
     tokio::spawn(async move {
         if delay_minutes <= 0 {
             if !run.is_started(&pool).await.unwrap_or(true) {
-                let _ = channel_id.say(&http, format!("<@{}> **The seed is being automatically started!**", player_id.get())).await;
+                let _ = channel_id.say(&http, "@here **The seed is being force started right now!**").await;
                 let _ = run_countdown(&pool, &http, channel_id, &run).await;
+                remove_start_button(&http, channel_id, &run).await;
             }
             return;
         }
@@ -1250,7 +1278,7 @@ pub(crate) fn spawn_force_start_task(
                 elapsed = t;
                 if run.is_started(&pool).await.unwrap_or(true) { return; }
                 let _ = channel_id.say(&http, format!(
-                    "<@{}> **2 minutes remaining** before the seed is automatically started!",
+                    "<@{}> **2 minutes remaining** before the seed is force started!",
                     player_id.get()
                 )).await;
             }
@@ -1262,7 +1290,7 @@ pub(crate) fn spawn_force_start_task(
                 elapsed = t;
                 if run.is_started(&pool).await.unwrap_or(true) { return; }
                 let _ = channel_id.say(&http, format!(
-                    "<@{}> **30 seconds remaining** before the seed is automatically started!",
+                    "<@{}> **30 seconds remaining** before the seed is force started!",
                     player_id.get()
                 )).await;
             }
@@ -1273,11 +1301,9 @@ pub(crate) fn spawn_force_start_task(
         }
 
         if run.is_started(&pool).await.unwrap_or(true) { return; }
-        let _ = channel_id.say(&http, format!(
-            "<@{}> **The seed is being automatically started!**",
-            player_id.get()
-        )).await;
+        let _ = channel_id.say(&http, "@here **The seed is being force started right now!**").await;
         let _ = run_countdown(&pool, &http, channel_id, &run).await;
+        remove_start_button(&http, channel_id, &run).await;
     });
 }
 
@@ -1393,8 +1419,9 @@ pub(crate) async fn handle_ready_qualifier(
         }
     }
 
+    let run = AsyncRun::Qualifier { team_id: *team_id, async_kind: *async_kind };
     let start_button = CreateActionRow::Buttons(vec![
-        CreateButton::new(format!("async_start_qualifier_{}_{}", team_id, *async_kind as i32))
+        CreateButton::new(run.button_id("start_countdown"))
             .label("START COUNTDOWN")
             .style(ButtonStyle::Success)
     ]);
