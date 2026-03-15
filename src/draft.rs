@@ -107,12 +107,12 @@ impl Kind {
         matches!(self, Self::PickOnly { .. } | Self::BanPick { .. } | Self::BanOnly { .. })
     }
 
-    pub(crate) fn preset_display_name(&self, preset: &str) -> Option<&'static str> {
+    pub(crate) fn preset_display_name(&self, preset: &str) -> Option<&str> {
         let options: &[PresetOption] = match self {
             Self::PickOnly { options, .. } | Self::BanPick { options, .. } | Self::BanOnly { options, .. } => options,
             _ => return None,
         };
-        options.iter().find(|p| p.preset == preset).map(|p| p.display_name)
+        options.iter().find(|p| p.preset == preset).map(|p| p.display_name.as_str())
     }
 
     fn language(&self) -> Language {
@@ -1826,7 +1826,7 @@ impl Draft {
                         let mut builder = MessageBuilder::default();
                         if picks_made > 0 {
                             let prev_preset = self.settings.get(&*format!("game{picks_made}_preset")).map(|s| s.as_ref()).unwrap_or("?");
-                            let prev_display = options.iter().find(|p| p.preset == prev_preset).map(|p| p.display_name).unwrap_or(prev_preset);
+                            let prev_display = options.iter().find(|p| p.preset == prev_preset).map(|p| p.display_name.as_str()).unwrap_or(prev_preset);
                             builder.push(format!("**{prev_display}** was picked for Game {picks_made}.\n"));
                         }
                         builder.mention_team(transaction, Some(*guild_id), active).await?;
@@ -1908,7 +1908,7 @@ impl Draft {
                             });
                         }
                         let val = self.settings.get(&*format!("ban{ban_count}")).map(|s| s.as_ref()).unwrap_or("?");
-                        let display = options.iter().find(|p| p.preset == val).map(|p| p.display_name).unwrap_or(val);
+                        let display = options.iter().find(|p| p.preset == val).map(|p| p.display_name.as_str()).unwrap_or(val);
                         prev_action = Some(format!("**{display}** was banned."));
                     }
                     DraftPhase::Pick(team) => {
@@ -1946,7 +1946,7 @@ impl Draft {
                             });
                         }
                         let val = self.settings.get(&*format!("game{pick_count}_preset")).map(|s| s.as_ref()).unwrap_or("?");
-                        let display = options.iter().find(|p| p.preset == val).map(|p| p.display_name).unwrap_or(val);
+                        let display = options.iter().find(|p| p.preset == val).map(|p| p.display_name.as_str()).unwrap_or(val);
                         prev_action = Some(format!("**{display}** was picked for Game {pick_count}."));
                     }
                 }
@@ -2022,7 +2022,7 @@ impl Draft {
                             });
                         }
                         let val = self.settings.get(&*format!("ban{ban_count}")).map(|s| s.as_ref()).unwrap_or("?");
-                        let display = options.iter().find(|p| p.preset == val).map(|p| p.display_name).unwrap_or(val);
+                        let display = options.iter().find(|p| p.preset == val).map(|p| p.display_name.as_str()).unwrap_or(val);
                         prev_action = Some(format!("**{display}** was banned."));
                     }
                     DraftPhase::Pick(_) => unreachable!("BanOnly order should not contain Pick phases"),

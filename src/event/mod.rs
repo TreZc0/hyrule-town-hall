@@ -319,7 +319,7 @@ impl<'a> Data<'a> {
             racetime_goal_name,
             is_custom_goal,
             preroll_mode AS "preroll_mode!",
-            spoiler_unlock AS "spoiler_unlock!"
+            spoiler_unlock AS "spoiler_unlock!",
             async_start_delay
         FROM events WHERE series = $1 AND event = $2"#, series as _, &event).fetch_optional(&mut **transaction).await?
             .map(|row| Ok::<_, DataError>(Self {

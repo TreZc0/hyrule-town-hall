@@ -906,7 +906,6 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 value.automated_asyncs,
                 value.show_opt_out,
                 value.force_custom_role_binding,
-                value.async_start_delay,
                 event_data.series as _,
                 &event_data.event,
                 goal_slug,
@@ -918,6 +917,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 value.start_delay,
                 start_delay_open,
                 value.restrict_chat_in_qualifiers,
+                value.async_start_delay,
             ).execute(&mut *transaction).await?;
             
             transaction.commit().await?;
