@@ -1136,8 +1136,8 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
             });
         }
     }
-    // Add Actions column for organizers when event has qualifiers
-    let show_organizer_actions = is_organizer && !matches!(qualifier_kind, QualifierKind::None);
+    // Add Actions column for organizers
+    let show_organizer_actions = is_organizer;
     if show_organizer_actions {
         column_headers.push(html! {
             th : "Actions";

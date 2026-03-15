@@ -2539,6 +2539,8 @@ async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf
     let members = team_obj.members(&mut transaction).await?;
     let qualifier_kind = data.qualifier_kind(&mut transaction, None).await?;
     let has_qualifiers = !matches!(qualifier_kind, QualifierKind::None);
+    let is_global_admin = me.is_global_admin();
+    let current_startgg_id = team_obj.startgg_id.as_ref().map(|id| id.0.clone());
 
     Ok(page(transaction, &Some(me), &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Manage — {}", data.display_name), html! {
         h2 {
@@ -2597,6 +2599,20 @@ async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf
             }
             fieldset {
                 input(type = "submit", value = "Confirm");
+            }
+        }
+        @if is_global_admin {
+            h3 : "start.gg Entrant ID";
+            form(action = uri!(set_startgg_id(series, event, team)).to_string(), method = "post") {
+                : csrf.as_ref();
+                fieldset {
+                    label(for = "startgg_id") : "start.gg Entrant ID:";
+                    : " ";
+                    input(type = "text", name = "startgg_id", id = "startgg_id", value? = current_startgg_id.as_deref());
+                }
+                fieldset {
+                    input(type = "submit", value = "Save");
+                }
             }
         }
     }).await?)
@@ -2720,6 +2736,34 @@ pub(crate) async fn manage_team_post(pool: &State<PgPool>, _http_client: &State<
     }
 }
 
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct SetStartggIdForm {
+    #[field(default = String::new())]
+    csrf: String,
+    #[field(default = None)]
+    startgg_id: Option<String>,
+}
+
+#[rocket::post("/event/<series>/<event>/manage/<team>/startgg-id", data = "<form>")]
+pub(crate) async fn set_startgg_id(pool: &State<PgPool>, me: User, csrf: Option<CsrfToken>, series: Series, event: &str, team: Id<Teams>, form: Form<Contextual<'_, SetStartggIdForm>>) -> Result<Redirect, StatusOrError<Error>> {
+    if !me.is_global_admin() {
+        return Err(StatusOrError::Status(Status::Forbidden))
+    }
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    if !data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden))
+    }
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if let Some(ref value) = form.value {
+        let startgg_id = value.startgg_id.as_deref().filter(|s| !s.is_empty());
+        sqlx::query!("UPDATE teams SET startgg_id = $1 WHERE id = $2", startgg_id, team as _).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+    }
+    Ok(Redirect::to(uri!(manage_team(series, event, team))))
+}
+
 /// Action to take when an organizer manages a racetime-only entrant (no HTH team)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromFormField)]
 pub(crate) enum ManageRacetimeAction {
@@ -2801,7 +2845,7 @@ pub(crate) async fn manage_racetime_entrant(pool: &State<PgPool>, me: Option<Use
 }
 
 #[rocket::post("/event/<series>/<event>/manage-entrant/<racetime_id>", data = "<form>")]
-pub(crate) async fn manage_racetime_entrant_post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, racetime_id: &str, form: Form<Contextual<'_, ManageRacetimeForm>>) -> Result<RedirectOrContent, StatusOrError<ManageTeamError>> {
+pub(crate) async fn manage_racetime_entrant_post(pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, racetime_id: &str, form: Form<Contextual<'_, ManageRacetimeForm>>) -> Result<RedirectOrContent, StatusOrError<ManageTeamError>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     if !data.organizers(&mut transaction).await?.contains(&me) {
@@ -2847,12 +2891,15 @@ pub(crate) async fn manage_racetime_entrant_post(pool: &State<PgPool>, discord_c
 
             // Post to organizer channel
             if let Some(organizer_channel) = data.discord_organizer_channel {
+                let entrant_name = racetime_bot::user_data(http_client, racetime_id).await.map_err(Error::from)?
+                    .map(|profile| profile.name)
+                    .unwrap_or_else(|| racetime_id.to_owned());
                 let mut msg = MessageBuilder::default();
                 msg.mention_user(&me)
                     .push(" has ")
                     .push(action_desc)
                     .push(" racetime entrant ")
-                    .push_safe(racetime_id)
+                    .push_safe(&entrant_name)
                     .push(" from ")
                     .push_safe(&data.display_name);
                 if let Some(ref reason) = value.reason {
