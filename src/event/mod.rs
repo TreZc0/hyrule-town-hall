@@ -1318,8 +1318,8 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                         }
                     }
                 } else {
+                    @let qualifier_kind = data.qualifier_kind(&mut transaction, Some(me)).await?;
                     @let qualifier_progress = {
-                        let qualifier_kind = data.qualifier_kind(&mut transaction, Some(me)).await?;
                         if let QualifierKind::Score(score_kind) = qualifier_kind {
                             let live_qualifier_count = usize::try_from(sqlx::query_scalar!(
                                 r#"SELECT COUNT(*) FROM races WHERE series = $1 AND event = $2 AND phase = 'Qualifier'"#,
@@ -1802,22 +1802,30 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             }
                             //TODO options to change team name or swap roles
                         }, errors, "Save");
-                        p {
-                            a(href = uri!(resign(data.series, &*data.event, row.id))) : "Resign";
-                        }
-                        @if data.show_opt_out && qualifier_progress.is_some() {
+                        @let (resign_errors, resign_button) = button_form_confirm(uri!(resign_post(data.series, &*data.event, row.id)), csrf, Vec::new(), "Resign", "Are you sure you want to resign? You will be removed from the standings entirely.");
+                        : resign_errors;
+                        @let show_opt_out = data.show_opt_out && matches!(qualifier_kind, QualifierKind::Score(_)) && !data.is_started(&mut transaction).await?;
+                        @if show_opt_out {
                             @let is_opted_out = if let Some(racetime) = me.racetime.as_ref() {
                                 sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM opt_outs WHERE series = $1 AND event = $2 AND racetime_id = $3) AS "exists!""#, data.series as _, &data.event, racetime.id).fetch_one(&mut *transaction).await?
                             } else {
                                 false
                             };
                             @if is_opted_out {
-                                p : "You have opted out of this event";
-                            } else {
-                                @let (errors, button) = button_form(uri!(crate::event::status_opt_out(data.series, &*data.event, row.id)), csrf, Vec::new(), "Opt out of upcoming event stages");
-                                : errors;
-                                div(class = "button-row") : button;
+                                p : "You have opted out of this event.";
                             }
+                            @if is_opted_out {
+                                div(class = "button-row") : resign_button;
+                            } else {
+                                @let (opt_out_errors, opt_out_button) = button_form_confirm(uri!(crate::event::status_opt_out(data.series, &*data.event, row.id)), csrf, Vec::new(), "Opt out of upcoming stages", "Are you sure you want to opt out? You will not be considered for upcoming stages, but will remain in the standings.");
+                                : opt_out_errors;
+                                div(class = "button-row") {
+                                    : resign_button;
+                                    : opt_out_button;
+                                }
+                            }
+                        } else {
+                            div(class = "button-row") : resign_button;
                         }
                     }
                 }
@@ -2206,6 +2214,7 @@ impl ToHtml for ResignFormSource {
 pub(crate) struct ResignForm {
     #[field(default = String::new())]
     csrf: String,
+    #[field(default = ResignFormSource::Resign)]
     source: ResignFormSource,
 }
 

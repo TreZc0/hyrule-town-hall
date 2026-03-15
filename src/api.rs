@@ -720,6 +720,43 @@ pub(crate) async fn entrants_csv(db_pool: &State<PgPool>, http_client: &State<re
     Ok((ContentType::CSV, csv.into_inner()?))
 }
 
+#[derive(Serialize)]
+pub(crate) struct QualifierStandingEntry {
+    rank: i64,
+    display_name: String,
+    racetime_id: Option<String>,
+    is_opted_out: bool,
+}
+
+#[rocket::get("/api/v1/event/<series>/<event>/qualifier-standings?<api_key>")]
+pub(crate) async fn qualifier_standings(db_pool: &State<PgPool>, http_client: &State<reqwest::Client>, series: crate::series::Series, event: &str, api_key: &str) -> Result<Json<Vec<QualifierStandingEntry>>, StatusOrError<CsvError>> {
+    let mut transaction = db_pool.begin().await?;
+    let me = Scopes { entrants_read: true, ..Scopes::default() }.validate(&mut transaction, api_key).await?.ok_or(StatusOrError::Status(Status::Forbidden))?;
+    let event = event::Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let is_organizer = event.organizers(&mut transaction).await?.contains(&me);
+    if !is_organizer && !event.restreamers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden))
+    }
+    let qualifier_kind = event.qualifier_kind(&mut transaction, Some(&me)).await?;
+    let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.inner().clone()), None, &event, is_organizer, qualifier_kind, None, true, true).await?;
+    let mut entries = Vec::new();
+    for (i, teams::SignupsTeam { members, is_opted_out, .. }) in signups.into_iter().enumerate() {
+        for member in members {
+            let (display_name, racetime_id) = match member.user {
+                teams::MemberUser::MidosHouse(user) => (
+                    user.display_name().to_owned(),
+                    user.racetime.as_ref().map(|rt| rt.id.clone()),
+                ),
+                teams::MemberUser::RaceTime { id, name, .. } => (name, Some(id)),
+                teams::MemberUser::Deleted => (String::from("deleted user"), None),
+                teams::MemberUser::Newcomer => continue,
+            };
+            entries.push(QualifierStandingEntry { rank: if is_opted_out { -1 } else { (i + 1) as i64 }, display_name, racetime_id, is_opted_out });
+        }
+    }
+    Ok(Json(entries))
+}
+
 #[rocket::get("/api/v1/event/<series>/<event>/swiss-standings?<api_key>")]
 pub(crate) async fn swiss_standings_endpoint(
     db_pool: &State<PgPool>,
