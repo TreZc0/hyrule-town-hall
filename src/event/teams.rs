@@ -1069,6 +1069,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
     let mut footnotes = Vec::default();
     let teams_label = if let TeamConfig::Solo = data.team_config { "Entrants" } else { "Teams" };
     let has_opt_outs = signups.iter().any(|signup| signup.is_opted_out);
+    let has_racetime_only = signups.iter().any(|signup| signup.members.iter().any(|m| matches!(m.user, MemberUser::RaceTime { .. })));
     let mut column_headers = Vec::default();
     if let QualifierKind::Rank | QualifierKind::Score(_) = qualifier_kind {
         column_headers.push(html! {
@@ -1218,10 +1219,18 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                 i : "Standings will not be published until after the qualifier stage has ended.";
             }
         } else {
-        @if has_opt_outs {
+        @if has_opt_outs || has_racetime_only {
             div(class = "bg-surface") {
                 p {
-                    : "* = opted out";
+                    @if has_opt_outs {
+                        : "* = opted out";
+                    }
+                    @if has_opt_outs && has_racetime_only {
+                        br;
+                    }
+                    @if has_racetime_only {
+                        : "** = racetime.gg only";
+                    }
                 }
             }
         }
@@ -1356,7 +1365,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                 }
                                             }
                                         }
-                                        MemberUser::RaceTime { url, name, .. } => a(href = format!("https://{}{url}", racetime_host())) : name;
+                                        MemberUser::RaceTime { url, name, .. } => em { a(href = format!("https://{}{url}", racetime_host())) : name; : "**"; }
                                         MemberUser::Newcomer => @unreachable // only returned if signups_sorted is called with worst_case_extrapolation = true, which it isn't above
                                         MemberUser::Deleted => em : "deleted user";
                                     }
