@@ -161,6 +161,26 @@ pub(crate) struct UserSlugQuery;
 )]
 pub(crate) struct EntrantsQuery;
 
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "assets/graphql/startgg-schema.json",
+    query_path = "assets/graphql/startgg-reset-set-mutation.graphql",
+    skip_default_scalars, // workaround for https://github.com/smashgg/developer-portal/issues/171
+    variables_derives = "Clone, PartialEq, Eq, Hash",
+    response_derives = "Debug, Clone",
+)]
+pub(crate) struct ResetSetMutation;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "assets/graphql/startgg-schema.json",
+    query_path = "assets/graphql/startgg-set-score-query.graphql",
+    skip_default_scalars, // workaround for https://github.com/smashgg/developer-portal/issues/171
+    variables_derives = "Clone, PartialEq, Eq, Hash",
+    response_derives = "Debug, Clone",
+)]
+pub(crate) struct SetScoreQuery;
+
 /// Helper type for building game data when reporting multi-game sets
 #[derive(Clone, Debug)]
 pub(crate) struct GameResult {
@@ -269,6 +289,7 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
         set_games_type: Option<i64>,
         total_games: Option<i64>,
         best_of: Option<i64>,
+        bracket_type: Option<event_sets_query::BracketType>,
     ) -> Result<Option<ImportSkipReason>, cal::Error> {
         if let Some(row) = sqlx::query!("
             SELECT mapped_phase, mapped_round
@@ -305,7 +326,16 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
                 Entrant::MidosHouseTeam(team2.clone()),
             ]),
             game: match set_games_type {
-                Some(1) => best_of.map(|best_of| best_of.try_into().expect("too many games")),
+                Some(1) => {
+                    if event.startgg_double_rr
+                        && best_of == Some(1)
+                        && bracket_type == Some(event_sets_query::BracketType::ROUND_ROBIN)
+                    {
+                        Some(2)
+                    } else {
+                        best_of.map(|best_of| best_of.try_into().expect("too many games"))
+                    }
+                }
                 Some(2) => total_games.map(|total_games| total_games.try_into().expect("too many games")),
                 _ => return Ok(Some(ImportSkipReason::SetGamesType)),
             },
@@ -368,8 +398,10 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
                 let phase = phase_group.as_ref()
                     .and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup { phase, .. }| phase.as_ref())
                     .and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroupPhase { name }| name.clone());
+                let bracket_type = phase_group.as_ref()
+                    .and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup { bracket_type, .. }| bracket_type.clone());
                 let pool = phase_group.and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup { display_identifier, .. }| display_identifier);
-                if let Some(reason) = process_set(&mut *transaction, http_client, event, races, event_slug, id.clone(), phase, full_round_text, pool, team1, team2, set_games_type, total_games, best_of).await? {
+                if let Some(reason) = process_set(&mut *transaction, http_client, event, races, event_slug, id.clone(), phase, full_round_text, pool, team1, team2, set_games_type, total_games, best_of, bracket_type).await? {
                     skips.push((id, reason));
                 }
             } else {

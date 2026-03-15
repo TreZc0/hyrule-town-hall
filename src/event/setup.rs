@@ -260,6 +260,12 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             label(for = "force_custom_role_binding") : "Use event-specific volunteer roles";
                             label(class = "help") : " (When enabled, uses event-specific role bindings. When disabled, uses game-level volunteer roles.)";
                         });
+
+                        : form_field("startgg_double_rr", &mut errors, html! {
+                            input(type = "checkbox", id = "startgg_double_rr", name = "startgg_double_rr", checked? = ctx.field_value("startgg_double_rr").map_or(event.startgg_double_rr, |value| value == "on"));
+                            label(for = "startgg_double_rr") : "start.gg double round-robin mode";
+                            label(class = "help") : " (When enabled with a start.gg round-robin best-of-1 bracket, HTH schedules 2 games per set and force-closes the start.gg set after both are played.)";
+                        });
                     }, errors.clone(), "Save Basic Info");
                     
                     h3 : "Enter Flow Configuration";
@@ -439,6 +445,7 @@ pub(crate) struct SetupForm {
     async_start_delay: Option<i32>,
     show_opt_out: bool,
     force_custom_role_binding: bool,
+    startgg_double_rr: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/setup", data = "<form>")]
@@ -751,8 +758,8 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                     default_game_count = $24, open_stream_delay = $25, invitational_stream_delay = $26,
                     hide_teams_tab = $27, hide_races_tab = $28, show_qualifier_times = $29,
                     automated_asyncs = $30, show_opt_out = $31, force_custom_role_binding = $32,
-                    async_start_delay = $33
-                WHERE series = $34 AND event = $35
+                    async_start_delay = $33, startgg_double_rr = $34
+                WHERE series = $35 AND event = $36
             "#,
                 value.display_name,
                 start,
@@ -787,6 +794,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 value.show_opt_out,
                 value.force_custom_role_binding,
                 value.async_start_delay,
+                value.startgg_double_rr,
                 event_data.series as _,
                 &event_data.event,
             ).execute(&mut *transaction).await?;

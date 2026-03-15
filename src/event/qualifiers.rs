@@ -1,7 +1,7 @@
 use crate::{
     cal::{Entrants, Race, RaceSchedule, Source},
     discord_scheduled_events::DiscordCtx,
-    event::{Data, Series, Tab},
+    event::{Data, QualifierScoreHiding, Series, Tab},
     prelude::*,
     seed,
     volunteer_requests,
@@ -40,6 +40,25 @@ async fn qualifiers_form(mut transaction: Transaction<'_, Postgres>, me: User, u
                     button(type = "submit") : "Disable Ping";
                 }
             }
+
+            h2 : "Qualifier Settings";
+            : full_form(uri!(post_settings(event.series, &*event.event)), csrf, html! {
+                : form_field("qualifier_score_hiding", &mut ctx.errors().collect_vec(), html! {
+                    label(for = "qualifier_score_hiding") : "Qualifier Score Hiding";
+                    select(id = "qualifier_score_hiding", name = "qualifier_score_hiding") {
+                        option(value = "none", selected? = ctx.field_value("qualifier_score_hiding").map_or(event.qualifier_score_hiding == QualifierScoreHiding::None, |v| v == "none")) : "None (show all scores)";
+                        option(value = "async_only", selected? = ctx.field_value("qualifier_score_hiding").map_or(event.qualifier_score_hiding == QualifierScoreHiding::AsyncOnly, |v| v == "async_only")) : "Async only (hide async scores)";
+                        option(value = "full_points", selected? = ctx.field_value("qualifier_score_hiding").map_or(event.qualifier_score_hiding == QualifierScoreHiding::FullPoints, |v| v == "full_points")) : "Full points (hide all points)";
+                        option(value = "full_points_counts", selected? = ctx.field_value("qualifier_score_hiding").map_or(event.qualifier_score_hiding == QualifierScoreHiding::FullPointsCounts, |v| v == "full_points_counts")) : "Full points + counts";
+                        option(value = "full_complete", selected? = ctx.field_value("qualifier_score_hiding").map_or(event.qualifier_score_hiding == QualifierScoreHiding::FullComplete, |v| v == "full_complete")) : "Full complete (hide everything)";
+                    }
+                });
+                : form_field("automated_asyncs", &mut ctx.errors().collect_vec(), html! {
+                    input(type = "checkbox", id = "automated_asyncs", name = "automated_asyncs", checked? = ctx.field_value("automated_asyncs").map_or(event.automated_asyncs, |v| v == "on"));
+                    label(for = "automated_asyncs") : "Use automated Discord threads for qualifier asyncs";
+                    label(class = "help") : " (When enabled, qualifier requests create private Discord threads with READY/countdown/FINISH buttons)";
+                });
+            }, ctx.errors().collect_vec(), "Save Settings");
 
             h2 : "Live Qualifier Races";
             @if races.is_empty() {
@@ -264,6 +283,54 @@ pub(crate) async fn delete_race(pool: &State<PgPool>, me: User, csrf: Option<Csr
     }
 
     Ok(Redirect::to(uri!(get(series, event))))
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct QualifierSettingsForm {
+    #[field(default = String::new())]
+    csrf: String,
+    #[field(default = String::new())]
+    qualifier_score_hiding: String,
+    automated_asyncs: bool,
+}
+
+#[rocket::post("/event/<series>/<event>/qualifiers/settings", data = "<form>")]
+pub(crate) async fn post_settings(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, QualifierSettingsForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let event_data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if !me.is_global_admin() && !event_data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+
+    Ok(if let Some(ref value) = form.value {
+        let qualifier_score_hiding = match value.qualifier_score_hiding.as_str() {
+            "none" | "" => QualifierScoreHiding::None,
+            "async_only" => QualifierScoreHiding::AsyncOnly,
+            "full_points" => QualifierScoreHiding::FullPoints,
+            "full_points_counts" => QualifierScoreHiding::FullPointsCounts,
+            "full_complete" => QualifierScoreHiding::FullComplete,
+            _ => {
+                form.context.push_error(form::Error::validation("Invalid qualifier score hiding value").with_name("qualifier_score_hiding"));
+                let is_started = event_data.is_started(&mut transaction).await?;
+                return Ok(RedirectOrContent::Content(qualifiers_form(transaction, me, uri, csrf.as_ref(), event_data, is_started, form.context).await?));
+            }
+        };
+
+        sqlx::query!(
+            "UPDATE events SET qualifier_score_hiding = $1, automated_asyncs = $2 WHERE series = $3 AND event = $4",
+            qualifier_score_hiding as _, value.automated_asyncs, series as _, event
+        )
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+    } else {
+        let is_started = event_data.is_started(&mut transaction).await?;
+        RedirectOrContent::Content(qualifiers_form(transaction, me, uri, csrf.as_ref(), event_data, is_started, form.context).await?)
+    })
 }
 
 #[derive(FromForm, CsrfForm)]
