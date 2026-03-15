@@ -1594,6 +1594,10 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                 td {
                                     @if let Some(ref team) = team {
                                         a(class = "button", href = uri!(crate::event::manage_team(series, event, team.id)).to_string()) : "Manage";
+                                    } else if let Some(member) = members.first() {
+                                        @if let MemberUser::RaceTime { id, .. } = &member.user {
+                                            a(class = "button", href = uri!(crate::event::manage_racetime_entrant(series, event, id)).to_string()) : "Manage";
+                                        }
                                     }
                                 }
                             }

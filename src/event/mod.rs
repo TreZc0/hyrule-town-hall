@@ -2661,6 +2661,158 @@ pub(crate) async fn manage_team_post(pool: &State<PgPool>, _http_client: &State<
     }
 }
 
+/// Action to take when an organizer manages a racetime-only entrant (no HTH team)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromFormField)]
+pub(crate) enum ManageRacetimeAction {
+    #[field(value = "opt_out")]
+    OptOut,
+    #[field(value = "block")]
+    Block,
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct ManageRacetimeForm {
+    #[field(default = String::new())]
+    csrf: String,
+    action: ManageRacetimeAction,
+    #[field(default = None)]
+    reason: Option<String>,
+}
+
+async fn manage_racetime_entrant_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, ctx: Context<'_>, series: Series, event: &str, racetime_id: &str) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let me = me.ok_or(StatusOrError::Status(Status::Unauthorized))?;
+    if !data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden))
+    }
+    let qualifier_kind = data.qualifier_kind(&mut transaction, None).await?;
+    if matches!(qualifier_kind, QualifierKind::None) {
+        return Err(StatusOrError::Status(Status::NotFound))
+    }
+
+    Ok(page(transaction, &Some(me), &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Manage Entrant — {}", data.display_name), html! {
+        h2 {
+            : "Manage Racetime Entrant";
+        }
+        p {
+            : "Racetime ID: ";
+            code : racetime_id;
+        }
+        p {
+            : "This entrant participated in a live qualifier on racetime.gg but does not have an HTH account or event signup.";
+        }
+        form(action = uri!(manage_racetime_entrant_post(series, event, racetime_id)).to_string(), method = "post") {
+            : csrf.as_ref();
+            fieldset {
+                legend : "Select an action:";
+                div {
+                    input(type = "radio", name = "action", value = "opt_out", id = "action-optout", checked);
+                    label(for = "action-optout") {
+                        strong : "Opt-out";
+                        : " — Remove from qualifier standings (shows \"—\" for placement)";
+                    }
+                }
+                div {
+                    input(type = "radio", name = "action", value = "block", id = "action-block");
+                    label(for = "action-block") {
+                        strong : "Opt-out and Block";
+                        : " — Remove from standings AND prevent entry to this event";
+                    }
+                }
+            }
+            fieldset {
+                label(for = "reason") : "Reason (optional, for audit log):";
+                br;
+                textarea(name = "reason", id = "reason", rows = "3", cols = "50");
+            }
+            @for error in ctx.errors() {
+                div(class = "error") : error.to_string();
+            }
+            fieldset {
+                input(type = "submit", value = "Confirm");
+            }
+        }
+    }).await?)
+}
+
+#[rocket::get("/event/<series>/<event>/manage-entrant/<racetime_id>")]
+pub(crate) async fn manage_racetime_entrant(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, racetime_id: &str) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    manage_racetime_entrant_page(pool, me, uri, csrf, Context::default(), series, event, racetime_id).await
+}
+
+#[rocket::post("/event/<series>/<event>/manage-entrant/<racetime_id>", data = "<form>")]
+pub(crate) async fn manage_racetime_entrant_post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, racetime_id: &str, form: Form<Contextual<'_, ManageRacetimeForm>>) -> Result<RedirectOrContent, StatusOrError<ManageTeamError>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    if !data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden))
+    }
+    let qualifier_kind = data.qualifier_kind(&mut transaction, None).await?;
+    if matches!(qualifier_kind, QualifierKind::None) {
+        return Err(StatusOrError::Status(Status::NotFound))
+    }
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if let Some(ref value) = form.value {
+        if data.is_ended() {
+            form.context.push_error(form::Error::validation("This event has already ended."));
+        }
+
+        Ok(if form.context.errors().next().is_some() {
+            transaction.rollback().await?;
+            RedirectOrContent::Content(manage_racetime_entrant_page(pool, Some(me), uri, csrf, form.context, series, event, racetime_id).await.map_err(|e| match e {
+                StatusOrError::Status(status) => StatusOrError::Status(status),
+                StatusOrError::Err(e) => e.into(),
+            })?)
+        } else {
+            // Always opt out
+            sqlx::query!(
+                "INSERT INTO opt_outs (series, event, racetime_id, opted_out_by, is_organizer_action) VALUES ($1, $2, $3, $4, TRUE)",
+                series as _, event, racetime_id, me.id as _
+            ).execute(&mut *transaction).await?;
+
+            // Additionally block if requested
+            if value.action == ManageRacetimeAction::Block {
+                sqlx::query!(
+                    "INSERT INTO event_blocks (series, event, racetime_id, blocked_by, reason) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+                    series as _, event, racetime_id, me.id as _, value.reason.as_deref()
+                ).execute(&mut *transaction).await?;
+            }
+
+            let action_desc = match value.action {
+                ManageRacetimeAction::OptOut => "opted out",
+                ManageRacetimeAction::Block => "opted out and blocked",
+            };
+
+            // Post to organizer channel
+            if let Some(organizer_channel) = data.discord_organizer_channel {
+                let mut msg = MessageBuilder::default();
+                msg.mention_user(&me)
+                    .push(" has ")
+                    .push(action_desc)
+                    .push(" racetime entrant ")
+                    .push_safe(racetime_id)
+                    .push(" from ")
+                    .push_safe(&data.display_name);
+                if let Some(ref reason) = value.reason {
+                    if !reason.is_empty() {
+                        msg.push(". Reason: ").push_safe(reason);
+                    }
+                }
+                msg.push(".");
+                organizer_channel.say(&*discord_ctx.read().await, msg.build()).await?;
+            }
+
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(teams::get(series, event))))
+        })
+    } else {
+        Err(StatusOrError::Err(ManageTeamError::FormValue))
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, sqlx::Type, FromFormField, Sequence)]
 #[sqlx(type_name = "async_kind", rename_all = "lowercase")]
 pub(crate) enum AsyncKind {
