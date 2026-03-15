@@ -1,0 +1,6 @@
+mutation ResetSetMutation($setId: ID!) {
+  resetSet(setId: $setId) {
+    id
+    state
+  }
+}

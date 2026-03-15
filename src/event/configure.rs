@@ -4,7 +4,6 @@ use {
         discord_bot::PgSnowflake,
         event::{
             Data,
-            QualifierScoreHiding,
             Tab,
         },
         prelude::*,
@@ -165,7 +164,7 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                                 input(type = "number", id = "async_start_delay", name = "async_start_delay", min = "0", value = ctx.field_value("async_start_delay").unwrap_or(
                                     &event.async_start_delay.map(|d| d.to_string()).unwrap_or_default()
                                 ), style = "width: 100%; max-width: 200px;");
-                                label(class = "help") : "(After seed is distributed, auto-start after this many minutes. Leave empty to disable.)";
+                                label(class = "help") : " (After seed is distributed, auto-start after this many minutes. Leave empty to disable.)";
                             });
                             : form_field("discord_events_enabled", &mut errors, html! {
                                 input(type = "checkbox", id = "discord_events_enabled", name = "discord_events_enabled", checked? = ctx.field_value("discord_events_enabled").map_or(event.discord_events_enabled, |value| value == "on"));
@@ -177,23 +176,7 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                                 label(for = "discord_events_require_restream") : "Only create Discord events for races with restreams";
                                 label(class = "help") : "(If enabled, Discord scheduled events will only be created for races that have at least one restream URL set)";
                             });
-                            : form_field("automated_asyncs", &mut errors, html! {
-                                input(type = "checkbox", id = "automated_asyncs", name = "automated_asyncs", checked? = ctx.field_value("automated_asyncs").map_or(event.automated_asyncs, |value| value == "on"));
-                                label(for = "automated_asyncs") : "Use automated Discord threads for qualifier asyncs";
-                                label(class = "help") : "(When enabled, qualifier requests create private Discord threads with READY/countdown/FINISH buttons. Staff validate results via /result-async command.)";
-                            });
                         }
-                        : form_field("qualifier_score_hiding", &mut errors, html! {
-                            label(for = "qualifier_score_hiding") : "Qualifier Score Hiding";
-                            select(id = "qualifier_score_hiding", name = "qualifier_score_hiding", style = "width: 100%; max-width: 600px;") {
-                                option(value = "none", selected? = ctx.field_value("qualifier_score_hiding").map_or(matches!(event.qualifier_score_hiding, QualifierScoreHiding::None), |v| v == "none")) : "None (all scores visible)";
-                                option(value = "async_only", selected? = ctx.field_value("qualifier_score_hiding").map_or(matches!(event.qualifier_score_hiding, QualifierScoreHiding::AsyncOnly), |v| v == "async_only")) : "Async Only (async scores hidden until window closes)";
-                                option(value = "full_points", selected? = ctx.field_value("qualifier_score_hiding").map_or(matches!(event.qualifier_score_hiding, QualifierScoreHiding::FullPoints), |v| v == "full_points")) : "Hide Points (names and counts visible)";
-                                option(value = "full_points_counts", selected? = ctx.field_value("qualifier_score_hiding").map_or(matches!(event.qualifier_score_hiding, QualifierScoreHiding::FullPointsCounts), |v| v == "full_points_counts")) : "Hide Points & Counts (names visible)";
-                                option(value = "full_complete", selected? = ctx.field_value("qualifier_score_hiding").map_or(matches!(event.qualifier_score_hiding, QualifierScoreHiding::FullComplete), |v| v == "full_complete")) : "Hide Everything (table hidden until quals end)";
-                            }
-                            label(class = "help") : "(Controls what qualifier information is visible to non-organizers before all qualifiers have ended)";
-                        });
                     }, errors, "Save");
                 }
                 h2 : "More options";
@@ -259,13 +242,12 @@ pub(crate) struct ConfigureForm {
     manual_reporting_with_breaks: bool,
     sync_startgg_ids: Option<String>,
     asyncs_active: bool,
+    #[field(default = None)]
+    async_start_delay: Option<i32>,
     swiss_standings: bool,
     discord_events_enabled: bool,
     discord_events_require_restream: bool,
-    automated_asyncs: bool,
-    async_start_delay: Option<i32>,
     settings_string: Option<String>,
-    qualifier_score_hiding: String,
 }
 
 #[rocket::post("/event/<series>/<event>/configure", data = "<form>")]
@@ -345,6 +327,9 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             if value.asyncs_active != data.asyncs_active {
                 sqlx::query!("UPDATE events SET asyncs_active = $1 WHERE series = $2 AND event = $3", value.asyncs_active, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
+            if value.async_start_delay != data.async_start_delay {
+                sqlx::query!("UPDATE events SET async_start_delay = $1 WHERE series = $2 AND event = $3", value.async_start_delay, data.series as _, &data.event).execute(&mut *transaction).await?;
+            }
             if value.swiss_standings != data.swiss_standings {
                 sqlx::query!("UPDATE events SET swiss_standings = $1 WHERE series = $2 AND event = $3", value.swiss_standings, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
@@ -353,24 +338,6 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             }
             if value.discord_events_require_restream != data.discord_events_require_restream {
                 sqlx::query!("UPDATE events SET discord_events_require_restream = $1 WHERE series = $2 AND event = $3", value.discord_events_require_restream, data.series as _, &data.event).execute(&mut *transaction).await?;
-            }
-            if value.automated_asyncs != data.automated_asyncs {
-                sqlx::query!("UPDATE events SET automated_asyncs = $1 WHERE series = $2 AND event = $3", value.automated_asyncs, data.series as _, &data.event).execute(&mut *transaction).await?;
-            }
-            if value.async_start_delay != data.async_start_delay {
-                sqlx::query!("UPDATE events SET async_start_delay = $1 WHERE series = $2 AND event = $3", value.async_start_delay, data.series as _, &data.event).execute(&mut *transaction).await?;
-            }
-            // Parse and update qualifier_score_hiding
-            let qualifier_score_hiding = match value.qualifier_score_hiding.as_str() {
-                "none" => QualifierScoreHiding::None,
-                "async_only" => QualifierScoreHiding::AsyncOnly,
-                "full_points" => QualifierScoreHiding::FullPoints,
-                "full_points_counts" => QualifierScoreHiding::FullPointsCounts,
-                "full_complete" => QualifierScoreHiding::FullComplete,
-                _ => QualifierScoreHiding::None,
-            };
-            if qualifier_score_hiding != data.qualifier_score_hiding {
-                sqlx::query!("UPDATE events SET qualifier_score_hiding = $1 WHERE series = $2 AND event = $3", qualifier_score_hiding as _, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
             if matches!(data.rando_version, Some(VersionedBranch::Tww { .. })) {
                 let new_settings_string = value.settings_string.as_deref().filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_owned());

@@ -1,0 +1,12 @@
+query SetScoreQuery($setId: ID!) {
+  set(id: $setId) {
+    slots {
+      entrant {
+        id
+      }
+      standing {
+        placement
+      }
+    }
+  }
+}

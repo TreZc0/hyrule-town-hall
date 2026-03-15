@@ -206,6 +206,7 @@ pub(crate) struct Data<'a> {
     pub(crate) default_volunteer_language: Language,
     pub(crate) asyncs_active: bool,
     pub(crate) swiss_standings: bool,
+    pub(crate) startgg_double_rr: bool,
     pub(crate) discord_events_enabled: bool,
     pub(crate) discord_events_require_restream: bool,
     pub(crate) listed: bool,
@@ -297,6 +298,7 @@ impl<'a> Data<'a> {
             default_volunteer_language AS "default_volunteer_language: Language",
             asyncs_active,
             swiss_standings,
+            startgg_double_rr,
             discord_events_enabled,
             discord_events_require_restream,
             listed,
@@ -367,6 +369,7 @@ impl<'a> Data<'a> {
                 default_volunteer_language: row.default_volunteer_language,
                 asyncs_active: row.asyncs_active,
                 swiss_standings: row.swiss_standings,
+                startgg_double_rr: row.startgg_double_rr,
                 discord_events_enabled: row.discord_events_enabled,
                 discord_events_require_restream: row.discord_events_require_restream,
                 series, event,
@@ -788,6 +791,11 @@ impl<'a> Data<'a> {
                         a(class = "button selected", href? = is_subpage.then(|| uri!(swiss_standings(self.series, &*self.event)))) : "Swiss Standings";
                     } else {
                         a(class = "button", href = uri!(swiss_standings(self.series, &*self.event))) : "Swiss Standings";
+                    }
+                }
+                @if matches!(self.match_source(), MatchSource::StartGG(_)) && self.startgg_double_rr {
+                    @if let Some(ref url) = self.url {
+                        a(class = "button", href = format!("{url}/brackets")) : "Standings";
                     }
                 }
                 @if signed_up {

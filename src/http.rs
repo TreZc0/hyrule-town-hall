@@ -639,6 +639,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::asyncs::delete,
         event::qualifiers::get,
         event::qualifiers::post_race,
+        event::qualifiers::post_settings,
         event::qualifiers::post_notification_role,
         event::qualifiers::delete_notification_role,
         event::qualifiers::get_edit,

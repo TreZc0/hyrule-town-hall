@@ -330,6 +330,11 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             input(type = "checkbox", id = "restrict_chat_in_qualifiers", name = "restrict_chat_in_qualifiers", checked? = ctx.field_value("restrict_chat_in_qualifiers").map_or(event.restrict_chat_in_qualifiers, |value| value == "on"));
                             label(for = "restrict_chat_in_qualifiers") : "Restrict Chat in Qualifiers";
                         });
+                        : form_field("startgg_double_rr", &mut errors, html! {
+                            input(type = "checkbox", id = "startgg_double_rr", name = "startgg_double_rr", checked? = ctx.field_value("startgg_double_rr").map_or(event.startgg_double_rr, |value| value == "on"));
+                            label(for = "startgg_double_rr") : "start.gg double round-robin mode";
+                            label(class = "help") : " (When enabled with a start.gg round-robin best-of-1 bracket, HTH schedules 2 games per set and force-closes the start.gg set after both are played.)";
+                        });
                     }, errors.clone(), "Save Basic Info");
                     
                     h3 : "Enter Flow Configuration";
@@ -519,6 +524,7 @@ pub(crate) struct SetupForm {
     start_delay: i32,
     start_delay_open: Option<String>,
     restrict_chat_in_qualifiers: bool,
+    startgg_double_rr: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/setup", data = "<form>")]
@@ -871,7 +877,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                     goal_slug = $35, draft_kind = $36, draft_config = $37,
                     qualifier_score_kind = $38, is_single_race = $39, hide_entrants = $40,
                     start_delay = $41, start_delay_open = $42, restrict_chat_in_qualifiers = $43,
-                    async_start_delay = $44
+                    async_start_delay = $44, startgg_double_rr = $45
                 WHERE series = $33 AND event = $34
             "#,
                 value.display_name,
@@ -918,6 +924,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 start_delay_open,
                 value.restrict_chat_in_qualifiers,
                 value.async_start_delay,
+                value.startgg_double_rr,
             ).execute(&mut *transaction).await?;
             
             transaction.commit().await?;

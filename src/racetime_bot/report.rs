@@ -399,24 +399,89 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                             winner_entrant_id
                         ).await.to_racetime()?;
 
-                        let match_decided = is_match_decided(&completed_game_results, total_games);
+                        // For double round-robin, all games are done when the current game
+                        // number equals the total. We check this directly rather than relying on
+                        // completed_game_results.len() because start.gg no longer returns game
+                        // data for completed (closed) sets.
+                        let double_rr_all_games_done = event.startgg_double_rr
+                            && game as i16 == total_games;
+                        let match_decided = is_match_decided(&completed_game_results, total_games)
+                            || double_rr_all_games_done;
 
                         if match_decided {
-                            let overall_winner = determine_overall_winner(&completed_game_results);
+                            if event.startgg_double_rr {
+                                let score_data = startgg::query_uncached::<startgg::SetScoreQuery>(
+                                    &ctx.global_state.http_client,
+                                    &ctx.global_state.startgg_token,
+                                    startgg::set_score_query::Variables { set_id: set.clone() },
+                                ).await.to_racetime()?;
+                                let game1_winner_id = score_data.set
+                                    .and_then(|s| s.slots)
+                                    .into_iter()
+                                    .flatten()
+                                    .flatten()
+                                    .find(|slot| slot.standing.as_ref().and_then(|st| st.placement) == Some(1))
+                                    .and_then(|slot| slot.entrant)
+                                    .and_then(|e| e.id)
+                                    .expect("double-RR set score query: no slot with placement=1");
+                                let all_game_results = vec![
+                                    startgg::GameResult { game_num: 1, winner_entrant_id: game1_winner_id },
+                                    startgg::GameResult { game_num: 2, winner_entrant_id: winner_entrant_id.clone() },
+                                ];
+                                // Reset the start.gg set (closed after game 1's report) so we
+                                // can report both games together with the correct combined result.
+                                startgg::query_uncached::<startgg::ResetSetMutation>(
+                                    &ctx.global_state.http_client,
+                                    &ctx.global_state.startgg_token,
+                                    startgg::reset_set_mutation::Variables {
+                                        set_id: set.clone(),
+                                    }
+                                ).await.to_racetime()?;
+                                let overall_winner_id = if is_match_decided(&all_game_results, total_games) {
+                                    Some(determine_overall_winner(&all_game_results))
+                                } else {
+                                    None
+                                };
+                                startgg::query_uncached::<startgg::ReportBracketSetMutation>(
+                                    &ctx.global_state.http_client,
+                                    &ctx.global_state.startgg_token,
+                                    startgg::report_bracket_set_mutation::Variables {
+                                        set_id: set.clone(),
+                                        winner_id: overall_winner_id,
+                                        game_data: Some(all_game_results.iter()
+                                            .map(|gr| Some(gr.to_game_data_input()))
+                                            .collect()),
+                                    }
+                                ).await.to_racetime()?;
+                            } else {
+                                let overall_winner = determine_overall_winner(&completed_game_results);
 
+                                startgg::query_uncached::<startgg::ReportBracketSetMutation>(
+                                    &ctx.global_state.http_client,
+                                    &ctx.global_state.startgg_token,
+                                    startgg::report_bracket_set_mutation::Variables {
+                                        set_id: set.clone(),
+                                        winner_id: Some(overall_winner),
+                                        game_data: Some(completed_game_results.iter()
+                                            .map(|gr| Some(gr.to_game_data_input()))
+                                            .collect()),
+                                    }
+                                ).await.to_racetime()?;
+                            }
+                            ignored_race_ids = cal_event.race.ignore_remaining_games(&mut transaction).await.to_racetime()?;
+                            series_decided = true;
+                        } else if event.startgg_double_rr {
                             startgg::query_uncached::<startgg::ReportBracketSetMutation>(
                                 &ctx.global_state.http_client,
                                 &ctx.global_state.startgg_token,
                                 startgg::report_bracket_set_mutation::Variables {
                                     set_id: set.clone(),
-                                    winner_id: Some(overall_winner),
+                                    winner_id: Some(winner_entrant_id.clone()),
                                     game_data: Some(completed_game_results.iter()
                                         .map(|gr| Some(gr.to_game_data_input()))
                                         .collect()),
                                 }
                             ).await.to_racetime()?;
-                            ignored_race_ids = cal_event.race.ignore_remaining_games(&mut transaction).await.to_racetime()?;
-                            series_decided = true;
                         } else {
                             startgg::query_uncached::<startgg::ReportBracketSetMutation>(
                                 &ctx.global_state.http_client,
