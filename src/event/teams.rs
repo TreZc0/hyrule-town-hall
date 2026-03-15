@@ -1158,8 +1158,8 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
             });
         }
     }
-    // Add Actions column for organizers when event has qualifiers
-    let show_organizer_actions = is_organizer && !matches!(qualifier_kind, QualifierKind::None);
+    // Add Actions column for organizers
+    let show_organizer_actions = is_organizer;
     if show_organizer_actions {
         column_headers.push(html! {
             th : "Actions";
@@ -1616,6 +1616,10 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                 td {
                                     @if let Some(ref team) = team {
                                         a(class = "button", href = uri!(crate::event::manage_team(series, event, team.id)).to_string()) : "Manage";
+                                    } else if let Some(member) = members.first() {
+                                        @if let MemberUser::RaceTime { id, .. } = &member.user {
+                                            a(class = "button", href = uri!(crate::event::manage_racetime_entrant(series, event, id)).to_string()) : "Manage";
+                                        }
                                     }
                                 }
                             }

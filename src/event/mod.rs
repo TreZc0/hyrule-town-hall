@@ -1358,7 +1358,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             None
                         }
                     };
-                    @if let Some((num_entered, num_finished, max_qualifiers, required_qualifiers, score, live_qualifier_count, async_qualifier_count, round_scores)) = qualifier_progress {
+                    @if let Some((num_entered, num_finished, max_qualifiers, required_qualifiers, score, live_qualifier_count, async_qualifier_count, ref round_scores)) = qualifier_progress {
                         h3 : "Qualifier Progress";
                         @let total_qualifier_count = live_qualifier_count + async_qualifier_count;
                         div(class = "bg-surface") {
@@ -1804,6 +1804,20 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                         }, errors, "Save");
                         p {
                             a(href = uri!(resign(data.series, &*data.event, row.id))) : "Resign";
+                        }
+                        @if data.show_opt_out && qualifier_progress.is_some() {
+                            @let is_opted_out = if let Some(racetime) = me.racetime.as_ref() {
+                                sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM opt_outs WHERE series = $1 AND event = $2 AND racetime_id = $3) AS "exists!""#, data.series as _, &data.event, racetime.id).fetch_one(&mut *transaction).await?
+                            } else {
+                                false
+                            };
+                            @if is_opted_out {
+                                p : "You have opted out of this event";
+                            } else {
+                                @let (errors, button) = button_form(uri!(crate::event::status_opt_out(data.series, &*data.event, row.id)), csrf, Vec::new(), "Opt out of upcoming event stages");
+                                : errors;
+                                div(class = "button-row") : button;
+                            }
                         }
                     }
                 }
@@ -2408,6 +2422,51 @@ pub(crate) async fn opt_out_post(pool: &State<PgPool>, discord_ctx: &State<RwFut
     }
 }
 
+#[rocket::post("/event/<series>/<event>/status/<team>/opt-out", data = "<form>")]
+pub(crate) async fn status_opt_out(pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, team: Id<Teams>, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<ResignError>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.value.is_some() {
+        if data.is_ended() {
+            form.context.push_error(form::Error::validation("You can no longer opt out from this event since it has already ended."));
+        }
+        let team_obj = Team::from_id(&mut transaction, team).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+        let members = team_obj.members(&mut transaction).await?;
+        if !members.iter().any(|m| m.id == me.id) {
+            return Err(StatusOrError::Status(Status::Forbidden))
+        }
+        if let Some(racetime) = me.racetime.as_ref() {
+            if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM opt_outs WHERE series = $1 AND event = $2 AND racetime_id = $3) AS "exists!""#, data.series as _, &data.event, racetime.id).fetch_one(&mut *transaction).await? {
+                form.context.push_error(form::Error::validation("You have already opted out of qualifier standings."));
+            }
+        } else {
+            form.context.push_error(form::Error::validation("Connect a racetime.gg account to your Hyrule Town Hall account to opt out."));
+        }
+        Ok(if form.context.errors().next().is_some() {
+            transaction.rollback().await?;
+            RedirectOrContent::Content(status_page(pool.begin().await?, http_client, Some(me), uri, csrf.as_ref(), data, StatusContext::Edit(form.context)).await.map_err(|e| StatusOrError::Err(e.into()))?)
+        } else {
+            let racetime = me.racetime.as_ref().expect("validated");
+            sqlx::query!(r#"INSERT INTO opt_outs (series, event, racetime_id, user_id) VALUES ($1, $2, $3, $4)"#, series as _, event, racetime.id, me.id as _).execute(&mut *transaction).await?;
+            if let Some(organizer_channel) = data.discord_organizer_channel {
+                organizer_channel.say(&*discord_ctx.read().await, MessageBuilder::default()
+                    .mention_user(&me)
+                    .push(" has deciced to opt out for")
+                    .push_safe(data.display_name)
+                    .push(".")
+                    .build(),
+                ).await?;
+            }
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(status(series, event))))
+        })
+    } else {
+        Err(StatusOrError::Err(ResignError::FormValue))
+    }
+}
+
 /// Action to take when an organizer manages a team/player
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromFormField)]
 pub(crate) enum ManageAction {
@@ -2457,6 +2516,8 @@ async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf
     let members = team_obj.members(&mut transaction).await?;
     let qualifier_kind = data.qualifier_kind(&mut transaction, None).await?;
     let has_qualifiers = !matches!(qualifier_kind, QualifierKind::None);
+    let is_global_admin = me.is_global_admin();
+    let current_startgg_id = team_obj.startgg_id.as_ref().map(|id| id.0.clone());
 
     Ok(page(transaction, &Some(me), &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Manage — {}", data.display_name), html! {
         h2 {
@@ -2515,6 +2576,20 @@ async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf
             }
             fieldset {
                 input(type = "submit", value = "Confirm");
+            }
+        }
+        @if is_global_admin {
+            h3 : "start.gg Entrant ID";
+            form(action = uri!(set_startgg_id(series, event, team)).to_string(), method = "post") {
+                : csrf.as_ref();
+                fieldset {
+                    label(for = "startgg_id") : "start.gg Entrant ID:";
+                    : " ";
+                    input(type = "text", name = "startgg_id", id = "startgg_id", value? = current_startgg_id.as_deref());
+                }
+                fieldset {
+                    input(type = "submit", value = "Save");
+                }
             }
         }
     }).await?)
@@ -2621,6 +2696,189 @@ pub(crate) async fn manage_team_post(pool: &State<PgPool>, _http_client: &State<
                     msg.mention_user(user);
                 }
                 msg.push(" from ").push_safe(&data.display_name);
+                if let Some(ref reason) = value.reason {
+                    if !reason.is_empty() {
+                        msg.push(". Reason: ").push_safe(reason);
+                    }
+                }
+                msg.push(".");
+                organizer_channel.say(&*discord_ctx.read().await, msg.build()).await?;
+            }
+
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(teams::get(series, event))))
+        })
+    } else {
+        Err(StatusOrError::Err(ManageTeamError::FormValue))
+    }
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct SetStartggIdForm {
+    #[field(default = String::new())]
+    csrf: String,
+    #[field(default = None)]
+    startgg_id: Option<String>,
+}
+
+#[rocket::post("/event/<series>/<event>/manage/<team>/startgg-id", data = "<form>")]
+pub(crate) async fn set_startgg_id(pool: &State<PgPool>, me: User, csrf: Option<CsrfToken>, series: Series, event: &str, team: Id<Teams>, form: Form<Contextual<'_, SetStartggIdForm>>) -> Result<Redirect, StatusOrError<Error>> {
+    if !me.is_global_admin() {
+        return Err(StatusOrError::Status(Status::Forbidden))
+    }
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    if !data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden))
+    }
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if let Some(ref value) = form.value {
+        let startgg_id = value.startgg_id.as_deref().filter(|s| !s.is_empty());
+        sqlx::query!("UPDATE teams SET startgg_id = $1 WHERE id = $2", startgg_id, team as _).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+    }
+    Ok(Redirect::to(uri!(manage_team(series, event, team))))
+}
+
+/// Action to take when an organizer manages a racetime-only entrant (no HTH team)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromFormField)]
+pub(crate) enum ManageRacetimeAction {
+    #[field(value = "opt_out")]
+    OptOut,
+    #[field(value = "block")]
+    Block,
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct ManageRacetimeForm {
+    #[field(default = String::new())]
+    csrf: String,
+    action: ManageRacetimeAction,
+    #[field(default = None)]
+    reason: Option<String>,
+}
+
+async fn manage_racetime_entrant_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, ctx: Context<'_>, series: Series, event: &str, racetime_id: &str) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let me = me.ok_or(StatusOrError::Status(Status::Unauthorized))?;
+    if !data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden))
+    }
+    let qualifier_kind = data.qualifier_kind(&mut transaction, None).await?;
+    if matches!(qualifier_kind, QualifierKind::None) {
+        return Err(StatusOrError::Status(Status::NotFound))
+    }
+
+    Ok(page(transaction, &Some(me), &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Manage Entrant — {}", data.display_name), html! {
+        h2 {
+            : "Manage Racetime Entrant";
+        }
+        p {
+            : "Racetime ID: ";
+            code : racetime_id;
+        }
+        p {
+            : "This entrant participated in a live qualifier on racetime.gg but does not have an HTH account or event signup.";
+        }
+        form(action = uri!(manage_racetime_entrant_post(series, event, racetime_id)).to_string(), method = "post") {
+            : csrf.as_ref();
+            fieldset {
+                legend : "Select an action:";
+                div {
+                    input(type = "radio", name = "action", value = "opt_out", id = "action-optout", checked);
+                    label(for = "action-optout") {
+                        strong : "Opt-out";
+                        : " — Remove from qualifier standings (shows \"—\" for placement)";
+                    }
+                }
+                div {
+                    input(type = "radio", name = "action", value = "block", id = "action-block");
+                    label(for = "action-block") {
+                        strong : "Opt-out and Block";
+                        : " — Remove from standings AND prevent entry to this event";
+                    }
+                }
+            }
+            fieldset {
+                label(for = "reason") : "Reason (optional, for audit log):";
+                br;
+                textarea(name = "reason", id = "reason", rows = "3", cols = "50");
+            }
+            @for error in ctx.errors() {
+                div(class = "error") : error.to_string();
+            }
+            fieldset {
+                input(type = "submit", value = "Confirm");
+            }
+        }
+    }).await?)
+}
+
+#[rocket::get("/event/<series>/<event>/manage-entrant/<racetime_id>")]
+pub(crate) async fn manage_racetime_entrant(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, racetime_id: &str) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    manage_racetime_entrant_page(pool, me, uri, csrf, Context::default(), series, event, racetime_id).await
+}
+
+#[rocket::post("/event/<series>/<event>/manage-entrant/<racetime_id>", data = "<form>")]
+pub(crate) async fn manage_racetime_entrant_post(pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, racetime_id: &str, form: Form<Contextual<'_, ManageRacetimeForm>>) -> Result<RedirectOrContent, StatusOrError<ManageTeamError>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    if !data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden))
+    }
+    let qualifier_kind = data.qualifier_kind(&mut transaction, None).await?;
+    if matches!(qualifier_kind, QualifierKind::None) {
+        return Err(StatusOrError::Status(Status::NotFound))
+    }
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if let Some(ref value) = form.value {
+        if data.is_ended() {
+            form.context.push_error(form::Error::validation("This event has already ended."));
+        }
+
+        Ok(if form.context.errors().next().is_some() {
+            transaction.rollback().await?;
+            RedirectOrContent::Content(manage_racetime_entrant_page(pool, Some(me), uri, csrf, form.context, series, event, racetime_id).await.map_err(|e| match e {
+                StatusOrError::Status(status) => StatusOrError::Status(status),
+                StatusOrError::Err(e) => e.into(),
+            })?)
+        } else {
+            // Always opt out
+            sqlx::query!(
+                "INSERT INTO opt_outs (series, event, racetime_id, opted_out_by, is_organizer_action) VALUES ($1, $2, $3, $4, TRUE)",
+                series as _, event, racetime_id, me.id as _
+            ).execute(&mut *transaction).await?;
+
+            // Additionally block if requested
+            if value.action == ManageRacetimeAction::Block {
+                sqlx::query!(
+                    "INSERT INTO event_blocks (series, event, racetime_id, blocked_by, reason) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+                    series as _, event, racetime_id, me.id as _, value.reason.as_deref()
+                ).execute(&mut *transaction).await?;
+            }
+
+            let action_desc = match value.action {
+                ManageRacetimeAction::OptOut => "opted out",
+                ManageRacetimeAction::Block => "opted out and blocked",
+            };
+
+            // Post to organizer channel
+            if let Some(organizer_channel) = data.discord_organizer_channel {
+                let entrant_name = racetime_bot::user_data(http_client, racetime_id).await.map_err(Error::from)?
+                    .map(|profile| profile.name)
+                    .unwrap_or_else(|| racetime_id.to_owned());
+                let mut msg = MessageBuilder::default();
+                msg.mention_user(&me)
+                    .push(" has ")
+                    .push(action_desc)
+                    .push(" racetime entrant ")
+                    .push_safe(&entrant_name)
+                    .push(" from ")
+                    .push_safe(&data.display_name);
                 if let Some(ref reason) = value.reason {
                     if !reason.is_empty() {
                         msg.push(". Reason: ").push_safe(reason);
