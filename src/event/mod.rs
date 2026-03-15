@@ -1381,7 +1381,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             None
                         }
                     };
-                    @if let Some((num_entered, num_finished, max_qualifiers, required_qualifiers, score, live_qualifier_count, async_qualifier_count, round_scores)) = qualifier_progress {
+                    @if let Some((num_entered, num_finished, max_qualifiers, required_qualifiers, score, live_qualifier_count, async_qualifier_count, ref round_scores)) = qualifier_progress {
                         h3 : "Qualifier Progress";
                         @let total_qualifier_count = live_qualifier_count + async_qualifier_count;
                         div(class = "bg-surface") {
@@ -1827,6 +1827,20 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                         }, errors, "Save");
                         p {
                             a(href = uri!(resign(data.series, &*data.event, row.id))) : "Resign";
+                        }
+                        @if data.show_opt_out && qualifier_progress.is_some() {
+                            @let is_opted_out = if let Some(racetime) = me.racetime.as_ref() {
+                                sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM opt_outs WHERE series = $1 AND event = $2 AND racetime_id = $3) AS "exists!""#, data.series as _, &data.event, racetime.id).fetch_one(&mut *transaction).await?
+                            } else {
+                                false
+                            };
+                            @if is_opted_out {
+                                p : "You have opted out of this event";
+                            } else {
+                                @let (errors, button) = button_form(uri!(crate::event::status_opt_out(data.series, &*data.event, row.id)), csrf, Vec::new(), "Opt out of upcoming event stages");
+                                : errors;
+                                div(class = "button-row") : button;
+                            }
                         }
                     }
                 }
@@ -2425,6 +2439,51 @@ pub(crate) async fn opt_out_post(pool: &State<PgPool>, discord_ctx: &State<RwFut
             }
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(crate::http::index)))
+        })
+    } else {
+        Err(StatusOrError::Err(ResignError::FormValue))
+    }
+}
+
+#[rocket::post("/event/<series>/<event>/status/<team>/opt-out", data = "<form>")]
+pub(crate) async fn status_opt_out(pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, team: Id<Teams>, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<ResignError>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.value.is_some() {
+        if data.is_ended() {
+            form.context.push_error(form::Error::validation("You can no longer opt out from this event since it has already ended."));
+        }
+        let team_obj = Team::from_id(&mut transaction, team).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+        let members = team_obj.members(&mut transaction).await?;
+        if !members.iter().any(|m| m.id == me.id) {
+            return Err(StatusOrError::Status(Status::Forbidden))
+        }
+        if let Some(racetime) = me.racetime.as_ref() {
+            if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM opt_outs WHERE series = $1 AND event = $2 AND racetime_id = $3) AS "exists!""#, data.series as _, &data.event, racetime.id).fetch_one(&mut *transaction).await? {
+                form.context.push_error(form::Error::validation("You have already opted out of qualifier standings."));
+            }
+        } else {
+            form.context.push_error(form::Error::validation("Connect a racetime.gg account to your Hyrule Town Hall account to opt out."));
+        }
+        Ok(if form.context.errors().next().is_some() {
+            transaction.rollback().await?;
+            RedirectOrContent::Content(status_page(pool.begin().await?, http_client, Some(me), uri, csrf.as_ref(), data, StatusContext::Edit(form.context)).await.map_err(|e| StatusOrError::Err(e.into()))?)
+        } else {
+            let racetime = me.racetime.as_ref().expect("validated");
+            sqlx::query!(r#"INSERT INTO opt_outs (series, event, racetime_id, user_id) VALUES ($1, $2, $3, $4)"#, series as _, event, racetime.id, me.id as _).execute(&mut *transaction).await?;
+            if let Some(organizer_channel) = data.discord_organizer_channel {
+                organizer_channel.say(&*discord_ctx.read().await, MessageBuilder::default()
+                    .mention_user(&me)
+                    .push(" has deciced to opt out for")
+                    .push_safe(data.display_name)
+                    .push(".")
+                    .build(),
+                ).await?;
+            }
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(status(series, event))))
         })
     } else {
         Err(StatusOrError::Err(ResignError::FormValue))

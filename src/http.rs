@@ -620,6 +620,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::resign_post,
         event::opt_out,
         event::opt_out_post,
+        event::status_opt_out,
         event::manage_team,
         event::manage_team_post,
         event::manage_racetime_entrant,
