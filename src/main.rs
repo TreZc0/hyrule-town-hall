@@ -459,6 +459,23 @@ async fn weekly_race_manager(
                             continue;
                         }
                     };
+                    let mut ai_transaction = match db_pool.begin().await {
+                        Ok(t) => t,
+                        Err(e) => {
+                            eprintln!("Error starting transaction for auto-ignore weekly races: {e}");
+                            continue;
+                        }
+                    };
+                    match cal::auto_ignore_past_weekly_races(&mut ai_transaction, series, &row.event, now).await {
+                        Ok(()) => {
+                            if let Err(e) = ai_transaction.commit().await {
+                                eprintln!("Error committing auto-ignore for {}/{}: {e}", series.slug(), row.event);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Error auto-ignoring past weekly races for {}/{}: {e}", series.slug(), row.event);
+                        }
+                    }
                     let mut transaction = match db_pool.begin().await {
                         Ok(t) => t,
                         Err(e) => {
