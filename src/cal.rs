@@ -3332,6 +3332,33 @@ pub(crate) async fn ensure_weekly_races(
     Ok(created)
 }
 
+/// Handles a weekly racetime.gg room being auto-cancelled due to no entrants joining.
+pub(crate) async fn auto_ignore_past_weekly_races(
+    transaction: &mut Transaction<'_, Postgres>,
+    series: Series,
+    event: &str,
+    now: DateTime<Utc>,
+) -> Result<(), Error> {
+    let cutoff = now - series.default_race_duration() - TimeDelta::hours(6);
+    let weekly_schedules = WeeklySchedule::for_event(&mut *transaction, series, event).await?;
+    for schedule in weekly_schedules.iter().filter(|s| s.active) {
+        let round = schedule.round_name();
+        sqlx::query!(
+            "UPDATE races SET ignored = true \
+             WHERE series = $1 AND event = $2 AND round = $3 \
+             AND start IS NOT NULL AND start < $4 \
+             AND end_time IS NULL AND NOT ignored",
+            series as _,
+            event,
+            round,
+            cutoff,
+        )
+        .execute(&mut **transaction)
+        .await?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn auto_import_races(db_pool: PgPool, http_client: reqwest::Client, config: Config, shutdown: rocket::Shutdown, discord_ctx: RwFuture<DiscordCtx>, new_room_lock: Arc<Mutex<()>>) -> Result<(), AutoImportError> {
     let mut last_crash = Instant::now();
     let mut wait_time = Duration::from_secs(1);
