@@ -29,6 +29,8 @@ pub(crate) struct AvianartPermlinkResponse {
     pub(crate) status: Option<String>,
     pub(crate) message: String,
     pub(crate) spoiler: Option<AvianartSpoiler>,
+    // Present when generation is complete; absence means still generating
+    pub(crate) patch: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,26 +71,64 @@ impl AvianartClient {
     pub(crate) async fn generate_seed(&self, preset: &str) -> Result<String, AvianartError> {
         let url = format!("{}?action=generate&preset={}", API_URL, preset);
         let body = json!([{"args": {"race": true}}]);
+        if cfg!(debug_assertions) {
+            eprintln!("[avianart] generate_seed: POST {url}");
+            eprintln!("[avianart] generate_seed: body = {body}");
+            eprintln!("[avianart] generate_seed: auth header present = {}", self.api_key.is_some());
+        }
         let req = self.apply_auth(self.client.post(&url));
         let result: AvianartEnvelope<AvianartGenerateResponse> =
             req.json(&body).send().await?.json().await?;
+        if cfg!(debug_assertions) {
+            eprintln!("[avianart] generate_seed: response status = {}, hash = {:?}", result.status, result.response.hash);
+        }
         Ok(result.response.hash)
     }
 
     pub(crate) async fn wait_for_seed(&self, hash: &str) -> Result<AvianartPermlinkResponse, AvianartError> {
         let url = format!("{}?action=permlink&hash={}", API_URL, hash);
-        for _ in 0..MAX_POLL_ATTEMPTS {
+        if cfg!(debug_assertions) {
+            eprintln!("[avianart] wait_for_seed: polling for hash={hash}, url={url}");
+            eprintln!("[avianart] wait_for_seed: poll interval={POLL_INTERVAL_SECS}s, max attempts={MAX_POLL_ATTEMPTS}");
+        }
+        for attempt in 0..MAX_POLL_ATTEMPTS {
             sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
+            if cfg!(debug_assertions) {
+                eprintln!("[avianart] wait_for_seed: attempt {}/{MAX_POLL_ATTEMPTS}", attempt + 1);
+            }
             let req = self.apply_auth(self.client.get(&url));
             let envelope: AvianartEnvelope<AvianartPermlinkResponse> =
                 req.send().await?.json().await?;
+            if cfg!(debug_assertions) {
+                eprintln!(
+                    "[avianart] wait_for_seed: outer status={}, inner status={:?}, message={:?}, has_spoiler={}, has_patch={}",
+                    envelope.status,
+                    envelope.response.status,
+                    envelope.response.message,
+                    envelope.response.spoiler.is_some(),
+                    envelope.response.patch.is_some(),
+                );
+            }
             // Inner status "failure" means generation failed
             if envelope.response.status.as_deref() == Some("failure") {
+                if cfg!(debug_assertions) {
+                    eprintln!("[avianart] wait_for_seed: generation failed: {}", envelope.response.message);
+                }
                 return Err(AvianartError::GenerationFailed(envelope.response.message));
             }
-            if envelope.status == 200 {
+            // Seed is complete when inner status is absent and patch data is present
+            if envelope.response.status.is_none() && envelope.response.patch.is_some() {
+                if cfg!(debug_assertions) {
+                    eprintln!("[avianart] wait_for_seed: seed ready after {} attempt(s)", attempt + 1);
+                    if let Some(ref spoiler) = envelope.response.spoiler {
+                        eprintln!("[avianart] wait_for_seed: spoiler meta hash = {:?}", spoiler.meta.hash);
+                    }
+                }
                 return Ok(envelope.response);
             }
+        }
+        if cfg!(debug_assertions) {
+            eprintln!("[avianart] wait_for_seed: timed out after {MAX_POLL_ATTEMPTS} attempts");
         }
         Err(AvianartError::Timeout(MAX_POLL_ATTEMPTS))
     }

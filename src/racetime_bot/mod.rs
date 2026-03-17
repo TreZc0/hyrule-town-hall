@@ -2011,16 +2011,39 @@ impl GlobalState {
                 self.avianart_api_key.clone(),
                 self.http_client.clone(),
             );
+            if let Environment::Dev = Environment::default() {
+                eprintln!("[avianart] roll_avianart_seed: starting seed roll for preset={preset:?}");
+            }
             let hash = client.generate_seed(&preset).await
                 .map_err(|e| RollError::Avianart(e.to_string()))?;
+            if let Environment::Dev = Environment::default() {
+                eprintln!("[avianart] roll_avianart_seed: generate_seed returned hash={hash:?}");
+            }
             let seed_data = client.wait_for_seed(&hash).await
                 .map_err(|e| RollError::Avianart(e.to_string()))?;
+            if let Environment::Dev = Environment::default() {
+                eprintln!(
+                    "[avianart] roll_avianart_seed: wait_for_seed complete, has_spoiler={}, message={:?}",
+                    seed_data.spoiler.is_some(),
+                    seed_data.message,
+                );
+            }
             let seed_hash = if let Some(ref spoiler) = seed_data.spoiler {
-                Some(crate::avianart::parse_file_hash(&spoiler.meta.hash)
-                    .map_err(|e| RollError::Avianart(e.to_string()))?)
+                let parsed = crate::avianart::parse_file_hash(&spoiler.meta.hash)
+                    .map_err(|e| RollError::Avianart(e.to_string()))?;
+                if let Environment::Dev = Environment::default() {
+                    eprintln!("[avianart] roll_avianart_seed: parsed file hash = {parsed:?}");
+                }
+                Some(parsed)
             } else {
+                if let Environment::Dev = Environment::default() {
+                    eprintln!("[avianart] roll_avianart_seed: no spoiler/file hash in response");
+                }
                 None
             };
+            if let Environment::Dev = Environment::default() {
+                eprintln!("[avianart] roll_avianart_seed: sending SeedRollUpdate::Done, hash={hash:?}, seed_hash={seed_hash:?}");
+            }
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
                     file_hash: None,
