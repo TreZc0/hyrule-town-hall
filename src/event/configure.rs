@@ -624,8 +624,13 @@ async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres
     
     let teams = sqlx::query_as!(Team, r#"
         SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", NULL as challonge_id, plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank 
-        FROM teams 
+        FROM teams
         WHERE series = $1 AND event = $2 AND startgg_id IS NULL AND NOT resigned
+        AND NOT EXISTS (
+            SELECT 1 FROM team_members tm
+            JOIN opt_outs oo ON oo.user_id = tm.member AND oo.series = $1 AND oo.event = $2
+            WHERE tm.team = teams.id
+        )
     "#, event.series as _, &event.event).fetch_all(&mut **transaction).await
         .map_err(|e| {
             log::error!("Database error while fetching teams for StartGG sync (event: {}, series: {}): {}", event_slug, event.series.slug(), e);

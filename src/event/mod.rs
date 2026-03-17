@@ -2493,7 +2493,7 @@ pub(crate) async fn status_opt_out(pool: &State<PgPool>, http_client: &State<req
             if let Some(organizer_channel) = data.discord_organizer_channel {
                 organizer_channel.say(&*discord_ctx.read().await, MessageBuilder::default()
                     .mention_user(&me)
-                    .push(" has deciced to opt out for")
+                    .push(" has decided to opt out for ")
                     .push_safe(data.display_name)
                     .push(".")
                     .build(),
