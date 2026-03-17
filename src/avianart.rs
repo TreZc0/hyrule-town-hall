@@ -11,6 +11,7 @@ const MAX_POLL_ATTEMPTS: u32 = 60; // 5 minutes max
 pub(crate) struct AvianartClient {
     api_key: Option<String>,
     client: Client,
+    verbose: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -28,7 +29,7 @@ pub(crate) struct AvianartGenerateResponse {
 #[derive(Debug, Deserialize)]
 pub(crate) struct AvianartPermlinkResponse {
     pub(crate) status: Option<String>,
-    pub(crate) message: String,
+    pub(crate) message: Option<String>,
     pub(crate) spoiler: Option<AvianartSpoiler>,
     // Present when generation is complete; absence means still generating
     #[allow(dead_code)]
@@ -49,6 +50,8 @@ pub(crate) struct SpoilerMeta {
 pub(crate) enum AvianartError {
     #[error("HTTP request failed: {0}")]
     Request(#[from] reqwest::Error),
+    #[error("JSON parse error: {0}")]
+    Json(#[from] serde_json::Error),
     #[error("Seed generation failed: {0}")]
     GenerationFailed(String),
     #[error("Seed generation timed out after {0} poll attempts")]
@@ -58,8 +61,8 @@ pub(crate) enum AvianartError {
 }
 
 impl AvianartClient {
-    pub(crate) fn new(api_key: Option<String>, client: Client) -> Self {
-        Self { api_key, client }
+    pub(crate) fn new(api_key: Option<String>, client: Client, verbose: bool) -> Self {
+        Self { api_key, client, verbose }
     }
 
     fn apply_auth(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -74,22 +77,39 @@ impl AvianartClient {
         let url = format!("{}?action=generate&preset={}", API_URL, preset);
         let body = json!([{"args": {"race": true}}]);
         let req = self.apply_auth(self.client.post(&url));
-        let result: AvianartEnvelope<AvianartGenerateResponse> =
-            req.json(&body).send().await?.json().await?;
+        let result: AvianartEnvelope<AvianartGenerateResponse> = if self.verbose {
+            let text = req.json(&body).send().await?.text().await?;
+            eprintln!("[avianart] generate POST {url} body={body}");
+            eprintln!("[avianart] generate response: {text}");
+            serde_json::from_str(&text)?
+        } else {
+            req.json(&body).send().await?.json().await?
+        };
+        if self.verbose { eprintln!("[avianart] generate hash={}", result.response.hash); }
         Ok(result.response.hash)
     }
 
     pub(crate) async fn wait_for_seed(&self, hash: &str) -> Result<AvianartPermlinkResponse, AvianartError> {
         let url = format!("{}?action=permlink&hash={}", API_URL, hash);
-        for _ in 0..MAX_POLL_ATTEMPTS {
+        for attempt in 1..=MAX_POLL_ATTEMPTS {
             sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
             let req = self.apply_auth(self.client.get(&url));
-            let envelope: AvianartEnvelope<AvianartPermlinkResponse> =
-                req.send().await?.json().await?;
+            let envelope: AvianartEnvelope<AvianartPermlinkResponse> = if self.verbose {
+                let text = req.send().await?.text().await?;
+                eprintln!("[avianart] permlink attempt {attempt}/{MAX_POLL_ATTEMPTS}: {text}");
+                serde_json::from_str(&text)?
+            } else {
+                req.send().await?.json().await?
+            };
             match envelope.response.status.as_deref() {
-                Some("failure") => return Err(AvianartError::GenerationFailed(envelope.response.message)),
-                None => return Ok(envelope.response), // status absent = generation complete
-                _ => {} // still generating ("pregeneration", "generating", "postgen")
+                Some("failure") => return Err(AvianartError::GenerationFailed(envelope.response.message.unwrap_or_default())),
+                None => {
+                    if self.verbose { eprintln!("[avianart] seed ready after {attempt} attempt(s), spoiler={:?}", envelope.response.spoiler.as_ref().map(|s| &s.meta.hash)); }
+                    return Ok(envelope.response); // status absent = generation complete
+                }
+                Some(s) => {
+                    if self.verbose { eprintln!("[avianart] still generating: status={s:?}"); }
+                }
             }
         }
         Err(AvianartError::Timeout(MAX_POLL_ATTEMPTS))
