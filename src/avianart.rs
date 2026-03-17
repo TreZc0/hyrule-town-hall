@@ -15,7 +15,8 @@ pub(crate) struct AvianartClient {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct AvianartEnvelope<T> {
-    pub(crate) status: u16,
+    #[allow(dead_code)]
+    status: u16,
     pub(crate) response: T,
 }
 
@@ -29,6 +30,9 @@ pub(crate) struct AvianartPermlinkResponse {
     pub(crate) status: Option<String>,
     pub(crate) message: String,
     pub(crate) spoiler: Option<AvianartSpoiler>,
+    // Present when generation is complete; absence means still generating
+    #[allow(dead_code)]
+    patch: Option<serde_json::Value>, // present when generation is complete
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,12 +86,10 @@ impl AvianartClient {
             let req = self.apply_auth(self.client.get(&url));
             let envelope: AvianartEnvelope<AvianartPermlinkResponse> =
                 req.send().await?.json().await?;
-            // Inner status "failure" means generation failed
-            if envelope.response.status.as_deref() == Some("failure") {
-                return Err(AvianartError::GenerationFailed(envelope.response.message));
-            }
-            if envelope.status == 200 {
-                return Ok(envelope.response);
+            match envelope.response.status.as_deref() {
+                Some("failure") => return Err(AvianartError::GenerationFailed(envelope.response.message)),
+                None => return Ok(envelope.response), // status absent = generation complete
+                _ => {} // still generating ("pregeneration", "generating", "postgen")
             }
         }
         Err(AvianartError::Timeout(MAX_POLL_ATTEMPTS))
