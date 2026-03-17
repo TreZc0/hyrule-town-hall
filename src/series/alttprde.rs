@@ -49,11 +49,11 @@ pub(crate) fn mode_for_game(picks: &draft::Picks, game: i16) -> Option<&'static 
 }
 
 pub(crate) static RIVALS_CUP_PRESETS: &[draft::PresetOption] = &[
-    draft::PresetOption { display_name: "Open", preset: "ttchaos/open" },
-    draft::PresetOption { display_name: "Standard", preset: "ttchaos/standard" },
-    draft::PresetOption { display_name: "Casual Boots", preset: "ttchaos/casualboots" },
-    draft::PresetOption { display_name: "MC Boss", preset: "ttchaos/mcboss" },
-    draft::PresetOption { display_name: "AD Tournament Keys", preset: "ttchaos/adtournamentkeys" },
+    draft::PresetOption { display_name: "Open", preset: "tt_chaos/open" },
+    draft::PresetOption { display_name: "Standard", preset: "tt_chaos/standard" },
+    draft::PresetOption { display_name: "Casual Boots", preset: "tt_chaos/casualboots" },
+    draft::PresetOption { display_name: "MC Boss", preset: "tt_chaos/mcboss" },
+    draft::PresetOption { display_name: "AD Tournament Keys", preset: "tt_chaos/adtournamentkeys" },
 ];
 
 pub(crate) static RIVALS_CUP_BRACKETS_ORDER: &[draft::DraftPhase] = &[
