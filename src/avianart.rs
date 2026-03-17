@@ -15,7 +15,8 @@ pub(crate) struct AvianartClient {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct AvianartEnvelope<T> {
-    pub(crate) status: u16,
+    #[allow(dead_code)]
+    status: u16,
     pub(crate) response: T,
 }
 
@@ -30,7 +31,8 @@ pub(crate) struct AvianartPermlinkResponse {
     pub(crate) message: String,
     pub(crate) spoiler: Option<AvianartSpoiler>,
     // Present when generation is complete; absence means still generating
-    pub(crate) patch: Option<serde_json::Value>,
+    #[allow(dead_code)]
+    patch: Option<serde_json::Value>, // present when generation is complete
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,32 +101,10 @@ impl AvianartClient {
             let req = self.apply_auth(self.client.get(&url));
             let envelope: AvianartEnvelope<AvianartPermlinkResponse> =
                 req.send().await?.json().await?;
-            if cfg!(debug_assertions) {
-                eprintln!(
-                    "[avianart] wait_for_seed: outer status={}, inner status={:?}, message={:?}, has_spoiler={}, has_patch={}",
-                    envelope.status,
-                    envelope.response.status,
-                    envelope.response.message,
-                    envelope.response.spoiler.is_some(),
-                    envelope.response.patch.is_some(),
-                );
-            }
-            // Inner status "failure" means generation failed
-            if envelope.response.status.as_deref() == Some("failure") {
-                if cfg!(debug_assertions) {
-                    eprintln!("[avianart] wait_for_seed: generation failed: {}", envelope.response.message);
-                }
-                return Err(AvianartError::GenerationFailed(envelope.response.message));
-            }
-            // Seed is complete when inner status is absent and patch data is present
-            if envelope.response.status.is_none() && envelope.response.patch.is_some() {
-                if cfg!(debug_assertions) {
-                    eprintln!("[avianart] wait_for_seed: seed ready after {} attempt(s)", attempt + 1);
-                    if let Some(ref spoiler) = envelope.response.spoiler {
-                        eprintln!("[avianart] wait_for_seed: spoiler meta hash = {:?}", spoiler.meta.hash);
-                    }
-                }
-                return Ok(envelope.response);
+            match envelope.response.status.as_deref() {
+                Some("failure") => return Err(AvianartError::GenerationFailed(envelope.response.message)),
+                None => return Ok(envelope.response), // status absent = generation complete
+                _ => {} // still generating ("pregeneration", "generating", "postgen")
             }
         }
         if cfg!(debug_assertions) {
