@@ -3915,7 +3915,11 @@ impl Handler {
         let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
         let event = self.official_data.as_ref().map(|OfficialRaceData { event, .. }| event);
-        let version = Some(goal.rando_version(event));
+        // version is only used to announce the TWWR randomizer build; for other seed types it's not needed
+        let version = match seed.files {
+            Some(seed::Files::TwwrPermalink { .. }) => Some(goal.rando_version(event)),
+            _ => None,
+        };
         let unlock_spoiler_log = goal.unlock_spoiler_log(self.is_official(), false);
         let (tx, rx) = mpsc::channel(1);
         tx.send(SeedRollUpdate::Done { rsl_preset: None, version, unlock_spoiler_log, seed }).await.unwrap();
