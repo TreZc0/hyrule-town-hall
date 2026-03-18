@@ -16,14 +16,14 @@ pub(crate) struct AvianartClient {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct AvianartEnvelope<T> {
-    #[allow(dead_code)]
     status: u16,
     pub(crate) response: T,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct AvianartGenerateResponse {
-    pub(crate) hash: String,
+    pub(crate) hash: Option<String>,
+    pub(crate) message: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,8 +85,12 @@ impl AvianartClient {
         } else {
             req.json(&body).send().await?.json().await?
         };
-        if self.verbose { eprintln!("[avianart] generate hash={}", result.response.hash); }
-        Ok(result.response.hash)
+        if result.status != 200 {
+            return Err(AvianartError::GenerationFailed(result.response.message.unwrap_or_else(|| format!("status {}", result.status))));
+        }
+        let hash = result.response.hash.ok_or_else(|| AvianartError::GenerationFailed("missing hash in generate response".into()))?;
+        if self.verbose { eprintln!("[avianart] generate hash={hash}"); }
+        Ok(hash)
     }
 
     pub(crate) async fn wait_for_seed(&self, hash: &str) -> Result<AvianartPermlinkResponse, AvianartError> {

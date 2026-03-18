@@ -733,9 +733,9 @@ impl Race {
     pub(crate) async fn for_scheduling_channel(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, channel_id: ChannelId, game: Option<i16>, include_started: bool) -> Result<Vec<Self>, Error> {
         let mut races = Vec::default();
         let rows = match (game, include_started) {
-            (None, false) => sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND scheduling_thread = $1 AND (start IS NULL OR start > NOW())"#, PgSnowflake(channel_id) as _).fetch_all(&mut **transaction).await?,
+            (None, false) => sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND scheduling_thread = $1 AND (start IS NULL OR start > NOW()) AND end_time IS NULL"#, PgSnowflake(channel_id) as _).fetch_all(&mut **transaction).await?,
             (None, true) => sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND scheduling_thread = $1"#, PgSnowflake(channel_id) as _).fetch_all(&mut **transaction).await?,
-            (Some(game), false) => sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND scheduling_thread = $1 AND game = $2 AND (start IS NULL OR start > NOW())"#, PgSnowflake(channel_id) as _, game).fetch_all(&mut **transaction).await?,
+            (Some(game), false) => sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND scheduling_thread = $1 AND game = $2 AND (start IS NULL OR start > NOW()) AND end_time IS NULL"#, PgSnowflake(channel_id) as _, game).fetch_all(&mut **transaction).await?,
             (Some(game), true) => sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND scheduling_thread = $1 AND game = $2"#, PgSnowflake(channel_id) as _, game).fetch_all(&mut **transaction).await?,
         };
         for id in rows {
