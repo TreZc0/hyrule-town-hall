@@ -399,14 +399,15 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                             winner_entrant_id
                         ).await.to_racetime()?;
 
-                        // For double round-robin, all games are done when the current game
-                        // number equals the total. We check this directly rather than relying on
-                        // completed_game_results.len() because start.gg no longer returns game
-                        // data for completed (closed) sets.
-                        let double_rr_all_games_done = event.startgg_double_rr
-                            && game as i16 == total_games;
-                        let match_decided = is_match_decided(&completed_game_results, total_games)
-                            || double_rr_all_games_done;
+                        // For hacky double round-robin, the series is decided only when all
+                        // HTH-tracked games are done (game == total_games), regardless of
+                        // win count. start.gg closes the BO1 set after game 1 is reported,
+                        // but we always play both games.
+                        let match_decided = if event.startgg_double_rr {
+                            game as i16 == total_games
+                        } else {
+                            is_match_decided(&completed_game_results, total_games)
+                        };
 
                         if match_decided {
                             if event.startgg_double_rr {
@@ -530,7 +531,15 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                     draft::Kind::PickOnly { .. }
                     | draft::Kind::BanPick { .. }
                     | draft::Kind::BanOnly { .. } => {
-                        cal_event.race.draft.clone().expect("series-draft race should have draft state")
+                        // cal_event.race.draft is a snapshot from when the room opened.
+                        // Reload from DB to get the current state in case Discord picks
+                        // were made after the room was already open (e.g. in test runs).
+                        sqlx::query_scalar!(
+                            r#"SELECT draft_state AS "draft_state: sqlx::types::Json<Draft>" FROM races WHERE id = $1"#,
+                            cal_event.race.id as _,
+                        ).fetch_one(&mut *transaction).await.to_racetime()?
+                            .expect("series-draft race should have draft state")
+                            .0
                     },
                     _ => Draft::for_next_game(&mut transaction, draft_kind, loser.id, winner.id).await.to_racetime()?,
                 };
