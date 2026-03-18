@@ -556,7 +556,10 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                             team: Team::dummy(),
                             transaction, guild_id, command_ids,
                         };
-                        scheduling_thread.say(&*discord_ctx, draft.next_step(draft_kind, next_game.game, &mut msg_ctx).await.to_racetime()?.message).await.to_racetime()?;
+                        let step = draft.next_step(draft_kind, next_game.game, &mut msg_ctx).await.to_racetime()?;
+                        if !step.message.is_empty() {
+                            scheduling_thread.say(&*discord_ctx, step.message).await.to_racetime()?;
+                        }
                         transaction = msg_ctx.into_transaction();
                     }
                 }
