@@ -2010,7 +2010,6 @@ impl GlobalState {
             let client = crate::avianart::AvianartClient::new(
                 self.avianart_api_key.clone(),
                 self.http_client.clone(),
-                Environment::default().is_dev(),
             );
             if let Environment::Dev = Environment::default() {
                 eprintln!("[avianart] roll_avianart_seed: starting seed roll for preset={preset:?}");

@@ -636,6 +636,14 @@ impl Handler {
         };
         sleep(stream_delay).await;
         let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+        if let Some(ended_at) = data.ended_at {
+            match cal_event.kind {
+                cal::EventKind::Normal => sqlx::query!("UPDATE races SET end_time = $1 WHERE id = $2", ended_at, cal_event.race.id as _).execute(&mut *transaction).await.to_racetime()?,
+                cal::EventKind::Async1 => sqlx::query!("UPDATE races SET async_end1 = $1 WHERE id = $2", ended_at, cal_event.race.id as _).execute(&mut *transaction).await.to_racetime()?,
+                cal::EventKind::Async2 => sqlx::query!("UPDATE races SET async_end2 = $1 WHERE id = $2", ended_at, cal_event.race.id as _).execute(&mut *transaction).await.to_racetime()?,
+                cal::EventKind::Async3 => sqlx::query!("UPDATE races SET async_end3 = $1 WHERE id = $2", ended_at, cal_event.race.id as _).execute(&mut *transaction).await.to_racetime()?,
+            };
+        }
         if cal_event.is_private_async_part() {
             ctx.say("@entrants Please remember to send the videos of your run to a tournament organizer.").await?;
             if fpa_invoked {

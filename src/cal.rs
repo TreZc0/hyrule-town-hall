@@ -846,6 +846,56 @@ impl Race {
         })
     }
 
+    pub(crate) async fn copy_draft_to_remaining_games(&self, transaction: &mut Transaction<'_, Postgres>, draft: &Draft) -> Result<(), Error> {
+        if let Some(game) = self.game {
+            let ([team1, team2, team3], [p1, p2, p3], [p1_discord, p2_discord], [p1_racetime, p2_racetime], [p1_twitch, p2_twitch], [total, finished]) = self.entrants.to_db();
+            sqlx::query!(r#"UPDATE races SET draft_state = $1 WHERE
+                NOT ignored
+                AND series = $2
+                AND event = $3
+                AND phase IS NOT DISTINCT FROM $4
+                AND round IS NOT DISTINCT FROM $5
+                AND game > $6
+                AND team1 IS NOT DISTINCT FROM $7
+                AND team2 IS NOT DISTINCT FROM $8
+                AND team3 IS NOT DISTINCT FROM $9
+                AND p1 IS NOT DISTINCT FROM $10
+                AND p2 IS NOT DISTINCT FROM $11
+                AND p3 IS NOT DISTINCT FROM $12
+                AND p1_discord IS NOT DISTINCT FROM $13
+                AND p2_discord IS NOT DISTINCT FROM $14
+                AND p1_racetime IS NOT DISTINCT FROM $15
+                AND p2_racetime IS NOT DISTINCT FROM $16
+                AND p1_twitch IS NOT DISTINCT FROM $17
+                AND p2_twitch IS NOT DISTINCT FROM $18
+                AND total IS NOT DISTINCT FROM $19
+                AND finished IS NOT DISTINCT FROM $20
+            "#,
+                Json(draft) as _,
+                self.series as _,
+                self.event,
+                self.phase,
+                self.round,
+                game,
+                team1 as _,
+                team2 as _,
+                team3 as _,
+                p1,
+                p2,
+                p3,
+                p1_discord.map(PgSnowflake) as _,
+                p2_discord.map(PgSnowflake) as _,
+                p1_racetime,
+                p2_racetime,
+                p1_twitch,
+                p2_twitch,
+                total.map(|total| total as i32),
+                finished.map(|finished| finished as i32),
+            ).execute(&mut **transaction).await?;
+        }
+        Ok(())
+    }
+
     pub(crate) async fn ignore_remaining_games(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<Id<Races>>, Error> {
         if let Some(game) = self.game {
             let ([team1, team2, team3], [p1, p2, p3], [p1_discord, p2_discord], [p1_racetime, p2_racetime], [p1_twitch, p2_twitch], [total, finished]) = self.entrants.to_db();
