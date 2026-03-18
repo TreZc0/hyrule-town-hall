@@ -2010,7 +2010,6 @@ impl GlobalState {
             let client = crate::avianart::AvianartClient::new(
                 self.avianart_api_key.clone(),
                 self.http_client.clone(),
-                Environment::default().is_dev(),
             );
             let hash = client.generate_seed(&preset).await
                 .map_err(|e| RollError::Avianart(e.to_string()))?;
