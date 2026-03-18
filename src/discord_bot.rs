@@ -1873,7 +1873,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         // Reset async fields in database when resetting schedule
                                         if reset_schedule {
                                             sqlx::query!(
-                                                "UPDATE races SET async_thread1 = NULL, async_thread2 = NULL, async_thread3 = NULL, async_seed1 = FALSE, async_seed2 = FALSE, async_seed3 = FALSE, async_ready1 = FALSE, async_ready2 = FALSE, async_ready3 = FALSE WHERE id = $1",
+                                                "UPDATE races SET async_thread1 = NULL, async_thread2 = NULL, async_thread3 = NULL, async_seed1 = FALSE, async_seed2 = FALSE, async_seed3 = FALSE, async_ready1 = FALSE, async_ready2 = FALSE, async_ready3 = FALSE, seed_data = NULL WHERE id = $1",
                                                 race.id as _
                                             ).execute(&mut *transaction).await?;
 
