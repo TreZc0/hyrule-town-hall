@@ -269,6 +269,20 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
         }));
         upcoming_events.push(event);
     }
+    let mut upcoming_events_unlisted = Vec::default();
+    if let Some(me) = &me {
+        let unlisted_rows: Vec<(Series, String)> = if me.is_global_admin() {
+            sqlx::query!(r#"SELECT series AS "series: Series", event FROM events WHERE NOT listed AND (end_time IS NULL OR end_time > NOW()) ORDER BY start ASC NULLS LAST"#)
+                .fetch_all(&mut *transaction).await?.into_iter().map(|r| (r.series, r.event)).collect()
+        } else {
+            sqlx::query!(r#"SELECT e.series AS "series: Series", e.event FROM events e JOIN organizers o ON o.series = e.series AND o.event = e.event WHERE NOT e.listed AND (e.end_time IS NULL OR e.end_time > NOW()) AND o.organizer = $1 ORDER BY e.start ASC NULLS LAST"#, me.id as _)
+                .fetch_all(&mut *transaction).await?.into_iter().map(|r| (r.series, r.event)).collect()
+        };
+        for (series, event_slug) in unlisted_rows {
+            let event = event::Data::new(&mut transaction, series, event_slug).await?.expect("event deleted during transaction");
+            upcoming_events_unlisted.push(event);
+        }
+    }
     races.sort_unstable_by(|race1, race2| {
         let start1 = match race1.schedule {
             RaceSchedule::Unscheduled => None,
@@ -309,6 +323,18 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
             if started || has_active_weekly || has_started_qualifier { &mut ongoing_events } else { &mut upcoming_events }.push(event);
         }
     }
+    let mut ongoing_events_unlisted = Vec::default();
+    for event in upcoming_events_unlisted.drain(..).collect_vec() {
+        if event.series != Series::Standard || event.event != "w" {
+            let started = event.is_started(&mut transaction).await?;
+            let has_active_weekly = WeeklySchedule::for_event(&mut transaction, event.series, &event.event).await?.iter().any(|s| s.active);
+            let has_started_qualifier = sqlx::query_scalar!(
+                r#"SELECT EXISTS (SELECT 1 FROM races WHERE series = $1 AND event = $2 AND phase = 'Qualifier' AND start <= NOW()) AS "exists!""#,
+                event.series as _, &event.event
+            ).fetch_one(&mut *transaction).await?;
+            if started || has_active_weekly || has_started_qualifier { &mut ongoing_events_unlisted } else { &mut upcoming_events_unlisted }.push(event);
+        }
+    }
     let page_content = html! {
         h1 : "Welcome to the Hyrule Town Hall!";
         p {
@@ -343,11 +369,17 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
             div {
                 h2 : "Ongoing events";
                 ul {
-                    @if ongoing_events.is_empty() {
+                    @if ongoing_events.is_empty() && ongoing_events_unlisted.is_empty() {
                         i : "(none currently)";
                     } else {
                         @for event in ongoing_events {
                             li : event;
+                        }
+                        @for event in ongoing_events_unlisted {
+                            li {
+                                : event;
+                                : " (not public)";
+                            }
                         }
                     }
                 }
@@ -355,12 +387,22 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
             div {
                 h2 : "Upcoming events";
                 ul {
-                    @if upcoming_events.is_empty() {
+                    @if upcoming_events.is_empty() && upcoming_events_unlisted.is_empty() {
                         i : "(none currently)";
                     } else {
                         @for event in upcoming_events {
                             li {
                                 : event;
+                                @if let Some(start) = event.start(&mut transaction).await? {
+                                    : " — ";
+                                    : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                }
+                            }
+                        }
+                        @for event in upcoming_events_unlisted {
+                            li {
+                                : event;
+                                : " (not public)";
                                 @if let Some(start) = event.start(&mut transaction).await? {
                                     : " — ";
                                     : format_datetime(start, DateTimeFormat { long: false, running_text: false });
