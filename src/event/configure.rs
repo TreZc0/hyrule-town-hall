@@ -190,6 +190,11 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                     li {
                         a(href = uri!(info_page_get(event.series, &*event.event))) : "Edit info page";
                     }
+                    @if let MatchSource::StartGG(_) = event.match_source() {
+                        li {
+                            a(href = uri!(round_labels_get(event.series, &*event.event))) : "Manage round labels";
+                        }
+                    }
                 }
             }
         } else if is_game_admin {
@@ -619,8 +624,13 @@ async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres
     
     let teams = sqlx::query_as!(Team, r#"
         SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", NULL as challonge_id, plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank 
-        FROM teams 
+        FROM teams
         WHERE series = $1 AND event = $2 AND startgg_id IS NULL AND NOT resigned
+        AND NOT EXISTS (
+            SELECT 1 FROM team_members tm
+            JOIN opt_outs oo ON oo.user_id = tm.member AND oo.series = $1 AND oo.event = $2
+            WHERE tm.team = teams.id
+        )
     "#, event.series as _, &event.event).fetch_all(&mut **transaction).await
         .map_err(|e| {
             log::error!("Database error while fetching teams for StartGG sync (event: {}, series: {}): {}", event_slug, event.series.slug(), e);
@@ -1910,4 +1920,224 @@ pub(crate) async fn info_page_post(
         transaction.commit().await?;
     }
     Ok(RedirectOrContent::Redirect(Redirect::to(uri!(crate::event::info(data.series, &*data.event)))))
+}
+
+async fn round_labels_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>) -> Result<RawHtml<String>, event::Error> {
+    let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, true).await?;
+    let content = if let Some(ref me) = me {
+        if event.organizers(&mut transaction).await?.contains(me) || me.is_global_admin() {
+            let pool_names = sqlx::query_scalar!(
+                "SELECT mapped_name FROM startgg_pool_name_mappings \
+                 WHERE series = $1 AND event = $2 \
+                 ORDER BY original_identifier::int",
+                event.series as _, &event.event
+            ).fetch_all(&mut *transaction).await?;
+            let pool_names_text = pool_names.join("\n");
+
+            let mappings = sqlx::query!(
+                "SELECT id, original_phase, original_round, mapped_phase, mapped_round \
+                 FROM startgg_phase_round_mappings \
+                 WHERE series = $1 AND event = $2 \
+                 ORDER BY id",
+                event.series as _, &event.event
+            ).fetch_all(&mut *transaction).await?;
+
+            html! {
+                h2 : "Pool Names";
+                p : "Enter pool display names, one per line. The 1st line replaces Pool 1, 2nd line Pool 2, and so on.";
+                : full_form(uri!(save_pool_names(event.series, &*event.event)), csrf, html! {
+                    fieldset {
+                        textarea(name = "pool_names", rows = "6", style = "width: 100%; max-width: 400px;") : pool_names_text;
+                    }
+                }, vec![], "Save Pool Names");
+
+                h2 : "Round Label Rules";
+                p {
+                    : "Rules remap phase/round strings from start.gg. Most specific rules (both fields matched) take priority over wildcards (blank = match any). Leave \"Set to\" fields blank to leave that value unchanged.";
+                    br;
+                    : "Placeholders: ";
+                    code : "{% pool %}";
+                    : ", ";
+                    code : "{% phase %}";
+                    : ", ";
+                    code : "{% round %}";
+                }
+                @if mappings.is_empty() {
+                    p : "No rules configured.";
+                } else {
+                    table {
+                        thead {
+                            tr {
+                                th : "Match phase";
+                                th : "Match round";
+                                th : "Set phase to";
+                                th : "Set round to";
+                                th;
+                            }
+                        }
+                        tbody {
+                            @for row in &mappings {
+                                tr {
+                                    td : row.original_phase.as_deref().unwrap_or("(any)");
+                                    td : row.original_round.as_deref().unwrap_or("(any)");
+                                    td : row.mapped_phase.as_deref().unwrap_or("(unchanged)");
+                                    td : row.mapped_round.as_deref().unwrap_or("(unchanged)");
+                                    td {
+                                        @let (errors, button) = button_form(uri!(remove_round_mapping(event.series, &*event.event, row.id)), csrf, vec![], "Remove");
+                                        : errors;
+                                        div(class = "button-row") : button;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                h3 : "Add a rule";
+                : full_form(uri!(add_round_mapping(event.series, &*event.event)), csrf, html! {
+                    fieldset {
+                        label(for = "original_phase") : "Match phase:";
+                        input(type = "text", id = "original_phase", name = "original_phase", placeholder = "blank = any");
+                    }
+                    fieldset {
+                        label(for = "original_round") : "Match round:";
+                        input(type = "text", id = "original_round", name = "original_round", placeholder = "blank = any");
+                    }
+                    fieldset {
+                        label(for = "mapped_phase") : "Set phase to:";
+                        input(type = "text", id = "mapped_phase", name = "mapped_phase", placeholder = "blank = leave unchanged");
+                    }
+                    fieldset {
+                        label(for = "mapped_round") : "Set round to:";
+                        input(type = "text", id = "mapped_round", name = "mapped_round", placeholder = "blank = leave unchanged");
+                    }
+                }, vec![], "Add Rule");
+            }
+        } else {
+            html! {
+                article {
+                    p : "This page is for organizers of this event only.";
+                }
+            }
+        }
+    } else {
+        html! {
+            article {
+                p {
+                    a(href = uri!(auth::login(Some(uri!(round_labels_get(event.series, &*event.event)))))) : "Sign in or create a Hyrule Town Hall account";
+                    : " to configure this event.";
+                }
+            }
+        }
+    };
+    Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Manage Round Labels — {}", event.display_name), html! {
+        : header;
+        : content;
+    }).await?)
+}
+
+#[rocket::get("/event/<series>/<event>/configure/round-labels")]
+pub(crate) async fn round_labels_get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    Ok(round_labels_form(transaction, me, uri, csrf.as_ref(), data).await?)
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct SavePoolNamesForm {
+    #[field(default = String::new())]
+    csrf: String,
+    #[field(default = String::new())]
+    pool_names: String,
+}
+
+#[rocket::post("/event/<series>/<event>/configure/round-labels/pool-names", data = "<form>")]
+pub(crate) async fn save_pool_names(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, SavePoolNamesForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.context.errors().next().is_some() {
+        return Ok(RedirectOrContent::Content(round_labels_form(transaction, Some(me), uri, csrf.as_ref(), data).await?));
+    }
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+    if let Some(ref value) = form.value {
+        sqlx::query!(
+            "DELETE FROM startgg_pool_name_mappings WHERE series = $1 AND event = $2",
+            data.series as _, &data.event
+        ).execute(&mut *transaction).await?;
+        for (i, line) in value.pool_names.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
+            let identifier = (i + 1).to_string();
+            sqlx::query!(
+                "INSERT INTO startgg_pool_name_mappings (series, event, original_identifier, mapped_name) \
+                 VALUES ($1, $2, $3, $4)",
+                data.series as _, &data.event, &identifier, line.trim()
+            ).execute(&mut *transaction).await?;
+        }
+        transaction.commit().await?;
+    }
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(round_labels_get(series, event)))))
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct AddRoundMappingForm {
+    #[field(default = String::new())]
+    csrf: String,
+    original_phase: Option<String>,
+    original_round: Option<String>,
+    mapped_phase: Option<String>,
+    mapped_round: Option<String>,
+}
+
+#[rocket::post("/event/<series>/<event>/configure/round-labels/mappings/add", data = "<form>")]
+pub(crate) async fn add_round_mapping(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, AddRoundMappingForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.context.errors().next().is_some() {
+        return Ok(RedirectOrContent::Content(round_labels_form(transaction, Some(me), uri, csrf.as_ref(), data).await?));
+    }
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+    if let Some(ref value) = form.value {
+        let original_phase = value.original_phase.as_deref().filter(|s| !s.trim().is_empty()).map(str::trim).map(str::to_owned);
+        let original_round = value.original_round.as_deref().filter(|s| !s.trim().is_empty()).map(str::trim).map(str::to_owned);
+        let mapped_phase = value.mapped_phase.as_deref().filter(|s| !s.trim().is_empty()).map(str::trim).map(str::to_owned);
+        let mapped_round = value.mapped_round.as_deref().filter(|s| !s.trim().is_empty()).map(str::trim).map(str::to_owned);
+        sqlx::query!(
+            "INSERT INTO startgg_phase_round_mappings \
+             (series, event, original_phase, original_round, mapped_phase, mapped_round) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+            data.series as _, &data.event,
+            original_phase as _, original_round as _,
+            mapped_phase as _, mapped_round as _
+        ).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+    }
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(round_labels_get(series, event)))))
+}
+
+#[rocket::post("/event/<series>/<event>/configure/round-labels/mappings/<mapping_id>/remove", data = "<form>")]
+pub(crate) async fn remove_round_mapping(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, mapping_id: i64, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.context.errors().next().is_some() {
+        return Ok(RedirectOrContent::Content(round_labels_form(transaction, Some(me), uri, csrf.as_ref(), data).await?));
+    }
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+    if form.value.is_some() {
+        sqlx::query!(
+            "DELETE FROM startgg_phase_round_mappings WHERE id = $1 AND series = $2 AND event = $3",
+            mapping_id, data.series as _, &data.event
+        ).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+    }
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(round_labels_get(series, event)))))
 }

@@ -911,6 +911,9 @@ async fn draft_action(ctx: &DiscordCtx, interaction: &impl GenericInteraction, a
             let step = race.draft.as_ref().unwrap().next_step(&draft_kind, race.game, &mut msg_ctx).await?;
             let mut transaction = msg_ctx.into_transaction();
             sqlx::query!("UPDATE races SET draft_state = $1 WHERE id = $2", Json(race.draft.as_ref().unwrap()) as _, race.id as _).execute(&mut *transaction).await?;
+            if matches!(step.kind, draft::StepKind::Done(_)) && draft_kind.uses_button_draft() {
+                race.copy_draft_to_remaining_games(&mut transaction, race.draft.as_ref().unwrap()).await?;
+            }
             transaction.commit().await?;
             if draft_kind.uses_button_draft() {
                 // Clear the ephemeral confirm dialog.
@@ -1874,7 +1877,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         // Reset async fields in database when resetting schedule
                                         if reset_schedule {
                                             sqlx::query!(
-                                                "UPDATE races SET async_thread1 = NULL, async_thread2 = NULL, async_thread3 = NULL, async_seed1 = FALSE, async_seed2 = FALSE, async_seed3 = FALSE, async_ready1 = FALSE, async_ready2 = FALSE, async_ready3 = FALSE WHERE id = $1",
+                                                "UPDATE races SET async_thread1 = NULL, async_thread2 = NULL, async_thread3 = NULL, async_seed1 = FALSE, async_seed2 = FALSE, async_seed3 = FALSE, async_ready1 = FALSE, async_ready2 = FALSE, async_ready3 = FALSE, seed_data = NULL WHERE id = $1",
                                                 race.id as _
                                             ).execute(&mut *transaction).await?;
 

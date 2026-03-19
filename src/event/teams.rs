@@ -1053,7 +1053,15 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
         false
     };
     let roles = data.team_config.roles();
-    let signups = signups_sorted(&mut transaction, &mut Cache::new(http_client.clone()), me.as_ref(), &data, is_organizer, qualifier_kind, None, all_qualifiers_ended, true).await?;
+    let mut signups = signups_sorted(&mut transaction, &mut Cache::new(http_client.clone()), me.as_ref(), &data, is_organizer, qualifier_kind, None, all_qualifiers_ended, true).await?;
+
+    // Hide opted-out racetime-only entrants from public view; organizers and global admins still see them
+    let is_global_admin = me.as_ref().is_some_and(|me| me.id == User::GLOBAL_ADMIN_USER_IDS[0].into());
+    if !is_organizer && !is_global_admin {
+        signups.retain(|signup| {
+            !signup.is_opted_out || signup.members.iter().any(|m| !matches!(m.user, MemberUser::RaceTime { .. }))
+        });
+    }
 
     // Check if there are ongoing asyncs (for disclaimer)
     let has_ongoing_asyncs = if !is_organizer && data.qualifier_score_hiding == QualifierScoreHiding::AsyncOnly && !all_qualifiers_ended {

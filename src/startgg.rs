@@ -267,6 +267,24 @@ impl fmt::Display for ImportSkipReason {
     }
 }
 
+fn expand_placeholders(
+    mut s: String,
+    orig_phase: &Option<String>,
+    orig_round: &Option<String>,
+    pool: Option<&str>,
+) -> Result<String, cal::Error> {
+    if s.contains("{% pool %}") {
+        s = s.replace("{% pool %}", pool.ok_or(cal::Error::PoolPlaceholder)?);
+    }
+    if s.contains("{% phase %}") {
+        s = s.replace("{% phase %}", orig_phase.as_deref().unwrap_or(""));
+    }
+    if s.contains("{% round %}") {
+        s = s.replace("{% round %}", orig_round.as_deref().unwrap_or(""));
+    }
+    Ok(s)
+}
+
 /// Returns:
 ///
 /// * A list of races to import. Only one race for each match is imported, with the `game` field specifying the total number of games in the match.
@@ -291,28 +309,37 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
         best_of: Option<i64>,
         bracket_type: Option<event_sets_query::BracketType>,
     ) -> Result<Option<ImportSkipReason>, cal::Error> {
+        let pool = if let Some(ref identifier) = pool {
+            Some(sqlx::query_scalar!(
+                "SELECT mapped_name FROM startgg_pool_name_mappings \
+                 WHERE series = $1 AND event = $2 AND original_identifier = $3",
+                event.series as _, &event.event, identifier
+            ).fetch_optional(&mut **transaction).await?.unwrap_or_else(|| identifier.clone()))
+        } else {
+            None
+        };
         if let Some(row) = sqlx::query!("
             SELECT mapped_phase, mapped_round
             FROM startgg_phase_round_mappings
-            WHERE (original_phase IS NULL OR original_phase = $1) AND (original_round IS NULL OR original_round = $2)
-            ORDER BY (original_phase IS NOT NULL AND original_round IS NOT NULL) DESC, (original_phase IS NOT NULL OR original_round IS NOT NULL) DESC
+            WHERE series = $3 AND event = $4
+              AND (original_phase IS NULL OR original_phase = $1)
+              AND (original_round IS NULL OR original_round = $2)
+            ORDER BY (original_phase IS NOT NULL AND original_round IS NOT NULL) DESC,
+                     (original_phase IS NOT NULL OR original_round IS NOT NULL) DESC
             LIMIT 1
-        ", &phase as _, &round as _).fetch_optional(&mut **transaction).await? {
-            if let Some(mapped_phase) = row.mapped_phase {
-                phase = Some(if mapped_phase.contains("{% pool %}") {
-                    mapped_phase.replace("{% pool %}", pool.as_deref().ok_or(cal::Error::PoolPlaceholder)?)
-                } else {
-                    mapped_phase
-                });
+        ", &phase as _, &round as _, event.series as _, &event.event).fetch_optional(&mut **transaction).await? {
+            let orig_phase = phase.clone();
+            let orig_round = round.clone();
+            if let Some(mapped) = row.mapped_phase {
+                phase = Some(expand_placeholders(mapped, &orig_phase, &orig_round, pool.as_deref())?);
             }
-            if let Some(mapped_round) = row.mapped_round {
-                round = Some(if mapped_round.contains("{% pool %}") {
-                    mapped_round.replace("{% pool %}", pool.as_deref().ok_or(cal::Error::PoolPlaceholder)?)
-                } else {
-                    mapped_round
-                });
+            if let Some(mapped) = row.mapped_round {
+                round = Some(expand_placeholders(mapped, &orig_phase, &orig_round, pool.as_deref())?);
             }
         }
+        let normalize = |s: String| s.replace("Winners", "WB").replace("Losers", "LB");
+        phase = phase.map(&normalize);
+        round = round.map(normalize);
         races.push(Race {
             id: Id::new(&mut *transaction).await?,
             series: event.series,

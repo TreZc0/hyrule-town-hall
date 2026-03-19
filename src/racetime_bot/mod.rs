@@ -3964,7 +3964,11 @@ impl Handler {
     async fn queue_existing_seed(&self, ctx: &RaceContext<GlobalState>, goal: Option<Goal>, seed: seed::Data, language: Language, article: &'static str, description: String, suppress_preamble: bool) {
         let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
-        let version = Some(self.effective_rando_version(goal));
+        // version is only used to announce the TWWR randomizer build; for other seed types it's not needed
+        let version = match seed.files {
+            Some(seed::Files::TwwrPermalink { .. }) => Some(self.effective_rando_version(goal)),
+            _ => None,
+        };
         let unlock_spoiler_log = self.effective_unlock_spoiler_log(goal, false);
         let (tx, rx) = mpsc::channel(1);
         tx.send(SeedRollUpdate::Done { rsl_preset: None, version, unlock_spoiler_log, seed }).await.unwrap();

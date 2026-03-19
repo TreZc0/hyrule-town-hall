@@ -1648,7 +1648,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                 msg.push(" signed up for ");
                                 msg.push_safe(&data.display_name);
                                 let response = startgg::query_cached::<startgg::UserSlugQuery>(http_client, &config.startgg, startgg::user_slug_query::Variables { id: startgg_id.clone() }).await?;
-                                if let startgg::user_slug_query::ResponseData { user: Some(startgg::user_slug_query::UserSlugQueryUser { discriminator: Some(slug) }) } = response {
+                                if let startgg::user_slug_query::ResponseData { user: Some(startgg::user_slug_query::UserSlugQueryUser { discriminator: Some(slug), .. }) } = response {
                                     msg.push(" with start.gg user slug ");
                                     msg.push_mono_safe(slug);
                                     msg.push(". Unless they signed up themselves, please go to the start.gg tournament settings › Attendees › Add Attendee, paste the user slug into the search field, and select the first result.");
