@@ -1056,6 +1056,11 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
     let teams_label = if let TeamConfig::Solo = data.team_config { "Entrants" } else { "Teams" };
     let has_opt_outs = signups.iter().any(|signup| signup.is_opted_out);
     let has_racetime_only = signups.iter().any(|signup| signup.members.iter().any(|m| matches!(m.user, MemberUser::RaceTime { .. })));
+    let mut rank = 0usize;
+    let signups: Vec<(Option<usize>, SignupsTeam)> = signups.into_iter().map(|s| {
+        let pos = if s.is_opted_out { None } else { rank += 1; Some(rank) };
+        (pos, s)
+    }).collect();
     let mut column_headers = Vec::default();
     if let QualifierKind::Rank | QualifierKind::Score(_) = qualifier_kind {
         column_headers.push(html! {
@@ -1236,7 +1241,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                         }
                     }
                 } else {
-                    @for (signup_idx, SignupsTeam { team, members, qualification, custom_choices, is_opted_out }) in signups.into_iter().enumerate() {
+                    @for (display_pos, SignupsTeam { team, members, qualification, custom_choices, is_opted_out }) in signups {
                         @let is_dimmed = match qualifier_kind {
                             QualifierKind::None => false,
                             QualifierKind::Rank => false, // unknown cutoff
@@ -1275,7 +1280,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                     } else if hide_rank {
                                         : "—";
                                     } else {
-                                        : signup_idx + 1;
+                                        : display_pos.unwrap_or(0);
                                     }
                                 }
                                 _ => {}
