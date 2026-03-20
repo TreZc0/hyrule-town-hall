@@ -17,6 +17,7 @@ use {
     },
 };
 
+pub(crate) mod async_results;
 pub(crate) mod configure;
 pub(crate) mod enter;
 pub(crate) mod setup;

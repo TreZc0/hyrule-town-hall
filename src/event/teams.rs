@@ -1052,6 +1052,23 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
         false
     };
 
+    let async_results_exist = if let QualifierKind::Score(_) = qualifier_kind {
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS(SELECT 1 FROM async_players ap WHERE ap.series = $1 AND ap.event = $2 AND ap.kind IN ('qualifier', 'qualifier2', 'qualifier3') AND ap.time IS NOT NULL) AS "exists!""#,
+            data.series as _,
+            &data.event
+        )
+        .fetch_one(&mut *transaction)
+        .await?
+    } else {
+        false
+    };
+    let show_async_results_link = async_results_exist
+        && (is_organizer || is_global_admin || data.qualifier_score_hiding == QualifierScoreHiding::None);
+    let async_results_hidden_from_public = show_async_results_link
+        && (is_organizer || is_global_admin)
+        && data.qualifier_score_hiding != QualifierScoreHiding::None;
+
     let mut footnotes = Vec::default();
     let teams_label = if let TeamConfig::Solo = data.team_config { "Entrants" } else { "Teams" };
     let has_opt_outs = signups.iter().any(|signup| signup.is_opted_out);
@@ -1197,6 +1214,14 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                 }
             }
         }
+        @if show_async_results_link {
+            a(class = "button", href = uri!(super::async_results::get(data.series, &*data.event)).to_string()) {
+                : "Async Results";
+            }
+            @if async_results_hidden_from_public {
+                small : " (hidden from public)";
+            }
+        }
         @if !is_organizer && has_ongoing_asyncs {
             div(class = "bg-surface") {
                 p {
@@ -1217,7 +1242,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                         : "* = opted out";
                     }
                     @if has_opt_outs && has_racetime_only {
-                        br;
+                        : " | ";
                     }
                     @if has_racetime_only {
                         : "** = racetime.gg only";
