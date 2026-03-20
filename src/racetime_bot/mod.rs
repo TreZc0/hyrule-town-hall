@@ -324,7 +324,7 @@ impl Goal {
     fn from_race_data(race_data: &RaceData) -> Option<Self> {
         let Ok(bot_goal) = race_data.goal.name.parse::<Self>() else { return None };
         if race_data.goal.custom != bot_goal.is_custom() { return None }
-        if let (Goal::StandardRuleset | Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Crosskeys2025 | Goal::MysteryD20, Some(_)) = (bot_goal, &race_data.opened_by) { return None }
+        if race_data.opened_by.is_some() { return None }
         Some(bot_goal)
     }
 
@@ -4919,7 +4919,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 ],
                             ).await?,
                             Goal::TwwrMainWeekly | Goal::TwwrMainMiniblins26 => ctx.send_message(
-                                "Welcome! This is a practice room for The Wind Waker Randomizer. Learn more at https://twwrando.xyz/",
+                                "Welcome! This is a practice room for The Wind Waker Randomizer. Learn more at http://twwrando.com/",
                                 true,
                                 vec![
                                     ("Record seed", ActionButton::Message {
