@@ -1229,16 +1229,16 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
         } else {
         @if show_async_results_link || has_opt_outs || has_racetime_only {
             div(class = "bg-surface") {
-                @if show_async_results_link {
-                    a(class = "button", style = "padding: 0.25rem 1rem; margin-right: 0.5rem;", href = uri!(super::async_results::get(data.series, &*data.event)).to_string()) {
-                        : "Async Results";
-                    }
-                    @if async_results_hidden_from_public {
-                        small(style = "margin-right: 0.5rem;") : "(hidden from public)";
-                    }
-                }
-                @if has_opt_outs || has_racetime_only {
+                @if show_async_results_link || has_opt_outs || has_racetime_only {
                     p {
+                        @if show_async_results_link {
+                            a(class = "button", style = "padding: 0.25rem 1rem; margin-right: 0.5rem;", href = uri!(super::async_results::get(data.series, &*data.event)).to_string()) {
+                                : "Async Results";
+                            }
+                            @if async_results_hidden_from_public {
+                                small(style = "margin-right: 0.5rem;") : "(hidden from public)";
+                            }
+                        }
                         @if has_opt_outs {
                             : "* = opted out";
                         }

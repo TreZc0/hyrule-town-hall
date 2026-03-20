@@ -144,7 +144,18 @@ pub(crate) async fn get(
         } else {
             @for section in &sections {
                 h2 : section.title;
-                table {
+                table(style = "table-layout: fixed; width: 100%;") {
+                    colgroup {
+                        col(style = "width: 4rem;");
+                        col(style = "min-width: 10rem;");
+                        col(style = "width: 7rem;");
+                        @if section.rows.iter().any(|r| r.points.is_some()) {
+                            col(style = "width: 6rem;");
+                        }
+                        @if section.has_vod {
+                            col(style = "width: 5rem;");
+                        }
+                    }
                     thead {
                         tr {
                             th : "Place";
@@ -178,8 +189,6 @@ pub(crate) async fn get(
                                         @if let Some(ref vod) = row.vod {
                                             @if let Some(Ok(vod_url)) = (!vod.contains(' ')).then(|| Url::parse(vod)) {
                                                 a(href = vod_url.to_string()) : "VoD";
-                                            } else {
-                                                : vod;
                                             }
                                         }
                                     }
