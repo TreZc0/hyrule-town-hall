@@ -1214,14 +1214,6 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                 }
             }
         }
-        @if show_async_results_link {
-            a(class = "button", href = uri!(super::async_results::get(data.series, &*data.event)).to_string()) {
-                : "Async Results";
-            }
-            @if async_results_hidden_from_public {
-                small : " (hidden from public)";
-            }
-        }
         @if !is_organizer && has_ongoing_asyncs {
             div(class = "bg-surface") {
                 p {
@@ -1235,17 +1227,27 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                 i : "Standings will not be published until after the qualifier stage has ended.";
             }
         } else {
-        @if has_opt_outs || has_racetime_only {
+        @if show_async_results_link || has_opt_outs || has_racetime_only {
             div(class = "bg-surface") {
-                p {
-                    @if has_opt_outs {
-                        : "* = opted out";
+                @if show_async_results_link {
+                    a(class = "button", style = "padding: 0.25rem 1rem; margin-right: 0.5rem;", href = uri!(super::async_results::get(data.series, &*data.event)).to_string()) {
+                        : "Async Results";
                     }
-                    @if has_opt_outs && has_racetime_only {
-                        : " | ";
+                    @if async_results_hidden_from_public {
+                        small(style = "margin-right: 0.5rem;") : "(hidden from public)";
                     }
-                    @if has_racetime_only {
-                        : "** = racetime.gg only";
+                }
+                @if has_opt_outs || has_racetime_only {
+                    p {
+                        @if has_opt_outs {
+                            : "* = opted out";
+                        }
+                        @if has_opt_outs && has_racetime_only {
+                            : " | ";
+                        }
+                        @if has_racetime_only {
+                            : "** = racetime.gg only";
+                        }
                     }
                 }
             }
