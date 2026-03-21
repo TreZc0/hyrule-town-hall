@@ -3383,22 +3383,22 @@ impl AlttprDeRaceOptions {
         // Build URL params - only include choices where both players said yes
         let mut custom_choices = HashMap::new();
         let mut display_only_choices = Vec::new();
+        // Handle pool settings with explicit priority: expert (2) > hard (1)
+        let expert_ok = choice_counts.get("pool_expert").is_some_and(|&c| c >= num_teams && num_teams > 0);
+        let hard_ok = choice_counts.get("pool_hard").is_some_and(|&c| c >= num_teams && num_teams > 0);
+        if expert_ok {
+            custom_choices.insert("pool".to_owned(), "2".to_owned());
+        } else if hard_ok {
+            custom_choices.insert("pool".to_owned(), "1".to_owned());
+        }
         for (key, count) in choice_counts {
             if count >= num_teams && num_teams > 0 {
                 // Both players agreed to this option
                 let url_value = match key.as_str() {
                     // Special case: pottery becomes "lottery"
                     "pots" => "lottery".to_owned(),
-                    // Special case: pool_hard becomes pool=1
-                    "pool_hard" => {
-                        custom_choices.insert("pool".to_owned(), "1".to_owned());
-                        continue;
-                    }
-                    // Special case: pool_expert becomes pool=2 (overwrites hard if both set)
-                    "pool_expert" => {
-                        custom_choices.insert("pool".to_owned(), "2".to_owned());
-                        continue;
-                    }
+                    // Handled above with explicit priority
+                    "pool_hard" | "pool_expert" => continue,
                     // Display-only choices: shown in race room but not passed to the seed API
                     "gtskips" => {
                         display_only_choices.push("GT Skips".to_owned());
