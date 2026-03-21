@@ -1252,7 +1252,7 @@ pub(crate) async fn races(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
                 event: data.event.to_string(),
                 source: cal::Source::Manual,
                 entrants: Entrants::Open,
-                phase: Some("Qualifier".to_owned()),
+                phase: None,
                 round,
                 game: None,
                 scheduling_thread: None,
