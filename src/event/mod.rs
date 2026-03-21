@@ -1202,6 +1202,92 @@ pub(crate) async fn races(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
     } else {
         (false, false, false)
     };
+    {
+        struct ConcludedAsync {
+            kind: AsyncKind,
+            file_stem: Option<String>,
+            tfb_uuid: Option<Uuid>,
+            seed_data: Option<serde_json::Value>,
+            start: Option<DateTime<Utc>>,
+            end_time: Option<DateTime<Utc>>,
+        }
+        let concluded_asyncs = sqlx::query_as!(
+            ConcludedAsync,
+            r#"SELECT kind AS "kind: AsyncKind", file_stem, tfb_uuid, seed_data, start, end_time
+               FROM asyncs
+               WHERE series = $1 AND event = $2 AND end_time IS NOT NULL AND end_time <= NOW()
+               ORDER BY kind"#,
+            data.series as _,
+            &data.event
+        )
+        .fetch_all(&mut *transaction)
+        .await?;
+        for row in concluded_asyncs {
+            let round = Some(match row.kind {
+                AsyncKind::Qualifier1 => "Qualifier Async 1".to_owned(),
+                AsyncKind::Qualifier2 => "Qualifier Async 2".to_owned(),
+                AsyncKind::Qualifier3 => "Qualifier Async 3".to_owned(),
+                AsyncKind::Seeding => "Seeding Async".to_owned(),
+                AsyncKind::Tiebreaker1 => "Tiebreaker Async 1".to_owned(),
+                AsyncKind::Tiebreaker2 => "Tiebreaker Async 2".to_owned(),
+            });
+            let seed_files = if let Some(hash) = row.seed_data.as_ref().and_then(|d| d.get("avianart_hash")).and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                Some(seed::Files::AvianartSeed { hash: hash.to_owned(), seed_hash: None })
+            } else if let (Some(permalink), Some(seed_hash)) = (
+                row.seed_data.as_ref().and_then(|d| d.get("permalink")).and_then(|v| v.as_str()).filter(|s| !s.is_empty()),
+                row.seed_data.as_ref().and_then(|d| d.get("seed_hash")).and_then(|v| v.as_str()),
+            ) {
+                Some(seed::Files::TwwrPermalink { permalink: permalink.to_owned(), seed_hash: seed_hash.to_owned() })
+            } else if let Some(uuid) = row.tfb_uuid {
+                Some(seed::Files::TriforceBlitz { is_dev: false, uuid })
+            } else if let Some(fs) = row.file_stem.filter(|s| !s.is_empty()) {
+                Some(seed::Files::MidosHouse { file_stem: Cow::Owned(fs), locked_spoiler_log_path: None })
+            } else {
+                None
+            };
+            let end_time = row.end_time;
+            past_races.push(Race {
+                id: Id::dummy(),
+                series: data.series,
+                event: data.event.to_string(),
+                source: cal::Source::Manual,
+                entrants: Entrants::Open,
+                phase: Some("Qualifier".to_owned()),
+                round,
+                game: None,
+                scheduling_thread: None,
+                schedule: RaceSchedule::Async {
+                    start1: row.start,
+                    start2: row.start,
+                    start3: None,
+                    end1: end_time,
+                    end2: end_time,
+                    end3: None,
+                    room1: None,
+                    room2: None,
+                    room3: None,
+                },
+                schedule_updated_at: None,
+                fpa_invoked: false,
+                breaks_used: false,
+                draft: None,
+                seed: seed::Data { files: seed_files, ..seed::Data::default() },
+                video_urls: HashMap::default(),
+                restreamers: HashMap::default(),
+                last_edited_by: None,
+                last_edited_at: None,
+                ignored: false,
+                schedule_locked: false,
+                notified: false,
+                async_notified_1: false,
+                async_notified_2: false,
+                async_notified_3: false,
+                discord_scheduled_event_id: None,
+                volunteer_request_sent: false,
+                volunteer_request_message_id: None,
+            });
+        }
+    }
     let content = html! {
         : header;
         //TODO copiable calendar link (with link to index for explanation?)
