@@ -5108,7 +5108,11 @@ impl RaceHandler<GlobalState> for Handler {
                             | Goal::AlttprDe9Bracket
                             | Goal::AlttprDe9SwissA
                             | Goal::AlttprDe9SwissB
-                                => this.roll_alttprde9_seed(ctx, cal_event.clone(), English, "a").await,
+                                => if event.draft_kind().is_none() {
+                                    this.roll_alttprde9_seed(ctx, cal_event.clone(), English, "a").await
+                                },
+                                // else: ban-pick draft event with missing draft state — error already
+                                // reported at room open via the draft_kind check; do not roll
                             Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups => {
                                 ctx.say("@entrants WARNING: The preset draft for this match is not complete! Please complete the draft in the scheduling Discord thread before the race.").await.to_racetime()?;
                             }
