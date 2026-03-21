@@ -600,6 +600,59 @@ pub(crate) async fn merge_accounts(pool: &State<PgPool>, me: User, racetime_user
     Err(MergeAccountsError::Other)
 }
 
+#[derive(Debug, thiserror::Error, Error)]
+pub(crate) enum UnlinkError {
+    #[error(transparent)] Sql(#[from] sqlx::Error),
+    #[error("cannot unlink: another login method is required")]
+    NoOtherLoginMethod,
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct UnlinkForm {
+    #[field(default = String::new())]
+    csrf: String,
+}
+
+#[rocket::post("/unlink/racetime", data = "<form>")]
+pub(crate) async fn unlink_racetime(pool: &State<PgPool>, me: User, csrf: Option<CsrfToken>, cookies: &CookieJar<'_>, form: Form<Contextual<'_, UnlinkForm>>) -> Result<Redirect, UnlinkError> {
+    if me.discord.is_none() {
+        return Err(UnlinkError::NoOtherLoginMethod);
+    }
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.value.is_some() {
+        sqlx::query!("UPDATE users SET racetime_id = NULL, racetime_display_name = NULL, racetime_discriminator = NULL, racetime_pronouns = NULL, display_source = 'discord' WHERE id = $1", me.id as _).execute(&**pool).await?;
+        cookies.remove_private(Cookie::from("racetime_token"));
+        cookies.remove_private(Cookie::from("racetime_refresh_token"));
+    }
+    Ok(Redirect::to(uri!(crate::user::profile(me.id))))
+}
+
+#[rocket::post("/unlink/discord", data = "<form>")]
+pub(crate) async fn unlink_discord(pool: &State<PgPool>, me: User, csrf: Option<CsrfToken>, cookies: &CookieJar<'_>, form: Form<Contextual<'_, UnlinkForm>>) -> Result<Redirect, UnlinkError> {
+    if me.racetime.is_none() {
+        return Err(UnlinkError::NoOtherLoginMethod);
+    }
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.value.is_some() {
+        sqlx::query!("UPDATE users SET discord_id = NULL, discord_display_name = NULL, discord_discriminator = NULL, discord_username = NULL, display_source = 'racetime' WHERE id = $1", me.id as _).execute(&**pool).await?;
+        cookies.remove_private(Cookie::from("discord_token"));
+        cookies.remove_private(Cookie::from("discord_refresh_token"));
+    }
+    Ok(Redirect::to(uri!(crate::user::profile(me.id))))
+}
+
+#[rocket::post("/unlink/startgg", data = "<form>")]
+pub(crate) async fn unlink_startgg(pool: &State<PgPool>, me: User, csrf: Option<CsrfToken>, form: Form<Contextual<'_, UnlinkForm>>) -> Result<Redirect, UnlinkError> {
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.value.is_some() {
+        sqlx::query!("UPDATE users SET startgg_id = NULL WHERE id = $1", me.id as _).execute(&**pool).await?;
+    }
+    Ok(Redirect::to(uri!(crate::user::profile(me.id))))
+}
+
 #[rocket::get("/logout?<redirect_to>")]
 pub(crate) fn logout(cookies: &CookieJar<'_>, redirect_to: Option<Origin<'_>>) -> Redirect {
     cookies.remove_private(Cookie::from("racetime_token"));

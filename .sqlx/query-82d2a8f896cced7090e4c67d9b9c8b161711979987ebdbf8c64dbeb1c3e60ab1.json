@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT e.series AS \"series: Series\", e.event FROM events e JOIN organizers o ON o.series = e.series AND o.event = e.event WHERE NOT e.listed AND (e.end_time IS NULL OR e.end_time > NOW()) AND o.organizer = $1 ORDER BY e.start ASC NULLS LAST",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "series: Series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "event",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "82d2a8f896cced7090e4c67d9b9c8b161711979987ebdbf8c64dbeb1c3e60ab1"
+}

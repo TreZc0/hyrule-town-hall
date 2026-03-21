@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT mapped_name FROM startgg_pool_name_mappings WHERE series = $1 AND event = $2 ORDER BY original_identifier::int",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "mapped_name",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c694f80e0565388282f88ebf520e548a219d5a6bab64beb12a7c8aa42397821c"
+}

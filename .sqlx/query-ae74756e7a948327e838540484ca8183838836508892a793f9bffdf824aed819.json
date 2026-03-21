@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id AS \"id: Id<Teams>\", series AS \"series: Series\", event, name, racetime_slug, startgg_id AS \"startgg_id: startgg::ID\", NULL as challonge_id, plural_name, restream_consent, mw_impl AS \"mw_impl: mw::Impl\", qualifier_rank \n        FROM teams \n        WHERE series = $1 AND event = $2 AND startgg_id IS NULL AND NOT resigned\n    ",
+  "query": "\n        SELECT id AS \"id: Id<Teams>\", series AS \"series: Series\", event, name, racetime_slug, startgg_id AS \"startgg_id: startgg::ID\", NULL as challonge_id, plural_name, restream_consent, mw_impl AS \"mw_impl: mw::Impl\", qualifier_rank \n        FROM teams\n        WHERE series = $1 AND event = $2 AND startgg_id IS NULL AND NOT resigned\n        AND NOT EXISTS (\n            SELECT 1 FROM team_members tm\n            JOIN opt_outs oo ON oo.user_id = tm.member AND oo.series = $1 AND oo.event = $2\n            WHERE tm.team = teams.id\n        )\n    ",
   "describe": {
     "columns": [
       {
@@ -89,5 +89,5 @@
       true
     ]
   },
-  "hash": "f2343f8030f46ebbc1690495a8e5a09e170036629ab882cf44a9388d717b4682"
+  "hash": "ae74756e7a948327e838540484ca8183838836508892a793f9bffdf824aed819"
 }
