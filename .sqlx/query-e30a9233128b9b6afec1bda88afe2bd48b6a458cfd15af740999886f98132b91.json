@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO events (series, event, display_name, team_config, language, listed,\n                goal_slug, draft_kind, draft_config, qualifier_score_kind,\n                is_single_race, hide_entrants, start_delay, start_delay_open, restrict_chat_in_qualifiers)\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Text",
+        {
+          "Custom": {
+            "name": "team_config",
+            "kind": {
+              "Enum": [
+                "solo",
+                "coop",
+                "pictionary",
+                "multiworld",
+                "tfbcoop"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        },
+        "Bool",
+        "Varchar",
+        "Varchar",
+        "Jsonb",
+        "Varchar",
+        "Bool",
+        "Bool",
+        "Int4",
+        "Int4",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e30a9233128b9b6afec1bda88afe2bd48b6a458cfd15af740999886f98132b91"
+}

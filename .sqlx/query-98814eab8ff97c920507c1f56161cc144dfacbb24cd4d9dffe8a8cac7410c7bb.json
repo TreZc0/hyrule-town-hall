@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n            series AS \"series: Series\",\n            event,\n            challonge_match,\n            league_id,\n            sheet_timestamp,\n            startgg_event,\n            startgg_set AS \"startgg_set: startgg::ID\",\n            speedgaming_id,\n            game,\n            team1 AS \"team1: Id<Teams>\",\n            team2 AS \"team2: Id<Teams>\",\n            team3 AS \"team3: Id<Teams>\",\n            p1,\n            p2,\n            p3,\n            p1_discord AS \"p1_discord: PgSnowflake<UserId>\",\n            p2_discord AS \"p2_discord: PgSnowflake<UserId>\",\n            p1_racetime,\n            p2_racetime,\n            p1_twitch,\n            p2_twitch,\n            total,\n            finished,\n            phase,\n            round,\n            scheduling_thread AS \"scheduling_thread: PgSnowflake<ChannelId>\",\n            draft_state AS \"draft_state: Json<Draft>\",\n            start,\n            async_start1,\n            async_start2,\n            async_start3,\n            end_time,\n            async_end1,\n            async_end2,\n            async_end3,\n            room,\n            async_room1,\n            async_room2,\n            async_room3,\n            schedule_updated_at,\n            fpa_invoked,\n            breaks_used,\n            seed_data,\n            file_stem,\n            locked_spoiler_log_path,\n            web_id,\n            web_gen_time,\n            is_tfb_dev,\n            tfb_uuid,\n            xkeys_uuid,\n            hash1,\n            hash2,\n            hash3,\n            hash4,\n            hash5,\n            seed_password,\n            video_url,\n            restreamer,\n            video_url_fr,\n            restreamer_fr,\n            video_url_de,\n            restreamer_de,\n            video_url_pt,\n            restreamer_pt,\n            last_edited_by AS \"last_edited_by: Id<Users>\",\n            last_edited_at,\n            ignored,\n            schedule_locked,\n            notified,\n            async_notified_1,\n            async_notified_2,\n            async_notified_3,\n            discord_scheduled_event_id AS \"discord_scheduled_event_id: PgSnowflake<ScheduledEventId>\",\n            volunteer_request_sent,\n            volunteer_request_message_id AS \"volunteer_request_message_id: PgSnowflake<MessageId>\"\n        FROM races WHERE id = $1",
+  "query": "SELECT\n            r.series AS \"series: Series\",\n            r.event,\n            challonge_match,\n            league_id,\n            sheet_timestamp,\n            startgg_event,\n            startgg_set AS \"startgg_set: startgg::ID\",\n            speedgaming_id,\n            game,\n            team1 AS \"team1: Id<Teams>\",\n            team2 AS \"team2: Id<Teams>\",\n            team3 AS \"team3: Id<Teams>\",\n            p1,\n            p2,\n            p3,\n            p1_discord AS \"p1_discord: PgSnowflake<UserId>\",\n            p2_discord AS \"p2_discord: PgSnowflake<UserId>\",\n            p1_racetime,\n            p2_racetime,\n            p1_twitch,\n            p2_twitch,\n            total,\n            finished,\n            phase,\n            round,\n            scheduling_thread AS \"scheduling_thread: PgSnowflake<ChannelId>\",\n            draft_state AS \"draft_state: Json<Draft>\",\n            r.start,\n            async_start1,\n            async_start2,\n            async_start3,\n            r.end_time,\n            async_end1,\n            async_end2,\n            async_end3,\n            room,\n            async_room1,\n            async_room2,\n            async_room3,\n            schedule_updated_at,\n            fpa_invoked,\n            breaks_used,\n            seed_data,\n            file_stem,\n            locked_spoiler_log_path,\n            web_id,\n            web_gen_time,\n            is_tfb_dev,\n            tfb_uuid,\n            xkeys_uuid,\n            hash1,\n            hash2,\n            hash3,\n            hash4,\n            hash5,\n            seed_password,\n            r.video_url,\n            restreamer,\n            video_url_fr,\n            restreamer_fr,\n            video_url_de,\n            restreamer_de,\n            video_url_pt,\n            restreamer_pt,\n            last_edited_by AS \"last_edited_by: Id<Users>\",\n            last_edited_at,\n            ignored,\n            schedule_locked,\n            notified,\n            async_notified_1,\n            async_notified_2,\n            async_notified_3,\n            discord_scheduled_event_id AS \"discord_scheduled_event_id: PgSnowflake<ScheduledEventId>\",\n            volunteer_request_sent,\n            volunteer_request_message_id AS \"volunteer_request_message_id: PgSnowflake<MessageId>\",\n            e.goal_slug\n        FROM races r LEFT JOIN events e ON r.series = e.series AND r.event = e.event\n        WHERE r.id = $1",
   "describe": {
     "columns": [
       {
@@ -377,6 +377,11 @@
         "ordinal": 74,
         "name": "volunteer_request_message_id: PgSnowflake<MessageId>",
         "type_info": "Int8"
+      },
+      {
+        "ordinal": 75,
+        "name": "goal_slug",
+        "type_info": "Varchar"
       }
     ],
     "parameters": {
@@ -459,8 +464,9 @@
       false,
       true,
       false,
+      true,
       true
     ]
   },
-  "hash": "26e17783cfe4ce5ffa19351a65562592a1621910ad05eefa3c1e24dc28783935"
+  "hash": "98814eab8ff97c920507c1f56161cc144dfacbb24cd4d9dffe8a8cac7410c7bb"
 }

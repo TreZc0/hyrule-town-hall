@@ -1983,9 +1983,14 @@ async fn round_labels_form(mut transaction: Transaction<'_, Postgres>, me: Optio
                                     td : row.mapped_phase.as_deref().unwrap_or("(unchanged)");
                                     td : row.mapped_round.as_deref().unwrap_or("(unchanged)");
                                     td {
+                                        @let (apply_errors, apply_button) = button_form(uri!(apply_round_mapping(event.series, &*event.event, row.id)), csrf, vec![], "Apply to Existing");
+                                        : apply_errors;
                                         @let (errors, button) = button_form(uri!(remove_round_mapping(event.series, &*event.event, row.id)), csrf, vec![], "Remove");
                                         : errors;
-                                        div(class = "button-row") : button;
+                                        div(class = "button-row") {
+                                            : apply_button;
+                                            : button;
+                                        }
                                     }
                                 }
                             }
@@ -2138,6 +2143,71 @@ pub(crate) async fn remove_round_mapping(pool: &State<PgPool>, me: User, uri: Or
             mapping_id, data.series as _, &data.event
         ).execute(&mut *transaction).await?;
         transaction.commit().await?;
+    }
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(round_labels_get(series, event)))))
+}
+
+#[rocket::post("/event/<series>/<event>/configure/round-labels/mappings/<mapping_id>/apply", data = "<form>")]
+pub(crate) async fn apply_round_mapping(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, mapping_id: i64, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.context.errors().next().is_some() {
+        return Ok(RedirectOrContent::Content(round_labels_form(transaction, Some(me), uri, csrf.as_ref(), data).await?));
+    }
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+    if form.value.is_some() {
+        let mapping = sqlx::query!(
+            "SELECT original_phase, original_round, mapped_phase, mapped_round \
+             FROM startgg_phase_round_mappings WHERE id = $1 AND series = $2 AND event = $3",
+            mapping_id, data.series as _, &data.event
+        ).fetch_optional(&mut *transaction).await?;
+        if let Some(mapping) = mapping {
+            // Existing races have already been through the normalize step (Winners→WB, Losers→LB),
+            // so normalize the original match values before comparing against stored phase/round.
+            let normalize = |s: &str| s.replace("Winners", "WB").replace("Losers", "LB");
+            let norm_orig_phase = mapping.original_phase.as_deref().map(&normalize);
+            let norm_orig_round = mapping.original_round.as_deref().map(&normalize);
+
+            let races = sqlx::query!(
+                r#"SELECT id AS "id: i64", phase, round FROM races
+                   WHERE series = $1 AND event = $2
+                     AND ($3::text IS NULL OR phase = $3)
+                     AND ($4::text IS NULL OR round = $4)"#,
+                data.series as _, &data.event,
+                norm_orig_phase as _, norm_orig_round as _
+            ).fetch_all(&mut *transaction).await?;
+
+            for race in races {
+                let orig_phase = race.phase.clone();
+                let orig_round = race.round.clone();
+                // Expand placeholders; skip races that need {% pool %} (pool info not stored).
+                let new_phase = if let Some(ref template) = mapping.mapped_phase {
+                    match crate::startgg::expand_placeholders(template.clone(), &orig_phase, &orig_round, None) {
+                        Ok(s) => Some(normalize(&s)),
+                        Err(_) => continue,
+                    }
+                } else {
+                    orig_phase.clone()
+                };
+                let new_round = if let Some(ref template) = mapping.mapped_round {
+                    match crate::startgg::expand_placeholders(template.clone(), &orig_phase, &orig_round, None) {
+                        Ok(s) => Some(normalize(&s)),
+                        Err(_) => continue,
+                    }
+                } else {
+                    orig_round.clone()
+                };
+                sqlx::query!(
+                    "UPDATE races SET phase = $2, round = $3 WHERE id = $1",
+                    race.id, new_phase as _, new_round as _
+                ).execute(&mut *transaction).await?;
+            }
+            transaction.commit().await?;
+        }
     }
     Ok(RedirectOrContent::Redirect(Redirect::to(uri!(round_labels_get(series, event)))))
 }

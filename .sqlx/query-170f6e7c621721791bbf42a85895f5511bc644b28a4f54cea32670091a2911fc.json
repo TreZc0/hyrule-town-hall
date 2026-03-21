@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n            display_name,\n            short_name,\n            start,\n            end_time,\n            url,\n            challonge_community,\n            speedgaming_slug,\n            hide_races_tab,\n            hide_teams_tab,\n            teams_url,\n            enter_url,\n            video_url,\n            discord_guild AS \"discord_guild: PgSnowflake<GuildId>\",\n            discord_invite_url,\n            discord_race_room_channel AS \"discord_race_room_channel: PgSnowflake<ChannelId>\",\n            discord_race_results_channel AS \"discord_race_results_channel: PgSnowflake<ChannelId>\",\n            discord_organizer_channel AS \"discord_organizer_channel: PgSnowflake<ChannelId>\",\n            discord_scheduling_channel AS \"discord_scheduling_channel: PgSnowflake<ChannelId>\",\n            discord_volunteer_info_channel AS \"discord_volunteer_info_channel: PgSnowflake<ChannelId>\",\n            discord_async_channel AS \"discord_async_channel: PgSnowflake<ChannelId>\",\n            rando_version AS \"rando_version: Json<VersionedBranch>\",\n            settings_string,\n            single_settings AS \"single_settings: Json<seed::Settings>\",\n            team_config AS \"team_config: TeamConfig\",\n            enter_flow AS \"enter_flow: Json<enter::Flow>\",\n            show_opt_out,\n            show_qualifier_times,\n            default_game_count,\n            min_schedule_notice,\n            open_stream_delay,\n            invitational_stream_delay,\n            retime_window,\n            auto_import,\n            emulator_settings_reminder,\n            prevent_late_joins,\n            manual_reporting_with_breaks,\n            language AS \"language: Language\",\n            default_volunteer_language AS \"default_volunteer_language: Language\",\n            asyncs_active,\n            swiss_standings,\n            discord_events_enabled,\n            discord_events_require_restream,\n            listed,\n            round_modes AS \"round_modes: Json<HashMap<String, String>>\",\n            automated_asyncs,\n            volunteer_requests_enabled,\n            volunteer_request_lead_time_hours,\n            force_custom_role_binding,\n            qualifier_score_hiding AS \"qualifier_score_hiding: QualifierScoreHiding\",\n            qualifier_notification_role_id,\n            async_start_delay\n        FROM events WHERE series = $1 AND event = $2",
+  "query": "SELECT\n            display_name,\n            short_name,\n            start,\n            end_time,\n            url,\n            challonge_community,\n            speedgaming_slug,\n            hide_races_tab,\n            hide_teams_tab,\n            teams_url,\n            enter_url,\n            video_url,\n            discord_guild AS \"discord_guild: PgSnowflake<GuildId>\",\n            discord_invite_url,\n            discord_race_room_channel AS \"discord_race_room_channel: PgSnowflake<ChannelId>\",\n            discord_race_results_channel AS \"discord_race_results_channel: PgSnowflake<ChannelId>\",\n            discord_organizer_channel AS \"discord_organizer_channel: PgSnowflake<ChannelId>\",\n            discord_scheduling_channel AS \"discord_scheduling_channel: PgSnowflake<ChannelId>\",\n            discord_volunteer_info_channel AS \"discord_volunteer_info_channel: PgSnowflake<ChannelId>\",\n            discord_async_channel AS \"discord_async_channel: PgSnowflake<ChannelId>\",\n            rando_version AS \"rando_version: Json<VersionedBranch>\",\n            settings_string,\n            single_settings AS \"single_settings: Json<seed::Settings>\",\n            team_config AS \"team_config: TeamConfig\",\n            enter_flow AS \"enter_flow: Json<enter::Flow>\",\n            show_opt_out,\n            show_qualifier_times,\n            default_game_count,\n            min_schedule_notice,\n            open_stream_delay,\n            invitational_stream_delay,\n            retime_window,\n            auto_import,\n            emulator_settings_reminder,\n            prevent_late_joins,\n            manual_reporting_with_breaks,\n            language AS \"language: Language\",\n            default_volunteer_language AS \"default_volunteer_language: Language\",\n            asyncs_active,\n            swiss_standings,\n            startgg_double_rr,\n            discord_events_enabled,\n            discord_events_require_restream,\n            listed,\n            round_modes AS \"round_modes: Json<HashMap<String, String>>\",\n            automated_asyncs,\n            volunteer_requests_enabled,\n            volunteer_request_lead_time_hours,\n            force_custom_role_binding,\n            qualifier_score_hiding AS \"qualifier_score_hiding: QualifierScoreHiding\",\n            qualifier_notification_role_id,\n            goal_slug,\n            draft_kind,\n            draft_config AS \"draft_config: Json<serde_json::Value>\",\n            qualifier_score_kind,\n            is_single_race,\n            hide_entrants,\n            start_delay,\n            start_delay_open,\n            restrict_chat_in_qualifiers,\n            racetime_goal_name,\n            is_custom_goal,\n            preroll_mode AS \"preroll_mode!\",\n            spoiler_unlock AS \"spoiler_unlock!\",\n            async_start_delay\n        FROM events WHERE series = $1 AND event = $2",
   "describe": {
     "columns": [
       {
@@ -242,46 +242,51 @@
       },
       {
         "ordinal": 40,
-        "name": "discord_events_enabled",
+        "name": "startgg_double_rr",
         "type_info": "Bool"
       },
       {
         "ordinal": 41,
-        "name": "discord_events_require_restream",
+        "name": "discord_events_enabled",
         "type_info": "Bool"
       },
       {
         "ordinal": 42,
-        "name": "listed",
+        "name": "discord_events_require_restream",
         "type_info": "Bool"
       },
       {
         "ordinal": 43,
+        "name": "listed",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 44,
         "name": "round_modes: Json<HashMap<String, String>>",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 44,
+        "ordinal": 45,
         "name": "automated_asyncs",
         "type_info": "Bool"
       },
       {
-        "ordinal": 45,
+        "ordinal": 46,
         "name": "volunteer_requests_enabled",
         "type_info": "Bool"
       },
       {
-        "ordinal": 46,
+        "ordinal": 47,
         "name": "volunteer_request_lead_time_hours",
         "type_info": "Int4"
       },
       {
-        "ordinal": 47,
+        "ordinal": 48,
         "name": "force_custom_role_binding",
         "type_info": "Bool"
       },
       {
-        "ordinal": 48,
+        "ordinal": 49,
         "name": "qualifier_score_hiding: QualifierScoreHiding",
         "type_info": {
           "Custom": {
@@ -299,12 +304,77 @@
         }
       },
       {
-        "ordinal": 49,
+        "ordinal": 50,
         "name": "qualifier_notification_role_id",
         "type_info": "Int8"
       },
       {
-        "ordinal": 50,
+        "ordinal": 51,
+        "name": "goal_slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 52,
+        "name": "draft_kind",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 53,
+        "name": "draft_config: Json<serde_json::Value>",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 54,
+        "name": "qualifier_score_kind",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 55,
+        "name": "is_single_race",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 56,
+        "name": "hide_entrants",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 57,
+        "name": "start_delay",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 58,
+        "name": "start_delay_open",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 59,
+        "name": "restrict_chat_in_qualifiers",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 60,
+        "name": "racetime_goal_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 61,
+        "name": "is_custom_goal",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 62,
+        "name": "preroll_mode!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 63,
+        "name": "spoiler_unlock!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 64,
         "name": "async_start_delay",
         "type_info": "Int4"
       }
@@ -359,6 +429,17 @@
       false,
       false,
       false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
       true,
       false,
       false,
@@ -366,8 +447,11 @@
       true,
       false,
       true,
+      false,
+      false,
+      false,
       true
     ]
   },
-  "hash": "9b2f250a4db8d8f06fdf6626c0bc774800f8b6c028b741476b5628a948ca222c"
+  "hash": "170f6e7c621721791bbf42a85895f5511bc644b28a4f54cea32670091a2911fc"
 }

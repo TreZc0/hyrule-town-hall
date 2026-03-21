@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE races SET ignored = true WHERE series = $1 AND event = $2 AND round = $3 AND start IS NOT NULL AND start < $4 AND end_time IS NULL AND NOT ignored",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2756b15bf80376545f9e964b0b4c14d031e954c824208667b7f6244afcee59e3"
+}

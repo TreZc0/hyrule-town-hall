@@ -267,7 +267,7 @@ impl fmt::Display for ImportSkipReason {
     }
 }
 
-fn expand_placeholders(
+pub(crate) fn expand_placeholders(
     mut s: String,
     orig_phase: &Option<String>,
     orig_round: &Option<String>,

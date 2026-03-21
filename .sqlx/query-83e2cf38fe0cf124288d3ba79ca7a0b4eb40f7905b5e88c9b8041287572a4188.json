@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT mapped_phase, mapped_round\n            FROM startgg_phase_round_mappings\n            WHERE series = $3 AND event = $4\n              AND (original_phase IS NULL OR original_phase = $1)\n              AND (original_round IS NULL OR original_round = $2)\n            ORDER BY (original_phase IS NOT NULL AND original_round IS NOT NULL) DESC,\n                     (original_phase IS NOT NULL OR original_round IS NOT NULL) DESC\n            LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "mapped_phase",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "mapped_round",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "83e2cf38fe0cf124288d3ba79ca7a0b4eb40f7905b5e88c9b8041287572a4188"
+}

@@ -361,7 +361,7 @@ impl PartialEq for User {
 impl Eq for User {}
 
 #[rocket::get("/user/<id>")]
-pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, racetime_user: Option<RaceTimeUser>, discord_user: Option<DiscordUser>, http_client: &State<reqwest::Client>, config: &State<Config>, id: Id<Users>) -> Result<RawHtml<String>, StatusOrError<PageError>> {
+pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, racetime_user: Option<RaceTimeUser>, discord_user: Option<DiscordUser>, http_client: &State<reqwest::Client>, config: &State<Config>, id: Id<Users>) -> Result<RawHtml<String>, StatusOrError<PageError>> {
     let mut transaction = pool.begin().await?;
     let user = if let Some(user) = User::from_id(&mut *transaction, id).await? {
         user
@@ -380,6 +380,12 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
                     }
                 }
                 //TODO if this may be outdated, link to racetime.gg login page for refreshing
+                @if me.as_ref().is_some_and(|me| me.id == user.id) && user.discord.is_some() {
+                    form(method = "post", action = uri!(crate::auth::unlink_racetime), style = "display: inline; margin-left: 2em") {
+                        : csrf;
+                        button(type = "submit") : "Unlink";
+                    }
+                }
             }
         }
     } else if me.as_ref().is_some_and(|me| me.id == user.id) {
@@ -457,6 +463,12 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
                     }
                 }
                 //TODO if this may be outdated, link to Discord login page for refreshing
+                @if me.as_ref().is_some_and(|me| me.id == user.id) && user.racetime.is_some() {
+                    form(method = "post", action = uri!(crate::auth::unlink_discord), style = "display: inline; margin-left: 2em") {
+                        : csrf;
+                        button(type = "submit") : "Unlink";
+                    }
+                }
             }
         }
     } else if me.as_ref().is_some_and(|me| me.id == user.id) {
@@ -542,6 +554,12 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
                     : ")";
                 } else {
                     code : startgg_id.to_string();
+                }
+                @if me.as_ref().is_some_and(|me| me.id == user.id) {
+                    form(method = "post", action = uri!(crate::auth::unlink_startgg), style = "display: inline; margin-left: 2em") {
+                        : csrf;
+                        button(type = "submit") : "Unlink";
+                    }
                 }
             }
         }

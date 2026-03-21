@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT goal_slug FROM events WHERE goal_slug IS NOT NULL AND (end_time IS NULL OR end_time > NOW())",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "goal_slug",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "58cffd11a3fe1c27441920ea4c5abec5c35fc538d922462fe9506f7c0bf203ec"
+}

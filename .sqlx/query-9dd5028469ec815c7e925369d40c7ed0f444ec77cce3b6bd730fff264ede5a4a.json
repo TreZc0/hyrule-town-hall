@@ -1,18 +1,12 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT discord_thread FROM async_teams WHERE team = $1 AND kind = $2",
+  "query": "SELECT kind AS \"kind: AsyncKind\" FROM asyncs WHERE series = $1 AND event = $2 AND kind IN ('qualifier', 'qualifier2', 'qualifier3') ORDER BY kind",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "discord_thread",
-        "type_info": "Int8"
-      }
-    ],
-    "parameters": {
-      "Left": [
-        "Int8",
-        {
+        "name": "kind: AsyncKind",
+        "type_info": {
           "Custom": {
             "name": "async_kind",
             "kind": {
@@ -26,11 +20,17 @@
             }
           }
         }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
       ]
     },
     "nullable": [
-      true
+      false
     ]
   },
-  "hash": "057debf49018f8a78fdfe10d0022f0adb437d3f74620d7c30b8fb882d54608e9"
+  "hash": "9dd5028469ec815c7e925369d40c7ed0f444ec77cce3b6bd730fff264ede5a4a"
 }

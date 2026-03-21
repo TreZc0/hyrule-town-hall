@@ -406,7 +406,7 @@ impl Goal {
     fn from_race_data(race_data: &RaceData) -> Option<Self> {
         let Ok(bot_goal) = race_data.goal.name.parse::<Self>() else { return None };
         if race_data.goal.custom != bot_goal.is_custom() { return None }
-        if let (Goal::StandardRuleset | Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Crosskeys2025 | Goal::MysteryD20, Some(_)) = (bot_goal, &race_data.opened_by) { return None }
+        if race_data.opened_by.is_some() { return None }
         Some(bot_goal)
     }
 
@@ -3371,22 +3371,22 @@ impl AlttprDeRaceOptions {
         // Build URL params - only include choices where both players said yes
         let mut custom_choices = HashMap::new();
         let mut display_only_choices = Vec::new();
+        // Handle pool settings with explicit priority: expert (2) > hard (1)
+        let expert_ok = choice_counts.get("pool_expert").is_some_and(|&c| c >= num_teams && num_teams > 0);
+        let hard_ok = choice_counts.get("pool_hard").is_some_and(|&c| c >= num_teams && num_teams > 0);
+        if expert_ok {
+            custom_choices.insert("pool".to_owned(), "2".to_owned());
+        } else if hard_ok {
+            custom_choices.insert("pool".to_owned(), "1".to_owned());
+        }
         for (key, count) in choice_counts {
             if count >= num_teams && num_teams > 0 {
                 // Both players agreed to this option
                 let url_value = match key.as_str() {
                     // Special case: pottery becomes "lottery"
                     "pots" => "lottery".to_owned(),
-                    // Special case: pool_hard becomes pool=1
-                    "pool_hard" => {
-                        custom_choices.insert("pool".to_owned(), "1".to_owned());
-                        continue;
-                    }
-                    // Special case: pool_expert becomes pool=2 (overwrites hard if both set)
-                    "pool_expert" => {
-                        custom_choices.insert("pool".to_owned(), "2".to_owned());
-                        continue;
-                    }
+                    // Handled above with explicit priority
+                    "pool_hard" | "pool_expert" => continue,
                     // Display-only choices: shown in race room but not passed to the seed API
                     "gtskips" => {
                         display_only_choices.push("GT Skips".to_owned());
@@ -4136,53 +4136,67 @@ impl RaceHandler<GlobalState> for Handler {
                     _ => {}
                 }
                 let (race_state, high_seed_name, low_seed_name) = if let Some(draft_kind) = event.draft_kind() {
-                    let state = cal_event.race.draft.clone().expect("missing draft state");
-                    let [high_seed_name, low_seed_name] = if let draft::StepKind::Done(_) | draft::StepKind::DoneRsl { .. } = state.next_step(&draft_kind, cal_event.race.game, &mut draft::MessageContext::None).await.to_racetime()?.kind {
-                        // we just need to roll the seed so player/team names are no longer required
-                        [format!("Team A"), format!("Team B")]
-                    } else {
-                        match cal_event.race.entrants {
-                            Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) => [format!("Team A"), format!("Team B")],
-                            Entrants::Two([Entrant::MidosHouseTeam(ref team1), Entrant::MidosHouseTeam(ref team2)]) => {
-                                let name1 = if_chain! {
-                                    if let Ok(member) = team1.members(&mut transaction).await.to_racetime()?.into_iter().exactly_one();
-                                    if let Some(ref racetime) = member.racetime;
-                                    then {
-                                        racetime.display_name.clone()
+                    if let Some(state) = cal_event.race.draft.clone() {
+                        let [high_seed_name, low_seed_name] = if let draft::StepKind::Done(_) | draft::StepKind::DoneRsl { .. } = state.next_step(&draft_kind, cal_event.race.game, &mut draft::MessageContext::None).await.to_racetime()?.kind {
+                            // we just need to roll the seed so player/team names are no longer required
+                            [format!("Team A"), format!("Team B")]
+                        } else {
+                            match cal_event.race.entrants {
+                                Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) => [format!("Team A"), format!("Team B")],
+                                Entrants::Two([Entrant::MidosHouseTeam(ref team1), Entrant::MidosHouseTeam(ref team2)]) => {
+                                    let name1 = if_chain! {
+                                        if let Ok(member) = team1.members(&mut transaction).await.to_racetime()?.into_iter().exactly_one();
+                                        if let Some(ref racetime) = member.racetime;
+                                        then {
+                                            racetime.display_name.clone()
+                                        } else {
+                                            team1.name(&mut transaction).await.to_racetime()?.map_or_else(|| format!("Team A"), Cow::into_owned)
+                                        }
+                                    };
+                                    let name2 = if_chain! {
+                                        if let Ok(member) = team2.members(&mut transaction).await.to_racetime()?.into_iter().exactly_one();
+                                        if let Some(ref racetime) = member.racetime;
+                                        then {
+                                            racetime.display_name.clone()
+                                        } else {
+                                            team2.name(&mut transaction).await.to_racetime()?.map_or_else(|| format!("Team B"), Cow::into_owned)
+                                        }
+                                    };
+                                    if team1.id == state.high_seed {
+                                        [name1, name2]
                                     } else {
-                                        team1.name(&mut transaction).await.to_racetime()?.map_or_else(|| format!("Team A"), Cow::into_owned)
+                                        [name2, name1]
                                     }
-                                };
-                                let name2 = if_chain! {
-                                    if let Ok(member) = team2.members(&mut transaction).await.to_racetime()?.into_iter().exactly_one();
-                                    if let Some(ref racetime) = member.racetime;
-                                    then {
-                                        racetime.display_name.clone()
-                                    } else {
-                                        team2.name(&mut transaction).await.to_racetime()?.map_or_else(|| format!("Team B"), Cow::into_owned)
-                                    }
-                                };
-                                if team1.id == state.high_seed {
-                                    [name1, name2]
-                                } else {
-                                    [name2, name1]
                                 }
+                                Entrants::Two([_, _]) => unimplemented!("draft with non-MH teams"),
+                                Entrants::Three([_, _, _]) => unimplemented!("draft with 3 teams"),
                             }
-                            Entrants::Two([_, _]) => unimplemented!("draft with non-MH teams"),
-                            Entrants::Three([_, _, _]) => unimplemented!("draft with 3 teams"),
+                        };
+                        (RaceState::Draft {
+                            unlock_spoiler_log: goal.map_or_else(
+                                || match event.spoiler_unlock.as_str() {
+                                    "after" => UnlockSpoilerLog::After,
+                                    "immediately" => UnlockSpoilerLog::Now,
+                                    _ => UnlockSpoilerLog::Never,
+                                },
+                                |g| g.unlock_spoiler_log(true, false),
+                            ),
+                            state,
+                        }, high_seed_name, low_seed_name)
+                    } else {
+                        let notif = format!(
+                            "Race room https://{}{} ({}/{}) opened with no draft state. Fix it in the DB and use !reroll in the room to retry.",
+                            racetime_host(), data.url, event.series.slug(), event.event,
+                        );
+                        {
+                            let discord_ctx = ctx.global_state.discord_ctx.read().await;
+                            if let Ok(dm) = ADMIN_USER.create_dm_channel(&*discord_ctx).await {
+                                let _ = dm.say(&*discord_ctx, &notif).await;
+                            }
                         }
-                    };
-                    (RaceState::Draft {
-                        unlock_spoiler_log: goal.map_or_else(
-                            || match event.spoiler_unlock.as_str() {
-                                "after" => UnlockSpoilerLog::After,
-                                "immediately" => UnlockSpoilerLog::Now,
-                                _ => UnlockSpoilerLog::Never,
-                            },
-                            |g| g.unlock_spoiler_log(true, false),
-                        ),
-                        state,
-                    }, high_seed_name, low_seed_name)
+                        ctx.say("Error: no draft state found for this race. A global admin has been notified. Use !reroll once the issue has been fixed.").await?;
+                        (RaceState::Init, format!("Team A"), format!("Team B"))
+                    }
                 } else {
                     (RaceState::Init, format!("Team A"), format!("Team B"))
                 };
@@ -4967,7 +4981,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 ],
                             ).await?,
                             Goal::TwwrMainWeekly | Goal::TwwrMainMiniblins26 => ctx.send_message(
-                                "Welcome! This is a practice room for The Wind Waker Randomizer. Learn more at https://twwrando.xyz/",
+                                "Welcome! This is a practice room for The Wind Waker Randomizer. Learn more at http://twwrando.com/",
                                 true,
                                 vec![
                                     ("Record seed", ActionButton::Message {
@@ -5160,7 +5174,11 @@ impl RaceHandler<GlobalState> for Handler {
                             | Goal::AlttprDe9Bracket
                             | Goal::AlttprDe9SwissA
                             | Goal::AlttprDe9SwissB
-                            ) => this.roll_alttprde9_seed(ctx, cal_event.clone(), English, "a").await,
+                            ) => if event.draft_kind().is_none() {
+                                this.roll_alttprde9_seed(ctx, cal_event.clone(), English, "a").await
+                            },
+                            // else: ban-pick draft event with missing draft state — error already
+                            // reported at room open via the draft_kind check; do not roll
                             Some(Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups) => {
                                 ctx.say("@entrants WARNING: The preset draft for this match is not complete! Please complete the draft in the scheduling Discord thread before the race.").await.to_racetime()?;
                             }
@@ -5769,6 +5787,23 @@ impl RaceHandler<GlobalState> for Handler {
                             let unlock_spoiler_log = self.effective_unlock_spoiler_log(goal, false);
                             ctx.say(format!("@entrants Rerolling seed...")).await?;
                             self.roll_seed(ctx, self.effective_preroll_mode(goal), self.effective_rando_version(goal), settings, unlock_spoiler_log, lang, "a", format!("seed")).await;
+                        } else if self.official_data.as_ref().and_then(|d| d.event.draft_kind()).is_some() {
+                            // Official draft event — try to reload draft state from DB (allows fixing and retrying after a DB fix)
+                            let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+                            let room_url: Url = format!("https://{}{}", racetime_host(), ctx.data().await.url).parse().to_racetime()?;
+                            let maybe_cal_event = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, room_url).await.to_racetime()?;
+                            transaction.commit().await.to_racetime()?;
+                            if let Some(cal_event) = maybe_cal_event {
+                                if let Some(draft) = cal_event.race.draft.clone() {
+                                    let unlock_spoiler_log = self.effective_unlock_spoiler_log(goal, false);
+                                    *state = RaceState::Draft { state: draft, unlock_spoiler_log };
+                                    self.advance_draft(ctx, &state).await?;
+                                } else {
+                                    ctx.say(format!("Sorry {reply_to}, the draft state for this race is still missing in the database. Please contact a tournament organizer.")).await?;
+                                }
+                            } else {
+                                ctx.say(format!("Sorry {reply_to}, failed to find this race in the database.")).await?;
+                            }
                         } else {
                             // Goal requires parameters
                             ctx.say(format!("Sorry {reply_to}, this goal requires settings to be specified. Please use the !seed command with the appropriate parameters to roll a seed.")).await?;

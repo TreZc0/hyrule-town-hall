@@ -1074,10 +1074,32 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
         false
     };
 
+    let async_results_exist = if let QualifierKind::Score(_) = qualifier_kind {
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS(SELECT 1 FROM async_players ap WHERE ap.series = $1 AND ap.event = $2 AND ap.kind IN ('qualifier', 'qualifier2', 'qualifier3') AND ap.time IS NOT NULL) AS "exists!""#,
+            data.series as _,
+            &data.event
+        )
+        .fetch_one(&mut *transaction)
+        .await?
+    } else {
+        false
+    };
+    let show_async_results_link = async_results_exist
+        && (is_organizer || is_global_admin || data.qualifier_score_hiding == QualifierScoreHiding::None);
+    let async_results_hidden_from_public = show_async_results_link
+        && (is_organizer || is_global_admin)
+        && data.qualifier_score_hiding != QualifierScoreHiding::None;
+
     let mut footnotes = Vec::default();
     let teams_label = if let TeamConfig::Solo = data.team_config { "Entrants" } else { "Teams" };
     let has_opt_outs = signups.iter().any(|signup| signup.is_opted_out);
     let has_racetime_only = signups.iter().any(|signup| signup.members.iter().any(|m| matches!(m.user, MemberUser::RaceTime { .. })));
+    let mut rank = 0usize;
+    let signups: Vec<(Option<usize>, SignupsTeam)> = signups.into_iter().map(|s| {
+        let pos = if s.is_opted_out { None } else { rank += 1; Some(rank) };
+        (pos, s)
+    }).collect();
     let mut column_headers = Vec::default();
     if let QualifierKind::Rank | QualifierKind::Score(_) = qualifier_kind {
         column_headers.push(html! {
@@ -1227,17 +1249,27 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                 i : "Standings will not be published until after the qualifier stage has ended.";
             }
         } else {
-        @if has_opt_outs || has_racetime_only {
+        @if show_async_results_link || has_opt_outs || has_racetime_only {
             div(class = "bg-surface") {
-                p {
-                    @if has_opt_outs {
-                        : "* = opted out";
-                    }
-                    @if has_opt_outs && has_racetime_only {
-                        br;
-                    }
-                    @if has_racetime_only {
-                        : "** = racetime.gg only";
+                @if show_async_results_link || has_opt_outs || has_racetime_only {
+                    p {
+                        @if show_async_results_link {
+                            a(class = "button", style = "padding: 0.25rem 1rem; margin-right: 0.5rem;", href = uri!(super::async_results::get(data.series, &*data.event)).to_string()) {
+                                : "Async Results";
+                            }
+                            @if async_results_hidden_from_public {
+                                small(style = "margin-right: 0.5rem;") : "(hidden from public)";
+                            }
+                        }
+                        @if has_opt_outs {
+                            : "* = opted out";
+                        }
+                        @if has_opt_outs && has_racetime_only {
+                            : " | ";
+                        }
+                        @if has_racetime_only {
+                            : "** = racetime.gg only";
+                        }
                     }
                 }
             }
@@ -1258,7 +1290,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                         }
                     }
                 } else {
-                    @for (signup_idx, SignupsTeam { team, members, qualification, custom_choices, is_opted_out }) in signups.into_iter().enumerate() {
+                    @for (display_pos, SignupsTeam { team, members, qualification, custom_choices, is_opted_out }) in signups {
                         @let is_dimmed = match qualifier_kind {
                             QualifierKind::None => false,
                             QualifierKind::Rank => false, // unknown cutoff
@@ -1297,7 +1329,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                     } else if hide_rank {
                                         : "—";
                                     } else {
-                                        : signup_idx + 1;
+                                        : display_pos.unwrap_or(0);
                                     }
                                 }
                                 _ => {}

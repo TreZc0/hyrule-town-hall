@@ -1,0 +1,37 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id: i64\", phase, round FROM races\n                   WHERE series = $1 AND event = $2\n                     AND ($3::text IS NULL OR phase = $3)\n                     AND ($4::text IS NULL OR round = $4)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: i64",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "phase",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "round",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "058193f3f76b88cc123fd677fa6f09bd5a0e68ffdea0e38c99a5530aa866be78"
+}

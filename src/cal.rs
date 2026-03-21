@@ -1602,7 +1602,7 @@ impl Event {
                     EventKind::Async3 => start3.is_some_and(|start3| start1.is_none_or(|start1| start3 < start1) || start2.is_none_or(|start2| start3 < start2)),
                     EventKind::Normal => unreachable!(),
                 },
-                Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) => unreachable!(),
+                Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) => false,
             },
         }
     }
@@ -2859,7 +2859,25 @@ pub(crate) async fn import_races_form(mut transaction: Transaction<'_, Postgres>
                 }
             }
         } else if me.is_some() {
-            let (races, skips) = startgg::races_to_import(&mut transaction, http_client, config, &event, event_slug).await?;
+            let races_result = startgg::races_to_import(&mut transaction, http_client, config, &event, event_slug).await;
+            if let Err(Error::UnknownTeamStartGG(ref id)) = races_result {
+                let name = startgg::query_cached::<startgg::TeamMembersQuery>(http_client, &config.startgg, startgg::team_members_query::Variables { entrant: id.clone() })
+                    .await.ok().and_then(|r| r.entrant).and_then(|e| e.name);
+                return Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Import Races — {}", event.display_name), html! {
+                    : header;
+                    h2 : "Import races";
+                    article {
+                        p {
+                            : format!(
+                                "start.gg entrant{} (ID: {}) is not linked to a Hyrule Town Hall team.",
+                                name.map(|n| format!(" '{n}'")).unwrap_or_default(),
+                                id,
+                            );
+                        }
+                    }
+                }).await?);
+            }
+            let (races, skips) = races_result?;
             if races.is_empty() {
                 html! {
                     article {
@@ -2980,15 +2998,22 @@ pub(crate) async fn import_races_post(discord_ctx: &State<RwFuture<DiscordCtx>>,
                 Vec::default()
             }
             MatchSource::StartGG(event_slug) => {
-                let (races, skips) = startgg::races_to_import(&mut transaction, http_client, config, &event, event_slug).await?;
-                if races.is_empty() {
-                    if skips.is_empty() {
-                        form.context.push_error(form::Error::validation("start.gg did not list any matches for this event."));
-                    } else {
-                        form.context.push_error(form::Error::validation("There are no races to import. Some matches have been skipped."));
+                match startgg::races_to_import(&mut transaction, http_client, config, &event, event_slug).await {
+                    Ok((races, skips)) => {
+                        if races.is_empty() {
+                            if skips.is_empty() {
+                                form.context.push_error(form::Error::validation("start.gg did not list any matches for this event."));
+                            } else {
+                                form.context.push_error(form::Error::validation("There are no races to import. Some matches have been skipped."));
+                            }
+                        }
+                        races
                     }
+                    Err(Error::UnknownTeamStartGG(_)) => return Ok(RedirectOrContent::Content(
+                        import_races_form(transaction, http_client, &*discord_ctx.read().await, config, Some(me), uri, csrf.as_ref(), event, form.context).await?
+                    )),
+                    Err(e) => return Err(e.into()),
                 }
-                races
             }
         };
         if form.context.errors().next().is_some() {
@@ -3168,6 +3193,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                     let startgg::team_members_query::ResponseData {
                                         entrant: Some(startgg::team_members_query::TeamMembersQueryEntrant {
                                             participants: Some(participants),
+                                            ..
                                         }),
                                     } = response else { return Err(Error::UnknownTeamStartGG(entrant).into()) };
                                     let Ok(startgg::team_members_query::TeamMembersQueryEntrantParticipants {

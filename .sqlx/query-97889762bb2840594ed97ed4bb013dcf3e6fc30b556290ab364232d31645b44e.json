@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE events SET qualifier_score_hiding = $1 WHERE series = $2 AND event = $3",
+  "query": "UPDATE events SET qualifier_score_hiding = $1, automated_asyncs = $2 WHERE series = $3 AND event = $4",
   "describe": {
     "columns": [],
     "parameters": {
@@ -19,11 +19,12 @@
             }
           }
         },
+        "Bool",
         "Text",
         "Text"
       ]
     },
     "nullable": []
   },
-  "hash": "df5e46c7ea8e783c695568fd07e6634196458ac02b8abb9290f607c18285596d"
+  "hash": "97889762bb2840594ed97ed4bb013dcf3e6fc30b556290ab364232d31645b44e"
 }
