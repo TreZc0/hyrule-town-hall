@@ -708,6 +708,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::configure::save_pool_names,
         event::configure::add_round_mapping,
         event::configure::remove_round_mapping,
+        event::configure::apply_round_mapping,
         event::configure::search_users,
         event::configure::restreamer_search,
         event::configure::video_url_suggestions,
