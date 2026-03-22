@@ -158,6 +158,12 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             label(class = "help") : " (Block joining races after they start)";
                         });
 
+                        : form_field("fpa_enabled", &mut errors, html! {
+                            input(type = "checkbox", id = "fpa_enabled", name = "fpa_enabled", checked? = ctx.field_value("fpa_enabled").map_or(event.fpa_enabled, |value| value == "on"));
+                            label(for = "fpa_enabled") : "FPA Enabled";
+                            label(class = "help") : " (Announce fair play agreement when official race rooms open)";
+                        });
+
                         h3 : "Additional Settings";
 
                         : form_field("enter_url", &mut errors, html! {
@@ -234,6 +240,11 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                         : form_field("show_qualifier_times", &mut errors, html! {
                             input(type = "checkbox", id = "show_qualifier_times", name = "show_qualifier_times", checked? = ctx.field_value("show_qualifier_times").map_or(event.show_qualifier_times, |value| value == "on"));
                             label(for = "show_qualifier_times") : "Show Qualifier Times";
+                        });
+
+                        : form_field("swiss_standings", &mut errors, html! {
+                            input(type = "checkbox", id = "swiss_standings", name = "swiss_standings", checked? = ctx.field_value("swiss_standings").map_or(event.swiss_standings, |value| value == "on"));
+                            label(for = "swiss_standings") : "Show Swiss Standings Tab";
                         });
 
                         : form_field("automated_asyncs", &mut errors, html! {
@@ -430,6 +441,7 @@ pub(crate) struct SetupForm {
     listed: bool,
     emulator_settings_reminder: bool,
     prevent_late_joins: bool,
+    fpa_enabled: bool,
     enter_url: Option<String>,
     teams_url: Option<String>,
     challonge_community: Option<String>,
@@ -441,6 +453,7 @@ pub(crate) struct SetupForm {
     hide_teams_tab: bool,
     hide_races_tab: bool,
     show_qualifier_times: bool,
+    swiss_standings: bool,
     automated_asyncs: bool,
     async_start_delay: Option<i32>,
     show_opt_out: bool,
@@ -758,8 +771,9 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                     default_game_count = $24, open_stream_delay = $25, invitational_stream_delay = $26,
                     hide_teams_tab = $27, hide_races_tab = $28, show_qualifier_times = $29,
                     automated_asyncs = $30, show_opt_out = $31, force_custom_role_binding = $32,
-                    async_start_delay = $33, startgg_double_rr = $34
-                WHERE series = $35 AND event = $36
+                    async_start_delay = $33, startgg_double_rr = $34, fpa_enabled = $35,
+                    swiss_standings = $36
+                WHERE series = $37 AND event = $38
             "#,
                 value.display_name,
                 start,
@@ -795,6 +809,8 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 value.force_custom_role_binding,
                 value.async_start_delay,
                 value.startgg_double_rr,
+                value.fpa_enabled,
+                value.swiss_standings,
                 event_data.series as _,
                 &event_data.event,
             ).execute(&mut *transaction).await?;

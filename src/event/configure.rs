@@ -148,10 +148,10 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                                 label(class = "help") : format!("(needs to be compatible with version {})", identifier);
                             });
                         }
-                        : form_field("swiss_standings", &mut errors, html! {
-                            input(type = "checkbox", id = "swiss_standings", name = "swiss_standings", checked? = ctx.field_value("swiss_standings").map_or(event.swiss_standings, |value| value == "on"));
-                            label(for = "swiss_standings") : "Show Swiss standings tab";
-                            label(class = "help") : "(If enabled, the Swiss standings tab will be visible for this event)";
+                        : form_field("fpa_enabled", &mut errors, html! {
+                            input(type = "checkbox", id = "fpa_enabled", name = "fpa_enabled", checked? = ctx.field_value("fpa_enabled").map_or(event.fpa_enabled, |value| value == "on"));
+                            label(for = "fpa_enabled") : "FPA Enabled";
+                            label(class = "help") : "(Announce fair play agreement when official race rooms open)";
                         });
                         @if event.discord_guild.is_some() {
                             : form_field("asyncs_active", &mut errors, html! {
@@ -249,9 +249,9 @@ pub(crate) struct ConfigureForm {
     asyncs_active: bool,
     #[field(default = None)]
     async_start_delay: Option<i32>,
-    swiss_standings: bool,
     discord_events_enabled: bool,
     discord_events_require_restream: bool,
+    fpa_enabled: bool,
     settings_string: Option<String>,
 }
 
@@ -335,14 +335,14 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             if value.async_start_delay != data.async_start_delay {
                 sqlx::query!("UPDATE events SET async_start_delay = $1 WHERE series = $2 AND event = $3", value.async_start_delay, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
-            if value.swiss_standings != data.swiss_standings {
-                sqlx::query!("UPDATE events SET swiss_standings = $1 WHERE series = $2 AND event = $3", value.swiss_standings, data.series as _, &data.event).execute(&mut *transaction).await?;
-            }
             if value.discord_events_enabled != data.discord_events_enabled {
                 sqlx::query!("UPDATE events SET discord_events_enabled = $1 WHERE series = $2 AND event = $3", value.discord_events_enabled, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
             if value.discord_events_require_restream != data.discord_events_require_restream {
                 sqlx::query!("UPDATE events SET discord_events_require_restream = $1 WHERE series = $2 AND event = $3", value.discord_events_require_restream, data.series as _, &data.event).execute(&mut *transaction).await?;
+            }
+            if value.fpa_enabled != data.fpa_enabled {
+                sqlx::query!("UPDATE events SET fpa_enabled = $1 WHERE series = $2 AND event = $3", value.fpa_enabled, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
             if matches!(data.rando_version, Some(VersionedBranch::Tww { .. })) {
                 let new_settings_string = value.settings_string.as_deref().filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_owned());
