@@ -3924,7 +3924,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             }
         }
     }
-    if race.goal_slug.as_deref() == Some("door_rando") {
+    if let Some(racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB) = race.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug) {
         let alttprde_options = AlttprDeRaceOptions::for_race(ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"), race, event.round_modes.as_ref()).await;
         content.push_line("");
         content.push_line("");
@@ -3933,7 +3933,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
         }
         // Mode not yet determined - draft will show separately
     }
-    if race.goal_slug.as_deref() == Some("crosskeys_2025") {
+    if let Some(racetime_bot::Goal::Crosskeys2025) = race.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug) {
         let crosskeys_options = CrosskeysRaceOptions::for_race(ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"), race).await;
         content.push_line("");
         content.push_line("");
@@ -3979,7 +3979,7 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
     if !is_second_part {
         let discord_data = discord_ctx.data.read().await;
         let global_state = discord_data.get::<GlobalState>().expect("Global State missing from Discord context");
-        let goal = cal_event.race.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug).expect("Goal not found for event");
+        let Some(goal) = cal_event.race.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug) else { return Ok(()); };
         let mut updates = match goal {
             racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB => {
                 let alttprde_options = AlttprDeRaceOptions::for_race(&global_state.db_pool, &cal_event.race, event.round_modes.as_ref()).await;

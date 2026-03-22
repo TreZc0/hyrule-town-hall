@@ -292,10 +292,24 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
 
                         : form_field("draft_kind", &mut errors, html! {
                             label(for = "draft_kind") : "Draft Kind";
-                            input(type = "text", id = "draft_kind", name = "draft_kind", value = ctx.field_value("draft_kind").unwrap_or(
-                                &event.draft_kind_str.clone().unwrap_or_default()
-                            ), style = "width: 100%; max-width: 600px;");
-                            label(class = "help") : " (e.g. s7, ban_only, pick_only, ban_pick, or empty for none)";
+                            select(id = "draft_kind", name = "draft_kind", style = "width: 100%; max-width: 600px;") {
+                                option(value = "", selected? = ctx.field_value("draft_kind").map_or(event.draft_kind_str.is_none(), |v| v.is_empty())) : "None";
+                                @for (slug, label) in &[
+                                    ("s7", "S7"),
+                                    ("multiworld_s3", "Multiworld S3"),
+                                    ("multiworld_s4", "Multiworld S4"),
+                                    ("multiworld_s5", "Multiworld S5"),
+                                    ("rsl_s7", "RSL S7"),
+                                    ("tournoifranco_s3", "Tournoi Franco S3"),
+                                    ("tournoifranco_s4", "Tournoi Franco S4"),
+                                    ("tournoifranco_s5", "Tournoi Franco S5"),
+                                    ("ban_pick", "Ban/Pick (generic, needs config)"),
+                                    ("ban_only", "Ban Only (generic, needs config)"),
+                                    ("pick_only", "Pick Only (generic, needs config)"),
+                                ] {
+                                    option(value = slug, selected? = ctx.field_value("draft_kind").map_or(event.draft_kind_str.as_deref() == Some(slug), |v| v == *slug)) : *label;
+                                }
+                            }
                         });
 
                         : form_field("draft_config", &mut errors, html! {
@@ -308,10 +322,18 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
 
                         : form_field("qualifier_score_kind", &mut errors, html! {
                             label(for = "qualifier_score_kind") : "Qualifier Score Kind";
-                            input(type = "text", id = "qualifier_score_kind", name = "qualifier_score_kind", value = ctx.field_value("qualifier_score_kind").unwrap_or(
-                                &event.qualifier_score_kind_str.clone().unwrap_or_default()
-                            ), style = "width: 100%; max-width: 600px;");
-                            label(class = "help") : " (e.g. standard, twwr_miniblins26, or empty for none)";
+                            select(id = "qualifier_score_kind", name = "qualifier_score_kind", style = "width: 100%; max-width: 600px;") {
+                                option(value = "", selected? = ctx.field_value("qualifier_score_kind").map_or(event.qualifier_score_kind_str.is_none(), |v| v.is_empty())) : "None";
+                                @for (slug, label) in &[
+                                    ("standard", "Standard"),
+                                    ("sgl_2023_online", "SGL 2023 Online"),
+                                    ("sgl_2024_online", "SGL 2024 Online"),
+                                    ("sgl_2025_online", "SGL 2025 Online"),
+                                    ("twwr_miniblins26", "TWWR Miniblins 26"),
+                                ] {
+                                    option(value = slug, selected? = ctx.field_value("qualifier_score_kind").map_or(event.qualifier_score_kind_str.as_deref() == Some(slug), |v| v == *slug)) : *label;
+                                }
+                            }
                         });
 
                         : form_field("is_single_race", &mut errors, html! {
@@ -341,6 +363,39 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             input(type = "checkbox", id = "restrict_chat_in_qualifiers", name = "restrict_chat_in_qualifiers", checked? = ctx.field_value("restrict_chat_in_qualifiers").map_or(event.restrict_chat_in_qualifiers, |value| value == "on"));
                             label(for = "restrict_chat_in_qualifiers") : "Restrict Chat in Qualifiers";
                         });
+
+                        : form_field("preroll_mode", &mut errors, html! {
+                            label(for = "preroll_mode") : "Preroll Mode";
+                            select(id = "preroll_mode", name = "preroll_mode", style = "width: 100%; max-width: 600px;") {
+                                @for (val, label) in &[("none", "None"), ("short", "Short"), ("medium", "Medium"), ("long", "Long")] {
+                                    option(value = val, selected? = ctx.field_value("preroll_mode").map_or(&*event.preroll_mode == *val, |v| v == *val)) : *label;
+                                }
+                            }
+                        });
+
+                        : form_field("spoiler_unlock", &mut errors, html! {
+                            label(for = "spoiler_unlock") : "Spoiler Log Unlock";
+                            select(id = "spoiler_unlock", name = "spoiler_unlock", style = "width: 100%; max-width: 600px;") {
+                                @for (val, label) in &[("never", "Never"), ("after", "After race"), ("immediately", "Immediately")] {
+                                    option(value = val, selected? = ctx.field_value("spoiler_unlock").map_or(&*event.spoiler_unlock == *val, |v| v == *val)) : *label;
+                                }
+                            }
+                        });
+
+                        : form_field("racetime_goal_name", &mut errors, html! {
+                            label(for = "racetime_goal_name") : "Racetime Goal Name";
+                            input(type = "text", id = "racetime_goal_name", name = "racetime_goal_name", value = ctx.field_value("racetime_goal_name").unwrap_or(
+                                &event.racetime_goal_name.clone().unwrap_or_default()
+                            ), style = "width: 100%; max-width: 600px;");
+                            label(class = "help") : " (Override the racetime.gg goal string for generic events. Leave empty to use goal name from the race room.)";
+                        });
+
+                        : form_field("is_custom_goal", &mut errors, html! {
+                            input(type = "checkbox", id = "is_custom_goal", name = "is_custom_goal", checked? = ctx.field_value("is_custom_goal").map_or(event.is_custom_goal, |value| value == "on"));
+                            label(for = "is_custom_goal") : "Is Custom Goal";
+                            label(class = "help") : " (When enabled, the racetime.gg goal is a custom goal rather than a standard one.)";
+                        });
+
                         : form_field("startgg_double_rr", &mut errors, html! {
                             input(type = "checkbox", id = "startgg_double_rr", name = "startgg_double_rr", checked? = ctx.field_value("startgg_double_rr").map_or(event.startgg_double_rr, |value| value == "on"));
                             label(for = "startgg_double_rr") : "start.gg double round-robin mode";
@@ -537,6 +592,12 @@ pub(crate) struct SetupForm {
     start_delay: i32,
     start_delay_open: Option<String>,
     restrict_chat_in_qualifiers: bool,
+    #[field(default = String::from("medium"))]
+    preroll_mode: String,
+    #[field(default = String::from("after"))]
+    spoiler_unlock: String,
+    racetime_goal_name: Option<String>,
+    is_custom_goal: bool,
     startgg_double_rr: bool,
 }
 
@@ -890,7 +951,9 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                     goal_slug = $35, draft_kind = $36, draft_config = $37,
                     qualifier_score_kind = $38, is_single_race = $39, hide_entrants = $40,
                     start_delay = $41, start_delay_open = $42, restrict_chat_in_qualifiers = $43,
-                    async_start_delay = $44, startgg_double_rr = $45, fpa_enabled = $46, swiss_standings = $47
+                    async_start_delay = $44, startgg_double_rr = $45,
+                    preroll_mode = $46, spoiler_unlock = $47, racetime_goal_name = $48, is_custom_goal = $49,
+                    fpa_enabled = $50, swiss_standings = $51
                 WHERE series = $33 AND event = $34
             "#,
                 value.display_name,
@@ -938,10 +1001,14 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 value.restrict_chat_in_qualifiers,
                 value.async_start_delay,
                 value.startgg_double_rr,
+                &value.preroll_mode,
+                &value.spoiler_unlock,
+                value.racetime_goal_name.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) }),
+                value.is_custom_goal,
                 value.fpa_enabled,
                 value.swiss_standings,
             ).execute(&mut *transaction).await?;
-            
+
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
         }
@@ -1231,8 +1298,24 @@ fn create_form_content(me: &Option<User>, _uri: &Origin<'_>, csrf: Option<&CsrfT
 
                         : form_field("draft_kind", &mut errors, html! {
                             label(for = "draft_kind") : "Draft Kind";
-                            input(type = "text", id = "draft_kind", name = "draft_kind", value = ctx.field_value("draft_kind").unwrap_or(&String::new()), style = "width: 100%; max-width: 600px;");
-                            label(class = "help") : " (e.g. s7, ban_only, pick_only, ban_pick, or empty for none)";
+                            select(id = "draft_kind", name = "draft_kind", style = "width: 100%; max-width: 600px;") {
+                                option(value = "", selected? = ctx.field_value("draft_kind").map_or(true, |v| v.is_empty())) : "None";
+                                @for (slug, label) in &[
+                                    ("s7", "S7"),
+                                    ("multiworld_s3", "Multiworld S3"),
+                                    ("multiworld_s4", "Multiworld S4"),
+                                    ("multiworld_s5", "Multiworld S5"),
+                                    ("rsl_s7", "RSL S7"),
+                                    ("tournoifranco_s3", "Tournoi Franco S3"),
+                                    ("tournoifranco_s4", "Tournoi Franco S4"),
+                                    ("tournoifranco_s5", "Tournoi Franco S5"),
+                                    ("ban_pick", "Ban/Pick (generic, needs config)"),
+                                    ("ban_only", "Ban Only (generic, needs config)"),
+                                    ("pick_only", "Pick Only (generic, needs config)"),
+                                ] {
+                                    option(value = slug, selected? = ctx.field_value("draft_kind").map_or(false, |v| v == *slug)) : *label;
+                                }
+                            }
                         });
 
                         : form_field("draft_config", &mut errors, html! {
@@ -1245,8 +1328,18 @@ fn create_form_content(me: &Option<User>, _uri: &Origin<'_>, csrf: Option<&CsrfT
 
                         : form_field("qualifier_score_kind", &mut errors, html! {
                             label(for = "qualifier_score_kind") : "Qualifier Score Kind";
-                            input(type = "text", id = "qualifier_score_kind", name = "qualifier_score_kind", value = ctx.field_value("qualifier_score_kind").unwrap_or(&String::new()), style = "width: 100%; max-width: 600px;");
-                            label(class = "help") : " (e.g. standard, twwr_miniblins26, or empty for none)";
+                            select(id = "qualifier_score_kind", name = "qualifier_score_kind", style = "width: 100%; max-width: 600px;") {
+                                option(value = "", selected? = ctx.field_value("qualifier_score_kind").map_or(true, |v| v.is_empty())) : "None";
+                                @for (slug, label) in &[
+                                    ("standard", "Standard"),
+                                    ("sgl_2023_online", "SGL 2023 Online"),
+                                    ("sgl_2024_online", "SGL 2024 Online"),
+                                    ("sgl_2025_online", "SGL 2025 Online"),
+                                    ("twwr_miniblins26", "TWWR Miniblins 26"),
+                                ] {
+                                    option(value = slug, selected? = ctx.field_value("qualifier_score_kind").map_or(false, |v| v == *slug)) : *label;
+                                }
+                            }
                         });
 
                         : form_field("is_single_race", &mut errors, html! {
@@ -1273,6 +1366,36 @@ fn create_form_content(me: &Option<User>, _uri: &Origin<'_>, csrf: Option<&CsrfT
                         : form_field("restrict_chat_in_qualifiers", &mut errors, html! {
                             input(type = "checkbox", id = "restrict_chat_in_qualifiers", name = "restrict_chat_in_qualifiers", checked? = ctx.field_value("restrict_chat_in_qualifiers").map_or(false, |value| value == "on"));
                             label(for = "restrict_chat_in_qualifiers") : "Restrict Chat in Qualifiers";
+                        });
+
+                        : form_field("preroll_mode", &mut errors, html! {
+                            label(for = "preroll_mode") : "Preroll Mode";
+                            select(id = "preroll_mode", name = "preroll_mode", style = "width: 100%; max-width: 600px;") {
+                                @for (val, label) in &[("none", "None"), ("short", "Short"), ("medium", "Medium"), ("long", "Long")] {
+                                    option(value = val, selected? = ctx.field_value("preroll_mode").map_or(*val == "medium", |v| v == *val)) : *label;
+                                }
+                            }
+                        });
+
+                        : form_field("spoiler_unlock", &mut errors, html! {
+                            label(for = "spoiler_unlock") : "Spoiler Log Unlock";
+                            select(id = "spoiler_unlock", name = "spoiler_unlock", style = "width: 100%; max-width: 600px;") {
+                                @for (val, label) in &[("never", "Never"), ("after", "After race"), ("immediately", "Immediately")] {
+                                    option(value = val, selected? = ctx.field_value("spoiler_unlock").map_or(*val == "after", |v| v == *val)) : *label;
+                                }
+                            }
+                        });
+
+                        : form_field("racetime_goal_name", &mut errors, html! {
+                            label(for = "racetime_goal_name") : "Racetime Goal Name";
+                            input(type = "text", id = "racetime_goal_name", name = "racetime_goal_name", value = ctx.field_value("racetime_goal_name").unwrap_or(&String::new()), style = "width: 100%; max-width: 600px;");
+                            label(class = "help") : " (Override the racetime.gg goal string for generic events.)";
+                        });
+
+                        : form_field("is_custom_goal", &mut errors, html! {
+                            input(type = "checkbox", id = "is_custom_goal", name = "is_custom_goal", checked? = ctx.field_value("is_custom_goal").map_or(true, |value| value == "on"));
+                            label(for = "is_custom_goal") : "Is Custom Goal";
+                            label(class = "help") : " (When enabled, the racetime.gg goal is a custom goal rather than a standard one.)";
                         });
                     }, errors.clone(), "Create Event");
                 }
@@ -1323,6 +1446,12 @@ pub(crate) struct CreateEventForm {
     start_delay: i32,
     start_delay_open: Option<String>,
     restrict_chat_in_qualifiers: bool,
+    #[field(default = String::from("medium"))]
+    preroll_mode: String,
+    #[field(default = String::from("after"))]
+    spoiler_unlock: String,
+    racetime_goal_name: Option<String>,
+    is_custom_goal: bool,
 }
 
 #[rocket::post("/event/new", data = "<form>")]
@@ -1429,12 +1558,15 @@ pub(crate) async fn create_post(pool: &State<PgPool>, me: User, uri: Origin<'_>,
 
         let mut transaction = pool.begin().await?;
 
+        let racetime_goal_name = value.racetime_goal_name.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+
         // Insert the new event
         sqlx::query!(r#"
             INSERT INTO events (series, event, display_name, team_config, language, listed,
                 goal_slug, draft_kind, draft_config, qualifier_score_kind,
-                is_single_race, hide_entrants, start_delay, start_delay_open, restrict_chat_in_qualifiers)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                is_single_race, hide_entrants, start_delay, start_delay_open, restrict_chat_in_qualifiers,
+                preroll_mode, spoiler_unlock, racetime_goal_name, is_custom_goal)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
         "#,
             series as _,
             &value.event,
@@ -1451,6 +1583,10 @@ pub(crate) async fn create_post(pool: &State<PgPool>, me: User, uri: Origin<'_>,
             value.start_delay,
             start_delay_open,
             value.restrict_chat_in_qualifiers,
+            &value.preroll_mode,
+            &value.spoiler_unlock,
+            racetime_goal_name,
+            value.is_custom_goal,
         ).execute(&mut *transaction).await?;
 
         transaction.commit().await?;

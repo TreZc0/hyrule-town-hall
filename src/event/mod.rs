@@ -218,6 +218,19 @@ pub(crate) struct Data<'a> {
     pub(crate) qualifier_score_hiding: QualifierScoreHiding,
     pub(crate) qualifier_notification_role_id: Option<RoleId>,
     pub(crate) async_start_delay: Option<i32>,
+    pub(crate) goal_slug: Option<String>,
+    pub(crate) draft_kind_str: Option<String>,
+    pub(crate) draft_config: Option<serde_json::Value>,
+    pub(crate) qualifier_score_kind_str: Option<String>,
+    pub(crate) is_single_race: bool,
+    pub(crate) hide_entrants: bool,
+    pub(crate) start_delay: i32,
+    pub(crate) start_delay_open: Option<i32>,
+    pub(crate) restrict_chat_in_qualifiers: bool,
+    pub(crate) racetime_goal_name: Option<String>,
+    pub(crate) is_custom_goal: bool,
+    pub(crate) preroll_mode: String,
+    pub(crate) spoiler_unlock: String,
 }
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]

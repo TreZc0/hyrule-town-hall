@@ -645,62 +645,6 @@ impl Race {
                 "1" => {} // no match data available
                 _ => {} // new events are scheduled via Mido's House
             },
-            Series::NineDaysOfSaws | Series::Pictionary => if let Some(race) = races.iter_mut().find(|race| race.series == event.series && race.event == event.event) {
-                race.schedule = if let Some(start) = event.start(&mut *transaction).await? {
-                    RaceSchedule::Live {
-                        end: event.end,
-                        room: event.url.clone(),
-                        start,
-                    }
-                } else {
-                    RaceSchedule::Unscheduled
-                };
-                if let Some(english_video_url) = event.video_url.clone() {
-                    race.video_urls.entry(English).or_insert(english_video_url);
-                }
-                race
-            } else {
-                races.push(Self {
-                    id: Id::<Races>::new(&mut *transaction).await?,
-                    series: event.series,
-                    event: event.event.to_string(),
-                    source: Source::Manual,
-                    entrants: Entrants::Open,
-                    phase: None,
-                    round: None,
-                    game: None,
-                    scheduling_thread: None,
-                    schedule: if let Some(start) = event.start(&mut *transaction).await? {
-                        RaceSchedule::Live {
-                            end: event.end,
-                            room: event.url.clone(),
-                            start,
-                        }
-                    } else {
-                        RaceSchedule::Unscheduled
-                    },
-                    schedule_updated_at: None,
-                    fpa_invoked: false,
-                    breaks_used: false,
-                    draft: None,
-                    seed: seed::Data::default(),
-                    video_urls: event.video_url.iter().map(|video_url| (English, video_url.clone())).collect(), //TODO sync between event and race? Video URL fields for other languages on event::Data?
-                    restreamers: HashMap::default(),
-                    last_edited_by: None,
-                    last_edited_at: None,
-                    ignored: false,
-                    schedule_locked: false,
-                    notified: false,
-                    async_notified_1: false,
-                    async_notified_2: false,
-                    async_notified_3: false,
-                    discord_scheduled_event_id: None,
-                    volunteer_request_sent: false,
-                    volunteer_request_message_id: None,
-                    goal_slug: None,
-                });
-                races.last_mut().expect("just pushed")
-            }.save(&mut *transaction).await?,
             Series::Rsl => match &*event.event {
                 "1" => {} // no match data available
                 _ => {} // new events are scheduled via Mido's House
@@ -723,6 +667,8 @@ impl Race {
             | Series::MixedPools
             | Series::Mq
             | Series::MysteryD
+            | Series::NineDaysOfSaws
+            | Series::Pictionary
             | Series::SongsOfHope
             | Series::SpeedGaming
             | Series::TournoiFrancophone
@@ -1615,7 +1561,7 @@ impl Event {
     }
 
     pub(crate) async fn should_create_room(&self, transaction: &mut Transaction<'_, Postgres>, event: &event::Data<'_>) -> Result<RaceHandleMode, event::DataError> {
-        Ok(if self.race.goal_slug.is_some() {
+        Ok(if event.goal_slug.is_some() {
             if_chain! {
                 if self.race.series == Series::SpeedGaming && self.race.event.ends_with("live");
                 if let Some(race_start) = self.start();
@@ -2266,7 +2212,7 @@ pub(crate) async fn race_table(
         for race in races {
             if !race.show_seed() {
                 // Check for Crosskeys2025 races
-                if race.goal_slug.as_deref() == Some("crosskeys_2025") {
+                if matches!(race.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug), Some(racetime_bot::Goal::Crosskeys2025)) {
                     break 'has_settings true
                 }
             }
@@ -2532,7 +2478,7 @@ pub(crate) async fn race_table(
                                 
                                 // Add Settings link for races with custom options
                                 @if race.show_seed() || race.is_ended() || matches!(race.schedule, RaceSchedule::Unscheduled | RaceSchedule::Async { .. } | RaceSchedule::Live { .. }) {
-                                    @if race.goal_slug.as_deref() == Some("crosskeys_2025") {
+                                    @if matches!(race.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug), Some(racetime_bot::Goal::Crosskeys2025)) {
                                         @if let Ok(crosskeys_options) = racetime_bot::CrosskeysRaceOptions::for_race_with_transaction(&mut *transaction, race).await {
                                             span(class = "settings-link", data_tooltip = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str_no_delay())) {
                                                 : " -Hover for Settings- ";
@@ -2545,7 +2491,7 @@ pub(crate) async fn race_table(
                         @if !has_seeds && has_settings {
                             td {
                                 // Check for Crosskeys2025 races
-                                @if race.goal_slug.as_deref() == Some("crosskeys_2025") {
+                                @if matches!(race.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug), Some(racetime_bot::Goal::Crosskeys2025)) {
                                     @if let Ok(crosskeys_options) = racetime_bot::CrosskeysRaceOptions::for_race_with_transaction(&mut *transaction, race).await {
                                         span(class = "settings-link", data_tooltip = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str_no_delay())) {
                                             : "-Hover for Settings-";

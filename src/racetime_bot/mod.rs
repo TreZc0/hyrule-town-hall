@@ -391,7 +391,6 @@ impl Goal {
     }
 
     /// Returns (slug, display_name) pairs for all unique goal slugs.
-    #[allow(dead_code)] // will be used in admin UI
     pub(crate) fn all_slugs() -> Vec<(&'static str, &'static str)> {
         let mut seen = Vec::new();
         for goal in all::<Self>() {
@@ -3296,7 +3295,13 @@ impl AlttprDeRaceOptions {
     }
 
     pub(crate) fn mode_display(&self) -> Option<String> {
-        self.mode.clone()
+        self.mode.as_ref().map(|mode| {
+            let mut chars = mode.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().to_string() + chars.as_str(),
+            }
+        })
     }
 
     pub(crate) fn as_seed_options_str(&self) -> String {
@@ -4243,7 +4248,7 @@ impl RaceHandler<GlobalState> for Handler {
                 } else {
                     match data.status.value {
                         RaceStatusValue::Invitational => {
-                            ctx.say(if let French = goal.language() {
+                            ctx.say(if let French = goal.map_or(event.language, |g| g.language()) {
                                 "Le FPA est activé pour cette race. Les joueurs pourront utiliser !fpa pendant la race pour signaler d'un problème technique de leur côté. Les race monitors doivent activer les notifications en cliquant sur l'icône de cloche 🔔 sous le chat."
                             } else {
                                 "Fair play agreement is active for this official race. Entrants may use the !fpa command during the race to notify of a crash. Race monitors (if any) should enable notifications using the bell 🔔 icon below chat."
@@ -5243,7 +5248,40 @@ impl RaceHandler<GlobalState> for Handler {
                 } else {
                     format!("Sorry {reply_to}, {msg}")
                 }).await?,
-            } } else {
+            } } else if self.official_data.as_ref().and_then(|d| d.event.draft_kind()).is_some() {
+                // Generic event with a draft kind — parse commands directly (non-RSL convention)
+                let action = match (cmd, &args[..]) {
+                    ("ban" | "block", []) => {
+                        self.send_settings(ctx, &format!("Sorry {reply_to}, the setting is required. Use one of the following:"), reply_to).await?;
+                        return Ok(());
+                    }
+                    ("ban" | "block", [setting]) => draft::Action::Ban { setting: setting.clone() },
+                    ("ban" | "block", _) => {
+                        ctx.say(format!("Sorry {reply_to}, only one setting can be banned at a time. Use \"!ban <setting>\"")).await?;
+                        return Ok(());
+                    }
+                    ("draft" | "pick", []) => {
+                        self.send_settings(ctx, &format!("Sorry {reply_to}, the setting is required. Use one of the following:"), reply_to).await?;
+                        return Ok(());
+                    }
+                    ("draft" | "pick", [_]) => {
+                        ctx.say(format!("Sorry {reply_to}, the value is required.")).await?;
+                        return Ok(());
+                    }
+                    ("draft" | "pick", [setting, value]) => draft::Action::Pick { setting: setting.clone(), value: value.clone() },
+                    ("draft" | "pick", _) => {
+                        ctx.say(format!("Sorry {reply_to}, only one setting can be drafted at a time. Use \"!pick <setting> <value>\"")).await?;
+                        return Ok(());
+                    }
+                    ("first", _) => draft::Action::GoFirst(true),
+                    ("second", _) => draft::Action::GoFirst(false),
+                    ("yes", _) => draft::Action::BooleanChoice(true),
+                    ("no", _) => draft::Action::BooleanChoice(false),
+                    ("skip", _) => draft::Action::Skip,
+                    _ => { ctx.say(format!("Sorry {reply_to}, unexpected draft command: {cmd}")).await?; return Ok(()); }
+                };
+                self.draft_action(ctx, msg.user.as_ref(), action).await?;
+            } else {
                 ctx.say(format!("Sorry {reply_to}, draft commands are not available for this event.")).await?;
             },
             "breaks" | "break" => match args[..] {
@@ -5730,8 +5768,16 @@ impl RaceHandler<GlobalState> for Handler {
                         }
                         transaction.commit().await.to_racetime()?;
                     } else {
-                        // Generic goal — roll with event's single_settings
-                        if let Some(ref settings) = self.official_data.as_ref().and_then(|d| d.event.single_settings.clone()) {
+                        // Generic goal
+                        let event_draft_kind = self.official_data.as_ref().and_then(|d| d.event.draft_kind());
+                        if args.as_slice() == ["draft"] && event_draft_kind.is_some() {
+                            let unlock_spoiler_log = self.effective_unlock_spoiler_log(None, false);
+                            *state = RaceState::Draft {
+                                state: Draft { high_seed: Id::dummy(), went_first: None, skipped_bans: 0, settings: HashMap::default() },
+                                unlock_spoiler_log,
+                            };
+                            self.advance_draft(ctx, &state).await?;
+                        } else if let Some(ref settings) = self.official_data.as_ref().and_then(|d| d.event.single_settings.clone()) {
                             let unlock_spoiler_log = self.effective_unlock_spoiler_log(None, cmd_name.eq_ignore_ascii_case("spoilerseed"));
                             let (article, desc) = if let French = lang { ("une", format!("seed")) } else { ("a", format!("seed")) };
                             self.roll_seed(ctx, self.effective_preroll_mode(None), self.effective_rando_version(None), settings.clone(), unlock_spoiler_log, lang, article, desc).await;

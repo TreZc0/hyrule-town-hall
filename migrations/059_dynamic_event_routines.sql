@@ -22,7 +22,7 @@ UPDATE events SET goal_slug = 'twwr_permalink' WHERE series = 'twwrmain' AND eve
 
 
 -- Generic button drafts: mode + config
--- AlttprDe Season 9 (BanPick): ban/pick sequence with DE9 presets
+-- AlttprDe Season 9 (BanPick): ban/pick sequence with DE9 presets (all three S9 events share the same draft)
 UPDATE events SET draft_kind = 'ban_pick', draft_config = '{
     "options": [
         {"display_name": "Ambroz1a", "preset": "ambroz1a"},
@@ -38,16 +38,16 @@ UPDATE events SET draft_kind = 'ban_pick', draft_config = '{
         {"phase": "pick", "team": "low_seed"}
     ],
     "label": "mode"
-}'::jsonb WHERE series = 'alttprde' AND event = '9bracket';
+}'::jsonb WHERE series = 'alttprde' AND event IN ('9bracket', '9swissa', '9swissb');
 
 -- RivalsCup Groups (PickOnly): each player picks 1 unique preset
 UPDATE events SET draft_kind = 'pick_only', draft_config = '{
     "options": [
-        {"display_name": "Open", "preset": "ttchaos_open"},
-        {"display_name": "Standard", "preset": "ttchaos_standard"},
-        {"display_name": "Casual Boots", "preset": "ttchaos_casualboots"},
-        {"display_name": "MC Boss", "preset": "ttchaos_mcboss"},
-        {"display_name": "AD Tournament Keys", "preset": "ttchaos_adtournamentkeys"}
+        {"display_name": "Open", "preset": "tt_chaos/open"},
+        {"display_name": "Standard", "preset": "tt_chaos/standard"},
+        {"display_name": "Casual Boots", "preset": "tt_chaos/casualboots"},
+        {"display_name": "MC Boss", "preset": "tt_chaos/mcboss"},
+        {"display_name": "AD Tournament Keys", "preset": "tt_chaos/adtournamentkeys"}
     ],
     "who_starts": "high_seed",
     "picks_per_player": 1,
@@ -58,11 +58,11 @@ UPDATE events SET draft_kind = 'pick_only', draft_config = '{
 -- RivalsCup Brackets (BanOnly): 2 bans, remaining randomly assigned
 UPDATE events SET draft_kind = 'ban_only', draft_config = '{
     "options": [
-        {"display_name": "Open", "preset": "ttchaos_open"},
-        {"display_name": "Standard", "preset": "ttchaos_standard"},
-        {"display_name": "Casual Boots", "preset": "ttchaos_casualboots"},
-        {"display_name": "MC Boss", "preset": "ttchaos_mcboss"},
-        {"display_name": "AD Tournament Keys", "preset": "ttchaos_adtournamentkeys"}
+        {"display_name": "Open", "preset": "tt_chaos/open"},
+        {"display_name": "Standard", "preset": "tt_chaos/standard"},
+        {"display_name": "Casual Boots", "preset": "tt_chaos/casualboots"},
+        {"display_name": "MC Boss", "preset": "tt_chaos/mcboss"},
+        {"display_name": "AD Tournament Keys", "preset": "tt_chaos/adtournamentkeys"}
     ],
     "order": [
         {"phase": "ban", "team": "high_seed"},
