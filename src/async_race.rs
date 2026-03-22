@@ -245,7 +245,7 @@ impl AsyncRaceManager {
         content.push(display_order.to_string());
         content.push(" of this round.");
 
-        if let Some(racetime_bot::Goal::Crosskeys2025) = race.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug) {
+        if let Some(racetime_bot::seed_gen_type::SeedGenType::AlttprDoorRando { source: racetime_bot::seed_gen_type::AlttprDrSource::MutualChoices }) = event.seed_gen_type.as_ref() {
             let crosskeys_options = racetime_bot::CrosskeysRaceOptions::for_race(db_pool, race).await;
 
             content.push_line("");
@@ -262,7 +262,7 @@ impl AsyncRaceManager {
             content.push("---");
         }
 
-        if race.series == Series::AlttprDe {
+        if let Some(racetime_bot::seed_gen_type::SeedGenType::AlttprDoorRando { source: racetime_bot::seed_gen_type::AlttprDrSource::Boothisman }) = event.seed_gen_type.as_ref() {
             let alttprde_options = racetime_bot::AlttprDeRaceOptions::for_race(db_pool, race, event.round_modes.as_ref()).await;
 
             let mut details = MessageBuilder::default();

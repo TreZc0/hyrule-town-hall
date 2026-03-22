@@ -28,6 +28,8 @@ pub(crate) struct Config {
     #[serde(default)]
     pub(crate) avianart_api_key: Option<String>,
     #[serde(default)]
+    pub(crate) mmr_api_key: Option<String>,
+    #[serde(default)]
     pub(crate) database: Option<ConfigDatabase>,
 }
 

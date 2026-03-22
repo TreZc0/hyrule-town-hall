@@ -3924,8 +3924,9 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             }
         }
     }
-    if let Some(racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB) = race.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug) {
-        let alttprde_options = AlttprDeRaceOptions::for_race(ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"), race, event.round_modes.as_ref()).await;
+    if let Some(racetime_bot::seed_gen_type::SeedGenType::AlttprDoorRando { source: racetime_bot::seed_gen_type::AlttprDrSource::Boothisman }) = event.seed_gen_type.as_ref() {
+        let db_pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+        let alttprde_options = AlttprDeRaceOptions::for_race(&db_pool, race, event.round_modes.as_ref()).await;
         content.push_line("");
         content.push_line("");
         if let Some(mode_display) = alttprde_options.mode_display() {
@@ -3933,8 +3934,9 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
         }
         // Mode not yet determined - draft will show separately
     }
-    if let Some(racetime_bot::Goal::Crosskeys2025) = race.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug) {
-        let crosskeys_options = CrosskeysRaceOptions::for_race(ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"), race).await;
+    if let Some(racetime_bot::seed_gen_type::SeedGenType::AlttprDoorRando { source: racetime_bot::seed_gen_type::AlttprDrSource::MutualChoices }) = event.seed_gen_type.as_ref() {
+        let db_pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+        let crosskeys_options = CrosskeysRaceOptions::for_race(&db_pool, race).await;
         content.push_line("");
         content.push_line("");
         content.push(format!("This race will be played with {} as settings.\n\nThis race will be played with {}.", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str()));
@@ -3979,34 +3981,8 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
     if !is_second_part {
         let discord_data = discord_ctx.data.read().await;
         let global_state = discord_data.get::<GlobalState>().expect("Global State missing from Discord context");
-        let Some(goal) = cal_event.race.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug) else { return Ok(()); };
-        let mut updates = match goal {
-            racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB => {
-                let alttprde_options = AlttprDeRaceOptions::for_race(&global_state.db_pool, &cal_event.race, event.round_modes.as_ref()).await;
-                global_state.clone().roll_alttprde9_seed(alttprde_options)
-            }
-            racetime_bot::Goal::AlttprDeRivalsCupBrackets | racetime_bot::Goal::AlttprDeRivalsCupGroups => {
-                let game_num = cal_event.race.game.unwrap_or(1);
-                let preset = cal_event.race.draft.as_ref()
-                    .and_then(|d| d.settings.get(&*format!("game{game_num}_preset")))
-                    .expect("RivalsCup async race missing preset in draft state")
-                    .as_ref().to_owned();
-                global_state.clone().roll_avianart_seed(preset)
-            }
-            racetime_bot::Goal::Crosskeys2025 => {
-                let crosskeys_options = CrosskeysRaceOptions::for_race(&global_state.db_pool, &cal_event.race).await;
-                global_state.clone().roll_crosskeys2025_seed(crosskeys_options)
-            }
-            racetime_bot::Goal::MysteryD20 => {
-                global_state.clone().roll_mysteryd20_seed()
-            }
-            racetime_bot::Goal::TwwrMainWeekly | racetime_bot::Goal::TwwrMainMiniblins26 => {
-                let settings_string = event.settings_string.clone().expect("TWWR event missing settings string");
-                let version = goal.rando_version(Some(&event));
-                global_state.clone().roll_twwr_seed(Some(version), settings_string, UnlockSpoilerLog::Never)
-            }
-            _ => unimplemented!("async seed rolling not implemented for this event"),
-        };
+        let Some(ref seed_gen_type) = event.seed_gen_type else { return Ok(()); };
+        let mut updates = global_state.clone().roll_seed_for_event(seed_gen_type, &cal_event, &event).await;
 
         // Loop until we get an update saying the seed data is done rolling.
         let seed = loop {
@@ -4018,21 +3994,13 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
             }
         };
 
-        match seed.files {
-            Some(seed::Files::AlttprDoorRando { ref uuid }) => {
-                let (hash1, hash2, hash3, hash4, hash5) = match seed.file_hash {
-                    Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) => (Some(hash1), Some(hash2), Some(hash3), Some(hash4), Some(hash5)),
-                    None => (None, None, None, None, None)
-                };
-                sqlx::query!("UPDATE races SET xkeys_uuid = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7", uuid, hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,).execute(&mut *transaction).await?;
-            }
-            Some(seed::Files::TwwrPermalink { ref permalink, ref seed_hash }) => {
-                sqlx::query!("UPDATE races SET seed_data = $1 WHERE id = $2", serde_json::json!({ "permalink": permalink, "seed_hash": seed_hash }), cal_event.race.id as _,).execute(&mut *transaction).await?;
-            }
-            Some(seed::Files::AvianartSeed { ref hash, ref seed_hash }) => {
-                sqlx::query!("UPDATE races SET seed_data = $1 WHERE id = $2", serde_json::json!({ "avianart_hash": hash, "avianart_seed_hash": seed_hash.as_ref().map(|h| h.join(", ")) }), cal_event.race.id as _,).execute(&mut *transaction).await?;
-            }
-            _ => unimplemented!("unexpected seed type for async rolling"),
+        // Write seed to unified seed_data JSONB column
+        if let Some(seed_data_json) = seed.to_seed_data() {
+            sqlx::query!("UPDATE races SET seed_data = $1 WHERE id = $2", seed_data_json, cal_event.race.id as _,).execute(&mut *transaction).await?;
+        }
+        // Also keep hash1..5 columns in sync (still present for display compatibility)
+        if let Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) = seed.file_hash {
+            sqlx::query!("UPDATE races SET hash1 = $1, hash2 = $2, hash3 = $3, hash4 = $4, hash5 = $5 WHERE id = $6", hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,).execute(&mut *transaction).await?;
         }
     }
 

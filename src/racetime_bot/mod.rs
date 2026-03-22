@@ -62,6 +62,7 @@ use {
 #[cfg(windows)] use directories::UserDirs;
 
 mod report;
+pub(crate) mod seed_gen_type;
 
 #[cfg(unix)] const PYTHON: &str = "python3";
 #[cfg(windows)] const PYTHON: &str = "py";
@@ -1547,6 +1548,8 @@ pub(crate) struct GlobalState {
     seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>,
     #[cfg_attr(not(unix), allow(dead_code))]
     avianart_api_key: Option<String>,
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(crate) mmr_api_key: Option<String>,
 }
 
 impl TypeMapKey for GlobalState {
@@ -1568,13 +1571,14 @@ impl GlobalState {
         seed_cache_tx: watch::Sender<()>,
         seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>,
         avianart_api_key: Option<String>,
+        mmr_api_key: Option<String>,
     ) -> Self {
         Self {
             host_info: racetime::HostInfo {
                 hostname: Cow::Borrowed(racetime_host()),
                 ..racetime::HostInfo::default()
             },
-            new_room_lock, racetime_config, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, discord_ctx, clean_shutdown, seed_cache_tx, seed_metadata, avianart_api_key,
+            new_room_lock, racetime_config, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, discord_ctx, clean_shutdown, seed_cache_tx, seed_metadata, avianart_api_key, mmr_api_key,
         }
     }
 
@@ -1739,257 +1743,6 @@ impl GlobalState {
         update_rx
     }
 
-    pub(crate) fn roll_crosskeys2025_seed(self: Arc<Self>, crosskeys_options: CrosskeysRaceOptions) -> mpsc::Receiver<SeedRollUpdate> {
-        let (update_tx, update_rx) = mpsc::channel(128);
-        let update_tx2 = update_tx.clone();
-        tokio::spawn(async move {
-            let uuid = Uuid::new_v4();
-            let crosskeys_meta = AlttprDoorRandoMeta {
-                bps: true,
-                name: uuid.to_string(),
-                race: true,
-                skip_playthrough: true,
-                spoiler: "full",
-                suppress_rom: true,
-            };
-            let mut crosskeys_yaml = AlttprDoorRandoYaml {
-                placements: HashMap::default(),
-                settings: HashMap::default(),
-                start_inventory: HashMap::default(),
-                meta: crosskeys_meta,
-            };
-
-            let keydrop_mode = if crosskeys_options.keydrop_ok { "keys" } else { "none" };
-            let pottery_mode = if crosskeys_options.keydrop_ok { "keys" } else { "none" };
-            let flute_mode = if crosskeys_options.flute_ok { "active" } else { "normal" };
-            let goal = if crosskeys_options.all_dungeons_ok { "dungeons" } else { "crystals" };
-            let mirrorscroll = if crosskeys_options.mirror_scroll_ok { 1 } else { 0 };
-            let world_state = if crosskeys_options.inverted_ok { "inverted" } else { "open" };
-            let pseudoboots = if crosskeys_options.pb_ok { 1 } else { 0 };
-            let skullwoods = if crosskeys_options.zw_ok { "followlinked" } else { "original" };
-
-            let crosskeys_settings = AlttprDoorRandoSetting {
-                accessibility: "locations",
-                bigkeyshuffle: 1,
-                compassshuffle: 1,
-                crystals_ganon: "7",
-                crystals_gt: "7",
-                dropshuffle: keydrop_mode,
-                flute_mode: flute_mode,
-                goal: goal,
-                item_functionality: "normal",
-                key_logic_algorithm: "partial",
-                keyshuffle: "wild",
-                linked_drops: "unset",
-                mapshuffle: 1,
-                mirrorscroll: mirrorscroll,
-                mode: world_state,
-                pottery: pottery_mode,
-                pseudoboots: pseudoboots,
-                shuffle: "crossed",
-                shuffletavern: 0,
-                skullwoods: skullwoods,
-            };
-
-            if !crosskeys_options.zw_ok {
-                let crosskeys_placements = AlttprDoorRandoPlacements {
-                    pinball_room: "Small Key (Skull Woods)",
-                };
-                crosskeys_yaml.placements.insert(1, crosskeys_placements);
-            }
-
-            if crosskeys_options.flute_ok {
-                let starting_flute = &["Ocarina (Activated)"];
-                crosskeys_yaml.start_inventory.insert(1, starting_flute);
-            }
-
-            crosskeys_yaml.settings.insert(1, crosskeys_settings);
-            let yaml_file = tempfile::Builder::new().prefix("alttpr_").suffix(".yml").tempfile().at_unknown()?;
-            let yaml_path = yaml_file.path();
-            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(serde_yml::to_string(&crosskeys_yaml)?.as_bytes()).await.at(&yaml_file)?;
-            
-            // Add retry logic with 2 retries
-            const MAX_RETRIES: u8 = 2;
-            
-            for attempt in 0..=MAX_RETRIES {
-                let output = Command::new(PYTHON)
-                    .current_dir("../alttpr")
-                    .arg("DungeonRandomizer.py")
-                    .arg("--customizer")
-                    .arg(yaml_path)
-                    .arg("--outputpath")
-                    .arg("/var/www/midos.house/seed")
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .at_command("DungeonRandomizer.py")?
-                    .wait_with_output()
-                    .await
-                    .at_command("DungeonRandomizer.py")?;
-                
-                match output.status.code() {
-                    Some(0) => {
-                        break;
-                    }
-                    Some(1) => {
-                        // Randomizer failed to generate a seed, lets retry.
-                        let last_error = Some(String::from_utf8_lossy(&output.stderr).into_owned());
-                        if attempt < MAX_RETRIES {
-                            // Wait a bit before retrying (exponential backoff)
-                            sleep(Duration::from_secs(10 + 2u64.pow(attempt as u32))).await;
-                            continue;
-                        }
-                        // Max retries reached
-                        return Err(RollError::Retries {
-                            num_retries: MAX_RETRIES + 1,
-                            last_error,
-                        });
-                    }
-                    _ => {
-                        // Other error codes - fail immediately
-                        return Err(RollError::Wheel(wheel::Error::CommandExit { 
-                            name: Cow::Borrowed("DungeonRandomizer.py"), 
-                            output 
-                        }));
-                    }
-                }
-            }
-            
-            // This swallows the hash error and just makes it empty--maybe we should surface this somehow?
-            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await.ok();
-            update_tx.send(SeedRollUpdate::Done {
-                seed: seed::Data {
-                    file_hash: file_hash,
-                    files: Some(seed::Files::AlttprDoorRando {
-                        uuid: uuid
-                    }),
-                    progression_spoiler: false,
-                    password: None,
-                },
-                rsl_preset: None,
-                version: None,
-                unlock_spoiler_log: UnlockSpoilerLog::Never
-            }).await.allow_unreceived();
-            Ok(())
-        }.then(|res| async move {
-            match res {
-                Ok(()) => {}
-                Err(e) => update_tx2.send(SeedRollUpdate::Error(e)).await.allow_unreceived(),
-            }
-        }));
-        update_rx
-    }
-
-    pub(crate) fn roll_alttprde9_seed(self: Arc<Self>, alttprde_options: AlttprDeRaceOptions) -> mpsc::Receiver<SeedRollUpdate> {
-        let (update_tx, update_rx) = mpsc::channel(128);
-        let update_tx2 = update_tx.clone();
-        tokio::spawn(async move {
-            // Build the URL from mode and custom choices
-            let api_url = alttprde_options.seed_url()
-                .ok_or_else(|| RollError::AlttprDe(format!("Mode not yet drafted - cannot roll seed")))?;
-
-            // Call the boothisman.de API to get the YAML
-            let response = reqwest::get(&api_url).await?;
-            let yaml_content = response.text().await?;
-
-            // Generate a UUID for this seed
-            let uuid = Uuid::new_v4();
-
-            // Parse the YAML and add meta settings
-            let mut yaml_value: serde_yml::Value = serde_yml::from_str(&yaml_content)?;
-            let meta = AlttprDoorRandoMeta {
-                bps: true,
-                name: uuid.to_string(),
-                race: true,
-                skip_playthrough: true,
-                spoiler: "full",
-                suppress_rom: true,
-            };
-            if let serde_yml::Value::Mapping(ref mut map) = yaml_value {
-                map.insert(serde_yml::Value::String("meta".to_string()), serde_yml::to_value(&meta)?);
-            }
-            let updated_yaml_content = serde_yml::to_string(&yaml_value)?;
-
-            // Save YAML to temp file
-            let yaml_file = tempfile::Builder::new().prefix("alttprde_").suffix(".yml").tempfile().at_unknown()?;
-            let yaml_path = yaml_file.path();
-            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(updated_yaml_content.as_bytes()).await.at(&yaml_file)?;
-
-            // Run DungeonRandomizer.py with the YAML (same as Crosskeys)
-            const MAX_RETRIES: u8 = 2;
-
-            for attempt in 0..=MAX_RETRIES {
-                let output = Command::new(PYTHON)
-                    .current_dir("../ALttPDoorRandomizer")
-                    .arg("DungeonRandomizer.py")
-                    .arg("--customizer")
-                    .arg(yaml_path)
-                    .arg("--outputpath")
-                    .arg("/var/www/midos.house/seed")
-                    .arg("--outputname")
-                    .arg(uuid.to_string())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .at_command("DungeonRandomizer.py")?
-                    .wait_with_output()
-                    .await
-                    .at_command("DungeonRandomizer.py")?;
-
-                match output.status.code() {
-                    Some(0) => break,
-                    Some(1) => {
-                        // Randomizer failed to generate a seed, lets retry.
-                        let last_error = Some(String::from_utf8_lossy(&output.stderr).into_owned());
-                        if attempt < MAX_RETRIES {
-                            let backoff_secs = 10 + 2u64.pow(attempt as u32);
-                            sleep(Duration::from_secs(backoff_secs)).await;
-                            continue;
-                        }
-                        // Max retries reached
-                        return Err(RollError::Retries {
-                            num_retries: MAX_RETRIES + 1,
-                            last_error,
-                        });
-                    }
-                    _ => {
-                        // Other error codes - fail immediately
-                        return Err(RollError::Wheel(wheel::Error::CommandExit {
-                            name: Cow::Borrowed("DungeonRandomizer.py"),
-                            output
-                        }));
-                    }
-                }
-            }
-
-            // Verify the patch file was created
-            let patch_path = format!("/var/www/midos.house/seed/DR_{uuid}.bps");
-            if !tokio::fs::try_exists(&patch_path).await.at(&patch_path)? {
-                return Err(RollError::AlttprDe(format!("DungeonRandomizer.py exited successfully but patch file was not found at {}", patch_path)));
-            }
-
-            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await?;
-            update_tx.send(SeedRollUpdate::Done {
-                seed: seed::Data {
-                    file_hash: Some(file_hash),
-                    files: Some(seed::Files::AlttprDoorRando { uuid }),
-                    progression_spoiler: false,
-                    password: None,
-                },
-                rsl_preset: None,
-                version: None,
-                unlock_spoiler_log: UnlockSpoilerLog::Never,
-            }).await.allow_unreceived();
-            Ok(())
-        }.then(|res: Result<(), RollError>| async move {
-            match res {
-                Ok(()) => {}
-                Err(e) => update_tx2.send(SeedRollUpdate::Error(e)).await.allow_unreceived(),
-            }
-        }));
-        update_rx
-    }
-
     #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn roll_avianart_seed(self: Arc<Self>, preset: String) -> mpsc::Receiver<SeedRollUpdate> {
         let (update_tx, update_rx) = mpsc::channel(128);
@@ -2138,6 +1891,115 @@ impl GlobalState {
             }
         }));
         update_rx
+    }
+
+    /// Roll an ALTTPR Door Randomizer seed from pre-built YAML content.
+    ///
+    /// Shared implementation for both Boothisman (AlttprDe9) and MutualChoices (Crosskeys) sources.
+    /// `working_dir` is `"../ALttPDoorRandomizer"` for Boothisman or `"../alttpr"` for MutualChoices.
+    /// `with_output_name` enables `--outputname uuid` and patch-file verification (AlttprDe9 only).
+    pub(crate) fn roll_alttpr_dr_seed(self: Arc<Self>, yaml_content: String, uuid: Uuid, working_dir: &'static str, with_output_name: bool) -> mpsc::Receiver<SeedRollUpdate> {
+        let (update_tx, update_rx) = mpsc::channel(128);
+        let update_tx2 = update_tx.clone();
+        tokio::spawn(async move {
+            let yaml_file = tempfile::Builder::new().prefix("alttpr_").suffix(".yml").tempfile().at_unknown()?;
+            let yaml_path = yaml_file.path();
+            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(yaml_content.as_bytes()).await.at(&yaml_file)?;
+            let output_name_str = with_output_name.then(|| uuid.to_string());
+            run_dungeon_randomizer(yaml_path, working_dir, output_name_str.as_deref()).await?;
+            if with_output_name {
+                let patch_path = format!("/var/www/midos.house/seed/DR_{uuid}.bps");
+                if !tokio::fs::try_exists(&patch_path).await.at(&patch_path)? {
+                    return Err(RollError::AlttprDe(format!("DungeonRandomizer.py exited successfully but patch file was not found at {}", patch_path)));
+                }
+            }
+            let file_hash = if with_output_name {
+                Some(Self::retrieve_hash_and_clean_up_spoiler(uuid).await?)
+            } else {
+                Self::retrieve_hash_and_clean_up_spoiler(uuid).await.ok()
+            };
+            update_tx.send(SeedRollUpdate::Done {
+                seed: seed::Data {
+                    file_hash,
+                    files: Some(seed::Files::AlttprDoorRando { uuid }),
+                    progression_spoiler: false,
+                    password: None,
+                },
+                rsl_preset: None,
+                version: None,
+                unlock_spoiler_log: UnlockSpoilerLog::Never,
+            }).await.allow_unreceived();
+            Ok(())
+        }.then(|res: Result<(), RollError>| async move {
+            match res {
+                Ok(()) => {}
+                Err(e) => update_tx2.send(SeedRollUpdate::Error(e)).await.allow_unreceived(),
+            }
+        }));
+        update_rx
+    }
+
+    /// Unified seed rolling dispatcher: rolls a seed for an event based on its `seed_gen_type`.
+    ///
+    /// Replaces the `match goal { ... }` dispatch blocks in `handle_race()` and elsewhere.
+    /// Each `SeedGenType` variant calls the appropriate existing rolling method.
+    pub(crate) async fn roll_seed_for_event(
+        self: Arc<Self>,
+        seed_gen_type: &seed_gen_type::SeedGenType,
+        cal_event: &cal::Event,
+        event: &event::Data<'_>,
+    ) -> mpsc::Receiver<SeedRollUpdate> {
+        use seed_gen_type::{SeedGenType, AlttprDrSource};
+        let unlock_spoiler_log = match event.spoiler_unlock.as_str() {
+            "after" => UnlockSpoilerLog::After,
+            "immediately" => UnlockSpoilerLog::Now,
+            _ => UnlockSpoilerLog::Never,
+        };
+        match seed_gen_type {
+            SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman } => {
+                let alttprde_options = AlttprDeRaceOptions::for_race(&self.db_pool, &cal_event.race, event.round_modes.as_ref()).await;
+                let api_url = match alttprde_options.seed_url() {
+                    Some(url) => url,
+                    None => return alttpr_dr_error_receiver(RollError::AlttprDe("Mode not yet drafted - cannot roll seed".to_owned())),
+                };
+                let uuid = Uuid::new_v4();
+                let yaml_content = match async {
+                    self.http_client.get(&api_url).send().await?.text().await
+                }.await {
+                    Ok(y) => y,
+                    Err(e) => return alttpr_dr_error_receiver(e.into()),
+                };
+                match inject_alttpr_dr_meta(&yaml_content, uuid) {
+                    Ok(yaml) => self.roll_alttpr_dr_seed(yaml, uuid, "../ALttPDoorRandomizer", true),
+                    Err(e) => alttpr_dr_error_receiver(e.into()),
+                }
+            }
+            SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices } => {
+                let crosskeys_options = CrosskeysRaceOptions::for_race(&self.db_pool, &cal_event.race).await;
+                let uuid = Uuid::new_v4();
+                match build_crosskeys_yaml(&crosskeys_options, uuid) {
+                    Ok(yaml_content) => self.roll_alttpr_dr_seed(yaml_content, uuid, "../alttpr", false),
+                    Err(e) => alttpr_dr_error_receiver(e.into()),
+                }
+            }
+            SeedGenType::AlttprDoorRando { source: AlttprDrSource::MysteryPool { .. } } => {
+                self.roll_mysteryd20_seed()
+            }
+            SeedGenType::AlttprAvianart => {
+                let game_num = cal_event.race.game.unwrap_or(1);
+                let preset = cal_event.race.draft.as_ref()
+                    .and_then(|d| d.settings.get(&*format!("game{game_num}_preset")))
+                    .expect("Avianart async race missing preset in draft state")
+                    .as_ref()
+                    .to_owned();
+                self.roll_avianart_seed(preset)
+            }
+            SeedGenType::TWWR { permalink } => {
+                let version = event.rando_version.clone();
+                self.roll_twwr_seed(version, permalink.clone(), unlock_spoiler_log)
+            }
+            _ => unimplemented!("async seed rolling not implemented for seed_gen_type {:?}", seed_gen_type),
+        }
     }
 
     async fn retrieve_hash_and_clean_up_spoiler(uuid: Uuid) -> Result<[String; 5], RollError> {
@@ -2485,6 +2347,96 @@ impl GlobalState {
     }
 }
 
+fn build_crosskeys_yaml(opts: &CrosskeysRaceOptions, uuid: Uuid) -> Result<String, serde_yml::Error> {
+    let meta = AlttprDoorRandoMeta { bps: true, name: uuid.to_string(), race: true, skip_playthrough: true, spoiler: "full", suppress_rom: true };
+    let mut yaml = AlttprDoorRandoYaml { placements: HashMap::default(), settings: HashMap::default(), start_inventory: HashMap::default(), meta };
+    let keydrop_mode = if opts.keydrop_ok { "keys" } else { "none" };
+    let pottery_mode = if opts.keydrop_ok { "keys" } else { "none" };
+    let flute_mode = if opts.flute_ok { "active" } else { "normal" };
+    let goal = if opts.all_dungeons_ok { "dungeons" } else { "crystals" };
+    let mirrorscroll = if opts.mirror_scroll_ok { 1 } else { 0 };
+    let world_state = if opts.inverted_ok { "inverted" } else { "open" };
+    let pseudoboots = if opts.pb_ok { 1 } else { 0 };
+    let skullwoods = if opts.zw_ok { "followlinked" } else { "original" };
+    let settings = AlttprDoorRandoSetting {
+        accessibility: "locations",
+        bigkeyshuffle: 1,
+        compassshuffle: 1,
+        crystals_ganon: "7",
+        crystals_gt: "7",
+        dropshuffle: keydrop_mode,
+        flute_mode,
+        goal,
+        item_functionality: "normal",
+        key_logic_algorithm: "partial",
+        keyshuffle: "wild",
+        linked_drops: "unset",
+        mapshuffle: 1,
+        mirrorscroll,
+        mode: world_state,
+        pottery: pottery_mode,
+        pseudoboots,
+        shuffle: "crossed",
+        shuffletavern: 0,
+        skullwoods,
+    };
+    if !opts.zw_ok {
+        yaml.placements.insert(1, AlttprDoorRandoPlacements { pinball_room: "Small Key (Skull Woods)" });
+    }
+    if opts.flute_ok {
+        yaml.start_inventory.insert(1, &["Ocarina (Activated)"]);
+    }
+    yaml.settings.insert(1, settings);
+    serde_yml::to_string(&yaml)
+}
+
+fn inject_alttpr_dr_meta(yaml_content: &str, uuid: Uuid) -> Result<String, serde_yml::Error> {
+    let mut yaml_value: serde_yml::Value = serde_yml::from_str(yaml_content)?;
+    let meta = AlttprDoorRandoMeta { bps: true, name: uuid.to_string(), race: true, skip_playthrough: true, spoiler: "full", suppress_rom: true };
+    if let serde_yml::Value::Mapping(ref mut map) = yaml_value {
+        map.insert(serde_yml::Value::String("meta".to_string()), serde_yml::to_value(&meta)?);
+    }
+    serde_yml::to_string(&yaml_value)
+}
+
+fn alttpr_dr_error_receiver(e: RollError) -> mpsc::Receiver<SeedRollUpdate> {
+    let (tx, rx) = mpsc::channel(1);
+    let _ = tx.try_send(SeedRollUpdate::Error(e));
+    rx
+}
+
+async fn run_dungeon_randomizer(yaml_path: &Path, working_dir: &str, output_name: Option<&str>) -> Result<(), RollError> {
+    const MAX_RETRIES: u8 = 2;
+    for attempt in 0..=MAX_RETRIES {
+        let mut cmd = Command::new(PYTHON);
+        cmd.current_dir(working_dir)
+            .arg("DungeonRandomizer.py")
+            .arg("--customizer")
+            .arg(yaml_path)
+            .arg("--outputpath")
+            .arg("/var/www/midos.house/seed")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(name) = output_name {
+            cmd.arg("--outputname").arg(name);
+        }
+        let output = cmd.spawn().at_command("DungeonRandomizer.py")?.wait_with_output().await.at_command("DungeonRandomizer.py")?;
+        match output.status.code() {
+            Some(0) => return Ok(()),
+            Some(1) => {
+                let last_error = Some(String::from_utf8_lossy(&output.stderr).into_owned());
+                if attempt < MAX_RETRIES {
+                    sleep(Duration::from_secs(10 + 2u64.pow(attempt as u32))).await;
+                    continue;
+                }
+                return Err(RollError::Retries { num_retries: MAX_RETRIES + 1, last_error });
+            }
+            _ => return Err(RollError::Wheel(wheel::Error::CommandExit { name: Cow::Borrowed("DungeonRandomizer.py"), output })),
+        }
+    }
+    unreachable!()
+}
+
 async fn roll_seed_locally(delay_until: Option<DateTime<Utc>>, version: VersionedBranch, unlock_spoiler_log: bool, mut settings: seed::Settings) -> Result<(String, Option<PathBuf>), RollError> {
     let allow_riir = match version {
         VersionedBranch::Pinned { ref version } => version.branch() == rando::Branch::DevFenhl && (version.base(), version.supplementary()) >= (&Version::new(8, 3, 16), Some(1)), // some versions older than this generate corrupted patch files
@@ -2737,45 +2689,16 @@ impl SeedRollUpdate {
                 }
                 let extra = seed.extra(Utc::now()).await.to_racetime()?;
                 if let Some(OfficialRaceData { cal_event, .. }) = official_data {
-                    match seed.files.as_ref().expect("received seed with no files") {
-                        seed::Files::MidosHouse { file_stem, .. } => {
-                            sqlx::query!(
-                                "UPDATE races SET file_stem = $1 WHERE id = $2",
-                                file_stem, cal_event.race.id as _,
-                            ).execute(db_pool).await.to_racetime()?;
-                        }
-                        seed::Files::OotrWeb { id, gen_time, file_stem } => {
-                            sqlx::query!(
-                                "UPDATE races SET web_id = $1, web_gen_time = $2, file_stem = $3 WHERE id = $4",
-                                *id as i64, gen_time, file_stem, cal_event.race.id as _,
-                            ).execute(db_pool).await.to_racetime()?;
-                        }
-                        seed::Files::TriforceBlitz { is_dev, uuid } => {
-                            sqlx::query!(
-                                "UPDATE races SET is_tfb_dev = $1, tfb_uuid = $2 WHERE id = $3",
-                                is_dev, uuid, cal_event.race.id as _,
-                            ).execute(db_pool).await.to_racetime()?;
-                        }
-                        seed::Files::AlttprDoorRando { uuid } => {
-                            sqlx::query!(
-                                "UPDATE races SET xkeys_uuid = $1 WHERE id = $2",
-                                uuid, cal_event.race.id as _,
-                            ).execute(db_pool).await.to_racetime()?;
-                        }
-                        seed::Files::TfbSotd { .. } => unimplemented!("Triforce Blitz seed of the day not supported for official races"),
-                        seed::Files::TwwrPermalink { permalink, seed_hash } => {
-                            sqlx::query!(
-                                "UPDATE races SET seed_data = $1 WHERE id = $2",
-                                json!({ "permalink": permalink, "seed_hash": seed_hash }), cal_event.race.id as _,
-                            ).execute(db_pool).await.to_racetime()?;
-                        }
-                        seed::Files::AvianartSeed { hash, seed_hash } => {
-                            sqlx::query!(
-                                "UPDATE races SET seed_data = $1 WHERE id = $2",
-                                json!({ "avianart_hash": hash, "avianart_seed_hash": seed_hash.as_ref().map(|h| h.join(", ")) }),
-                                cal_event.race.id as _,
-                            ).execute(db_pool).await.to_racetime()?;
-                        }
+                    if let Some(seed::Files::TfbSotd { .. }) = seed.files {
+                        unimplemented!("Triforce Blitz seed of the day not supported for official races");
+                    }
+                    // Merge file_hash from spoiler log into seed so to_seed_data() includes it
+                    seed.file_hash = extra.file_hash.clone();
+                    if let Some(seed_data_json) = seed.to_seed_data() {
+                        sqlx::query!(
+                            "UPDATE races SET seed_data = $1 WHERE id = $2",
+                            seed_data_json, cal_event.race.id as _,
+                        ).execute(db_pool).await.to_racetime()?;
                     }
                     if let Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) = extra.file_hash {
                         sqlx::query!(
@@ -3228,21 +3151,6 @@ impl CrosskeysRaceOptions {
         }
     }
 
-    pub(crate) async fn for_race_with_transaction(transaction: &mut Transaction<'_, Postgres>, race: &Race) -> sqlx::Result<Self> {
-        let teams = race.teams();
-        let team_rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _).fetch_all(&mut **transaction).await?;
-        Ok(CrosskeysRaceOptions {
-            all_dungeons_ok: team_rows.iter().all(|row| row.custom_choices.get("all_dungeons").is_some_and(|v| v == "yes")),
-            flute_ok: team_rows.iter().all(|row| row.custom_choices.get("flute").is_some_and(|v| v == "yes")),
-            hovering_ok: team_rows.iter().all(|row| row.custom_choices.get("hovering").is_some_and(|v| v == "yes")),
-            inverted_ok: team_rows.iter().all(|row| row.custom_choices.get("inverted").is_some_and(|v| v == "yes")),
-            keydrop_ok: team_rows.iter().all(|row| row.custom_choices.get("keydrop").is_some_and(|v| v == "yes")),
-            mirror_scroll_ok: team_rows.iter().all(|row| row.custom_choices.get("mirror_scroll").is_some_and(|v| v == "yes")),
-            no_delay_ok: team_rows.iter().all(|row| row.custom_choices.get("no_delay").is_some_and(|v| v == "yes")),
-            pb_ok: team_rows.iter().all(|row| row.custom_choices.get("pseudoboots").is_some_and(|v| v == "yes")),
-            zw_ok: team_rows.iter().all(|row| row.custom_choices.get("zw").is_some_and(|v| v == "yes")),
-        })
-    }
 
 }
 
@@ -3708,30 +3616,31 @@ impl Handler {
                 } else {
                     ("a", format!("seed with {}", step.message))
                 };
-                // Special handling for goals that use custom seed rolling
-                match goal {
-                    Some(Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB) => {
-                        let cal_event = self.official_data.as_ref().expect("AlttprDe9 goal must have official_data").cal_event.clone();
+                // Dispatch seed rolling based on seed_gen_type from event DB config.
+                let event_seed_gen_type = self.official_data.as_ref().and_then(|d| d.event.seed_gen_type.as_ref());
+                match event_seed_gen_type {
+                    Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::Boothisman }) => {
+                        let cal_event = self.official_data.as_ref().expect("AlttprDoorRando/Boothisman must have official_data").cal_event.clone();
                         self.roll_alttprde9_seed(ctx, cal_event, lang, article).await;
                     }
-                    Some(Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups) => {
-                        let cal_event = self.official_data.as_ref().expect("RivalsCup goal must have official_data").cal_event.clone();
+                    Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MutualChoices }) => {
+                        let cal_event = self.official_data.as_ref().expect("AlttprDoorRando/MutualChoices must have official_data").cal_event.clone();
+                        self.roll_crosskeys2025_seed(ctx, cal_event, lang, article).await;
+                    }
+                    Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MysteryPool { .. } }) => {
+                        let cal_event = self.official_data.as_ref().expect("AlttprDoorRando/MysteryPool must have official_data").cal_event.clone();
+                        self.roll_mysteryd20_seed(ctx, cal_event, lang, article).await;
+                    }
+                    Some(seed_gen_type::SeedGenType::AlttprAvianart) => {
+                        let cal_event = self.official_data.as_ref().expect("AlttprAvianart must have official_data").cal_event.clone();
                         let preset = settings.get("preset")
                             .and_then(|v| v.as_str())
-                            .expect("RivalsCup Done settings missing preset")
+                            .expect("Avianart Done settings missing preset")
                             .to_owned();
                         self.roll_rivals_cup_seed(ctx, cal_event, preset, lang, article).await;
                     }
-                    Some(Goal::Crosskeys2025) => {
-                        let cal_event = self.official_data.as_ref().expect("Crosskeys2025 goal must have official_data").cal_event.clone();
-                        self.roll_crosskeys2025_seed(ctx, cal_event, lang, article).await;
-                    }
-                    Some(Goal::MysteryD20) => {
-                        let cal_event = self.official_data.as_ref().expect("MysteryD20 goal must have official_data").cal_event.clone();
-                        self.roll_mysteryd20_seed(ctx, cal_event, lang, article).await;
-                    }
                     _ => {
-                        self.roll_seed(ctx, self.effective_preroll_mode(goal), self.effective_rando_version(goal), settings, unlock_spoiler_log, lang, article, description).await;
+                        self.roll_seed(ctx, self.effective_preroll_mode(None), self.effective_rando_version(None), settings, unlock_spoiler_log, lang, article, description).await;
                     }
                 }
             }
@@ -3890,7 +3799,19 @@ impl Handler {
         let alttprde_options = AlttprDeRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race, event.round_modes.as_ref()).await;
         let seed_options_str = alttprde_options.as_seed_options_str();
         let race_options_str = alttprde_options.as_race_options_str();
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_alttprde9_seed(alttprde_options), language, article, format!("seed with {}", seed_options_str), false).await;
+        let uuid = Uuid::new_v4();
+        let receiver = async {
+            let url = alttprde_options.seed_url()
+                .ok_or_else(|| RollError::AlttprDe("Mode not yet drafted - cannot roll seed".to_owned()))?;
+            let yaml = ctx.global_state.http_client.get(&url).send().await?.text().await?;
+            let yaml = inject_alttpr_dr_meta(&yaml, uuid)?;
+            Ok::<_, RollError>(ctx.global_state.clone().roll_alttpr_dr_seed(yaml, uuid, "../ALttPDoorRandomizer", true))
+        }.await;
+        let receiver = match receiver {
+            Ok(rx) => rx,
+            Err(e) => alttpr_dr_error_receiver(e),
+        };
+        self.roll_seed_inner(ctx, Some(delay_until), receiver, language, article, format!("seed with {}", seed_options_str), false).await;
         ctx.send_message(format!("@entrants Remember: this race will be played with {}!",
                                     race_options_str
                                 ), true, Vec::default()).await.expect("failed to send race options");
@@ -3916,9 +3837,16 @@ impl Handler {
         let delay_until = official_start - TimeDelta::minutes(10);
 
         let crosskeys_options = CrosskeysRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race).await;
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2025_seed(crosskeys_options), language, article, format!("seed with {}", crosskeys_options.as_seed_options_str()), false).await;
+        let seed_options_str = crosskeys_options.as_seed_options_str();
+        let race_options_str = crosskeys_options.as_race_options_str();
+        let uuid = Uuid::new_v4();
+        let receiver = match build_crosskeys_yaml(&crosskeys_options, uuid) {
+            Ok(yaml_content) => ctx.global_state.clone().roll_alttpr_dr_seed(yaml_content, uuid, "../alttpr", false),
+            Err(e) => alttpr_dr_error_receiver(e.into()),
+        };
+        self.roll_seed_inner(ctx, Some(delay_until), receiver, language, article, format!("seed with {}", seed_options_str), false).await;
         ctx.send_message(format!("@entrants Remember: this race will be played with {}!",
-                                    crosskeys_options.as_race_options_str()
+                                    race_options_str
                                 ), true, Vec::default()).await.expect("failed to send race options");
     }
 
@@ -6679,13 +6607,19 @@ pub(crate) enum PrepareSeedsError {
 
 async fn prepare_seeds(global_state: Arc<GlobalState>, mut seed_cache_rx: watch::Receiver<()>, mut shutdown: rocket::Shutdown) -> Result<(), PrepareSeedsError> {
     'outer: loop {
-        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND room IS NULL AND async_room1 IS NULL AND async_room2 IS NULL AND async_room3 IS NULL AND file_stem IS NULL AND tfb_uuid IS NULL"#).fetch_all(&global_state.db_pool).await? {
+        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND room IS NULL AND async_room1 IS NULL AND async_room2 IS NULL AND async_room3 IS NULL AND seed_data IS NULL"#).fetch_all(&global_state.db_pool).await? {
             let mut transaction = global_state.db_pool.begin().await?;
             let race = Race::from_id(&mut transaction, &global_state.http_client, id).await?;
             let event = race.event(&mut transaction).await?;
-            if let Some(goal) = event.goal_slug.as_deref().and_then(Goal::from_slug) {
-                if let PrerollMode::Long = goal.preroll_seeds(Some((event.series, &*event.event))) {
-                    if let Some(settings) = race.single_settings(&mut transaction).await? {
+            if event.seed_gen_type.is_some() && event.preroll_mode == "long" {
+                if let Some(settings) = race.single_settings(&mut transaction).await? {
+                    let unlock_spoiler_log = match event.spoiler_unlock.as_str() {
+                        "after" => UnlockSpoilerLog::After,
+                        "immediately" => UnlockSpoilerLog::Now,
+                        _ => UnlockSpoilerLog::Never,
+                    };
+                    let rando_version = event.rando_version.clone()
+                        .unwrap_or(VersionedBranch::Latest { branch: rando::Branch::Dev });
                         transaction.commit().await?;
                         if race.seed.files.is_none()
                         && race
@@ -6699,9 +6633,9 @@ async fn prepare_seeds(global_state: Arc<GlobalState>, mut seed_cache_rx: watch:
                                     PrerollMode::Long,
                                     false,
                                     None,
-                                    goal.rando_version(Some(&event)),
+                                    rando_version.clone(),
                                     settings.clone(),
-                                    goal.unlock_spoiler_log(true, false),
+                                    unlock_spoiler_log,
                                 );
                                 loop {
                                     select! {
@@ -6739,73 +6673,88 @@ async fn prepare_seeds(global_state: Arc<GlobalState>, mut seed_cache_rx: watch:
                                 }
                             }
                         }
-                    }
                 }
             }
         }
-        let active_slugs: Vec<String> = sqlx::query_scalar!("SELECT DISTINCT goal_slug FROM events WHERE goal_slug IS NOT NULL AND (end_time IS NULL OR end_time > NOW())").fetch_all(&global_state.db_pool).await?.into_iter().flatten().collect();
-        for goal in all::<Goal>() {
-            if let Some(settings) = goal.single_settings() { //TODO preroll for official races with single settings even if their goals don't have single settings
-                if goal.preroll_seeds(None) == PrerollMode::Long && active_slugs.iter().any(|slug| slug == goal.slug()) {
-                    if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM prerolled_seeds WHERE goal_name = $1) AS "exists!""#, goal.as_str()).fetch_one(&global_state.db_pool).await? { break }
-                    'seed: loop {
-                        let mut seed_rx = global_state.clone().roll_seed(
-                            PrerollMode::Long,
-                            false,
-                            None,
-                            goal.rando_version(None),
-                            settings.clone(),
-                            goal.unlock_spoiler_log(false, false),
-                        );
-                        loop {
-                            select! {
-                                () = &mut shutdown => break 'outer,
-                                Some(update) = seed_rx.recv() => match update {
-                                    SeedRollUpdate::Queued(_) |
-                                    SeedRollUpdate::MovedForward(_) |
-                                    SeedRollUpdate::Started => {}
-                                    SeedRollUpdate::Done { seed, .. } => {
-                                        let extra = seed.extra(Utc::now()).await?;
-                                        let [hash1, hash2, hash3, hash4, hash5] = match extra.file_hash {
-                                            Some(hash) => hash.map(Some),
-                                            None => [const { None }; 5],
-                                        };
-                                        match seed.files {
-                                            Some(seed::Files::MidosHouse { file_stem, locked_spoiler_log_path }) => {
-                                                sqlx::query!("INSERT INTO prerolled_seeds
-                                                    (goal_name, file_stem, locked_spoiler_log_path, hash1, hash2, hash3, hash4, hash5, seed_password, progression_spoiler)
-                                                VALUES
-                                                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                                                ",
-                                                    goal.as_str(),
-                                                    &file_stem,
-                                                    locked_spoiler_log_path,
-                                                    hash1 as _,
-                                                    hash2 as _,
-                                                    hash3 as _,
-                                                    hash4 as _,
-                                                    hash5 as _,
-                                                    extra.password.map(|password| password.into_iter().map(char::from).collect::<String>()),
-                                                    goal.unlock_spoiler_log(false, false) == UnlockSpoilerLog::Progression,
-                                                ).execute(&global_state.db_pool).await?;
-                                            }
-                                            _ => unimplemented!("unexpected seed files in prerolled seed"),
-                                        }
-                                        break 'seed
+        // Global prerolled seed pool: query events that have fixed settings and long preroll.
+        // This replaces the old all::<Goal>() iteration — seeds are now keyed by event.goal_slug.
+        let pool_events = sqlx::query!(
+            r#"SELECT goal_slug, preroll_mode AS "preroll_mode!", spoiler_unlock AS "spoiler_unlock!",
+               rando_version AS "rando_version: sqlx::types::Json<VersionedBranch>",
+               single_settings AS "single_settings: sqlx::types::Json<seed::Settings>"
+               FROM events
+               WHERE seed_gen_type IS NOT NULL AND preroll_mode = 'long'
+               AND single_settings IS NOT NULL
+               AND (end_time IS NULL OR end_time > NOW())"#
+        ).fetch_all(&global_state.db_pool).await?;
+        for row in pool_events {
+            let goal_name = row.goal_slug.as_deref().unwrap_or("unknown");
+            let settings = match row.single_settings { Some(sqlx::types::Json(s)) => s, None => continue };
+            if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM prerolled_seeds WHERE goal_name = $1) AS "exists!""#, goal_name).fetch_one(&global_state.db_pool).await? { break }
+            let rando_version = row.rando_version.map(|sqlx::types::Json(v)| v)
+                .unwrap_or(VersionedBranch::Latest { branch: rando::Branch::Dev });
+            let unlock_spoiler_log = match row.spoiler_unlock.as_str() {
+                "after" => UnlockSpoilerLog::After,
+                "immediately" => UnlockSpoilerLog::Now,
+                _ => UnlockSpoilerLog::Never,
+            };
+            let progression_spoiler = unlock_spoiler_log == UnlockSpoilerLog::Progression;
+            'seed: loop {
+                let mut seed_rx = global_state.clone().roll_seed(
+                    PrerollMode::Long,
+                    false,
+                    None,
+                    rando_version.clone(),
+                    settings.clone(),
+                    unlock_spoiler_log,
+                );
+                loop {
+                    select! {
+                        () = &mut shutdown => break 'outer,
+                        Some(update) = seed_rx.recv() => match update {
+                            SeedRollUpdate::Queued(_) |
+                            SeedRollUpdate::MovedForward(_) |
+                            SeedRollUpdate::Started => {}
+                            SeedRollUpdate::Done { seed, .. } => {
+                                let extra = seed.extra(Utc::now()).await?;
+                                let [hash1, hash2, hash3, hash4, hash5] = match extra.file_hash {
+                                    Some(hash) => hash.map(Some),
+                                    None => [const { None }; 5],
+                                };
+                                match seed.files {
+                                    Some(seed::Files::MidosHouse { file_stem, locked_spoiler_log_path }) => {
+                                        sqlx::query!("INSERT INTO prerolled_seeds
+                                            (goal_name, file_stem, locked_spoiler_log_path, hash1, hash2, hash3, hash4, hash5, seed_password, progression_spoiler)
+                                        VALUES
+                                            ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                                        ",
+                                            goal_name,
+                                            &file_stem,
+                                            locked_spoiler_log_path,
+                                            hash1 as _,
+                                            hash2 as _,
+                                            hash3 as _,
+                                            hash4 as _,
+                                            hash5 as _,
+                                            extra.password.map(|password| password.into_iter().map(char::from).collect::<String>()),
+                                            progression_spoiler,
+                                        ).execute(&global_state.db_pool).await?;
                                     }
-                                    SeedRollUpdate::Error(RollError::Retries { num_retries, last_error }) => {
-                                        if let Some(last_error) = last_error {
-                                            eprintln!("seed rolling failed {num_retries} times, sample error:\n{last_error}");
-                                        } else {
-                                            eprintln!("seed rolling failed {num_retries} times, no sample error recorded");
-                                        }
-                                        continue 'seed
-                                    }
-                                    SeedRollUpdate::Error(e) => return Err(e.into()),
-                                    #[cfg(unix)] SeedRollUpdate::Message(_) => {}
-                                },
+                                    _ => unimplemented!("unexpected seed files in prerolled seed"),
+                                }
+                                break 'seed
                             }
-                        }
+                            SeedRollUpdate::Error(RollError::Retries { num_retries, last_error }) => {
+                                if let Some(last_error) = last_error {
+                                    eprintln!("seed rolling failed {num_retries} times, sample error:\n{last_error}");
+                                } else {
+                                    eprintln!("seed rolling failed {num_retries} times, no sample error recorded");
+                                }
+                                continue 'seed
+                            }
+                            SeedRollUpdate::Error(e) => return Err(e.into()),
+                            #[cfg(unix)] SeedRollUpdate::Message(_) => {}
+                        },
                     }
                 }
             }

@@ -298,6 +298,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             seed_cache_tx,
             seed_metadata,
             config.avianart_api_key.clone(),
+            config.mmr_api_key.clone(),
         ).await);
         let discord_builder = discord_bot::configure_builder(discord_builder, global_state.clone(), db_pool.clone(), http_client.clone(), config.clone(), Arc::clone(&new_room_lock), Arc::clone(&clean_shutdown), rocket.shutdown());
         #[cfg(unix)] let unix_listener = unix_socket::listen(rocket.shutdown(), clean_shutdown, global_state.clone());

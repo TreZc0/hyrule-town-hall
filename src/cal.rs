@@ -435,13 +435,6 @@ impl Race {
             fpa_invoked,
             breaks_used,
             seed_data,
-            file_stem,
-            locked_spoiler_log_path,
-            web_id,
-            web_gen_time,
-            is_tfb_dev,
-            tfb_uuid,
-            xkeys_uuid,
             hash1,
             hash2,
             hash3,
@@ -581,24 +574,8 @@ impl Race {
             fpa_invoked: row.fpa_invoked,
             breaks_used: row.breaks_used,
             draft: row.draft_state.map(|Json(draft)| draft),
-            seed: seed::Data::from_db(
-                row.start,
-                row.async_start1,
-                row.async_start2,
-                row.async_start3,
-                row.file_stem,
-                row.locked_spoiler_log_path,
-                row.web_id,
-                row.web_gen_time,
-                row.is_tfb_dev,
-                row.tfb_uuid,
-                row.xkeys_uuid,
+            seed: seed::Data::from_seed_data_only(
                 row.seed_data,
-                row.hash1,
-                row.hash2,
-                row.hash3,
-                row.hash4,
-                row.hash5,
                 row.seed_password.as_deref(),
                 false, // no official races with progression spoilers so far
             ),
@@ -1225,21 +1202,12 @@ impl Race {
             RaceSchedule::Live { start, end, ref room } => (Some(start), [None; 3], end, [None; 3], room.as_ref(), [None; 3]),
             RaceSchedule::Async { start1, start2, start3, end1, end2, end3, ref room1, ref room2, ref room3 } => (None, [start1, start2, start3], None, [end1, end2, end3], None, [room1.as_ref(), room2.as_ref(), room3.as_ref()]),
         };
-        let (web_id, web_gen_time, file_stem, locked_spoiler_log_path, is_tfb_dev, tfb_uuid, xkeys_uuid) = match self.seed.files {
-            Some(seed::Files::AlttprDoorRando { uuid}) => (None, None, None, None, false, None, Some(uuid)),
-            Some(seed::Files::MidosHouse { ref file_stem, ref locked_spoiler_log_path }) => (None, None, Some(file_stem), locked_spoiler_log_path.as_ref(), false, None, None),
-            Some(seed::Files::OotrWeb { id, gen_time, ref file_stem }) => (Some(id), Some(gen_time), Some(file_stem), None, false, None, None),
-            Some(seed::Files::TriforceBlitz { is_dev, uuid }) => (None, None, None, None, is_dev, Some(uuid), None),
-            Some(seed::Files::TfbSotd { .. }) => unimplemented!("Triforce Blitz seed of the day not supported for official races"),
-            Some(seed::Files::TwwrPermalink { .. }) => (None, None, None, None, false, None, None),
-            Some(seed::Files::AvianartSeed { .. }) => (None, None, None, None, false, None, None),
-            None => (None, None, None, None, false, None, None),
-        };
+        let seed_data = self.seed.to_seed_data();
         sqlx::query!("
-            INSERT INTO races              (startgg_set, start, series, event, async_start2, async_start1, room, scheduling_thread, async_room1, async_room2, draft_state, async_end1, async_end2, end_time, team1, team2, web_id, web_gen_time, file_stem, hash1, hash2, hash3, hash4, hash5, game, id,  p1,  p2,  last_edited_by, last_edited_at, video_url, phase, round, ignored, p3,  startgg_event, total, finished, tfb_uuid, video_url_fr, restreamer, restreamer_fr, locked_spoiler_log_path, video_url_pt, restreamer_pt, p1_twitch, p2_twitch, p1_discord, p2_discord, schedule_locked, team3, schedule_updated_at, video_url_de, restreamer_de, sheet_timestamp, league_id, p1_racetime, p2_racetime, async_start3, async_room3, async_end3, challonge_match, seed_password, speedgaming_id, notified, is_tfb_dev, fpa_invoked, breaks_used, xkeys_uuid, async_notified_1, async_notified_2, async_notified_3, discord_scheduled_event_id)
-            VALUES                         ($1,          $2,    $3,     $4,    $5,           $6,           $7,   $8,                $9,          $10,         $11,         $12,        $13,        $14,      $15,   $16,   $17,    $18,          $19,       $20,   $21,   $22,   $23,   $24,   $25,  $26, $27, $28, $29,            $30,            $31,       $32,   $33,   $34,     $35, $36,           $37,   $38,      $39,      $40,          $41,        $42,           $43,                     $44,          $45,           $46,       $47,       $48,        $49,        $50,             $51,   $52,                 $53,          $54,           $55,             $56,       $57,         $58,         $59,          $60,         $61,        $62,             $63,           $64,            $65,      $66,        $67,         $68,          $69,        $70,        $71,        $72,                       $73)
-            ON CONFLICT (id) DO UPDATE SET (startgg_set, start, series, event, async_start2, async_start1, room, scheduling_thread, async_room1, async_room2, draft_state, async_end1, async_end2, end_time, team1, team2, web_id, web_gen_time, file_stem, hash1, hash2, hash3, hash4, hash5, game, id,  p1,  p2,  last_edited_by, last_edited_at, video_url, phase, round, ignored, p3,  startgg_event, total, finished, tfb_uuid, video_url_fr, restreamer, restreamer_fr, locked_spoiler_log_path, video_url_pt, restreamer_pt, p1_twitch, p2_twitch, p1_discord, p2_discord, schedule_locked, team3, schedule_updated_at, video_url_de, restreamer_de, sheet_timestamp, league_id, p1_racetime, p2_racetime, async_start3, async_room3, async_end3, challonge_match, seed_password, speedgaming_id, notified, is_tfb_dev, fpa_invoked, breaks_used, xkeys_uuid, async_notified_1, async_notified_2, async_notified_3, discord_scheduled_event_id)
-            =                              ($1,          $2,    $3,     $4,    $5,           $6,           $7,   $8,                $9,          $10,         $11,         $12,        $13,        $14,      $15,   $16,   $17,    $18,          $19,       $20,   $21,   $22,   $23,   $24,   $25,  $26, $27, $28, $29,            $30,            $31,       $32,   $33,   $34,     $35, $36,           $37,   $38,      $39,      $40,          $41,        $42,           $43,                     $44,          $45,           $46,       $47,       $48,        $49,        $50,             $51,   $52,                 $53,          $54,           $55,             $56,       $57,         $58,         $59,          $60,         $61,        $62,             $63,           $64,            $65,      $66,        $67,         $68,          $69,        $70,        $71,        $72,                       $73)
+            INSERT INTO races              (startgg_set, start, series, event, async_start2, async_start1, room, scheduling_thread, async_room1, async_room2, draft_state, async_end1, async_end2, end_time, team1, team2, hash1, hash2, hash3, hash4, hash5, game, id,  p1,  p2,  last_edited_by, last_edited_at, video_url, phase, round, ignored, p3,  startgg_event, total, finished, video_url_fr, restreamer, restreamer_fr, video_url_pt, restreamer_pt, p1_twitch, p2_twitch, p1_discord, p2_discord, schedule_locked, team3, schedule_updated_at, video_url_de, restreamer_de, sheet_timestamp, league_id, p1_racetime, p2_racetime, async_start3, async_room3, async_end3, challonge_match, seed_password, speedgaming_id, notified, fpa_invoked, breaks_used, async_notified_1, async_notified_2, async_notified_3, discord_scheduled_event_id, seed_data)
+            VALUES                         ($1,          $2,    $3,     $4,    $5,           $6,           $7,   $8,                $9,          $10,         $11,         $12,        $13,        $14,      $15,   $16,   $17,   $18,   $19,   $20,   $21,   $22,  $23, $24, $25, $26,            $27,            $28,       $29,   $30,   $31,     $32, $33,           $34,   $35,      $36,          $37,        $38,           $39,          $40,           $41,       $42,       $43,        $44,        $45,             $46,   $47,                 $48,          $49,           $50,             $51,       $52,         $53,         $54,          $55,         $56,        $57,             $58,           $59,            $60,      $61,         $62,          $63,        $64,        $65,                       $66,       $67)
+            ON CONFLICT (id) DO UPDATE SET (startgg_set, start, series, event, async_start2, async_start1, room, scheduling_thread, async_room1, async_room2, draft_state, async_end1, async_end2, end_time, team1, team2, hash1, hash2, hash3, hash4, hash5, game, id,  p1,  p2,  last_edited_by, last_edited_at, video_url, phase, round, ignored, p3,  startgg_event, total, finished, video_url_fr, restreamer, restreamer_fr, video_url_pt, restreamer_pt, p1_twitch, p2_twitch, p1_discord, p2_discord, schedule_locked, team3, schedule_updated_at, video_url_de, restreamer_de, sheet_timestamp, league_id, p1_racetime, p2_racetime, async_start3, async_room3, async_end3, challonge_match, seed_password, speedgaming_id, notified, fpa_invoked, breaks_used, async_notified_1, async_notified_2, async_notified_3, discord_scheduled_event_id, seed_data)
+            =                              ($1,          $2,    $3,     $4,    $5,           $6,           $7,   $8,                $9,          $10,         $11,         $12,        $13,        $14,      $15,   $16,   $17,   $18,   $19,   $20,   $21,   $22,  $23, $24, $25, $26,            $27,            $28,       $29,   $30,   $31,     $32, $33,           $34,   $35,      $36,          $37,        $38,           $39,          $40,           $41,       $42,       $43,        $44,        $45,             $46,   $47,                 $48,          $49,           $50,             $51,       $52,         $53,         $54,          $55,         $56,        $57,             $58,           $59,            $60,      $61,         $62,          $63,        $64,        $65,                       $66,       $67)
         ",
             startgg_set as _,
             start,
@@ -1257,9 +1225,6 @@ impl Race {
             end,
             team1 as _,
             team2 as _,
-            web_id.map(|web_id| web_id as i64),
-            web_gen_time,
-            file_stem.map(|file_stem| &**file_stem),
             self.seed.file_hash.as_ref().map(|[hash1, _, _, _, _]| hash1),
             self.seed.file_hash.as_ref().map(|[_, hash2, _, _, _]| hash2),
             self.seed.file_hash.as_ref().map(|[_, _, hash3, _, _]| hash3),
@@ -1279,11 +1244,9 @@ impl Race {
             startgg_event,
             total.map(|total| total as i32),
             finished.map(|finished| finished as i32),
-            tfb_uuid,
             self.video_urls.get(&French).map(|url| url.to_string()),
             self.restreamers.get(&English),
             self.restreamers.get(&French),
-            locked_spoiler_log_path,
             self.video_urls.get(&Portuguese).map(|url| url.to_string()),
             self.restreamers.get(&Portuguese),
             p1_twitch,
@@ -1306,14 +1269,13 @@ impl Race {
             self.seed.password.map(|password| password.into_iter().map(char::from).collect::<String>()),
             speedgaming_id,
             self.notified,
-            is_tfb_dev,
             self.fpa_invoked,
             self.breaks_used,
-            xkeys_uuid,
             self.async_notified_1,
             self.async_notified_2,
             self.async_notified_3,
-            self.discord_scheduled_event_id as _
+            self.discord_scheduled_event_id as _,
+            seed_data.map(Json) as _
         ).execute(&mut **transaction).await?;
         Ok(())
     }
@@ -2207,18 +2169,10 @@ pub(crate) async fn race_table(
         false
     };
     
-    // Check if any race has custom settings that would show in a settings column
-    let has_settings = 'has_settings: {
-        for race in races {
-            if !race.show_seed() {
-                // Check for Crosskeys2025 races
-                if matches!(race.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug), Some(racetime_bot::Goal::Crosskeys2025)) {
-                    break 'has_settings true
-                }
-            }
-        }
-        false
-    };
+    // Check if the event uses a seed gen type that exposes per-race player-chosen settings.
+    let has_settings = event.is_some_and(|e| {
+        e.seed_gen_type.as_ref().is_some_and(|sgt| sgt.has_display_settings())
+    });
     let has_buttons = options.can_create || options.can_edit;
     let now = Utc::now();
     Ok(html! {
@@ -2476,11 +2430,11 @@ pub(crate) async fn race_table(
                                     }
                                 }
                                 
-                                // Add Settings link for races with custom options
+                                // Add Settings link for races with per-race player-chosen settings
                                 @if race.show_seed() || race.is_ended() || matches!(race.schedule, RaceSchedule::Unscheduled | RaceSchedule::Async { .. } | RaceSchedule::Live { .. }) {
-                                    @if matches!(race.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug), Some(racetime_bot::Goal::Crosskeys2025)) {
-                                        @if let Ok(crosskeys_options) = racetime_bot::CrosskeysRaceOptions::for_race_with_transaction(&mut *transaction, race).await {
-                                            span(class = "settings-link", data_tooltip = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str_no_delay())) {
+                                    @if let Some(sgt) = event.seed_gen_type.as_ref() {
+                                        @if let Some(summary) = sgt.agreed_settings_str(&mut **transaction, race, &event.boolean_choice_requirements()).await {
+                                            span(class = "settings-link", data_tooltip = summary) {
                                                 : " -Hover for Settings- ";
                                             }
                                         }
@@ -2490,10 +2444,9 @@ pub(crate) async fn race_table(
                         }
                         @if !has_seeds && has_settings {
                             td {
-                                // Check for Crosskeys2025 races
-                                @if matches!(race.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug), Some(racetime_bot::Goal::Crosskeys2025)) {
-                                    @if let Ok(crosskeys_options) = racetime_bot::CrosskeysRaceOptions::for_race_with_transaction(&mut *transaction, race).await {
-                                        span(class = "settings-link", data_tooltip = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str_no_delay())) {
+                                @if let Some(sgt) = event.seed_gen_type.as_ref() {
+                                    @if let Some(summary) = sgt.agreed_settings_str(&mut **transaction, race, &event.boolean_choice_requirements()).await {
+                                        span(class = "settings-link", data_tooltip = summary) {
                                             : "-Hover for Settings-";
                                         }
                                     }

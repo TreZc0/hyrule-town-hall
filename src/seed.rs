@@ -79,7 +79,184 @@ pub(crate) enum Files {
     },
 }
 
+impl Files {
+    /// Serialize to the unified `seed_data` JSONB format stored on the `races` table.
+    ///
+    /// For `AlttprDoorRando`, the file hash icons are stored separately on `Data` and must be
+    /// merged in via `Data::to_seed_data()` — this method omits them.
+    pub(crate) fn to_seed_data_base(&self) -> serde_json::Value {
+        match self {
+            Self::AlttprDoorRando { uuid } => serde_json::json!({
+                "type": "alttpr_dr",
+                "uuid": uuid.to_string(),
+            }),
+            Self::AvianartSeed { hash, seed_hash } => {
+                let mut obj = serde_json::json!({"type": "alttpr_avianart", "hash": hash});
+                if let Some(sh) = seed_hash {
+                    // Store as JSON array (canonical new format)
+                    obj["seed_hash"] = serde_json::Value::Array(
+                        sh.iter().map(|s| serde_json::Value::String(s.clone())).collect()
+                    );
+                }
+                obj
+            }
+            Self::OotrWeb { id, gen_time, file_stem } => serde_json::json!({
+                "type": "ootr_web",
+                "id": id,
+                "gen_time": gen_time.to_rfc3339(),
+                "file_stem": file_stem.as_ref(),
+            }),
+            Self::TriforceBlitz { is_dev, uuid } => serde_json::json!({
+                "type": "ootr_tfb",
+                "uuid": uuid.to_string(),
+                "is_dev": is_dev,
+            }),
+            Self::MidosHouse { file_stem, locked_spoiler_log_path } => {
+                let mut obj = serde_json::json!({
+                    "type": "midos_house",
+                    "file_stem": file_stem.as_ref(),
+                });
+                if let Some(path) = locked_spoiler_log_path {
+                    obj["locked_spoiler_log_path"] = serde_json::Value::String(path.clone());
+                }
+                obj
+            }
+            Self::TwwrPermalink { permalink, seed_hash } => serde_json::json!({
+                "type": "twwr",
+                "permalink": permalink,
+                "seed_hash": seed_hash,
+            }),
+            Self::TfbSotd { .. } => {
+                // TfbSotd is an ephemeral in-memory type only; never stored in races table
+                panic!("TfbSotd cannot be serialized to seed_data")
+            }
+        }
+    }
+
+    /// Parse from the unified `seed_data` JSONB column.
+    ///
+    /// Returns `None` if `value` has an unrecognised `type` field or is missing required fields.
+    pub(crate) fn from_seed_data(value: &serde_json::Value) -> Option<Self> {
+        match value.get("type").and_then(|v| v.as_str())? {
+            "alttpr_dr" => {
+                let uuid = value.get("uuid")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok())?;
+                Some(Self::AlttprDoorRando { uuid })
+            }
+            "alttpr_avianart" => {
+                let hash = value.get("hash").and_then(|v| v.as_str())?.to_owned();
+                // seed_hash may be a JSON array (new format) or a comma-separated string (migrated)
+                let seed_hash = if let Some(arr) = value.get("seed_hash").and_then(|v| v.as_array()) {
+                    let parts: Vec<String> = arr.iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect();
+                    parts.try_into().ok()
+                } else {
+                    value.get("seed_hash")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| crate::avianart::parse_file_hash(s).ok())
+                };
+                Some(Self::AvianartSeed { hash, seed_hash })
+            }
+            "ootr_web" => {
+                let id = value.get("id").and_then(|v| v.as_i64())?;
+                let gen_time: DateTime<Utc> = value.get("gen_time")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok())?;
+                let file_stem = value.get("file_stem").and_then(|v| v.as_str())?.to_owned();
+                Some(Self::OotrWeb { id, gen_time, file_stem: Cow::Owned(file_stem) })
+            }
+            "ootr_tfb" => {
+                let uuid = value.get("uuid")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok())?;
+                let is_dev = value.get("is_dev").and_then(|v| v.as_bool()).unwrap_or(false);
+                Some(Self::TriforceBlitz { is_dev, uuid })
+            }
+            "midos_house" => {
+                let file_stem = value.get("file_stem").and_then(|v| v.as_str())?.to_owned();
+                let locked_spoiler_log_path = value.get("locked_spoiler_log_path")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned);
+                Some(Self::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path })
+            }
+            "twwr" => {
+                let permalink = value.get("permalink").and_then(|v| v.as_str())?.to_owned();
+                let seed_hash = value.get("seed_hash").and_then(|v| v.as_str())?.to_owned();
+                Some(Self::TwwrPermalink { permalink, seed_hash })
+            }
+            _ => None,
+        }
+    }
+}
+
 impl Data {
+    /// Serialize to the unified `seed_data` JSONB value for storage in the `races` table.
+    ///
+    /// For `AlttprDoorRando`, merges in `file_hash` (hash1..5) so they survive the column drop.
+    pub(crate) fn to_seed_data(&self) -> Option<serde_json::Value> {
+        let files = self.files.as_ref()?;
+        let mut obj = files.to_seed_data_base();
+        // Merge hash icons into alttpr_dr entries so they're preserved after column drop
+        if matches!(files, Files::AlttprDoorRando { .. }) {
+            if let Some([h1, h2, h3, h4, h5]) = &self.file_hash {
+                obj["hash1"] = h1.as_str().into();
+                obj["hash2"] = h2.as_str().into();
+                obj["hash3"] = h3.as_str().into();
+                obj["hash4"] = h4.as_str().into();
+                obj["hash5"] = h5.as_str().into();
+            }
+        }
+        Some(obj)
+    }
+
+    /// Construct `Data` purely from the unified `seed_data` JSONB column (post-migration races).
+    ///
+    /// This is the simplified constructor used after migration 060 drops the old individual
+    /// seed columns from the `races` table.
+    pub(crate) fn from_seed_data_only(
+        seed_data: Option<serde_json::Value>,
+        password: Option<&str>,
+        progression_spoiler: bool,
+    ) -> Self {
+        let (files, file_hash) = if let Some(ref data) = seed_data {
+            let files = Files::from_seed_data(data);
+            // For AlttprDR: hash icons are stored inline in seed_data
+            let file_hash = if data.get("type").and_then(|v| v.as_str()) == Some("alttpr_dr") {
+                let h1 = data.get("hash1").and_then(|v| v.as_str()).map(str::to_owned);
+                let h2 = data.get("hash2").and_then(|v| v.as_str()).map(str::to_owned);
+                let h3 = data.get("hash3").and_then(|v| v.as_str()).map(str::to_owned);
+                let h4 = data.get("hash4").and_then(|v| v.as_str()).map(str::to_owned);
+                let h5 = data.get("hash5").and_then(|v| v.as_str()).map(str::to_owned);
+                match (h1, h2, h3, h4, h5) {
+                    (Some(h1), Some(h2), Some(h3), Some(h4), Some(h5)) => {
+                        Some([h1, h2, h3, h4, h5])
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            (files, file_hash)
+        } else {
+            (None, None)
+        };
+        Self {
+            file_hash,
+            password: password.map(|pw| {
+                pw.chars()
+                    .map(|note| OcarinaNote::try_from(note)
+                        .expect("invalid ocarina note in password, should be prevented by SQL constraint"))
+                    .collect_vec()
+                    .try_into()
+                    .expect("invalid password length, should be prevented by SQL constraint")
+            }),
+            files,
+            progression_spoiler,
+        }
+    }
+
     pub(crate) fn from_db(
         start: Option<DateTime<Utc>>,
         async_start1: Option<DateTime<Utc>>,
@@ -431,7 +608,10 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>,
             let mut transaction = pool.begin().await?;
             let SeedMetadata { locked_spoiler_log_path, progression_spoiler } = if let Some(info) = lock!(@read seed_metadata = seed_metadata; seed_metadata.get(file_stem).cloned()) {
                 info
-            } else if let Some(locked_spoiler_log_path) = sqlx::query_scalar!("SELECT locked_spoiler_log_path FROM races WHERE file_stem = $1", file_stem).fetch_optional(&mut *transaction).await? {
+            } else if let Some(locked_spoiler_log_path) = sqlx::query_scalar!(
+                "SELECT seed_data->>'locked_spoiler_log_path' FROM races WHERE seed_data->>'file_stem' = $1 AND seed_data->>'type' = 'midos_house'",
+                file_stem
+            ).fetch_optional(&mut *transaction).await? {
                 SeedMetadata { locked_spoiler_log_path, progression_spoiler: false /* no official races with progression spoilers so far */ }
             } else {
                 SeedMetadata::default()
@@ -494,7 +674,10 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>,
             let mut transaction = pool.begin().await?;
             let SeedMetadata { locked_spoiler_log_path, progression_spoiler } = if let Some(info) = lock!(@read seed_metadata = seed_metadata; seed_metadata.get(file_stem).cloned()) {
                 info
-            } else if let Some(locked_spoiler_log_path) = sqlx::query_scalar!("SELECT locked_spoiler_log_path FROM races WHERE file_stem = $1", file_stem).fetch_optional(&mut *transaction).await? {
+            } else if let Some(locked_spoiler_log_path) = sqlx::query_scalar!(
+                "SELECT seed_data->>'locked_spoiler_log_path' FROM races WHERE seed_data->>'file_stem' = $1 AND seed_data->>'type' = 'midos_house'",
+                file_stem
+            ).fetch_optional(&mut *transaction).await? {
                 SeedMetadata { locked_spoiler_log_path, progression_spoiler: false /* no official races with progression spoilers so far */ }
             } else {
                 SeedMetadata::default()

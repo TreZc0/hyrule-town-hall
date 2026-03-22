@@ -13,7 +13,10 @@ use {
 
         notification::SimpleNotificationKind,
         prelude::*,
-        racetime_bot::VersionedBranch,
+        racetime_bot::{
+            VersionedBranch,
+            seed_gen_type::SeedGenType,
+        },
     },
 };
 
@@ -231,6 +234,7 @@ pub(crate) struct Data<'a> {
     pub(crate) is_custom_goal: bool,
     pub(crate) preroll_mode: String,
     pub(crate) spoiler_unlock: String,
+    pub(crate) seed_gen_type: Option<SeedGenType>,
 }
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
@@ -314,7 +318,9 @@ impl<'a> Data<'a> {
             is_custom_goal,
             preroll_mode AS "preroll_mode!",
             spoiler_unlock AS "spoiler_unlock!",
-            async_start_delay
+            async_start_delay,
+            seed_gen_type,
+            seed_config AS "seed_config: Json<serde_json::Value>"
         FROM events WHERE series = $1 AND event = $2"#, series as _, &event).fetch_optional(&mut **transaction).await?
             .map(|row| Ok::<_, DataError>(Self {
                 display_name: row.display_name,
@@ -388,6 +394,10 @@ impl<'a> Data<'a> {
                 preroll_mode: row.preroll_mode,
                 spoiler_unlock: row.spoiler_unlock,
                 async_start_delay: row.async_start_delay,
+                seed_gen_type: SeedGenType::from_db(
+                    row.seed_gen_type.as_deref(),
+                    row.seed_config.as_ref().map(|Json(v)| v),
+                ),
             }))
             .transpose()
     }
