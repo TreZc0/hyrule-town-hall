@@ -1,0 +1,1 @@
+ALTER TABLE events ADD COLUMN fpa_enabled BOOLEAN NOT NULL DEFAULT false;

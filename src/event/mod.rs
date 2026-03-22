@@ -167,7 +167,6 @@ pub(crate) struct Data<'a> {
     pub(crate) event: Cow<'a, str>,
     pub(crate) display_name: String,
     pub(crate) short_name: Option<String>,
-    /// The event's originally scheduled starting time, not accounting for the 24-hour deadline extension in the event of an odd number of teams for events with qualifier asyncs.
     pub(crate) base_start: Option<DateTime<Utc>>,
     pub(crate) end: Option<DateTime<Utc>>,
     pub(crate) url: Option<Url>,
@@ -201,9 +200,9 @@ pub(crate) struct Data<'a> {
     pub(crate) auto_import: bool,
     pub(crate) emulator_settings_reminder: bool,
     pub(crate) prevent_late_joins: bool,
+    pub(crate) fpa_enabled: bool,
     pub(crate) manual_reporting_with_breaks: bool,
     pub(crate) language: Language,
-    #[allow(dead_code)] // Will be used for tabbed UI
     pub(crate) default_volunteer_language: Language,
     pub(crate) asyncs_active: bool,
     pub(crate) swiss_standings: bool,
@@ -211,35 +210,13 @@ pub(crate) struct Data<'a> {
     pub(crate) discord_events_enabled: bool,
     pub(crate) discord_events_require_restream: bool,
     pub(crate) listed: bool,
-    /// Maps round names to mode names for swiss events where mode is fixed per round.
-    /// Example: {"Round 1": "ambrozia", "Round 2": "crosskeys"}
     pub(crate) round_modes: Option<HashMap<String, String>>,
-    /// When true, qualifier requests create Discord threads with READY/countdown/FINISH buttons
-    /// instead of using web forms for submission.
     pub(crate) automated_asyncs: bool,
-    /// When true, automatic volunteer request posts are enabled for this event.
     pub(crate) volunteer_requests_enabled: bool,
-    /// How many hours in advance to post volunteer request announcements.
     pub(crate) volunteer_request_lead_time_hours: i32,
-    /// When true, uses event-specific role bindings. When false, uses game-level role bindings.
     pub(crate) force_custom_role_binding: bool,
-    /// Controls when qualifier scores are hidden on the teams page.
     pub(crate) qualifier_score_hiding: QualifierScoreHiding,
-    /// Discord role to ping when a qualifier race room opens.
     pub(crate) qualifier_notification_role_id: Option<RoleId>,
-    pub(crate) goal_slug: Option<String>,
-    pub(crate) draft_kind_str: Option<String>,
-    pub(crate) draft_config: Option<serde_json::Value>,
-    pub(crate) qualifier_score_kind_str: Option<String>,
-    pub(crate) is_single_race: bool,
-    pub(crate) hide_entrants: bool,
-    pub(crate) start_delay: i32,
-    pub(crate) start_delay_open: Option<i32>,
-    pub(crate) restrict_chat_in_qualifiers: bool,
-    pub(crate) racetime_goal_name: Option<String>,
-    pub(crate) is_custom_goal: bool,
-    pub(crate) preroll_mode: String,
-    pub(crate) spoiler_unlock: String,
     pub(crate) async_start_delay: Option<i32>,
 }
 
@@ -294,6 +271,7 @@ impl<'a> Data<'a> {
             auto_import,
             emulator_settings_reminder,
             prevent_late_joins,
+            fpa_enabled,
             manual_reporting_with_breaks,
             language AS "language: Language",
             default_volunteer_language AS "default_volunteer_language: Language",
@@ -365,6 +343,7 @@ impl<'a> Data<'a> {
                 auto_import: row.auto_import,
                 emulator_settings_reminder: row.emulator_settings_reminder,
                 prevent_late_joins: row.prevent_late_joins,
+                fpa_enabled: row.fpa_enabled,
                 manual_reporting_with_breaks: row.manual_reporting_with_breaks,
                 language: row.language,
                 default_volunteer_language: row.default_volunteer_language,

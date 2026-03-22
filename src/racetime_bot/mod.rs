@@ -4238,22 +4238,20 @@ impl RaceHandler<GlobalState> for Handler {
                         });
                     }
                 }
-                let fpa_enabled = match goal {
-                    Some(Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Crosskeys2025 | Goal::MysteryD20) => false,
-                    _ => {
-                        let lang = goal.map_or(event.language, |g| g.language());
-                        match data.status.value {
-                            RaceStatusValue::Invitational => {
-                                ctx.say(if let French = lang {
-                                    "Le FPA est activé pour cette race. Les joueurs pourront utiliser !fpa pendant la race pour signaler d'un problème technique de leur côté. Les race monitors doivent activer les notifications en cliquant sur l'icône de cloche 🔔 sous le chat."
-                                } else {
-                                    "Fair play agreement is active for this official race. Entrants may use the !fpa command during the race to notify of a crash. Race monitors (if any) should enable notifications using the bell 🔔 icon below chat."
-                                }).await?; //TODO different message for monitorless FPA?
-                                true
-                            }
-                            RaceStatusValue::Open => false,
-                            _ => data.entrants.len() < 10, // guess based on entrant count, assuming an open race for 10 or more
+                let fpa_enabled = if !event.fpa_enabled {
+                    false
+                } else {
+                    match data.status.value {
+                        RaceStatusValue::Invitational => {
+                            ctx.say(if let French = goal.language() {
+                                "Le FPA est activé pour cette race. Les joueurs pourront utiliser !fpa pendant la race pour signaler d'un problème technique de leur côté. Les race monitors doivent activer les notifications en cliquant sur l'icône de cloche 🔔 sous le chat."
+                            } else {
+                                "Fair play agreement is active for this official race. Entrants may use the !fpa command during the race to notify of a crash. Race monitors (if any) should enable notifications using the bell 🔔 icon below chat."
+                            }).await?; //TODO different message for monitorless FPA?
+                            true
                         }
+                        RaceStatusValue::Open => false,
+                        _ => data.entrants.len() < 10, // guess based on entrant count, assuming an open race for 10 or more
                     }
                 };
                 (
