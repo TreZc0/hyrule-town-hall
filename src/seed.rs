@@ -333,8 +333,7 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
                     @if let Some(hash_icon_data) = HashIconData::by_name(transaction, game_id, &hash_icon_name).await? {
                         @let file_name = &hash_icon_data.file_name;
                         @let src = format!("/static/hash-icon/{}", file_name);
-                        @let srcset = format!("/static/hash-icon-500/{} 10x", file_name);
-                        img(class = "hash-icon", alt = hash_icon_name, src = src, srcset = srcset);
+                        img(class = "hash-icon", alt = hash_icon_name, src = src);
                     }
                 }
             }
@@ -346,8 +345,7 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
                         @if let Some(hash_icon_data) = HashIconData::by_name(transaction, game_id, &hash_icon_name).await? {
                             @let file_name = &hash_icon_data.file_name;
                             @let src = format!("/static/hash-icon/{}", file_name);
-                            @let srcset = format!("/static/hash-icon-500/{} 10x", file_name);
-                            img(class = "hash-icon", alt = hash_icon_name, src = src, srcset = srcset);
+                            img(class = "hash-icon", alt = hash_icon_name, src = src);
                         }
                     }
                 }
@@ -525,8 +523,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>,
                             @if let Some(hash_icon_data) = HashIconData::by_name(&mut transaction, 1, &hash_icon_name).await? {
                                 @let file_name = &hash_icon_data.file_name;
                                 @let src = format!("/static/hash-icon/{}", file_name);
-                                @let srcset = format!("/static/hash-icon-500/{} 10x", file_name);
-                                img(class = "hash-icon", alt = hash_icon_name, src = src, srcset = srcset);
+                                img(class = "hash-icon", alt = hash_icon_name, src = src);
                             }
                         }
                     }
