@@ -534,55 +534,6 @@ impl Goal {
         }
     }
 
-    /// See the [`PrerollMode`] docs.
-    pub(crate) fn preroll_seeds(&self, event: Option<(Series, &str)>) -> PrerollMode {
-        match self {
-            | Self::AlttprDe9Bracket
-            | Self::AlttprDe9SwissA
-            | Self::AlttprDe9SwissB
-            | Self::AlttprDeRivalsCupBrackets
-            | Self::AlttprDeRivalsCupGroups
-            | Self::Crosskeys2025
-            | Self::Sgl2023
-            | Self::Sgl2024
-            | Self::TriforceBlitz
-                => PrerollMode::None,
-            | Self::Cc7
-            | Self::CoOpS3
-                => PrerollMode::Short,
-            | Self::CopaDoBrasil
-            | Self::LeagueS8
-            | Self::Mq
-            | Self::MultiworldS3
-            | Self::MultiworldS4
-            | Self::MultiworldS5
-            | Self::MysteryD20
-            | Self::NineDaysOfSaws
-            | Self::Pic7
-            | Self::PicRs2
-            | Self::Rsl
-            | Self::SongsOfHope
-            | Self::TournoiFrancoS3
-            | Self::TournoiFrancoS4
-            | Self::TournoiFrancoS5
-            | Self::TriforceBlitzProgressionSpoiler
-            | Self::WeTryToBeBetterS1
-            | Self::WeTryToBeBetterS2
-            | Self::TwwrMainWeekly
-            | Self::TwwrMainMiniblins26
-                => PrerollMode::Medium,
-            | Self::MixedPoolsS2
-            | Self::MixedPoolsS3
-            | Self::MixedPoolsS4
-                => PrerollMode::Long,
-            Self::StandardRuleset => if let Some((Series::Standard, "8" | "8cc")) = event {
-                PrerollMode::Short
-            } else {
-                s::WEEKLY_PREROLL_MODE //TODO allow weekly organizers to configure this
-            },
-        }
-    }
-
     /// Returns whether this goal requires seed generation.
     ///
     /// For speedrunning events that don't use randomizer seeds, this returns false.
@@ -594,113 +545,6 @@ impl Goal {
         ];
 
         !NO_SEED_GOALS.contains(self)
-    }
-
-    pub(crate) fn unlock_spoiler_log(&self, official_race: bool, spoiler_seed: bool) -> UnlockSpoilerLog {
-        if spoiler_seed {
-            UnlockSpoilerLog::Now
-        } else {
-            match self {
-                | Self::Pic7
-                | Self::PicRs2
-                    => UnlockSpoilerLog::Now,
-                | Self::TriforceBlitzProgressionSpoiler
-                    => UnlockSpoilerLog::Progression,
-                | Self::CopaDoBrasil
-                | Self::LeagueS8
-                | Self::MixedPoolsS2
-                | Self::MixedPoolsS3
-                | Self::MixedPoolsS4
-                | Self::Mq
-                | Self::MultiworldS3
-                | Self::MultiworldS4
-                | Self::MultiworldS5
-                | Self::NineDaysOfSaws
-                | Self::Rsl
-                | Self::Sgl2023
-                | Self::Sgl2024
-                | Self::SongsOfHope
-                | Self::TournoiFrancoS3
-                | Self::TournoiFrancoS4
-                | Self::TournoiFrancoS5
-                | Self::TriforceBlitz
-                | Self::WeTryToBeBetterS1
-                | Self::WeTryToBeBetterS2
-                    => UnlockSpoilerLog::After,
-                | Self::Cc7
-                | Self::CoOpS3
-                | Self::StandardRuleset
-                    => if official_race { UnlockSpoilerLog::Never } else { UnlockSpoilerLog::After },
-                | Self::AlttprDe9Bracket
-                | Self::AlttprDe9SwissA
-                | Self::AlttprDe9SwissB
-                | Self::AlttprDeRivalsCupBrackets
-                | Self::AlttprDeRivalsCupGroups
-                | Self::Crosskeys2025
-                | Self::MysteryD20
-                | Self::TwwrMainWeekly
-                | Self::TwwrMainMiniblins26
-                    => UnlockSpoilerLog::Never
-            }
-        }
-    }
-
-    pub(crate) fn rando_version(&self, event: Option<&event::Data<'_>>) -> VersionedBranch {
-        match self {
-            Self::Cc7 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 1, 0) },
-            Self::CoOpS3 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 1, 0) },
-            Self::CopaDoBrasil => VersionedBranch::Pinned { version: rando::Version::from_dev(7, 1, 143) },
-            Self::LeagueS8 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 2, 57) },
-            Self::MixedPoolsS2 => VersionedBranch::Pinned { version: rando::Version::from_branch(rando::Branch::DevFenhl, 7, 1, 117, 17) },
-            Self::MixedPoolsS3 => VersionedBranch::Pinned { version: rando::Version::from_branch(rando::Branch::DevFenhl, 8, 1, 76, 4) },
-            Self::MixedPoolsS4 => VersionedBranch::Pinned { version: rando::Version::from_branch(rando::Branch::DevFenhl, 8, 2, 76, 10) },
-            Self::Mq => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 2, 0) },
-            Self::MultiworldS3 => VersionedBranch::Pinned { version: rando::Version::from_dev(6, 2, 205) },
-            Self::MultiworldS4 => VersionedBranch::Pinned { version: rando::Version::from_dev(7, 1, 199) },
-            Self::MultiworldS5 => VersionedBranch::Pinned { version: if Utc::now() >= Utc.with_ymd_and_hms(2025, 6, 4, 16, 0, 0).single().expect("wrong hardcoded datetime") {
-                rando::Version::from_dev(8, 3, 0)
-            } else {
-                rando::Version::from_dev(8, 2, 76)
-            } },
-            Self::NineDaysOfSaws => VersionedBranch::Pinned { version: rando::Version::from_branch(rando::Branch::DevFenhl, 6, 9, 14, 2) },
-            Self::Pic7 => VersionedBranch::Custom { github_username: Cow::Borrowed("fenhl"), branch: Cow::Borrowed("frogs2-melody") },
-            Self::Sgl2023 => VersionedBranch::Latest { branch: rando::Branch::Sgl2023 },
-            Self::Sgl2024 => VersionedBranch::Latest { branch: rando::Branch::Sgl2024 },
-            Self::SongsOfHope => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 1, 0) },
-            Self::StandardRuleset => if_chain! {
-                if let Some(event) = event;
-                if event.series == Series::Standard && event.event == "w";
-                then {
-                    event.rando_version.clone().expect("no randomizer version configured for weeklies") //TODO allow weekly organizers to configure this
-                } else {
-                    VersionedBranch::Pinned { version: rando::Version::from_dev(8, 2, 0) }
-                }
-            },
-            Self::TournoiFrancoS3 => VersionedBranch::Pinned { version: rando::Version::from_branch(rando::Branch::DevR, 7, 1, 143, 1) },
-            Self::TournoiFrancoS4 => VersionedBranch::Pinned { version: rando::Version::from_branch(rando::Branch::DevRob, 8, 1, 45, 105) },
-            Self::TournoiFrancoS5 => VersionedBranch::Pinned { version: rando::Version::from_branch(rando::Branch::DevRob, 8, 2, 64, 135) },
-            Self::TriforceBlitz => VersionedBranch::Latest { branch: rando::Branch::DevBlitz },
-            Self::TriforceBlitzProgressionSpoiler => VersionedBranch::Latest { branch: rando::Branch::DevBlitz },
-            Self::WeTryToBeBetterS1 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 0, 11) },
-            Self::WeTryToBeBetterS2 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 2, 0) },
-            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => panic!("randomizer version for this goal is unused"),
-            Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups => panic!("randomizer version for this goal is unused"),
-            Self::Crosskeys2025 => panic!("randomizer version for this goal is unused"),
-            Self::MysteryD20 => panic!("randomizer version for this goal is unused"),
-            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => if_chain! {
-                if let Some(event) = event;
-                if let Some(ref rando_version) = event.rando_version;
-                then {
-                    rando_version.clone()
-                } else {
-                    // Default fallback if not configured in database
-                    VersionedBranch::Tww {
-                        identifier: Cow::Borrowed("wwrando-dev-tanjo3"),                                                                                                                                                              github_url: Cow::Borrowed("https://github.com/tanjo3/wwrando/releases"),
-                    }
-                }
-            },
-            Self::PicRs2 | Self::Rsl => panic!("randomizer version for this goal must be parsed from RSL script"),
-        }
     }
 
     /// Only returns a value for goals that only have one possible set of settings.
@@ -908,7 +752,7 @@ impl Goal {
     }
 
     pub(crate) async fn parse_seed_command(&self, transaction: &mut Transaction<'_, Postgres>, global_state: &GlobalState, is_official: bool, spoiler_seed: bool, no_password: bool, args: &[String], draft_kind: Option<&draft::Kind>) -> Result<SeedCommandParseResult, Error> {
-        let unlock_spoiler_log = self.unlock_spoiler_log(is_official, spoiler_seed);
+        let unlock_spoiler_log = if spoiler_seed { UnlockSpoilerLog::Now } else if is_official { UnlockSpoilerLog::After } else { UnlockSpoilerLog::Never };
         Ok(match self {
             | Self::CoOpS3
             | Self::CopaDoBrasil
@@ -3490,34 +3334,23 @@ impl Handler {
         }
     }
 
-    /// Returns the language for this race, falling back to the event's language for generic goals.
-    fn language(&self, goal: Option<Goal>) -> Language {
-        if let Some(goal) = goal {
-            goal.language()
-        } else if let Some(ref official_data) = self.official_data {
-            official_data.event.language
-        } else {
-            English
-        }
+    /// Returns the language for this race, using the event's configured language.
+    fn language(&self) -> Language {
+        self.official_data.as_ref().map(|d| d.event.language).unwrap_or(English)
     }
 
-    /// Returns the rando version for this race, falling back to the event's rando_version for generic goals.
-    fn effective_rando_version(&self, goal: Option<Goal>) -> VersionedBranch {
-        if let Some(goal) = goal {
-            let event = self.official_data.as_ref().map(|d| &d.event);
-            goal.rando_version(event)
-        } else if let Some(ref official_data) = self.official_data {
+    /// Returns the rando version for this race from event DB config.
+    fn effective_rando_version(&self) -> VersionedBranch {
+        if let Some(ref official_data) = self.official_data {
             official_data.event.rando_version.clone().unwrap_or(VersionedBranch::Latest { branch: rando::Branch::Dev })
         } else {
             VersionedBranch::Latest { branch: rando::Branch::Dev }
         }
     }
 
-    /// Returns the unlock_spoiler_log mode for this race, falling back to event config for generic goals.
-    fn effective_unlock_spoiler_log(&self, goal: Option<Goal>, spoiler_seed: bool) -> UnlockSpoilerLog {
-        if let Some(goal) = goal {
-            goal.unlock_spoiler_log(self.is_official(), spoiler_seed)
-        } else if spoiler_seed {
+    /// Returns the unlock_spoiler_log mode for this race from event DB config.
+    fn effective_unlock_spoiler_log(&self, spoiler_seed: bool) -> UnlockSpoilerLog {
+        if spoiler_seed {
             UnlockSpoilerLog::Now
         } else if let Some(ref official_data) = self.official_data {
             match official_data.event.spoiler_unlock.as_str() {
@@ -3530,12 +3363,9 @@ impl Handler {
         }
     }
 
-    /// Returns the preroll mode for this race, falling back to event config for generic goals.
-    fn effective_preroll_mode(&self, goal: Option<Goal>) -> PrerollMode {
-        if let Some(goal) = goal {
-            let event_id = self.official_data.as_ref().map(|d| (d.event.series, &*d.event.event));
-            goal.preroll_seeds(event_id)
-        } else if let Some(ref official_data) = self.official_data {
+    /// Returns the preroll mode for this race from event DB config.
+    fn effective_preroll_mode(&self) -> PrerollMode {
+        if let Some(ref official_data) = self.official_data {
             match official_data.event.preroll_mode.as_str() {
                 "short" => PrerollMode::Short,
                 "medium" => PrerollMode::Medium,
@@ -3560,7 +3390,6 @@ impl Handler {
     }
 
     async fn send_settings(&self, ctx: &RaceContext<GlobalState>, preface: &str, reply_to: &str) -> Result<(), Error> {
-        let goal = self.goal(ctx).await;
         if let Some(draft_kind) = self.official_data.as_ref().and_then(|OfficialRaceData { event, .. }| event.draft_kind()) {
             let available_settings = lock!(@read state = self.race_state; if let RaceState::Draft { state: ref draft, .. } = *state {
                 match draft.next_step(&draft_kind, self.official_data.as_ref().and_then(|OfficialRaceData { cal_event, .. }| cal_event.race.game), &mut draft::MessageContext::RaceTime { high_seed_name: &self.high_seed_name, low_seed_name: &self.low_seed_name, reply_to }).await.to_racetime()?.kind {
@@ -3586,7 +3415,7 @@ impl Handler {
                 draft::Kind::PickOnly { options, .. } | draft::Kind::BanPick { options, .. } | draft::Kind::BanOnly { options, .. } => options.iter().map(|p| Cow::Owned(p.display_name.clone())).collect(),
             });
             if available_settings.is_empty() {
-                ctx.say(if let French = self.language(goal) {
+                ctx.say(if let French = self.language() {
                     format!("Désolé {reply_to}, aucun setting n'est demandé pour le moment.")
                 } else {
                     format!("Sorry {reply_to}, no settings are currently available.")
@@ -3604,8 +3433,7 @@ impl Handler {
     }
 
     async fn advance_draft(&self, ctx: &RaceContext<GlobalState>, state: &RaceState) -> Result<(), Error> {
-        let goal = self.goal(ctx).await;
-        let lang = self.language(goal);
+        let lang = self.language();
         let draft_kind = self.official_data.as_ref().and_then(|OfficialRaceData { event, .. }| event.draft_kind()).expect("advance_draft called without draft kind");
         let RaceState::Draft { state: ref draft, unlock_spoiler_log } = *state else { unreachable!() };
         let step = draft.next_step(&draft_kind, self.official_data.as_ref().and_then(|OfficialRaceData { cal_event, .. }| cal_event.race.game), &mut draft::MessageContext::RaceTime { high_seed_name: &self.high_seed_name, low_seed_name: &self.low_seed_name, reply_to: "friend" }).await.to_racetime()?;
@@ -3640,7 +3468,7 @@ impl Handler {
                         self.roll_rivals_cup_seed(ctx, cal_event, preset, lang, article).await;
                     }
                     _ => {
-                        self.roll_seed(ctx, self.effective_preroll_mode(None), self.effective_rando_version(None), settings, unlock_spoiler_log, lang, article, description).await;
+                        self.roll_seed(ctx, self.effective_preroll_mode(), self.effective_rando_version(), settings, unlock_spoiler_log, lang, article, description).await;
                     }
                 }
             }
@@ -3658,7 +3486,6 @@ impl Handler {
     }
 
     async fn draft_action(&self, ctx: &RaceContext<GlobalState>, sender: Option<&UserData>, action: draft::Action) -> Result<(), Error> {
-        let goal = self.goal(ctx).await;
         let reply_to = sender.map_or("friend", |user| &user.name);
         if let RaceStatusValue::Open | RaceStatusValue::Invitational = ctx.data().await.status.value {
             lock!(@write state = self.race_state; if let Some(draft_kind) = self.official_data.as_ref().and_then(|OfficialRaceData { event, .. }| event.draft_kind()) {
@@ -3714,7 +3541,7 @@ impl Handler {
                             }
                         }
                     }
-                    RaceState::Rolling | RaceState::Rolled(_) | RaceState::SpoilerSent => match self.language(goal) {
+                    RaceState::Rolling | RaceState::Rolled(_) | RaceState::SpoilerSent => match self.language() {
                         French => ctx.say(format!("Désolé {reply_to}, mais il n'y a pas de draft, ou la phase de pick&ban est terminée.")).await?,
                         _ => ctx.say(format!("Sorry {reply_to}, there is no settings draft this race or the draft is already completed.")).await?,
                     },
@@ -3723,7 +3550,7 @@ impl Handler {
                 ctx.say(format!("Sorry {reply_to}, this event doesn't have a settings draft.")).await?;
             });
         } else {
-            match self.language(goal) {
+            match self.language() {
                 French => ctx.say(format!("Désolé {reply_to}, mais la race a débuté.")).await?,
                 _ => ctx.say(format!("Sorry {reply_to}, but the race has already started.")).await?,
             }
@@ -3867,8 +3694,7 @@ impl Handler {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(15);
         let settings_string = self.official_data.as_ref().and_then(|data| data.event.settings_string.clone()).expect("TWWR event missing settings string");
-        let goal = self.goal(ctx).await;
-        let version = self.effective_rando_version(goal);
+        let version = self.effective_rando_version();
         self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_twwr_seed(Some(version), settings_string, UnlockSpoilerLog::Never), language, article, "seed".to_string(), false).await;
     }
 
@@ -3894,26 +3720,26 @@ impl Handler {
         self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_tfb_dev_seed(delay_until, coop, Some(format!("https://{}{}", racetime_host(), ctx.data().await.url)), unlock_spoiler_log), language, article, description, false).await;
     }
 
-    async fn queue_existing_seed(&self, ctx: &RaceContext<GlobalState>, goal: Option<Goal>, seed: seed::Data, language: Language, article: &'static str, description: String, suppress_preamble: bool) {
+    async fn queue_existing_seed(&self, ctx: &RaceContext<GlobalState>, seed: seed::Data, language: Language, article: &'static str, description: String, suppress_preamble: bool) {
         let official_start = self.official_data.as_ref().map(|official_data| official_data.cal_event.start().expect("handling room for official race without start time"));
         let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
         // version is only used to announce the TWWR randomizer build; for other seed types it's not needed
         let version = match seed.files() {
-            Some(seed::Files::TwwrPermalink { .. }) => Some(self.effective_rando_version(goal)),
+            Some(seed::Files::TwwrPermalink { .. }) => Some(self.effective_rando_version()),
             _ => None,
         };
-        let unlock_spoiler_log = self.effective_unlock_spoiler_log(goal, false);
+        let unlock_spoiler_log = self.effective_unlock_spoiler_log(false);
         let (tx, rx) = mpsc::channel(1);
         tx.send(SeedRollUpdate::Done { rsl_preset: None, version, unlock_spoiler_log, seed }).await.unwrap();
         self.roll_seed_inner(ctx, delay_until, rx, language, article, description, suppress_preamble).await;
     }
 
     /// Returns `false` if this race was already finished/cancelled.
-    async fn unlock_spoiler_log(&self, ctx: &RaceContext<GlobalState>, goal: Option<Goal>) -> Result<bool, Error> {
+    async fn unlock_spoiler_log(&self, ctx: &RaceContext<GlobalState>) -> Result<bool, Error> {
         lock!(@write state = self.race_state; {
             match *state {
                 RaceState::Rolled(ref seed) if seed.seed_data.is_some() => if self.official_data.as_ref().is_none_or(|official_data| !official_data.cal_event.is_private_async_part()) {
-                    if let UnlockSpoilerLog::Progression | UnlockSpoilerLog::After = self.effective_unlock_spoiler_log(goal, false /* we may try to unlock a log that's already unlocked, but other than that, this assumption doesn't break anything */) {
+                    if let UnlockSpoilerLog::Progression | UnlockSpoilerLog::After = self.effective_unlock_spoiler_log(false /* we may try to unlock a log that's already unlocked, but other than that, this assumption doesn't break anything */) {
                         match seed.files() {
                             Some(seed::Files::AlttprDoorRando { .. }) => unreachable!(),
                             Some(seed::Files::MidosHouse { file_stem, locked_spoiler_log_path }) => if let Some(locked_spoiler_log_path) = locked_spoiler_log_path {
@@ -4016,7 +3842,7 @@ impl RaceHandler<GlobalState> for Handler {
                     }
                 }
                 ctx.send_message(&if_chain! {
-                    if let French = goal.map_or(event.language, |g| g.language());
+                    if let French = event.language;
                     if !event.is_single_race();
                     if let (Some(phase), Some(round)) = (cal_event.race.phase.as_ref(), cal_event.race.round.as_ref());
                     if let Some(Some(phase_round)) = sqlx::query_scalar!("SELECT display_fr FROM phase_round_options WHERE series = $1 AND event = $2 AND phase = $3 AND round = $4", event.series as _, &event.event, phase, round).fetch_optional(&mut *transaction).await.to_racetime()?;
@@ -4107,14 +3933,11 @@ impl RaceHandler<GlobalState> for Handler {
                             }
                         };
                         (RaceState::Draft {
-                            unlock_spoiler_log: goal.map_or_else(
-                                || match event.spoiler_unlock.as_str() {
-                                    "after" => UnlockSpoilerLog::After,
-                                    "immediately" => UnlockSpoilerLog::Now,
-                                    _ => UnlockSpoilerLog::Never,
-                                },
-                                |g| g.unlock_spoiler_log(true, false),
-                            ),
+                            unlock_spoiler_log: match event.spoiler_unlock.as_str() {
+                                "after" => UnlockSpoilerLog::After,
+                                "immediately" => UnlockSpoilerLog::Now,
+                                _ => UnlockSpoilerLog::Never,
+                            },
                             state,
                         }, high_seed_name, low_seed_name)
                     } else {
@@ -4177,7 +4000,7 @@ impl RaceHandler<GlobalState> for Handler {
                 } else {
                     match data.status.value {
                         RaceStatusValue::Invitational => {
-                            ctx.say(if let French = goal.map_or(event.language, |g| g.language()) {
+                            ctx.say(if let French = event.language {
                                 "Le FPA est activé pour cette race. Les joueurs pourront utiliser !fpa pendant la race pour signaler d'un problème technique de leur côté. Les race monitors doivent activer les notifications en cliquant sur l'icône de cloche 🔔 sous le chat."
                             } else {
                                 "Fair play agreement is active for this official race. Entrants may use the !fpa command during the race to notify of a crash. Race monitors (if any) should enable notifications using the bell 🔔 icon below chat."
@@ -5005,7 +4828,7 @@ impl RaceHandler<GlobalState> for Handler {
             if !restreams.is_empty() {
                 let ctx_clone = ctx.clone();
                 let restreams_clone = restreams.clone();
-                let lang_clone = goal.map_or(event.language, |g| g.language());
+                let lang_clone = event.language;
                 tokio::spawn(async move {
                     // Small delay to allow handler to fully initialize
                     sleep(Duration::from_millis(100)).await;
@@ -5068,79 +4891,100 @@ impl RaceHandler<GlobalState> for Handler {
             }
             lock!(@read state = this.race_state; {
                 if existing_seed.files().is_some() {
-                    this.queue_existing_seed(ctx, goal, existing_seed, English, "a", format!("seed"), true).await; //TODO better article/description
+                    this.queue_existing_seed(ctx, existing_seed, English, "a", format!("seed"), true).await; //TODO better article/description
                 } else if goal.is_none_or(|g| g.requires_seed()) {
                     // Only roll seeds for goals that require them
                     let _event_id = Some((event.series, &*event.event));
                     match *state {
-                        RaceState::Init => match goal {
-                            Some(
-                            | Goal::CoOpS3
-                            | Goal::CopaDoBrasil
-                            | Goal::LeagueS8
-                            | Goal::MixedPoolsS2
-                            | Goal::MixedPoolsS3
-                            | Goal::MixedPoolsS4
-                            | Goal::Mq
-                            | Goal::Pic7
-                            | Goal::Sgl2023
-                            | Goal::Sgl2024
-                            | Goal::SongsOfHope
-                            | Goal::TriforceBlitzProgressionSpoiler
-                            ) => this.roll_seed(ctx, this.effective_preroll_mode(goal), this.effective_rando_version(goal), goal.unwrap().single_settings().expect("goal has no single settings"), this.effective_unlock_spoiler_log(goal, false), English, "a", format!("seed")).await,
-                            Some(
-                            | Goal::WeTryToBeBetterS1
-                            | Goal::WeTryToBeBetterS2
-                            ) => this.roll_seed(ctx, this.effective_preroll_mode(goal), this.effective_rando_version(goal), goal.unwrap().single_settings().expect("goal has no single settings"), this.effective_unlock_spoiler_log(goal, false), French, "une", format!("seed")).await,
-                            Some(
-                            | Goal::Cc7
-                            | Goal::MultiworldS3
-                            | Goal::MultiworldS4
-                            | Goal::MultiworldS5
-                            | Goal::Rsl
-                            | Goal::TournoiFrancoS3
-                            | Goal::TournoiFrancoS4
-                            | Goal::TournoiFrancoS5
-                            ) => unreachable!("should have draft state set"),
-                            Some(
-                            | Goal::AlttprDe9Bracket
-                            | Goal::AlttprDe9SwissA
-                            | Goal::AlttprDe9SwissB
-                            ) => if event.draft_kind().is_none() {
-                                this.roll_alttprde9_seed(ctx, cal_event.clone(), English, "a").await
-                            },
-                            // else: ban-pick draft event with missing draft state — error already
-                            // reported at room open via the draft_kind check; do not roll
-                            Some(Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups) => {
+                        RaceState::Init => match &event.seed_gen_type {
+                            Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::Boothisman }) => {
+                                if event.draft_kind().is_none() {
+                                    this.roll_alttprde9_seed(ctx, cal_event.clone(), English, "a").await
+                                }
+                                // else: ban-pick draft event with missing draft state — error already
+                                // reported at room open via the draft_kind check; do not roll
+                            }
+                            Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MutualChoices }) => {
+                                this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await
+                            }
+                            Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MysteryPool { .. } }) => {
+                                this.roll_mysteryd20_seed(ctx, cal_event.clone(), English, "a").await
+                            }
+                            Some(seed_gen_type::SeedGenType::AlttprAvianart) => {
                                 ctx.say("@entrants WARNING: The preset draft for this match is not complete! Please complete the draft in the scheduling Discord thread before the race.").await.to_racetime()?;
                             }
-                            Some(Goal::Crosskeys2025) => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await,
-                            Some(Goal::TwwrMainWeekly | Goal::TwwrMainMiniblins26) => this.roll_twwr_seed_official(ctx, cal_event.clone(), English, "a").await,
-                            Some(Goal::MysteryD20) => this.roll_mysteryd20_seed(ctx, cal_event.clone(), English, "a").await,
-                            Some(Goal::NineDaysOfSaws) => unreachable!("9dos series has concluded"),
-                            Some(Goal::PicRs2) => this.roll_rsl_seed(ctx, rsl::VersionedPreset::Fenhl {
-                                version: Some((Version::new(2, 3, 8), 10)),
-                                preset: rsl::DevFenhlPreset::Pictionary,
-                            }, 1, this.effective_unlock_spoiler_log(goal, false), English, "a", format!("seed")).await,
-                            Some(Goal::StandardRuleset) => if let (Series::Standard, "8" | "8cc") = (event.series, &*event.event) {
-                                this.roll_seed(ctx, this.effective_preroll_mode(goal), this.effective_rando_version(goal), s::s8_settings(), this.effective_unlock_spoiler_log(goal, false), English, "an", format!("S8 seed")).await
-                            } else {
-                                let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
-                                let mut settings = event::Data::new(&mut transaction, Series::Standard, "w").await.to_racetime()?.expect("missing weeklies event").single_settings.expect("no settings configured for weeklies");
-                                transaction.commit().await.to_racetime()?;
-                                settings.insert(format!("password_lock"), json!(true));
-                                this.roll_seed(ctx, this.effective_preroll_mode(goal), this.effective_rando_version(goal), settings, this.effective_unlock_spoiler_log(goal, false), English, "a", format!("weekly seed")).await
-                            },
-                            Some(Goal::TriforceBlitz) => this.roll_tfb_dev_seed(ctx, true, this.effective_unlock_spoiler_log(goal, false), English, "a", format!("Triforce Blitz S4 co-op seed")).await,
-                            None => {
-                                // Generic goal — auto-roll with event's single_settings if available
-                                if let Some(ref settings) = event.single_settings {
-                                    let event_lang = event.language;
-                                    let (article, desc) = if let French = event_lang { ("une", format!("seed")) } else { ("a", format!("seed")) };
-                                    this.roll_seed(ctx, this.effective_preroll_mode(goal), this.effective_rando_version(goal), settings.clone(), this.effective_unlock_spoiler_log(goal, false), event_lang, article, desc).await;
-                                }
-                                // If no single_settings, don't auto-roll — user must use !seed
+                            Some(seed_gen_type::SeedGenType::TWWR { .. }) => {
+                                this.roll_twwr_seed_official(ctx, cal_event.clone(), English, "a").await
                             }
+                            Some(_) | None => match goal {
+                                Some(
+                                | Goal::CoOpS3
+                                | Goal::CopaDoBrasil
+                                | Goal::LeagueS8
+                                | Goal::MixedPoolsS2
+                                | Goal::MixedPoolsS3
+                                | Goal::MixedPoolsS4
+                                | Goal::Mq
+                                | Goal::Pic7
+                                | Goal::Sgl2023
+                                | Goal::Sgl2024
+                                | Goal::SongsOfHope
+                                | Goal::TriforceBlitzProgressionSpoiler
+                                ) => this.roll_seed(ctx, this.effective_preroll_mode(), this.effective_rando_version(), goal.unwrap().single_settings().expect("goal has no single settings"), this.effective_unlock_spoiler_log(false), English, "a", format!("seed")).await,
+                                Some(
+                                | Goal::WeTryToBeBetterS1
+                                | Goal::WeTryToBeBetterS2
+                                ) => this.roll_seed(ctx, this.effective_preroll_mode(), this.effective_rando_version(), goal.unwrap().single_settings().expect("goal has no single settings"), this.effective_unlock_spoiler_log(false), French, "une", format!("seed")).await,
+                                Some(
+                                | Goal::Cc7
+                                | Goal::MultiworldS3
+                                | Goal::MultiworldS4
+                                | Goal::MultiworldS5
+                                | Goal::Rsl
+                                | Goal::TournoiFrancoS3
+                                | Goal::TournoiFrancoS4
+                                | Goal::TournoiFrancoS5
+                                ) => unreachable!("should have draft state set"),
+                                Some(
+                                | Goal::AlttprDe9Bracket
+                                | Goal::AlttprDe9SwissA
+                                | Goal::AlttprDe9SwissB
+                                ) => if event.draft_kind().is_none() {
+                                    this.roll_alttprde9_seed(ctx, cal_event.clone(), English, "a").await
+                                },
+                                // else: ban-pick draft event with missing draft state — error already
+                                // reported at room open via the draft_kind check; do not roll
+                                Some(Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups) => {
+                                    ctx.say("@entrants WARNING: The preset draft for this match is not complete! Please complete the draft in the scheduling Discord thread before the race.").await.to_racetime()?;
+                                }
+                                Some(Goal::Crosskeys2025) => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await,
+                                Some(Goal::TwwrMainWeekly | Goal::TwwrMainMiniblins26) => this.roll_twwr_seed_official(ctx, cal_event.clone(), English, "a").await,
+                                Some(Goal::MysteryD20) => this.roll_mysteryd20_seed(ctx, cal_event.clone(), English, "a").await,
+                                Some(Goal::NineDaysOfSaws) => unreachable!("9dos series has concluded"),
+                                Some(Goal::PicRs2) => this.roll_rsl_seed(ctx, rsl::VersionedPreset::Fenhl {
+                                    version: Some((Version::new(2, 3, 8), 10)),
+                                    preset: rsl::DevFenhlPreset::Pictionary,
+                                }, 1, this.effective_unlock_spoiler_log(false), English, "a", format!("seed")).await,
+                                Some(Goal::StandardRuleset) => if let (Series::Standard, "8" | "8cc") = (event.series, &*event.event) {
+                                    this.roll_seed(ctx, this.effective_preroll_mode(), this.effective_rando_version(), s::s8_settings(), this.effective_unlock_spoiler_log(false), English, "an", format!("S8 seed")).await
+                                } else {
+                                    let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+                                    let mut settings = event::Data::new(&mut transaction, Series::Standard, "w").await.to_racetime()?.expect("missing weeklies event").single_settings.expect("no settings configured for weeklies");
+                                    transaction.commit().await.to_racetime()?;
+                                    settings.insert(format!("password_lock"), json!(true));
+                                    this.roll_seed(ctx, this.effective_preroll_mode(), this.effective_rando_version(), settings, this.effective_unlock_spoiler_log(false), English, "a", format!("weekly seed")).await
+                                },
+                                Some(Goal::TriforceBlitz) => this.roll_tfb_dev_seed(ctx, true, this.effective_unlock_spoiler_log(false), English, "a", format!("Triforce Blitz S4 co-op seed")).await,
+                                None => {
+                                    // Generic goal — auto-roll with event's single_settings if available
+                                    if let Some(ref settings) = event.single_settings {
+                                        let event_lang = event.language;
+                                        let (article, desc) = if let French = event_lang { ("une", format!("seed")) } else { ("a", format!("seed")) };
+                                        this.roll_seed(ctx, this.effective_preroll_mode(), this.effective_rando_version(), settings.clone(), this.effective_unlock_spoiler_log(false), event_lang, article, desc).await;
+                                    }
+                                    // If no single_settings, don't auto-roll — user must use !seed
+                                }
+                            },
                         },
                         RaceState::Draft { state: ref draft_state, .. } => {
                             this.advance_draft(ctx, &state).await?;
@@ -5162,7 +5006,7 @@ impl RaceHandler<GlobalState> for Handler {
 
     async fn command(&mut self, ctx: &RaceContext<GlobalState>, cmd_name: String, args: Vec<String>, _is_moderator: bool, is_monitor: bool, msg: &ChatMessage) -> Result<(), Error> {
         let goal = self.goal(ctx).await;
-        let lang = self.language(goal);
+        let lang = self.language();
         let reply_to = msg.user.as_ref().map_or("friend", |user| &user.name);
         match &*cmd_name.to_ascii_lowercase() {
             cmd @ ("ban" | "block" | "draft" | "first" | "no" | "pick" | "second" | "skip" | "yes") => if let Some(goal) = goal { match goal.parse_draft_command(cmd, &args) {
@@ -5490,7 +5334,7 @@ impl RaceHandler<GlobalState> for Handler {
                     );
                     let (access_token, _) = racetime::authorize_with_host(&ctx.global_state.host_info, &client_id, &client_secret, &ctx.global_state.http_client).await?;
                     let (goal_str, goal_is_custom) = if let Some(goal) = goal {
-                        (goal.as_str().to_owned(), goal.is_custom())
+                        (goal.as_str().to_owned(), event.is_custom_goal)
                     } else {
                         let data = ctx.data().await;
                         let goal_name = event.racetime_goal_name.as_deref().unwrap_or(&data.goal.name);
@@ -5536,7 +5380,7 @@ impl RaceHandler<GlobalState> for Handler {
                                         );
                                         let (access_token, _) = racetime::authorize_with_host(&ctx.global_state.host_info, &client_id, &client_secret, &ctx.global_state.http_client).await?;
                                         let (goal_str, goal_is_custom) = if let Some(goal) = goal {
-                                            (goal.as_str().to_owned(), goal.is_custom())
+                                            (goal.as_str().to_owned(), event.is_custom_goal)
                                         } else {
                                             let data = ctx.data().await;
                                             let goal_name = event.racetime_goal_name.as_deref().unwrap_or(&data.goal.name);
@@ -5658,13 +5502,13 @@ impl RaceHandler<GlobalState> for Handler {
                                 unimplemented!()
                             }
                             SeedCommandParseResult::Regular { settings, unlock_spoiler_log, language, article, description } => {
-                                self.roll_seed(ctx, self.effective_preroll_mode(Some(goal)), self.effective_rando_version(Some(goal)), settings, unlock_spoiler_log, language, article, description).await
+                                self.roll_seed(ctx, self.effective_preroll_mode(), self.effective_rando_version(), settings, unlock_spoiler_log, language, article, description).await
                             },
                             SeedCommandParseResult::Rsl { preset, world_count, unlock_spoiler_log, language, article, description } => self.roll_rsl_seed(ctx, preset, world_count, unlock_spoiler_log, language, article, description).await,
                             SeedCommandParseResult::Tfb { version, unlock_spoiler_log, language, article, description } => self.roll_tfb_seed(ctx, version, unlock_spoiler_log, language, article, description).await,
                             SeedCommandParseResult::TfbDev { coop, unlock_spoiler_log, language, article, description } => self.roll_tfb_dev_seed(ctx, coop, unlock_spoiler_log, language, article, description).await,
                             SeedCommandParseResult::Twwr { permalink, unlock_spoiler_log, language, article, description } => self.roll_twwr_seed(ctx, permalink, unlock_spoiler_log, language, article, description).await,
-                            SeedCommandParseResult::QueueExisting { data, language, article, description } => self.queue_existing_seed(ctx, Some(goal), data, language, article, description, false).await,
+                            SeedCommandParseResult::QueueExisting { data, language, article, description } => self.queue_existing_seed(ctx, data, language, article, description, false).await,
                             SeedCommandParseResult::SendPresets { language, msg } => {
                                 ctx.say(if let French = language {
                                     format!("Désolé {reply_to}, {msg}. Veuillez utiliser un des suivants :")
@@ -5700,16 +5544,16 @@ impl RaceHandler<GlobalState> for Handler {
                         // Generic goal
                         let event_draft_kind = self.official_data.as_ref().and_then(|d| d.event.draft_kind());
                         if args.as_slice() == ["draft"] && event_draft_kind.is_some() {
-                            let unlock_spoiler_log = self.effective_unlock_spoiler_log(None, false);
+                            let unlock_spoiler_log = self.effective_unlock_spoiler_log(false);
                             *state = RaceState::Draft {
                                 state: Draft { high_seed: Id::dummy(), went_first: None, skipped_bans: 0, settings: HashMap::default() },
                                 unlock_spoiler_log,
                             };
                             self.advance_draft(ctx, &state).await?;
                         } else if let Some(ref settings) = self.official_data.as_ref().and_then(|d| d.event.single_settings.clone()) {
-                            let unlock_spoiler_log = self.effective_unlock_spoiler_log(None, cmd_name.eq_ignore_ascii_case("spoilerseed"));
+                            let unlock_spoiler_log = self.effective_unlock_spoiler_log(cmd_name.eq_ignore_ascii_case("spoilerseed"));
                             let (article, desc) = if let French = lang { ("une", format!("seed")) } else { ("a", format!("seed")) };
-                            self.roll_seed(ctx, self.effective_preroll_mode(None), self.effective_rando_version(None), settings.clone(), unlock_spoiler_log, lang, article, desc).await;
+                            self.roll_seed(ctx, self.effective_preroll_mode(), self.effective_rando_version(), settings.clone(), unlock_spoiler_log, lang, article, desc).await;
                         } else {
                             ctx.say(format!("Sorry {reply_to}, no settings are configured for this event. Please contact a tournament organizer.")).await?;
                         }
@@ -5754,12 +5598,12 @@ impl RaceHandler<GlobalState> for Handler {
                             if !is_entrant && !self.can_monitor(ctx, is_monitor, msg).await.to_racetime()? {
                                 ctx.say(format!("Sorry {reply_to}, only @entrants or race monitors may use this command.")).await?;
                             } else {
-                            let settings = goal.and_then(|g| g.single_settings()).or_else(|| self.official_data.as_ref().and_then(|d| d.event.single_settings.clone()));
+                            let settings = self.official_data.as_ref().and_then(|d| d.event.single_settings.clone());
                             if let Some(settings) = settings {
                             // Goal has default settings, use them to roll
-                            let unlock_spoiler_log = self.effective_unlock_spoiler_log(goal, false);
+                            let unlock_spoiler_log = self.effective_unlock_spoiler_log(false);
                             ctx.say(format!("@entrants Rerolling seed...")).await?;
-                            self.roll_seed(ctx, self.effective_preroll_mode(goal), self.effective_rando_version(goal), settings, unlock_spoiler_log, lang, "a", format!("seed")).await;
+                            self.roll_seed(ctx, self.effective_preroll_mode(), self.effective_rando_version(), settings, unlock_spoiler_log, lang, "a", format!("seed")).await;
                         } else if self.official_data.as_ref().and_then(|d| d.event.draft_kind()).is_some() {
                             // Official draft event — try to reload draft state from DB (allows fixing and retrying after a DB fix)
                             let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
@@ -5768,7 +5612,7 @@ impl RaceHandler<GlobalState> for Handler {
                             transaction.commit().await.to_racetime()?;
                             if let Some(cal_event) = maybe_cal_event {
                                 if let Some(draft) = cal_event.race.draft.clone() {
-                                    let unlock_spoiler_log = self.effective_unlock_spoiler_log(goal, false);
+                                    let unlock_spoiler_log = self.effective_unlock_spoiler_log(false);
                                     *state = RaceState::Draft { state: draft, unlock_spoiler_log };
                                     self.advance_draft(ctx, &state).await?;
                                 } else {
@@ -5817,7 +5661,7 @@ impl RaceHandler<GlobalState> for Handler {
     async fn race_data(&mut self, ctx: &RaceContext<GlobalState>, _old_race_data: RaceData) -> Result<(), Error> {
         let data = ctx.data().await;
         let goal = self.goal(ctx).await;
-        let lang = self.language(goal);
+        let lang = self.language();
         if let Some(OfficialRaceData { ref event, ref entrants, ref mut scores, .. }) = self.official_data {
             for entrant in &data.entrants {
                 if let Some(user) = &entrant.user {
@@ -6002,7 +5846,7 @@ impl RaceHandler<GlobalState> for Handler {
                     _ => {} // all other known goals and generic goals (None) have no special notifications
                 }
             }
-            RaceStatusValue::Finished => if self.unlock_spoiler_log(ctx, goal).await? {
+            RaceStatusValue::Finished => if self.unlock_spoiler_log(ctx).await? {
                 if let Some(Goal::TriforceBlitz | Goal::TriforceBlitzProgressionSpoiler) = goal {
                     if self.check_tfb_finish(ctx).await? {
                         self.cleaned_up.store(true, atomic::Ordering::SeqCst);
@@ -6150,7 +5994,7 @@ impl RaceHandler<GlobalState> for Handler {
                         }
                     }
                 }
-                self.unlock_spoiler_log(ctx, goal).await?;
+                self.unlock_spoiler_log(ctx).await?;
                 if let Some(Goal::Rsl) = goal {
                     sqlx::query!("DELETE FROM rsl_seeds WHERE room = $1", format!("https://{}{}", racetime_host(), ctx.data().await.url)).execute(&ctx.global_state.db_pool).await.to_racetime()?;
                 }
@@ -6319,11 +6163,11 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                     None
                 };
                 let (goal_str, goal_is_custom) = if let Some(ref g) = schedule_goal {
-                    let is_custom = g.parse::<Goal>().map(|goal| goal.is_custom()).unwrap_or(true);
+                    let is_custom = g.parse::<Goal>().map(|_| event.is_custom_goal).unwrap_or(true);
                     (g.clone(), is_custom)
                 } else {
                     if let Some(goal) = cal_event.race.goal_slug.as_deref().and_then(Goal::from_slug) {
-                        (goal.as_str().to_owned(), goal.is_custom())
+                        (goal.as_str().to_owned(), event.is_custom_goal)
                     } else if let Some(ref slug) = cal_event.race.goal_slug {
                         // Generic goal — use event config
                         let goal_name = event.racetime_goal_name.as_deref().unwrap_or(slug);
