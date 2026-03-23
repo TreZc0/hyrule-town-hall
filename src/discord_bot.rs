@@ -2,7 +2,7 @@ use {
     crate::{
         config::ConfigRaceTime,
         prelude::*,
-        racetime_bot::{AlttprDeRaceOptions, CleanShutdown, CrosskeysRaceOptions, GlobalState},
+        racetime_bot::{CleanShutdown, GlobalState},
         async_race::{self, Error as AsyncRaceError},
         volunteer_requests,
     }, serenity::all::{
@@ -1870,7 +1870,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             discord_scheduled_event_id: race.discord_scheduled_event_id,
                                             volunteer_request_sent: race.volunteer_request_sent,
                                             volunteer_request_message_id: race.volunteer_request_message_id,
-                                            goal_slug: race.goal_slug,
+                                            racetime_goal_slug: race.racetime_goal_slug,
                                         };
                                         race.save(&mut transaction).await?;
 
@@ -3924,22 +3924,13 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             }
         }
     }
-    if let Some(racetime_bot::seed_gen_type::SeedGenType::AlttprDoorRando { source: racetime_bot::seed_gen_type::AlttprDrSource::Boothisman }) = event.seed_gen_type.as_ref() {
+    if let Some(ref sgt) = event.seed_gen_type {
         let db_pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-        let alttprde_options = AlttprDeRaceOptions::for_race(&db_pool, race, event.round_modes.as_ref()).await;
-        content.push_line("");
-        content.push_line("");
-        if let Some(mode_display) = alttprde_options.mode_display() {
-            content.push(format!("This race will be played in {} mode.", mode_display));
+        if let Some(display_str) = sgt.scheduling_thread_str(&db_pool, race, event.round_modes.as_ref()).await {
+            content.push_line("");
+            content.push_line("");
+            content.push(display_str);
         }
-        // Mode not yet determined - draft will show separately
-    }
-    if let Some(racetime_bot::seed_gen_type::SeedGenType::AlttprDoorRando { source: racetime_bot::seed_gen_type::AlttprDrSource::MutualChoices }) = event.seed_gen_type.as_ref() {
-        let db_pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-        let crosskeys_options = CrosskeysRaceOptions::for_race(&db_pool, race).await;
-        content.push_line("");
-        content.push_line("");
-        content.push(format!("This race will be played with {} as settings.\n\nThis race will be played with {}.", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str()));
     }
     let thread_id = if let Some(ChannelType::Forum) = scheduling_channel.to_channel(ctx).await?.guild().map(|c| c.kind) {
         scheduling_channel.create_forum_post(ctx, CreateForumPost::new(

@@ -119,7 +119,7 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
                     discord_scheduled_event_id: None,
                     volunteer_request_sent: false,
                     volunteer_request_message_id: None,
-                    goal_slug: None,
+                    racetime_goal_slug: None,
                 });
             }
         }

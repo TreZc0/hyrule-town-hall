@@ -1,5 +1,7 @@
 use {
+    std::collections::HashMap,
     itertools::Itertools as _,
+    sqlx::PgPool,
     crate::cal::Race,
 };
 
@@ -83,6 +85,31 @@ impl SeedGenType {
                 eprintln!("unknown seed_gen_type: {other}");
                 None
             }
+        }
+    }
+
+    /// Returns the display string to append to a scheduling thread for this seed gen type,
+    /// or `None` if no extra information needs to be shown.
+    pub(crate) async fn scheduling_thread_str(
+        &self,
+        db_pool: &PgPool,
+        race: &Race,
+        round_modes: Option<&HashMap<String, String>>,
+    ) -> Option<String> {
+        match self {
+            Self::AlttprDoorRando { source: AlttprDrSource::Boothisman } => {
+                let opts = super::AlttprDeRaceOptions::for_race(db_pool, race, round_modes).await;
+                opts.mode_display().map(|mode| format!("This race will be played in {} mode.", mode))
+            }
+            Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices } => {
+                let opts = super::CrosskeysRaceOptions::for_race(db_pool, race).await;
+                Some(format!(
+                    "This race will be played with {} as settings.\n\nThis race will be played with {}.",
+                    opts.as_seed_options_str(),
+                    opts.as_race_options_str(),
+                ))
+            }
+            _ => None,
         }
     }
 

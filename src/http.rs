@@ -313,26 +313,31 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
     let chests = if let Some(event) = chests_event { event.chests().await? } else { ChestAppearances::random() };
     let mut ongoing_events = Vec::default();
     for event in upcoming_events.drain(..).collect_vec() {
-        if event.series != Series::Standard || event.event != "w" { // the weeklies are a perpetual event so we avoid always listing them
+        let weekly_schedules = WeeklySchedule::for_event(&mut transaction, event.series, &event.event).await?;
+        if !weekly_schedules.is_empty() {
+            // Recurring event: show as ongoing only when its weekly schedule is active; omit otherwise
+            if weekly_schedules.iter().any(|s| s.active) { ongoing_events.push(event); }
+        } else {
             let started = event.is_started(&mut transaction).await?;
-            let has_active_weekly = WeeklySchedule::for_event(&mut transaction, event.series, &event.event).await?.iter().any(|s| s.active);
             let has_started_qualifier = sqlx::query_scalar!(
                 r#"SELECT EXISTS (SELECT 1 FROM races WHERE series = $1 AND event = $2 AND phase = 'Qualifier' AND start <= NOW()) AS "exists!""#,
                 event.series as _, &event.event
             ).fetch_one(&mut *transaction).await?;
-            if started || has_active_weekly || has_started_qualifier { &mut ongoing_events } else { &mut upcoming_events }.push(event);
+            if started || has_started_qualifier { &mut ongoing_events } else { &mut upcoming_events }.push(event);
         }
     }
     let mut ongoing_events_unlisted = Vec::default();
     for event in upcoming_events_unlisted.drain(..).collect_vec() {
-        if event.series != Series::Standard || event.event != "w" {
+        let weekly_schedules = WeeklySchedule::for_event(&mut transaction, event.series, &event.event).await?;
+        if !weekly_schedules.is_empty() {
+            if weekly_schedules.iter().any(|s| s.active) { ongoing_events_unlisted.push(event); }
+        } else {
             let started = event.is_started(&mut transaction).await?;
-            let has_active_weekly = WeeklySchedule::for_event(&mut transaction, event.series, &event.event).await?.iter().any(|s| s.active);
             let has_started_qualifier = sqlx::query_scalar!(
                 r#"SELECT EXISTS (SELECT 1 FROM races WHERE series = $1 AND event = $2 AND phase = 'Qualifier' AND start <= NOW()) AS "exists!""#,
                 event.series as _, &event.event
             ).fetch_one(&mut *transaction).await?;
-            if started || has_active_weekly || has_started_qualifier { &mut ongoing_events_unlisted } else { &mut upcoming_events_unlisted }.push(event);
+            if started || has_started_qualifier { &mut ongoing_events_unlisted } else { &mut upcoming_events_unlisted }.push(event);
         }
     }
     let page_content = html! {

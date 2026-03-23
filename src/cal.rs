@@ -386,7 +386,7 @@ pub(crate) struct Race {
     pub(crate) discord_scheduled_event_id: Option<PgSnowflake<ScheduledEventId>>,
     pub(crate) volunteer_request_sent: bool,
     pub(crate) volunteer_request_message_id: Option<PgSnowflake<MessageId>>,
-    pub(crate) goal_slug: Option<String>,
+    pub(crate) racetime_goal_slug: Option<String>,
 }
 
 impl Race {
@@ -460,7 +460,7 @@ impl Race {
             discord_scheduled_event_id AS "discord_scheduled_event_id: PgSnowflake<ScheduledEventId>",
             volunteer_request_sent,
             volunteer_request_message_id AS "volunteer_request_message_id: PgSnowflake<MessageId>",
-            e.goal_slug
+            e.racetime_goal_slug
         FROM races r LEFT JOIN events e ON r.series = e.series AND r.event = e.event
         WHERE r.id = $1"#, id as _).fetch_one(&mut **transaction).await?;
         let source = if let Some(id) = row.challonge_match {
@@ -602,7 +602,7 @@ impl Race {
             discord_scheduled_event_id: row.discord_scheduled_event_id.map(|PgSnowflake(id)| PgSnowflake(id)),
             volunteer_request_sent: row.volunteer_request_sent,
             volunteer_request_message_id: row.volunteer_request_message_id.map(|PgSnowflake(id)| PgSnowflake(id)),
-            goal_slug: row.goal_slug,
+            racetime_goal_slug: row.racetime_goal_slug,
             id, source, entrants,
         })
     }
@@ -1523,9 +1523,9 @@ impl Event {
     }
 
     pub(crate) async fn should_create_room(&self, transaction: &mut Transaction<'_, Postgres>, event: &event::Data<'_>) -> Result<RaceHandleMode, event::DataError> {
-        Ok(if event.goal_slug.is_some() {
+        Ok(if event.racetime_goal_slug.is_some() {
             if_chain! {
-                if self.race.series == Series::SpeedGaming && self.race.event.ends_with("live");
+                if event.is_live_event;
                 if let Some(race_start) = self.start();
                 if event.start(transaction).await?.is_some_and(|event_start| event_start <= race_start);
                 then {
@@ -2098,7 +2098,7 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
                     discord_scheduled_event_id: None,
                     volunteer_request_sent: false,
                     volunteer_request_message_id: None,
-                    goal_slug: None,
+                    racetime_goal_slug: None,
                     scheduling_thread,
                 };
                 if game == 1 {
@@ -3053,7 +3053,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                     discord_scheduled_event_id: None,
                                     volunteer_request_sent: false,
                                     volunteer_request_message_id: None,
-                                    goal_slug: None,
+                                    racetime_goal_slug: None,
                                 };
                                 if let Some(race) = races.iter_mut().find(|race| if let Source::League { id } = race.source { id == match_data.id } else { false }) {
                                     if !race.schedule_locked {
@@ -3296,7 +3296,7 @@ pub(crate) async fn ensure_weekly_races(
                     discord_scheduled_event_id: None,
                     volunteer_request_sent: false,
                     volunteer_request_message_id: None,
-                    goal_slug: None,
+                    racetime_goal_slug: None,
                     schedule,
                 };
                 race.save(&mut *transaction).await?;
@@ -3435,12 +3435,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                     }
                 }
             }
-            @if race.series == Series::League && !race.has_any_room() {
-                // restream data entered here would be automatically overwritten
-                fieldset {
-                    label : "To edit restream data, please use the League website.";
-                }
-            } else {
+            {
                 table {
                     thead {
                         tr {

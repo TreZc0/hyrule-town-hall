@@ -1121,7 +1121,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
         QualifierKind::Single { show_times: false } | QualifierKind::SongsOfHope => column_headers.push(html! {
             th : "Qualified";
         }),
-        QualifierKind::Single { show_times: true } => if series == Series::TriforceBlitz {
+        QualifierKind::Single { show_times: true } => if data.qualifier_score_kind_str.as_deref() == Some("triforce_blitz") {
             column_headers.push(html! {
                 th : "Pieces Found";
             });

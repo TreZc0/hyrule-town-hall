@@ -3962,21 +3962,21 @@ impl RaceHandler<GlobalState> for Handler {
                     restreamer_racetime_id: cal_event.race.restreamers.get(&language).cloned(),
                     ready: false,
                 })).collect();
+                if !cal_event.race.video_urls.is_empty() {
+                    ctx.say("@entrants This race is being restreamed. Please ensure at least one participant has clean audio (no desktop alerts, no gameplay overlays) on stream.").await?;
+                }
                 let stream_delay = cal_event.race.stream_delay(&event);
                 if !stream_delay.is_zero() || event.emulator_settings_reminder || event.prevent_late_joins {
                     let delay_until = cal_event.start().expect("handling room for official race without start time") - stream_delay - TimeDelta::minutes(5);
                     if let Ok(delay) = (delay_until - Utc::now()).to_std() {
                         let ctx = ctx.clone();
-                        let game_audio_reminder = event.series == Series::SpeedGaming && cal_event.race.phase.as_ref().is_some_and(|phase| phase != "Qualifier");
-                        let requires_emote_only = event.series == Series::SpeedGaming && cal_event.race.phase.as_ref().is_some_and(|phase| phase != "Qualifier");
                         tokio::spawn(async move {
                             sleep_until(Instant::now() + delay).await;
                             if !Self::should_handle_inner(&*ctx.data().await, ctx.global_state.clone(), Some(None)).await { return }
                             if !stream_delay.is_zero() {
-                                ctx.say(format!("@entrants Remember to go live with a delay of {} ({} seconds){}!",
+                                ctx.say(format!("@entrants Remember to go live with a delay of {} ({} seconds)!",
                                     English.format_duration(stream_delay, true),
                                     stream_delay.as_secs(),
-                                    if requires_emote_only { " and set your chat to emote only" } else { "" },
                                 )).await.expect("failed to send stream delay notice");
                             }
                             if event.emulator_settings_reminder || event.prevent_late_joins {
@@ -3987,9 +3987,7 @@ impl RaceHandler<GlobalState> for Handler {
                                     ctx.set_invitational().await.expect("failed to make the room invitational");
                                 }
                                 if event.emulator_settings_reminder {
-                                    ctx.say(format!("@entrants Remember to show your emulator settings{}!",
-                                        if game_audio_reminder { " and ensure you are streaming/recording game audio" } else { "" },
-                                    )).await.expect("failed to send emulator settings notice");
+                                    ctx.say("@entrants Remember to show your emulator settings!").await.expect("failed to send emulator settings notice");
                                 }
                             }
                         });
@@ -6166,9 +6164,9 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                     let is_custom = g.parse::<Goal>().map(|_| event.is_custom_goal).unwrap_or(true);
                     (g.clone(), is_custom)
                 } else {
-                    if let Some(goal) = cal_event.race.goal_slug.as_deref().and_then(Goal::from_slug) {
+                    if let Some(goal) = cal_event.race.racetime_goal_slug.as_deref().and_then(Goal::from_slug) {
                         (goal.as_str().to_owned(), event.is_custom_goal)
-                    } else if let Some(ref slug) = cal_event.race.goal_slug {
+                    } else if let Some(ref slug) = cal_event.race.racetime_goal_slug {
                         // Generic goal — use event config
                         let goal_name = event.racetime_goal_name.as_deref().unwrap_or(slug);
                         (goal_name.to_owned(), event.is_custom_goal)
@@ -6522,9 +6520,9 @@ async fn prepare_seeds(global_state: Arc<GlobalState>, mut seed_cache_rx: watch:
             }
         }
         // Global prerolled seed pool: query events that have fixed settings and long preroll.
-        // This replaces the old all::<Goal>() iteration — seeds are now keyed by event.goal_slug.
+        // This replaces the old all::<Goal>() iteration — seeds are now keyed by event.racetime_goal_slug.
         let pool_events = sqlx::query!(
-            r#"SELECT goal_slug, preroll_mode AS "preroll_mode!", spoiler_unlock AS "spoiler_unlock!",
+            r#"SELECT racetime_goal_slug, preroll_mode AS "preroll_mode!", spoiler_unlock AS "spoiler_unlock!",
                rando_version AS "rando_version: sqlx::types::Json<VersionedBranch>",
                single_settings AS "single_settings: sqlx::types::Json<seed::Settings>"
                FROM events
@@ -6533,7 +6531,7 @@ async fn prepare_seeds(global_state: Arc<GlobalState>, mut seed_cache_rx: watch:
                AND (end_time IS NULL OR end_time > NOW())"#
         ).fetch_all(&global_state.db_pool).await?;
         for row in pool_events {
-            let goal_name = row.goal_slug.as_deref().unwrap_or("unknown");
+            let goal_name = row.racetime_goal_slug.as_deref().unwrap_or("unknown");
             let settings = match row.single_settings { Some(sqlx::types::Json(s)) => s, None => continue };
             if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM prerolled_seeds WHERE goal_name = $1) AS "exists!""#, goal_name).fetch_one(&global_state.db_pool).await? { break }
             let rando_version = row.rando_version.map(|sqlx::types::Json(v)| v)

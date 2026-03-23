@@ -221,7 +221,7 @@ pub(crate) struct Data<'a> {
     pub(crate) qualifier_score_hiding: QualifierScoreHiding,
     pub(crate) qualifier_notification_role_id: Option<RoleId>,
     pub(crate) async_start_delay: Option<i32>,
-    pub(crate) goal_slug: Option<String>,
+    pub(crate) racetime_goal_slug: Option<String>,
     pub(crate) draft_kind_str: Option<String>,
     pub(crate) draft_config: Option<serde_json::Value>,
     pub(crate) qualifier_score_kind_str: Option<String>,
@@ -235,6 +235,7 @@ pub(crate) struct Data<'a> {
     pub(crate) preroll_mode: String,
     pub(crate) spoiler_unlock: String,
     pub(crate) seed_gen_type: Option<SeedGenType>,
+    pub(crate) is_live_event: bool,
 }
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
@@ -305,7 +306,7 @@ impl<'a> Data<'a> {
             force_custom_role_binding,
             qualifier_score_hiding AS "qualifier_score_hiding: QualifierScoreHiding",
             qualifier_notification_role_id,
-            goal_slug,
+            racetime_goal_slug,
             draft_kind,
             draft_config AS "draft_config: Json<serde_json::Value>",
             qualifier_score_kind,
@@ -320,7 +321,8 @@ impl<'a> Data<'a> {
             spoiler_unlock AS "spoiler_unlock!",
             async_start_delay,
             seed_gen_type,
-            seed_config AS "seed_config: Json<serde_json::Value>"
+            seed_config AS "seed_config: Json<serde_json::Value>",
+            is_live_event
         FROM events WHERE series = $1 AND event = $2"#, series as _, &event).fetch_optional(&mut **transaction).await?
             .map(|row| Ok::<_, DataError>(Self {
                 display_name: row.display_name,
@@ -380,7 +382,7 @@ impl<'a> Data<'a> {
                 force_custom_role_binding: row.force_custom_role_binding.unwrap_or(true),
                 qualifier_score_hiding: row.qualifier_score_hiding,
                 qualifier_notification_role_id: row.qualifier_notification_role_id.map(|id| RoleId::new(id as u64)),
-                goal_slug: row.goal_slug,
+                racetime_goal_slug: row.racetime_goal_slug,
                 draft_kind_str: row.draft_kind,
                 draft_config: row.draft_config.map(|Json(v)| v),
                 qualifier_score_kind_str: row.qualifier_score_kind,
@@ -398,6 +400,7 @@ impl<'a> Data<'a> {
                     row.seed_gen_type.as_deref(),
                     row.seed_config.as_ref().map(|Json(v)| v),
                 ),
+                is_live_event: row.is_live_event,
             }))
             .transpose()
     }
@@ -527,10 +530,12 @@ impl<'a> Data<'a> {
     }
 
     pub(crate) async fn qualifier_kind(&self, transaction: &mut Transaction<'_, Postgres>, me: Option<&User>) -> Result<QualifierKind, DataError> {
-        Ok(if let Some(score_kind) = self.qualifier_score_kind_str.as_deref().and_then(teams::QualifierScoreKind::from_slug) {
-            QualifierKind::Score(score_kind)
-        } else if self.series == Series::SongsOfHope && self.event == "1" {
+        Ok(if self.qualifier_score_kind_str.as_deref() == Some("songs_of_hope") {
             QualifierKind::SongsOfHope
+        } else if self.qualifier_score_kind_str.as_deref() == Some("triforce_blitz") {
+            QualifierKind::Single { show_times: true }
+        } else if let Some(score_kind) = self.qualifier_score_kind_str.as_deref().and_then(teams::QualifierScoreKind::from_slug) {
+            QualifierKind::Score(score_kind)
         } else if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams WHERE series = $1 AND event = $2 AND qualifier_rank IS NOT NULL) AS "exists!""#, self.series as _, &*self.event).fetch_one(&mut **transaction).await? {
             QualifierKind::Rank
         } else if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM asyncs WHERE series = $1 AND event = $2 AND kind = 'qualifier') AS "exists!""#, self.series as _, &*self.event).fetch_one(&mut **transaction).await? {
@@ -830,7 +835,7 @@ impl<'a> Data<'a> {
                 @let practice_seed_url = (is_ootr && self.single_settings.is_some()).then(|| uri!(practice_seed(self.series, &*self.event)));
                 @let practice_race_url = if_chain! {
                     if is_ootr;
-                    if let Some(goal) = self.goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug);
+                    if let Some(goal) = self.racetime_goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug);
                     if goal.is_custom(); //TODO also support non-custom goals, see https://github.com/racetimeGG/racetime-app/issues/215
                     then {
                         let mut practice_url = Url::parse(&format!("https://{}/{}/startrace", racetime_host(), racetime_bot::CATEGORY))?;
@@ -1264,7 +1269,7 @@ pub(crate) async fn races(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
                 discord_scheduled_event_id: None,
                 volunteer_request_sent: false,
                 volunteer_request_message_id: None,
-                goal_slug: data.goal_slug.clone(),
+                racetime_goal_slug: data.racetime_goal_slug.clone(),
             });
         }
     }

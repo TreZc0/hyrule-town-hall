@@ -280,12 +280,12 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
 
                         h3 : "Racetime Bot Configuration";
 
-                        : form_field("goal_slug", &mut errors, html! {
-                            label(for = "goal_slug") : "Goal Slug";
-                            select(id = "goal_slug", name = "goal_slug", style = "width: 100%; max-width: 600px;") {
-                                option(value = "", selected? = ctx.field_value("goal_slug").map_or(event.goal_slug.is_none(), |v| v.is_empty())) : "None";
+                        : form_field("racetime_goal_slug", &mut errors, html! {
+                            label(for = "racetime_goal_slug") : "Goal Slug";
+                            select(id = "racetime_goal_slug", name = "racetime_goal_slug", style = "width: 100%; max-width: 600px;") {
+                                option(value = "", selected? = ctx.field_value("racetime_goal_slug").map_or(event.racetime_goal_slug.is_none(), |v| v.is_empty())) : "None";
                                 @for (slug, display_name) in racetime_bot::Goal::all_slugs() {
-                                    option(value = slug, selected? = ctx.field_value("goal_slug").map_or(event.goal_slug.as_deref() == Some(slug), |v| v == slug)) : display_name;
+                                    option(value = slug, selected? = ctx.field_value("racetime_goal_slug").map_or(event.racetime_goal_slug.as_deref() == Some(slug), |v| v == slug)) : display_name;
                                 }
                             }
                         });
@@ -582,7 +582,7 @@ pub(crate) struct SetupForm {
     async_start_delay: Option<i32>,
     show_opt_out: bool,
     force_custom_role_binding: bool,
-    goal_slug: Option<String>,
+    racetime_goal_slug: Option<String>,
     draft_kind: Option<String>,
     draft_config: Option<String>,
     qualifier_score_kind: Option<String>,
@@ -821,7 +821,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             let challonge_community = value.challonge_community.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
 
             // Parse new racetime bot config fields
-            let goal_slug = value.goal_slug.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+            let racetime_goal_slug = value.racetime_goal_slug.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
             let draft_kind = value.draft_kind.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
             let qualifier_score_kind = value.qualifier_score_kind.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
 
@@ -948,7 +948,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                     default_game_count = $24, open_stream_delay = $25, invitational_stream_delay = $26,
                     hide_teams_tab = $27, hide_races_tab = $28, show_qualifier_times = $29,
                     automated_asyncs = $30, show_opt_out = $31, force_custom_role_binding = $32,
-                    goal_slug = $35, draft_kind = $36, draft_config = $37,
+                    racetime_goal_slug = $35, draft_kind = $36, draft_config = $37,
                     qualifier_score_kind = $38, is_single_race = $39, hide_entrants = $40,
                     start_delay = $41, start_delay_open = $42, restrict_chat_in_qualifiers = $43,
                     async_start_delay = $44, startgg_double_rr = $45,
@@ -990,7 +990,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 value.force_custom_role_binding,
                 event_data.series as _,
                 &event_data.event,
-                goal_slug,
+                racetime_goal_slug,
                 draft_kind,
                 draft_config_json as _,
                 qualifier_score_kind,
@@ -1286,12 +1286,12 @@ fn create_form_content(me: &Option<User>, _uri: &Origin<'_>, csrf: Option<&CsrfT
 
                         h3 : "Racetime Bot Configuration";
 
-                        : form_field("goal_slug", &mut errors, html! {
-                            label(for = "goal_slug") : "Goal Slug";
-                            select(id = "goal_slug", name = "goal_slug", style = "width: 100%; max-width: 600px;") {
-                                option(value = "", selected? = ctx.field_value("goal_slug").map_or(true, |v| v.is_empty())) : "None";
+                        : form_field("racetime_goal_slug", &mut errors, html! {
+                            label(for = "racetime_goal_slug") : "Goal Slug";
+                            select(id = "racetime_goal_slug", name = "racetime_goal_slug", style = "width: 100%; max-width: 600px;") {
+                                option(value = "", selected? = ctx.field_value("racetime_goal_slug").map_or(true, |v| v.is_empty())) : "None";
                                 @for (slug, display_name) in racetime_bot::Goal::all_slugs() {
-                                    option(value = slug, selected? = ctx.field_value("goal_slug").map_or(false, |v| v == slug)) : display_name;
+                                    option(value = slug, selected? = ctx.field_value("racetime_goal_slug").map_or(false, |v| v == slug)) : display_name;
                                 }
                             }
                         });
@@ -1436,7 +1436,7 @@ pub(crate) struct CreateEventForm {
     team_config: String,
     language: String,
     listed: bool,
-    goal_slug: Option<String>,
+    racetime_goal_slug: Option<String>,
     draft_kind: Option<String>,
     draft_config: Option<String>,
     qualifier_score_kind: Option<String>,
@@ -1509,7 +1509,7 @@ pub(crate) async fn create_post(pool: &State<PgPool>, me: User, uri: Origin<'_>,
         };
 
         // Parse optional string fields
-        let goal_slug = value.goal_slug.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+        let racetime_goal_slug = value.racetime_goal_slug.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
         let draft_kind = value.draft_kind.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
         let qualifier_score_kind = value.qualifier_score_kind.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
 
@@ -1563,7 +1563,7 @@ pub(crate) async fn create_post(pool: &State<PgPool>, me: User, uri: Origin<'_>,
         // Insert the new event
         sqlx::query!(r#"
             INSERT INTO events (series, event, display_name, team_config, language, listed,
-                goal_slug, draft_kind, draft_config, qualifier_score_kind,
+                racetime_goal_slug, draft_kind, draft_config, qualifier_score_kind,
                 is_single_race, hide_entrants, start_delay, start_delay_open, restrict_chat_in_qualifiers,
                 preroll_mode, spoiler_unlock, racetime_goal_name, is_custom_goal)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
@@ -1574,7 +1574,7 @@ pub(crate) async fn create_post(pool: &State<PgPool>, me: User, uri: Origin<'_>,
             team_config as _,
             language as _,
             value.listed,
-            goal_slug,
+            racetime_goal_slug,
             draft_kind,
             draft_config_json as _,
             qualifier_score_kind,
