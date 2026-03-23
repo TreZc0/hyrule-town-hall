@@ -1211,16 +1211,16 @@ pub(crate) async fn races(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
                 AsyncKind::Tiebreaker2 => "Tiebreaker Async 2".to_owned(),
             });
             let seed_files = if let Some(hash) = row.seed_data.as_ref().and_then(|d| d.get("avianart_hash")).and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
-                Some(seed::Files::AvianartSeed { hash: hash.to_owned(), seed_hash: None })
+                Some(seed::Files::AvianartSeed { hash: hash.to_owned(), seed_hash: None }.to_seed_data_base())
             } else if let (Some(permalink), Some(seed_hash)) = (
                 row.seed_data.as_ref().and_then(|d| d.get("permalink")).and_then(|v| v.as_str()).filter(|s| !s.is_empty()),
                 row.seed_data.as_ref().and_then(|d| d.get("seed_hash")).and_then(|v| v.as_str()),
             ) {
-                Some(seed::Files::TwwrPermalink { permalink: permalink.to_owned(), seed_hash: seed_hash.to_owned() })
+                Some(seed::Files::TwwrPermalink { permalink: permalink.to_owned(), seed_hash: seed_hash.to_owned() }.to_seed_data_base())
             } else if let Some(uuid) = row.tfb_uuid {
-                Some(seed::Files::TriforceBlitz { is_dev: false, uuid })
+                Some(seed::Files::TriforceBlitz { is_dev: false, uuid }.to_seed_data_base())
             } else if let Some(fs) = row.file_stem.filter(|s| !s.is_empty()) {
-                Some(seed::Files::MidosHouse { file_stem: Cow::Owned(fs), locked_spoiler_log_path: None })
+                Some(seed::Files::MidosHouse { file_stem: Cow::Owned(fs), locked_spoiler_log_path: None }.to_seed_data_base())
             } else {
                 None
             };
@@ -1250,7 +1250,7 @@ pub(crate) async fn races(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
                 fpa_invoked: false,
                 breaks_used: false,
                 draft: None,
-                seed: seed::Data { files: seed_files, ..seed::Data::default() },
+                seed: seed::Data { seed_data: seed_files, ..seed::Data::default() },
                 video_urls: HashMap::default(),
                 restreamers: HashMap::default(),
                 last_edited_by: None,

@@ -2153,7 +2153,7 @@ pub(crate) async fn race_table(
     let has_seeds = 'has_seeds: {
         for race in races {
             if race.show_seed() {
-                if race.seed.file_hash.is_some() || race.seed.files.is_some() {
+                if race.seed.file_hash.is_some() || race.seed.files().is_some() {
                     break 'has_seeds true
                 }
             } else {
@@ -4321,7 +4321,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 race.seed.file_hash = Some(file_hash);
             }
             if let (Some(id), Some(gen_time), Some(file_stem)) = (web_id, web_gen_time, file_stem) {
-                race.seed.files = Some(seed::Files::OotrWeb { id, gen_time, file_stem: Cow::Owned(file_stem) });
+                race.seed.seed_data = Some(seed::Files::OotrWeb { id, gen_time, file_stem: Cow::Owned(file_stem) }.to_seed_data_base());
             }
             race.save(&mut transaction).await?;
 

@@ -387,7 +387,7 @@ impl AsyncRaceManager {
         content.mention_user(&player);
         content.push(", ");
         content.push_line("");
-        match &race.seed.files {
+        match race.seed.files() {
             Some(seed::Files::TwwrPermalink { permalink, seed_hash }) => {
                 content.push(format!("Your seed is ready! Permalink: {permalink}"));
                 if !seed_hash.is_empty() {
@@ -493,23 +493,20 @@ impl AsyncRaceManager {
     }
 
     fn get_seed_url(race: &Race) -> Result<String, Error> {
-        if let Some(seed_files) = &race.seed.files {
-            match seed_files {
-                seed::Files::AlttprDoorRando { uuid } => {
-                    let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html")?;
-                    patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{uuid}.bps", base_uri()));
-                    Ok(patcher_url.to_string())
-                }
-                seed::Files::TwwrPermalink { permalink, .. } => {
-                    Ok(format!("Permalink: {permalink}"))
-                }
-                seed::Files::AvianartSeed { hash, .. } => {
-                    Ok(format!("https://avianart.games/perm/{hash}"))
-                }
-                _ => Err(Error::UnsupportedSeedType),
+        match race.seed.files() {
+            Some(seed::Files::AlttprDoorRando { uuid }) => {
+                let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html")?;
+                patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{uuid}.bps", base_uri()));
+                Ok(patcher_url.to_string())
             }
-        } else {
-            Err(Error::NoSeedAvailable)
+            Some(seed::Files::TwwrPermalink { permalink, .. }) => {
+                Ok(format!("Permalink: {permalink}"))
+            }
+            Some(seed::Files::AvianartSeed { hash, .. }) => {
+                Ok(format!("https://avianart.games/perm/{hash}"))
+            }
+            Some(_) => Err(Error::UnsupportedSeedType),
+            None => Err(Error::NoSeedAvailable),
         }
     }
 

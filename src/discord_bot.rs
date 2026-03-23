@@ -3976,7 +3976,7 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
     };
     
-    let is_second_part = cal_event.race.seed.files.is_some();
+    let is_second_part = cal_event.race.seed.files().is_some();
 
     if !is_second_part {
         let discord_data = discord_ctx.data.read().await;

@@ -42,12 +42,11 @@ pub(crate) type Settings = serde_json::Map<String, serde_json::Value>;
 pub(crate) struct Data {
     pub(crate) file_hash: Option<[String; 5]>,
     pub(crate) password: Option<[OcarinaNote; 6]>,
-    pub(crate) files: Option<Files>,
+    pub(crate) seed_data: Option<serde_json::Value>,
     pub(crate) progression_spoiler: bool,
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(unix, derive(Protocol))]
 pub(crate) enum Files {
     AlttprDoorRando {
         uuid: Uuid,
@@ -126,10 +125,11 @@ impl Files {
                 "permalink": permalink,
                 "seed_hash": seed_hash,
             }),
-            Self::TfbSotd { .. } => {
-                // TfbSotd is an ephemeral in-memory type only; never stored in races table
-                panic!("TfbSotd cannot be serialized to seed_data")
-            }
+            Self::TfbSotd { date, ordinal } => serde_json::json!({
+                "type": "tfb_sotd",
+                "date": date.to_string(),
+                "ordinal": ordinal,
+            }),
         }
     }
 
@@ -186,20 +186,31 @@ impl Files {
                 let seed_hash = value.get("seed_hash").and_then(|v| v.as_str())?.to_owned();
                 Some(Self::TwwrPermalink { permalink, seed_hash })
             }
+            "tfb_sotd" => {
+                let date = value.get("date")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok())?;
+                let ordinal = value.get("ordinal").and_then(|v| v.as_u64())?;
+                Some(Self::TfbSotd { date, ordinal })
+            }
             _ => None,
         }
     }
 }
 
 impl Data {
+    /// Return a typed view of the seed data, parsed from the JSON blob.
+    pub(crate) fn files(&self) -> Option<Files> {
+        self.seed_data.as_ref().and_then(Files::from_seed_data)
+    }
+
     /// Serialize to the unified `seed_data` JSONB value for storage in the `races` table.
     ///
     /// For `AlttprDoorRando`, merges in `file_hash` (hash1..5) so they survive the column drop.
     pub(crate) fn to_seed_data(&self) -> Option<serde_json::Value> {
-        let files = self.files.as_ref()?;
-        let mut obj = files.to_seed_data_base();
+        let mut obj = self.seed_data.clone()?;
         // Merge hash icons into alttpr_dr entries so they're preserved after column drop
-        if matches!(files, Files::AlttprDoorRando { .. }) {
+        if obj.get("type").and_then(|v| v.as_str()) == Some("alttpr_dr") {
             if let Some([h1, h2, h3, h4, h5]) = &self.file_hash {
                 obj["hash1"] = h1.as_str().into();
                 obj["hash2"] = h2.as_str().into();
@@ -220,27 +231,23 @@ impl Data {
         password: Option<&str>,
         progression_spoiler: bool,
     ) -> Self {
-        let (files, file_hash) = if let Some(ref data) = seed_data {
-            let files = Files::from_seed_data(data);
-            // For AlttprDR: hash icons are stored inline in seed_data
-            let file_hash = if data.get("type").and_then(|v| v.as_str()) == Some("alttpr_dr") {
+        // For AlttprDR: hash icons are stored inline in seed_data; extract them for the field.
+        let file_hash = if let Some(ref data) = seed_data {
+            if data.get("type").and_then(|v| v.as_str()) == Some("alttpr_dr") {
                 let h1 = data.get("hash1").and_then(|v| v.as_str()).map(str::to_owned);
                 let h2 = data.get("hash2").and_then(|v| v.as_str()).map(str::to_owned);
                 let h3 = data.get("hash3").and_then(|v| v.as_str()).map(str::to_owned);
                 let h4 = data.get("hash4").and_then(|v| v.as_str()).map(str::to_owned);
                 let h5 = data.get("hash5").and_then(|v| v.as_str()).map(str::to_owned);
                 match (h1, h2, h3, h4, h5) {
-                    (Some(h1), Some(h2), Some(h3), Some(h4), Some(h5)) => {
-                        Some([h1, h2, h3, h4, h5])
-                    }
+                    (Some(h1), Some(h2), Some(h3), Some(h4), Some(h5)) => Some([h1, h2, h3, h4, h5]),
                     _ => None,
                 }
             } else {
                 None
-            };
-            (files, file_hash)
+            }
         } else {
-            (None, None)
+            None
         };
         Self {
             file_hash,
@@ -252,7 +259,7 @@ impl Data {
                     .try_into()
                     .expect("invalid password length, should be prevented by SQL constraint")
             }),
-            files,
+            seed_data,
             progression_spoiler,
         }
     }
@@ -285,26 +292,26 @@ impl Data {
                 _ => unreachable!("only some hash icons present, should be prevented by SQL constraint"),
             },
             password: password.map(|pw| pw.chars().map(|note| OcarinaNote::try_from(note).expect("invalid ocarina note in password, should be prevented by SQL constraint")).collect_vec().try_into().expect("invalid password length, should be prevented by SQL constraint")),
-            files: match (file_stem, locked_spoiler_log_path, web_id, web_gen_time, tfb_uuid, xkeys_uuid, seed_data) {
-                (_, _, _, _, Some(uuid), None, None) => Some(Files::TriforceBlitz { is_dev: is_tfb_dev, uuid }),
-                (Some(file_stem), _, Some(id), Some(gen_time), None, None, None) => Some(Files::OotrWeb { id, gen_time, file_stem: Cow::Owned(file_stem) }),
+            seed_data: match (file_stem, locked_spoiler_log_path, web_id, web_gen_time, tfb_uuid, xkeys_uuid, seed_data) {
+                (_, _, _, _, Some(uuid), None, None) => Some(Files::TriforceBlitz { is_dev: is_tfb_dev, uuid }.to_seed_data_base()),
+                (Some(file_stem), _, Some(id), Some(gen_time), None, None, None) => Some(Files::OotrWeb { id, gen_time, file_stem: Cow::Owned(file_stem) }.to_seed_data_base()),
                 (Some(file_stem), locked_spoiler_log_path, Some(id), None, None, None, None) => Some(if let Some(first_start) = [start, async_start1, async_start2, async_start3].into_iter().filter_map(identity).min() {
-                    Files::OotrWeb { id, gen_time: first_start - TimeDelta::days(1), file_stem: Cow::Owned(file_stem) }
+                    Files::OotrWeb { id, gen_time: first_start - TimeDelta::days(1), file_stem: Cow::Owned(file_stem) }.to_seed_data_base()
                 } else {
-                    Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }
+                    Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }.to_seed_data_base()
                 }),
-                (Some(file_stem), locked_spoiler_log_path, None, _, None, None, None) => Some(Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }),
-                (_, _, _, _, _, Some(uuid), None) => Some(Files::AlttprDoorRando { uuid }),
-                (_, _, _, _, _, _, Some(ref seed_data)) => (|| {
-                    if let Some(hash) = seed_data.get("avianart_hash").and_then(|v| v.as_str()) {
-                        let seed_hash = seed_data.get("avianart_seed_hash")
+                (Some(file_stem), locked_spoiler_log_path, None, _, None, None, None) => Some(Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }.to_seed_data_base()),
+                (_, _, _, _, _, Some(uuid), None) => Some(Files::AlttprDoorRando { uuid }.to_seed_data_base()),
+                (_, _, _, _, _, _, Some(ref old_data)) => (|| {
+                    if let Some(hash) = old_data.get("avianart_hash").and_then(|v| v.as_str()) {
+                        let seed_hash = old_data.get("avianart_seed_hash")
                             .and_then(|v| v.as_str())
                             .and_then(|s| crate::avianart::parse_file_hash(s).ok());
-                        return Some(Files::AvianartSeed { hash: hash.to_owned(), seed_hash });
+                        return Some(Files::AvianartSeed { hash: hash.to_owned(), seed_hash }.to_seed_data_base());
                     }
-                    let permalink = seed_data.get("permalink")?.as_str()?.to_owned();
-                    let seed_hash = seed_data.get("seed_hash")?.as_str()?.to_owned();
-                    Some(Files::TwwrPermalink { permalink, seed_hash })
+                    let permalink = old_data.get("permalink")?.as_str()?.to_owned();
+                    let seed_hash = old_data.get("seed_hash")?.as_str()?.to_owned();
+                    Some(Files::TwwrPermalink { permalink, seed_hash }.to_seed_data_base())
                 })(),
                 (None, _, _, _, None, None, None) => None,
             },
@@ -321,7 +328,7 @@ impl Data {
         }
 
         if_chain! {
-            if self.file_hash.is_none() || self.password.is_none() || match self.files {
+            if self.file_hash.is_none() || self.password.is_none() || match self.files() {
                 Some(Files::AlttprDoorRando { .. }) => false,
                 Some(Files::MidosHouse { .. }) => true,
                 Some(Files::OotrWeb { gen_time, .. }) => gen_time <= now - WEB_TIMEOUT,
@@ -331,7 +338,7 @@ impl Data {
                 Some(Files::AvianartSeed { .. }) => false,
                 None => false,
             };
-            if let Some((spoiler_path, spoiler_file_name)) = match self.files {
+            if let Some((spoiler_path, spoiler_file_name)) = match self.files() {
                 Some(Files::MidosHouse { locked_spoiler_log_path: Some(ref spoiler_path), .. }) if fs::exists(spoiler_path).await? => Some((PathBuf::from(spoiler_path), None)),
                 Some(Files::MidosHouse { ref file_stem, .. } | Files::OotrWeb { ref file_stem, .. }) => {
                     let spoiler_file_name = format!("{file_stem}_Spoiler.json");
@@ -376,8 +383,8 @@ impl Data {
         }
         //TODO if file_hash.is_none() and a patch file is available, read the file hash from the patched rom?
         let file_hash = self.file_hash.clone().or_else(|| {
-            if let Some(Files::AvianartSeed { ref seed_hash, .. }) = self.files {
-                seed_hash.clone()
+            if let Some(Files::AvianartSeed { seed_hash, .. }) = self.files() {
+                seed_hash
             } else {
                 None
             }
@@ -427,7 +434,7 @@ enum SpoilerStatus {
 pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bool, add_hash_url: Option<rocket::http::uri::Origin<'_>>, transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<RawHtml<String>, ExtraDataError> {
     //TODO show seed password when appropriate
     let extra = seed.extra(now).await?;
-    let mut seed_links = match seed.files {
+    let mut seed_links = match seed.files() {
         Some(Files::AlttprDoorRando { uuid }) => {
             let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
             patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{uuid}.bps", base_uri()));
@@ -618,10 +625,10 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>,
             };
             let seed = Data {
                 password: None, // not displayed
-                files: Some(Files::MidosHouse {
+                seed_data: Some(Files::MidosHouse {
                     file_stem: Cow::Owned(file_stem.to_owned()),
                     locked_spoiler_log_path,
-                }),
+                }.to_seed_data_base()),
                 file_hash: None,
                 progression_spoiler,
             };
@@ -630,7 +637,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>,
                 SpoilerStatus::Unlocked(_) | SpoilerStatus::Progression => {}
                 SpoilerStatus::Locked | SpoilerStatus::NotFound => return Err(StatusOrError::Status(Status::NotFound)),
             }
-            let spoiler_path = if let Some(Files::MidosHouse { locked_spoiler_log_path: Some(path), .. }) = seed.files {
+            let spoiler_path = if let Some(Files::MidosHouse { locked_spoiler_log_path: Some(path), .. }) = seed.files() {
                 PathBuf::from(path)
             } else {
                 Path::new(DIR).join(format!("{file_stem}.json"))
@@ -684,10 +691,10 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>,
             };
             let seed = Data {
                 password: None, // not displayed
-                files: Some(Files::MidosHouse {
+                seed_data: Some(Files::MidosHouse {
                     file_stem: Cow::Owned(file_stem.to_owned()),
                     locked_spoiler_log_path,
-                }),
+                }.to_seed_data_base()),
                 file_hash: None,
                 progression_spoiler,
             };
