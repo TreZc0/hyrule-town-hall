@@ -348,11 +348,9 @@ pub(crate) async fn add_game_post(
 }
 
 #[derive(FromForm, CsrfForm)]
-#[allow(dead_code)]
 pub(crate) struct AddAdminForm {
     #[field(default = String::new())]
     csrf: String,
-    #[allow(dead_code)]
     admin: String,
 }
 
@@ -362,7 +360,6 @@ pub(crate) struct RemoveAdminForm {
     csrf: String,
 }
 
-#[allow(dead_code)]
 #[rocket::post("/admin/game/<game_name>/admins/<admin_id>/remove", data = "<form>")]
 pub(crate) async fn remove_game_admin(
     pool: &State<PgPool>,
@@ -398,7 +395,6 @@ pub(crate) async fn remove_game_admin(
     Ok(Redirect::to(uri!(manage_game_admins(game_name))))
 }
 
-#[allow(dead_code)]
 #[rocket::post("/admin/game/<game_name>/admins", data = "<form>")]
 pub(crate) async fn add_game_admin(
     pool: &State<PgPool>,
