@@ -398,7 +398,7 @@ impl AsyncRaceManager {
                 if let Some(VersionedBranch::Tww { tracker_link: Some(tl), .. }) = &event.rando_version {
                     if let Some(ss) = &event.settings_string {
                         content.push_line("");
-                        content.push(format!("Tracker: https://{tl}/#/tracker/new/{ss}"));
+                        content.push(format!("Tracker: https://{tl}/#/tracker/new/{}", urlencoding::encode(ss)));
                     }
                 }
             }

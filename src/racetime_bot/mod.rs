@@ -1805,7 +1805,7 @@ impl SeedRollUpdate {
 
                 let twwr_tracker_url = match (&version, &official_data) {
                     (Some(VersionedBranch::Tww { tracker_link: Some(tl), .. }), Some(OfficialRaceData { event, .. })) =>
-                        event.settings_string.as_deref().map(|ss| format!("https://{tl}/#/tracker/new/{ss}")),
+                        event.settings_string.as_deref().map(|ss| format!("https://{tl}/#/tracker/new/{}", urlencoding::encode(ss))),
                     _ => None,
                 };
 
