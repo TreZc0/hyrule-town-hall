@@ -283,7 +283,6 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             client_id: String::new(),
             client_secret: String::new(),
         };
-        let (seed_cache_tx, seed_cache_rx) = watch::channel(());
         let global_state = Arc::new(racetime_bot::GlobalState::new(
             Arc::clone(&new_room_lock),
             racetime_config,
@@ -295,14 +294,13 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             ootr_api_client,
             discord_builder.ctx_fut.clone(),
             Arc::clone(&clean_shutdown),
-            seed_cache_tx,
             seed_metadata,
             config.avianart_api_key.clone(),
             config.mmr_api_key.clone(),
         ).await);
         let discord_builder = discord_bot::configure_builder(discord_builder, global_state.clone(), db_pool.clone(), http_client.clone(), config.clone(), Arc::clone(&new_room_lock), Arc::clone(&clean_shutdown), rocket.shutdown());
         #[cfg(unix)] let unix_listener = unix_socket::listen(rocket.shutdown(), clean_shutdown, global_state.clone());
-        let racetime_task = tokio::spawn(racetime_bot::main(config.clone(), rocket.shutdown(), global_state, seed_cache_rx)).map(|res| match res {
+        let racetime_task = tokio::spawn(racetime_bot::main(config.clone(), rocket.shutdown(), global_state)).map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(Error::from(e)),
             Err(e) => Err(Error::from(e)),

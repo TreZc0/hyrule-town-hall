@@ -7,7 +7,7 @@ use {
             Tab,
         },
         prelude::*,
-        racetime_bot::{Goal, VersionedBranch},
+        racetime_bot::VersionedBranch,
         startgg,
         user::DisplaySource,
     },
@@ -1098,6 +1098,9 @@ async fn weekly_schedules_form(mut transaction: Transaction<'_, Postgres>, me: O
         if event.organizers(&mut transaction).await?.contains(me) || me.is_global_admin() {
             let schedules = WeeklySchedule::for_event(&mut transaction, event.series, &event.event).await?;
             let now = Utc::now();
+            let event_goals: Vec<String> = sqlx::query_scalar!(
+                r#"SELECT DISTINCT racetime_goal_slug AS "slug!" FROM events WHERE racetime_goal_slug IS NOT NULL ORDER BY racetime_goal_slug"#
+            ).fetch_all(&mut *transaction).await?;
             html! {
                 h2 : "Manage Weekly Schedules";
                 p : "Weekly schedules define recurring race times for this event. Races are automatically created based on these schedules.";
@@ -1216,10 +1219,7 @@ async fn weekly_schedules_form(mut transaction: Transaction<'_, Postgres>, me: O
                     : form_field("racetime_goal", &mut errors, html! {
                         label(for = "racetime_goal") : "racetime.gg Goal Override:";
                         @let current_goal = defaults.add_racetime_goal().unwrap_or("");
-                        @let unique_goals = {
-                            let mut seen = HashSet::new();
-                            all::<Goal>().filter_map(|g| if seen.insert(g.as_str()) { Some(g.as_str()) } else { None }).collect::<Vec<_>>()
-                        };
+                        @let unique_goals = event_goals.iter().map(|s| s.as_str()).collect::<Vec<_>>();
                         select(id = "racetime_goal", name = "racetime_goal") {
                             option(value = "", selected? = current_goal.is_empty()) : "None (use event default)";
                             @for goal_str in &unique_goals {
@@ -1503,6 +1503,10 @@ async fn weekly_schedule_edit_form(mut transaction: Transaction<'_, Postgres>, m
     .fetch_optional(&mut *transaction)
     .await?;
 
+    let event_goals: Vec<String> = sqlx::query_scalar!(
+        r#"SELECT DISTINCT racetime_goal_slug AS "slug!" FROM events WHERE racetime_goal_slug IS NOT NULL ORDER BY racetime_goal_slug"#
+    ).fetch_all(&mut *transaction).await?;
+
     let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, true).await?;
     let content = if event.is_ended() {
         html! {
@@ -1580,14 +1584,11 @@ async fn weekly_schedule_edit_form(mut transaction: Transaction<'_, Postgres>, m
                         @let current_goal = ctx.field_value("racetime_goal").unwrap_or_else(|| {
                             match schedule.racetime_goal.as_deref() {
                                 None => "",
-                                Some(g) if all::<Goal>().any(|goal| goal.as_str() == g) => g,
+                                Some(g) if event_goals.iter().any(|s| s == g) => g,
                                 Some(_) => "custom",
                             }
                         });
-                        @let unique_goals = {
-                            let mut seen = HashSet::new();
-                            all::<Goal>().filter_map(|g| if seen.insert(g.as_str()) { Some(g.as_str()) } else { None }).collect::<Vec<_>>()
-                        };
+                        @let unique_goals = event_goals.iter().map(|s| s.as_str()).collect::<Vec<_>>();
                         select(id = "racetime_goal", name = "racetime_goal", data_racetime_category = racetime_category.as_deref().unwrap_or(""), data_current_goal = current_goal) {
                             option(value = "", selected? = current_goal.is_empty()) : "None (use event default)";
                             @for goal_str in &unique_goals {
@@ -1601,7 +1602,7 @@ async fn weekly_schedule_edit_form(mut transaction: Transaction<'_, Postgres>, m
                         label(for = "racetime_goal_custom") : "Custom Goal String:";
                         @let custom_val = ctx.field_value("racetime_goal_custom").unwrap_or_else(|| {
                             match schedule.racetime_goal.as_deref() {
-                                Some(g) if !all::<Goal>().any(|goal| goal.as_str() == g) => g,
+                                Some(g) if !event_goals.iter().any(|s| s == g) => g,
                                 _ => "",
                             }
                         });

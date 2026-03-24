@@ -230,7 +230,6 @@ pub(crate) struct Data<'a> {
     pub(crate) start_delay: i32,
     pub(crate) start_delay_open: Option<i32>,
     pub(crate) restrict_chat_in_qualifiers: bool,
-    pub(crate) racetime_goal_name: Option<String>,
     pub(crate) is_custom_goal: bool,
     pub(crate) preroll_mode: String,
     pub(crate) spoiler_unlock: String,
@@ -315,7 +314,6 @@ impl<'a> Data<'a> {
             start_delay,
             start_delay_open,
             restrict_chat_in_qualifiers,
-            racetime_goal_name,
             is_custom_goal,
             preroll_mode AS "preroll_mode!",
             spoiler_unlock AS "spoiler_unlock!",
@@ -391,7 +389,6 @@ impl<'a> Data<'a> {
                 start_delay: row.start_delay,
                 start_delay_open: row.start_delay_open,
                 restrict_chat_in_qualifiers: row.restrict_chat_in_qualifiers,
-                racetime_goal_name: row.racetime_goal_name,
                 is_custom_goal: row.is_custom_goal,
                 preroll_mode: row.preroll_mode,
                 spoiler_unlock: row.spoiler_unlock,
@@ -835,13 +832,12 @@ impl<'a> Data<'a> {
                 @let practice_seed_url = (is_ootr && self.single_settings.is_some()).then(|| uri!(practice_seed(self.series, &*self.event)));
                 @let practice_race_url = if_chain! {
                     if is_ootr;
-                    if let Some(goal) = self.racetime_goal_slug.as_deref().and_then(racetime_bot::Goal::from_slug);
-                    if goal.is_custom(); //TODO also support non-custom goals, see https://github.com/racetimeGG/racetime-app/issues/215
+                    if let Some(ref slug) = self.racetime_goal_slug;
                     then {
                         let mut practice_url = Url::parse(&format!("https://{}/{}/startrace", racetime_host(), racetime_bot::CATEGORY))?;
                         practice_url
                             .query_pairs_mut()
-                            .append_pair(if goal.is_custom() { "custom_goal" } else { "goal" }, goal.as_str())
+                            .append_pair(if self.is_custom_goal { "custom_goal" } else { "goal" }, slug)
                             .extend_pairs(self.team_config.is_racetime_team_format().then_some([("team_race", "1"), ("require_even_teams", "1")]).into_iter().flatten())
                             .append_pair("hide_comments", "1")
                             .finish();

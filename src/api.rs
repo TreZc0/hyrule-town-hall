@@ -219,9 +219,13 @@ enum UserFromDiscordError {
 }
 
 #[Object] impl Query {
-    /// Custom racetime.gg goals in the OoTR category handled by Mido instead of RandoBot.
-    async fn goal_names(&self) -> Vec<&'static str> {
-        all::<racetime_bot::Goal>().filter(|goal| goal.is_custom()).map(|goal| goal.as_str()).collect()
+    /// Custom racetime.gg goals handled by Mido instead of RandoBot.
+    async fn goal_names(&self, ctx: &Context<'_>) -> sqlx::Result<Vec<String>> {
+        Ok(db!(db = ctx; {
+            sqlx::query_scalar!(
+                r#"SELECT DISTINCT racetime_goal_slug AS "slug!" FROM events WHERE racetime_goal_slug IS NOT NULL AND is_custom_goal = true ORDER BY racetime_goal_slug"#
+            ).fetch_all(&mut **db).await?
+        }))
     }
 
     /// Returns a series (group of events) by its URL part.

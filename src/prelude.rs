@@ -160,7 +160,6 @@ pub(crate) use {
         sync::{
             broadcast,
             mpsc,
-            watch,
         },
         time::{
             Instant,

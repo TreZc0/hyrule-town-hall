@@ -42,8 +42,7 @@ pub(crate) struct WeeklySchedule {
     pub(crate) notification_role_id: Option<PgSnowflake<RoleId>>,
     pub(crate) room_open_minutes_before: i16,
     /// Optional racetime.gg goal string override. If `None`, the event-level default is used.
-    /// If the value matches a known `Goal::as_str()`, `Goal::is_custom()` determines the custom flag;
-    /// otherwise the custom flag is set to `true`.
+    /// The custom flag is looked up from the events table; unknown strings default to `true`.
     pub(crate) racetime_goal: Option<String>,
 }
 
