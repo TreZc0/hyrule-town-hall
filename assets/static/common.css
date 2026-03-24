@@ -180,6 +180,10 @@ nav > a.nav:hover {
 .popover-wrapper > button,
 input[type="text"],
 input[type="number"],
+input[type="url"],
+input[type="datetime-local"],
+input[type="date"],
+input[type="time"],
 select,
 textarea {
   background-color: var(--bg-surface);
@@ -193,7 +197,8 @@ textarea {
 
 }
 
-input[type="text"], input[type="number"], select {
+input[type="text"], input[type="number"], input[type="url"],
+input[type="datetime-local"], input[type="date"], input[type="time"], select {
   margin: 0 5px !important;
   padding: 2px !important;
 }

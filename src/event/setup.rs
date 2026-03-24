@@ -8,15 +8,22 @@ use rocket::response::content::RawText;
 async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
     let header = event.header(&mut transaction, me.as_ref(), Tab::Setup, false).await?;
 
-    // Load enter_flow as raw JSON for display in form
-    let enter_flow_json = sqlx::query_scalar!(r#"
-        SELECT enter_flow AS "enter_flow: serde_json::Value"
+    // Load enter_flow and rando_version as raw JSON for display in form
+    let (enter_flow_json, rando_version_json) = sqlx::query!(r#"
+        SELECT enter_flow AS "enter_flow: serde_json::Value",
+               rando_version AS "rando_version: serde_json::Value"
         FROM events WHERE series = $1 AND event = $2
     "#, event.series as _, &*event.event)
-    .fetch_one(&mut *transaction).await?;
-    
+    .fetch_one(&mut *transaction).await
+    .map(|row| (row.enter_flow, row.rando_version))?;
+
     // Format enter_flow JSON for display
     let enter_flow_string = match &enter_flow_json {
+        Some(json) => serde_json::to_string_pretty(json).unwrap_or_default(),
+        None => String::new(),
+    };
+
+    let rando_version_string = match &rando_version_json {
         Some(json) => serde_json::to_string_pretty(json).unwrap_or_default(),
         None => String::new(),
     };
@@ -162,6 +169,20 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             input(type = "checkbox", id = "fpa_enabled", name = "fpa_enabled", checked? = ctx.field_value("fpa_enabled").map_or(event.fpa_enabled, |value| value == "on"));
                             label(for = "fpa_enabled") : "FPA Enabled";
                             label(class = "help") : " (Announce fair play agreement when official race rooms open)";
+                        });
+
+                        : form_field("rando_version_json", &mut errors, html! {
+                            label(for = "rando_version_json") : "Randomizer Version (JSON)";
+                            textarea(id = "rando_version_json", name = "rando_version_json", rows = "8", style = "font-family: monospace; width: 100%; max-width: 800px;") {
+                                : ctx.field_value("rando_version_json").unwrap_or(&rando_version_string);
+                            }
+                            p(class = "help") : "Randomizer version config as JSON. Leave empty to clear.";
+                            details {
+                                summary : "Examples";
+                                pre(style = "font-size: 13px; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                    : "// TWW randomizer build:\n{\n  \"type\": \"tww\",\n  \"identifier\": \"dev_tanjo3.1.10.5\",\n  \"githubUrl\": \"https://github.com/tanjo3/wwrando/releases/tag/dev_tanjo3.1.10.5\",\n  \"trackerLink\": \"wooferzfg.me/tww-rando-tracker/miniblins\"\n}\n\n// OoTR pinned version:\n{ \"type\": \"pinned\", \"version\": \"8.3.16 f.1\" }\n\n// OoTR latest branch:\n{ \"type\": \"latest\", \"branch\": \"dev\" }";
+                                }
+                            }
                         });
 
                         h3 : "Additional Settings";
@@ -442,6 +463,7 @@ pub(crate) struct SetupForm {
     emulator_settings_reminder: bool,
     prevent_late_joins: bool,
     fpa_enabled: bool,
+    rando_version_json: Option<String>,
     enter_url: Option<String>,
     teams_url: Option<String>,
     challonge_community: Option<String>,
@@ -753,6 +775,17 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 None
             };
 
+            let rando_version = match value.rando_version_json.as_deref() {
+                None | Some("") => Ok(None),
+                Some(s) => match serde_json::from_str::<serde_json::Value>(s) {
+                    Ok(json) => Ok(Some(json)),
+                    Err(_) => {
+                        form.context.push_error(form::Error::validation("Invalid JSON format for Randomizer Version").with_name("rando_version_json"));
+                        Err(())
+                    }
+                },
+            };
+
             if form.context.errors().next().is_some() {
                 return Ok(RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?));
             }
@@ -772,8 +805,8 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                     hide_teams_tab = $27, hide_races_tab = $28, show_qualifier_times = $29,
                     automated_asyncs = $30, show_opt_out = $31, force_custom_role_binding = $32,
                     async_start_delay = $33, startgg_double_rr = $34, fpa_enabled = $35,
-                    swiss_standings = $36
-                WHERE series = $37 AND event = $38
+                    swiss_standings = $36, rando_version = $37
+                WHERE series = $38 AND event = $39
             "#,
                 value.display_name,
                 start,
@@ -811,6 +844,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 value.startgg_double_rr,
                 value.fpa_enabled,
                 value.swiss_standings,
+                rando_version.unwrap() as _,
                 event_data.series as _,
                 &event_data.event,
             ).execute(&mut *transaction).await?;
