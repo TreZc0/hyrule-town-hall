@@ -15,6 +15,7 @@ use {
         cal::{Race, RaceSchedule},
         event::{self, AsyncKind, Data as EventData},
         prelude::*,
+        racetime_bot::VersionedBranch,
         team::Team,
         user::User,
         seed,
@@ -372,7 +373,7 @@ impl AsyncRaceManager {
     async fn distribute_seed_to_thread(
         transaction: &mut Transaction<'_, Postgres>,
         discord_ctx: &DiscordCtx,
-        _event: &EventData<'_>,
+        event: &EventData<'_>,
         race: &Race,
         async_part: u8,
     ) -> Result<(), Error> {
@@ -393,6 +394,12 @@ impl AsyncRaceManager {
                 if !seed_hash.is_empty() {
                     content.push_line("");
                     content.push(format!("Seed Hash: {seed_hash}"));
+                }
+                if let Some(VersionedBranch::Tww { tracker_link: Some(tl), .. }) = &event.rando_version {
+                    if let Some(ss) = &event.settings_string {
+                        content.push_line("");
+                        content.push(format!("Tracker: https://{tl}/#/tracker/new/{ss}"));
+                    }
                 }
             }
             _ => {

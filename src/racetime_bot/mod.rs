@@ -163,6 +163,8 @@ pub(crate) enum VersionedBranch {
     Tww {
         identifier: Cow<'static, str>,
         github_url: Cow<'static, str>,
+        #[serde(default)]
+        tracker_link: Option<Cow<'static, str>>,
     },
 }
 
@@ -191,10 +193,11 @@ impl From<&VersionedBranch> for String {
                 "githubUsername": github_username,
                 "branch": branch
             }),
-            VersionedBranch::Tww { identifier, github_url } => json!({
+            VersionedBranch::Tww { identifier, github_url, tracker_link } => json!({
                 "type": "tww",
                 "identifier": identifier,
-                "githubUrl": github_url
+                "githubUrl": github_url,
+                "trackerLink": tracker_link
             }),
         };
         serde_json::to_string(&value).expect("failed to serialize VersionedBranch")
@@ -225,7 +228,8 @@ impl From<String> for VersionedBranch {
             "tww" => {
                 let identifier = value.get("identifier").and_then(|v| v.as_str()).expect("missing identifier field").to_owned().into();
                 let github_url = value.get("githubUrl").and_then(|v| v.as_str()).expect("missing githubUrl field").to_owned().into();
-                VersionedBranch::Tww { identifier, github_url }
+                let tracker_link = value.get("trackerLink").and_then(|v| v.as_str()).map(|s| s.to_owned().into());
+                VersionedBranch::Tww { identifier, github_url, tracker_link }
             }
             _ => panic!("unknown VersionedBranch type: {}", type_str),
         }
@@ -1799,6 +1803,12 @@ impl SeedRollUpdate {
                 };
                 ctx.say(message).await?;
 
+                let twwr_tracker_url = match (&version, &official_data) {
+                    (Some(VersionedBranch::Tww { tracker_link: Some(tl), .. }), Some(OfficialRaceData { event, .. })) =>
+                        event.settings_string.as_deref().map(|ss| format!("https://{tl}/#/tracker/new/{ss}")),
+                    _ => None,
+                };
+
                 // Send hash to chat with proper emoji formatting (for TWWR and other seeds)
                 let game_id_for_hash = if let Some(OfficialRaceData { event, .. }) = official_data {
                     let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
@@ -1828,12 +1838,15 @@ impl SeedRollUpdate {
                     }
                 }
 
-                if let Some(VersionedBranch::Tww { identifier, github_url }) = version {
+                if let Some(VersionedBranch::Tww { identifier, github_url, .. }) = version {
                     ctx.say(if let French = language {
                         format!("Cette course utilise la version '{identifier}' du randomizer TWW: {github_url}")
                     } else {
                         format!("This race uses TWW randomizer build '{identifier}': {github_url}")
                     }).await?;
+                }
+                if let Some(tracker_url) = twwr_tracker_url {
+                    ctx.say(format!("Tracker: {tracker_url}")).await?;
                 }
                 match unlock_spoiler_log {
                     UnlockSpoilerLog::Now => ctx.say("The spoiler log is also available on the seed page.").await?,

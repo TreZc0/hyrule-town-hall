@@ -2590,7 +2590,35 @@ pub(crate) async fn race_table(
                                             @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
 
                                             @if !pending_signups.is_empty() && confirmed_signups.is_empty() {
-                                                : "pending";
+                                                @let pending_user_cache = {
+                                                    let mut cache = HashMap::new();
+                                                    let unique_user_ids = pending_signups.iter().map(|s| s.user_id).collect::<HashSet<_>>();
+                                                    for user_id in unique_user_ids {
+                                                        let user = User::from_id(&mut **transaction, user_id).await.ok().flatten();
+                                                        cache.insert(user_id, user);
+                                                    }
+                                                    cache
+                                                };
+                                                @let pending_tooltip = {
+                                                    let mut role_groups: Vec<(&str, Vec<String>)> = Vec::new();
+                                                    for signup in &pending_signups {
+                                                        let name = pending_user_cache.get(&signup.user_id)
+                                                            .and_then(|opt| opt.as_ref())
+                                                            .map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                                        if let Some(entry) = role_groups.iter_mut().find(|(r, _)| *r == signup.role_type_name.as_str()) {
+                                                            entry.1.push(name);
+                                                        } else {
+                                                            role_groups.push((signup.role_type_name.as_str(), vec![name]));
+                                                        }
+                                                    }
+                                                    role_groups.iter()
+                                                        .map(|(role, users)| format!("{}: {}", role, users.join(", ")))
+                                                        .collect::<Vec<_>>()
+                                                        .join("\n")
+                                                };
+                                                span(class = "settings-link pending-link", data_tooltip = pending_tooltip) {
+                                                    : "pending";
+                                                }
                                             } else if !confirmed_signups.is_empty() {
                                                 @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
 

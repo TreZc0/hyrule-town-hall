@@ -2542,8 +2542,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                 eprintln!("Failed to delete Discord scheduled event for race {}: {}", race.id, e);
                                             }
                                             if race_mut.discord_scheduled_event_id.is_none() && race.discord_scheduled_event_id.is_some() {
-                                                // Event was deleted, update the database
-                                                race_mut.save(&mut transaction).await?;
+                                                // Event was deleted, update only discord_scheduled_event_id to avoid overwriting the start = NULL we just set
+                                                sqlx::query!("UPDATE races SET discord_scheduled_event_id = NULL WHERE id = $1", race.id as _).execute(&mut *transaction).await?;
                                             }
                                             transaction.commit().await?;
                                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
