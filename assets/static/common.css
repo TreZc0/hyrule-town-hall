@@ -598,6 +598,10 @@ p.error {
   word-break: break-all;
 }
 
+.settings-link.pending-link {
+  text-decoration: underline dotted;
+}
+
 .tooltip-content {
   display: none;
   position: absolute;
