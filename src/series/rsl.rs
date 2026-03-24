@@ -102,7 +102,8 @@ pub(crate) enum VersionedPreset {
         version: Option<Version>,
         weights: Weights,
     },
-    Fenhl {
+#[cfg_attr(not(unix), allow(dead_code))]
+        Fenhl {
         version: Option<(Version, u8)>,
         preset: DevFenhlPreset,
     },

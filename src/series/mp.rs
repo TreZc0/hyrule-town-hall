@@ -512,6 +512,8 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
     })
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn s2_settings() -> seed::Settings {
     collect![
         format!("user_message") => json!("2nd Mixed Pools Tournament"),
@@ -604,6 +606,9 @@ pub(crate) fn s2_settings() -> seed::Settings {
     ]
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
+
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn s3_settings() -> seed::Settings {
     collect![
         format!("user_message") => json!("3rd Mixed Pools Tournament"),
@@ -707,6 +712,7 @@ pub(crate) fn s3_settings() -> seed::Settings {
     ]
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn s4_settings() -> seed::Settings {
     collect![
         format!("password_lock") => json!(true),

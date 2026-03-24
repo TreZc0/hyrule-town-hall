@@ -1,5 +1,6 @@
 use crate::prelude::*;
 
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn s1_settings() -> seed::Settings {
     collect![
         format!("password_lock") => json!(true),

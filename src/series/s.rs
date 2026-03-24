@@ -1068,6 +1068,7 @@ pub(crate) fn weeklies_enter_form(me: Option<&User>) -> RawHtml<String> {
     }
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn s8_settings() -> seed::Settings {
     collect![
         format!("password_lock") => json!(true),

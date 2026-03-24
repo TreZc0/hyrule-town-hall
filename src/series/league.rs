@@ -131,6 +131,7 @@ pub(crate) enum MatchStatus {
     Confirmed,
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn s8_settings() -> seed::Settings {
     collect![
         format!("user_message") => json!("OoTR League S8"),

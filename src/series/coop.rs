@@ -23,6 +23,7 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
     })
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn s3_settings() -> seed::Settings {
     collect![
         format!("user_message") => json!("Co-op Tournament Season 3"),

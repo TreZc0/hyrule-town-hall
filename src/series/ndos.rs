@@ -119,6 +119,7 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
     })
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn beginner_preset() -> seed::Settings {
     collect![
         format!("user_message") => json!("Standard Anti-Weekly Settings (Beginner)"),
@@ -460,6 +461,8 @@ pub(crate) fn beginner_preset() -> seed::Settings {
     ]
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
+
 pub(crate) fn advanced_preset() -> seed::Settings {
     let mut settings = beginner_preset();
     settings.insert(format!("user_message"), json!("Standard Anti-Weekly Settings (Advanced)"));
@@ -471,6 +474,7 @@ pub(crate) fn advanced_preset() -> seed::Settings {
     settings.insert(format!("correct_potcrate_appearances"), json!("textures_content"));
     settings.insert(format!("item_pool_value"), json!("minimal"));
     settings.insert(format!("junk_ice_traps"), json!("on"));
+    #[cfg_attr(not(unix), allow(dead_code))]
     settings
 }
 

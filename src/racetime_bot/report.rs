@@ -47,32 +47,6 @@ impl Score for Option<Duration> {
     }
 }
 
-impl Score for tfb::Score {
-    type SortKey = (Reverse<u8>, Duration);
-
-    fn is_dnf(&self) -> bool {
-        self.pieces == 0
-    }
-
-    fn sort_key(&self) -> Self::SortKey {
-        (
-            Reverse(self.pieces),
-            self.last_collection_time,
-        )
-    }
-
-    fn time_window(&self, other: &Self) -> Option<Duration> {
-        (self.pieces == other.pieces).then(|| self.last_collection_time - other.last_collection_time)
-    }
-
-    fn format(&self, _: Language) -> Cow<'_, str> {
-        Cow::Owned(self.to_string())
-    }
-
-    fn as_duration(&self) -> Option<Option<Duration>> {
-        None
-    }
-}
 
 /// Queries start.gg for current set state and builds complete game results including the new game
 async fn collect_completed_game_results(
@@ -606,31 +580,7 @@ async fn report_ffa(ctx: &RaceContext<GlobalState>, cal_event: &cal::Event, even
 }
 
 impl Handler {
-    #[must_use = "should set cleaned_up if this returns true"]
-    pub(super) async fn check_tfb_finish(&self, ctx: &RaceContext<GlobalState>) -> Result<bool, Error> {
-        let data = ctx.data().await;
-        let Some(OfficialRaceData { ref cal_event, ref event, fpa_invoked, breaks_used, ref scores, .. }) = self.official_data else { return Ok(true) };
-        Ok(if let Some(scores) = data.entrants.iter().map(|entrant| {
-            let key = if let Some(ref team) = entrant.team { Some(&team.slug) } else { entrant.user.as_ref().map(|user| &user.id) };
-            if let Some(key) = key {
-                match entrant.status.value {
-                    EntrantStatusValue::Dnf => Some((key.clone(), tfb::Score::dnf(event.team_config))),
-                    EntrantStatusValue::Done => scores.get(key).and_then(|&score| Some((key.clone(), score?))),
-                    _ => None,
-                }
-            } else {
-                None
-            }
-        }).collect() {
-            ctx.say("All scores received. Thank you for playing Triforce Blitz, see you next race!").await?;
-            self.official_race_finished(ctx, data, cal_event, event, fpa_invoked, breaks_used || self.breaks.is_some(), Some(scores)).await?;
-            true
-        } else {
-            false
-        })
-    }
-
-    pub(super) async fn official_race_finished(&self, ctx: &RaceContext<GlobalState>, data: RwLockReadGuard<'_, RaceData>, cal_event: &cal::Event, event: &event::Data<'_>, fpa_invoked: bool, breaks_used: bool, tfb_scores: Option<HashMap<String, tfb::Score>>) -> Result<(), Error> {
+    pub(super) async fn official_race_finished(&self, ctx: &RaceContext<GlobalState>, data: RwLockReadGuard<'_, RaceData>, cal_event: &cal::Event, event: &event::Data<'_>, fpa_invoked: bool, breaks_used: bool) -> Result<(), Error> {
         let stream_delay = match cal_event.race.entrants {
             Entrants::Open | Entrants::Count { .. } => event.open_stream_delay,
             Entrants::Two(_) | Entrants::Three(_) | Entrants::Named(_) => event.invitational_stream_delay,
@@ -723,33 +673,6 @@ impl Handler {
                     Entrants::Named(_) => unimplemented!(),
                     Entrants::Two(_) | Entrants::Three(_) => {
                         let room = Url::parse(&format!("https://{}{}", racetime_host(), data.url)).to_racetime()?;
-                        if let Some(mut tfb_scores) = tfb_scores {
-                            let mut teams = Vec::with_capacity(data.entrants.len());
-                            for entrant in &data.entrants {
-                                if let Some(rt_user) = &entrant.user {
-                                    teams.push((if_chain! {
-                                        if let Some(user) = User::from_racetime(&mut *transaction, &rt_user.id).await.to_racetime()?;
-                                        if let Some(team) = Team::from_event_and_member(&mut transaction, event.series, &event.event, user.id).await.to_racetime()?;
-                                        then {
-                                            Entrant::MidosHouseTeam(team)
-                                        } else {
-                                            Entrant::Named {
-                                                name: rt_user.full_name.clone(),
-                                                racetime_id: Some(rt_user.id.clone()),
-                                                twitch_username: rt_user.twitch_name.clone(),
-                                            }
-                                        }
-                                    }, tfb_scores.remove(&rt_user.id).expect("missing TFB score"), room.clone()));
-                                }
-                            }
-                            if let Ok(teams) = teams.try_into() {
-                                let (t, ids) = report_1v1(transaction, ctx, cal_event, event, teams).await?;
-                                transaction = t;
-                                ignored_race_ids = ids;
-                            } else { //TODO separate function for reporting 3-entrant results
-                                report_ffa(ctx, cal_event, event, room).await?;
-                            }
-                        } else {
                             let mut teams = Vec::with_capacity(data.entrants.len());
                             for entrant in &data.entrants {
                                 if let Some(rt_user) = &entrant.user {
@@ -775,7 +698,6 @@ impl Handler {
                             } else { //TODO separate function for reporting 3-entrant results
                                 report_ffa(ctx, cal_event, event, room).await?;
                             }
-                        }
                     }
                 },
                 TeamConfig::Pictionary => unimplemented!(), //TODO calculate like solo but report as teams
@@ -823,33 +745,6 @@ impl Handler {
                                 }
                             }
                         }
-                        if let Some(mut tfb_scores) = tfb_scores {
-                            let mut all_teams_found = true;
-                            let mut teams = Vec::with_capacity(team_times.len());
-                            for team_slug in team_times.keys() {
-                                if let Some(team) = Team::from_racetime(&mut transaction, event.series, &event.event, &team_slug).await.to_racetime()? {
-                                    teams.push((
-                                        Entrant::MidosHouseTeam(team),
-                                        tfb_scores.remove(team_slug).expect("missing TFB score"),
-                                        team_rooms.remove(team_slug).expect("each team should have a room"),
-                                    ));
-                                } else {
-                                    all_teams_found = false;
-                                }
-                            }
-                            if_chain! {
-                                if all_teams_found;
-                                if let Ok(teams) = teams.try_into();
-                                then {
-                                    let (t, ids) = report_1v1(transaction, ctx, cal_event, event, teams).await?;
-                                    transaction = t;
-                                    ignored_race_ids = ids;
-                                } else { //TODO separate function for reporting 3-entrant results
-                                    let room = Url::parse(&format!("https://{}{}", racetime_host(), data.url)).to_racetime()?;
-                                    report_ffa(ctx, cal_event, event, room).await?;
-                                }
-                            }
-                        } else {
                             let mut all_teams_found = true;
                             let mut teams = Vec::with_capacity(team_times.len());
                             for (team_slug, times) in team_times {
@@ -875,7 +770,6 @@ impl Handler {
                                     report_ffa(ctx, cal_event, event, room).await?;
                                 }
                             }
-                        }
                     }
                 },
             }

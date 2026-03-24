@@ -300,6 +300,7 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
     })
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn settings_2023() -> seed::Settings {
     collect![
         format!("user_message") => json!("SGL 2023"),
@@ -385,6 +386,8 @@ pub(crate) fn settings_2023() -> seed::Settings {
         ]),
     ]
 }
+
+#[cfg_attr(not(unix), allow(dead_code))]
 
 pub(crate) fn settings_2024() -> seed::Settings {
     collect![

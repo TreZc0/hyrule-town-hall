@@ -643,6 +643,7 @@ pub(crate) async fn find_team_form(mut transaction: Transaction<'_, Postgres>, m
     }).await?)
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn race7_settings() -> seed::Settings {
     collect![
         format!("user_message") => json!("7th Pictionary Spoiler Log Race"),

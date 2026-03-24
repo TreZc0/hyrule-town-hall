@@ -4,9 +4,11 @@ use {
     sqlx::PgPool,
     crate::cal::Race,
 };
+#[cfg(unix)] use async_proto::Protocol;
 
 /// Which seed generator an event uses, stored in `events.seed_gen_type`.
 #[derive(Debug, Clone)]
+#[cfg_attr(unix, derive(Protocol))]
 pub(crate) enum SeedGenType {
     AlttprDoorRando {
         source: AlttprDrSource,
@@ -25,6 +27,7 @@ pub(crate) enum SeedGenType {
 
 /// Source/method used to produce ALTTPR Door Rando settings.
 #[derive(Debug, Clone)]
+#[cfg_attr(unix, derive(Protocol))]
 pub(crate) enum AlttprDrSource {
     /// Fetch a preset YAML from the boothisman.de API.
     Boothisman,
@@ -178,6 +181,30 @@ impl SeedGenType {
             Some("base settings".to_owned())
         } else {
             Some(agreed.join(", "))
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct UnknownSeedGenType;
+
+impl std::fmt::Display for UnknownSeedGenType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unknown seed_gen_type slug; valid values: ootr_rsl, ootr_tfb, alttpr_avianart, ootr, mmr")
+    }
+}
+
+impl std::str::FromStr for SeedGenType {
+    type Err = UnknownSeedGenType;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ootr_rsl"       => Ok(Self::OotrRsl),
+            "ootr_tfb"       => Ok(Self::OotrTriforceBlitz),
+            "alttpr_avianart" => Ok(Self::AlttprAvianart),
+            "ootr"           => Ok(Self::OoTR),
+            "mmr"            => Ok(Self::Mmr),
+            _ => Err(UnknownSeedGenType),
         }
     }
 }

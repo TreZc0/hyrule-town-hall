@@ -1,5 +1,4 @@
 use {
-    racetime::model::*,
     serde_json::Value as Json,
     crate::{
         event::{
@@ -14,68 +13,6 @@ pub(crate) fn piece_count(team_config: TeamConfig) -> u8 {
     3 * team_config.roles().len() as u8
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Score {
-    pub(crate) team_config: TeamConfig,
-    pub(crate) pieces: u8,
-    pub(crate) last_collection_time: Duration,
-}
-
-impl Score {
-    pub(crate) fn dnf(team_config: TeamConfig) -> Self {
-        Self {
-            pieces: 0,
-            last_collection_time: Duration::default(),
-            team_config,
-        }
-    }
-}
-
-impl fmt::Display for Score {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.pieces == 0 {
-            write!(f, "0/{}", piece_count(self.team_config))
-        } else {
-            write!(f, "{}/{} in {}", self.pieces, piece_count(self.team_config), English.format_duration(self.last_collection_time, false))
-        }
-    }
-}
-
-pub(crate) fn report_score_button(team_config: TeamConfig, finish_time: Option<Duration>) -> (&'static str, ActionButton) {
-    ("Report score", ActionButton::Message {
-        message: format!("!score ${{pieces}} ${{last_collection_time}}"),
-        help_text: Some(format!("Report your Triforce Blitz score for this race.")),
-        survey: Some(vec![
-            SurveyQuestion {
-                name: format!("pieces"),
-                label: format!("Pieces found"),
-                default: Some(json!(if let Some(finish_time) = finish_time {
-                    if finish_time < Duration::from_secs(2 * 60 * 60) {
-                        Cow::Owned(piece_count(team_config).to_string())
-                    } else {
-                        "1".into()
-                    }
-                } else {
-                    "0".into()
-                })),
-                help_text: None,
-                kind: SurveyQuestionKind::Radio,
-                placeholder: None,
-                options: (0..=piece_count(team_config)).map(|n| (n.to_string(), n.to_string())).collect(),
-            },
-            SurveyQuestion {
-                name: format!("last_collection_time"),
-                label: format!("Most recent collection time"),
-                default: finish_time.map(|finish_time| json!(unparse_duration(finish_time))),
-                help_text: Some(format!("Leave blank if you didn't collect any pieces.")),
-                kind: SurveyQuestionKind::Input,
-                placeholder: Some(format!("e.g. 1h23m45s")),
-                options: Vec::default(),
-            },
-        ]),
-        submit: Some(format!("Submit")),
-    })
-}
 
 pub(crate) fn parse_seed_url(seed: &Url) -> Option<(bool, Uuid)> {
     if_chain! {
@@ -207,6 +144,7 @@ impl From<CoOpRole> for event::Role {
     }
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn progression_spoiler_settings() -> seed::Settings {
     collect![
         format!("user_message") => json!("Triforce Blitz Progression Spoiler"),
