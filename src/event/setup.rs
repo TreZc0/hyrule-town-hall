@@ -1025,7 +1025,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 value.is_custom_goal,
                 value.fpa_enabled,
                 value.swiss_standings,
-                value.rando_version_json
+                rando_version.unwrap()
             ).execute(&mut *transaction).await?;
 
             transaction.commit().await?;
