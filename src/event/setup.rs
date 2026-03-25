@@ -481,6 +481,48 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
   ]
 }"#;
                                     }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "Custom Boolean Choice (stored in custom_choices by key):";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "requirements": [
+    {
+      "type": "booleanChoice",
+      "key": "hard_mode",
+      "label": "Difficulty: Hard"
+    }
+  ]
+}"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "Qualifier Placement Cutoff:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "requirements": [
+    {
+      "type": "qualifierPlacement",
+      "numPlayers": 16,
+      "minRaces": 1,
+      "needFinish": false,
+      "excludePlayers": 0
+    }
+  ]
+}"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "External / Manual Requirement:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "requirements": [
+    {
+      "type": "external",
+      "html": "Please fill out <a href=\"https://example.com/form\">this form</a>.",
+      "text": "Please fill out the registration form.",
+      "blocksSubmit": true
+    }
+  ]
+}"#;
+                                    }
                                 }
                             }
                         });

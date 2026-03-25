@@ -2497,7 +2497,7 @@ pub(crate) async fn race_table(
                                             @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
 
                                             @if !confirmed_signups.is_empty() {
-                                                @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
+                                                @let role_bindings = event::roles::EffectiveRoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
 
                                                 // Group bindings by language and check which languages have volunteers
                                                 @let languages_with_volunteers = role_bindings.iter()
@@ -2620,7 +2620,7 @@ pub(crate) async fn race_table(
                                                     : "pending";
                                                 }
                                             } else if !confirmed_signups.is_empty() {
-                                                @let role_bindings = event::roles::RoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
+                                                @let role_bindings = event::roles::EffectiveRoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
 
                                                 // Group bindings by language and check which languages have volunteers
                                                 @let languages_with_volunteers = role_bindings.iter()
