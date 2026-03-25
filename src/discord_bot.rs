@@ -290,6 +290,7 @@ async fn apply_live_schedule(
     event: event::Data<'static>,
     was_scheduled: bool,
     start: DateTime<Utc>,
+    nl_note: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     race.schedule.set_live_start(start);
     race.schedule_updated_at = Some(Utc::now());
@@ -337,6 +338,9 @@ async fn apply_live_schedule(
                 ).await?;
             } else {
                 let mut response_content = MessageBuilder::default();
+                if let Some(ref note) = nl_note {
+                    response_content.push(note);
+                }
                 response_content.push(if let Some(game) = cal_event.race.game { format!("Game {game}") } else { format!("This race") });
                 response_content.push(if was_scheduled { " has been rescheduled for " } else { " is now scheduled for " });
                 response_content.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
@@ -607,6 +611,11 @@ async fn apply_live_schedule(
                 }
                 response_content.build()
             }
+        };
+        let response_content = if let Some(ref note) = nl_note {
+            format!("{}{}", note, response_content)
+        } else {
+            response_content
         };
         interaction.edit_response(ctx, EditInteractionResponse::new()
             .content(response_content)
@@ -948,6 +957,10 @@ fn parse_timestamp(timestamp: &str) -> Option<DateTime<Utc>> {
     regex_captures!("^<t:(-?[0-9]+)(?::[tTdDfFR])?>$", timestamp)
         .and_then(|(_, timestamp)| timestamp.parse().ok())
         .and_then(|timestamp| Utc.timestamp_opt(timestamp, 0).single())
+}
+
+fn parse_natural_language_timestamp(s: &str) -> Option<DateTime<Utc>> {
+    interim::parse_date_string(s, Utc::now(), interim::Dialect::Us).ok()
 }
 
 pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global_state: Arc<GlobalState>, db_pool: PgPool, http_client: reqwest::Client, config: Config, new_room_lock: Arc<Mutex<()>>, clean_shutdown: Arc<Mutex<CleanShutdown>>, shutdown: rocket::Shutdown) -> serenity_utils::Builder {
@@ -1956,7 +1969,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         CommandDataOptionValue::String(ref start) => start,
                                         _ => panic!("unexpected slash command option type"),
                                     };
-                                    if let Some(start) = parse_timestamp(start) {
+                                    let parsed = parse_timestamp(start)
+                                        .map(|dt| (dt, false))
+                                        .or_else(|| parse_natural_language_timestamp(start).map(|dt| (dt, true)));
+                                    if let Some((start, was_natural_language)) = parsed {
+                                        let nl_note = if was_natural_language {
+                                            let mut note = MessageBuilder::default();
+                                            note.push("-# Interpreted as ");
+                                            note.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
+                                            note.push(" (UTC). Include a timezone like `EST` or `CET` to adjust.\n");
+                                            Some(note.build())
+                                        } else {
+                                            None
+                                        };
                                         if (start - Utc::now()).to_std().map_or(true, |schedule_notice| schedule_notice > Duration::from_secs(365 * 24 * 60 * 60)) {
                                             interaction.edit_response(ctx, EditInteractionResponse::new()
                                                 .content(if let French = event.language {
@@ -1998,6 +2023,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         _ => None,
                                                     };
                                                     let mut prompt = MessageBuilder::default();
+                                                    if let Some(ref note) = nl_note {
+                                                        prompt.push(note);
+                                                    }
                                                     prompt.push(format!("Game {} is already scheduled", game_num));
                                                     if let Some(existing) = existing_start {
                                                         prompt.push(" for ");
@@ -2026,18 +2054,18 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     ).await?;
                                                     transaction.rollback().await?;
                                                 } else {
-                                                    apply_live_schedule(ctx, interaction, transaction, race, event, was_scheduled, start).await?;
+                                                    apply_live_schedule(ctx, interaction, transaction, race, event, was_scheduled, start, nl_note).await?;
                                                 }
                                             } else {
-                                                apply_live_schedule(ctx, interaction, transaction, race, event, was_scheduled, start).await?;
+                                                apply_live_schedule(ctx, interaction, transaction, race, event, was_scheduled, start, nl_note).await?;
                                             }
                                         }
                                     } else {
                                         interaction.edit_response(ctx, EditInteractionResponse::new()
                                             .content(if let French = event.language {
-                                                "Désolé, cela n'est pas un timestamp au format de Discord. Vous pouvez utiliser @time ou <https://hammertime.cyou/> pour en générer un."
+                                                "Désolé, cela n'est pas un timestamp au format de Discord. Vous pouvez utiliser <https://hammertime.cyou/> pour en générer un, ou entrer directement la date — par exemple `vendredi 20h UTC`, `demain 15h EST`."
                                             } else {
-                                                "Sorry, that doesn't look like a Discord timestamp. You can type `@time` or use <https://hammertime.cyou/> to generate one."
+                                                "Sorry, I couldn't parse that time. Try natural language like `friday 8pm UTC` or `tomorrow 15:00 EST`, or use <https://hammertime.cyou/> to generate a Discord timestamp."
                                             })
                                         ).await?;
                                         transaction.rollback().await?;
@@ -2086,7 +2114,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         CommandDataOptionValue::String(ref start) => start,
                                         _ => panic!("unexpected slash command option type"),
                                     };
-                                    if let Some(start) = parse_timestamp(start) {
+                                    let parsed = parse_timestamp(start)
+                                        .map(|dt| (dt, false))
+                                        .or_else(|| parse_natural_language_timestamp(start).map(|dt| (dt, true)));
+                                    if let Some((start, was_natural_language)) = parsed {
+                                        let nl_note = if was_natural_language {
+                                            let mut note = MessageBuilder::default();
+                                            note.push("-# Interpreted as ");
+                                            note.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
+                                            note.push(" (UTC). Include a timezone like `EST` or `CET` to adjust.\n");
+                                            Some(note.build())
+                                        } else {
+                                            None
+                                        };
                                         if (start - Utc::now()).to_std().map_or(true, |schedule_notice| schedule_notice > Duration::from_secs(365 * 24 * 60 * 60)) {
                                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                                 .ephemeral(true)
@@ -2207,6 +2247,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     };
                                                     if should_post_regular_response {
                                                         let mut response_content = MessageBuilder::default();
+                                                        if let Some(ref note) = nl_note {
+                                                            response_content.push(note);
+                                                        }
                                                         response_content.push(if let Entrants::Two(_) = cal_event.race.entrants { "Your half of " } else { "Your part of " });
                                                         response_content.push(if let Some(game) = cal_event.race.game { format!("game {game}") } else { format!("this race") });
                                                         response_content.push(if was_scheduled { " has been rescheduled for " } else { " is now scheduled for " });
@@ -2473,6 +2516,11 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         response_content.build()
                                                     }
                                                 };
+                                                let response_content = if let Some(ref note) = nl_note {
+                                                    format!("{}{}", note, response_content)
+                                                } else {
+                                                    response_content
+                                                };
                                                 interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                                     .ephemeral(false)
                                                     .content(response_content)
@@ -2483,9 +2531,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                             .ephemeral(true)
                                             .content(if let French = event.language {
-                                                "Désolé, cela n'est pas un timestamp au format de Discord. Vous pouvez utiliser `@time` ou <https://hammertime.cyou/> pour en générer un."
+                                                "Désolé, cela n'est pas un timestamp au format de Discord. Vous pouvez utiliser <https://hammertime.cyou/> pour en générer un, ou entrer directement la date — par exemple `vendredi 20h UTC`, `demain 15h EST`."
                                             } else {
-                                                "Sorry, that doesn't look like a Discord timestamp. You can type `@time` or use <https://hammertime.cyou/> to generate one."
+                                                "Sorry, I couldn't parse that time. Try natural language like `friday 8pm UTC` or `tomorrow 15:00 EST`, or use <https://hammertime.cyou/> to generate a Discord timestamp."
                                             })
                                         )).await?;
                                         transaction.rollback().await?;
@@ -3696,7 +3744,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 ).await?;
                                 transaction.rollback().await?;
                             } else if team.is_some() || is_organizer {
-                                apply_live_schedule(ctx, interaction, transaction, race, event, was_scheduled, start).await?;
+                                apply_live_schedule(ctx, interaction, transaction, race, event, was_scheduled, start, None).await?;
                             } else {
                                 interaction.edit_response(ctx, EditInteractionResponse::new()
                                     .content("Sorry, only participants in this race and organizers can use this command.")
@@ -3833,7 +3881,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             content.mention_command(command_ids.schedule, "schedule");
             content.push(" pour schedule votre race en live ou ");
             content.mention_command(command_ids.schedule_async, "schedule-async");
-            content.push(" pour schedule votre async. Vous devez insérer un timestamp Discord que vous pouvez créer sur <https://hammertime.cyou/> ou en tapant `@time`.");
+            content.push(" pour schedule votre async. Vous pouvez entrer directement la date (par exemple `vendredi 20h UTC` ou `demain 15h CET`) ou utiliser <https://hammertime.cyou/> pour générer un timestamp Discord. Si vous n'indiquez pas de fuseau horaire, UTC sera utilisé.");
         } else {
             for team in race.teams() {
                 content.mention_team(&mut transaction, Some(guild_id), team).await?;
@@ -3862,9 +3910,9 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
                 if event.asyncs_allowed() {
                     content.push(" to schedule as a live race or ");
                     content.mention_command(command_ids.schedule_async, "schedule-async");
-                    content.push(" to schedule as an async. These commands take a Discord timestamp, which you can generate by typing `@time` or at <https://hammertime.cyou/>.");
+                    content.push(" to schedule as an async. You can enter a time naturally (e.g. `friday 8pm UTC` or `tomorrow 15:00 EST`) or use <https://hammertime.cyou/> to generate a Discord timestamp. If no timezone is provided, UTC is assumed.");
                 } else {
-                    content.push(" to schedule your race. This command takes a Discord timestamp, which you can generate by typing `@time` or at <https://hammertime.cyou/>.");
+                    content.push(" to schedule your race. You can enter a time naturally (e.g. `friday 8pm UTC` or `tomorrow 15:00 EST`) or use <https://hammertime.cyou/> to generate a Discord timestamp. If no timezone is provided, UTC is assumed.");
                 }
                 if game_count > 1 {
                     content.push(" You can use the ");

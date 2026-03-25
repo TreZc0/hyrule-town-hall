@@ -52,6 +52,7 @@ gix = { version = "0.80", features = ["blocking-http-transport-reqwest"] }
 graphql_client = { git = "https://github.com/fenhl/graphql-client", branch = "skip-default-scalars" }
 hyper = "1.4.1"
 ics = "0.5"
+interim = { version = "0.2.1", features = ["chrono_0_4"] }
 if_chain = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 itertools = "0.14"
