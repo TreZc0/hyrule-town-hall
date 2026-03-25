@@ -194,6 +194,8 @@ impl std::fmt::Display for UnknownSeedGenType {
     }
 }
 
+impl std::error::Error for UnknownSeedGenType {}
+
 impl std::str::FromStr for SeedGenType {
     type Err = UnknownSeedGenType;
 

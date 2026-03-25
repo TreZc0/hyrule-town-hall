@@ -378,7 +378,7 @@ impl seed_gen_type::SeedGenType {
         Ok(())
     }
 
-    async fn parse_seed_command(
+    pub(crate) async fn parse_seed_command(
         &self,
         _transaction: &mut Transaction<'_, Postgres>,
         global_state: &GlobalState,
