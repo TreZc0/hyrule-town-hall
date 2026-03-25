@@ -4,7 +4,7 @@
 UPDATE events SET racetime_goal_slug = 'Beat the game - Tournament (Solo)'
     WHERE racetime_goal_slug = 'door_rando';
 
-UPDATE events SET racetime_goal_slug = "Beat the game - Tournament (Solo)"
+UPDATE events SET racetime_goal_slug = 'Beat the game - Tournament (Solo)'
     WHERE racetime_goal_slug = 'avianart';
 
 -- racetime_goal_name was an override column for the cases above; now redundant.
