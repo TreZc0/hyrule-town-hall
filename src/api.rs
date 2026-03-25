@@ -732,8 +732,8 @@ pub(crate) struct QualifierStandingEntry {
     is_opted_out: bool,
 }
 
-#[rocket::get("/api/v1/event/<series>/<event>/qualifier-standings?<api_key>")]
-pub(crate) async fn qualifier_standings(db_pool: &State<PgPool>, http_client: &State<reqwest::Client>, series: crate::series::Series, event: &str, api_key: &str) -> Result<Json<Vec<QualifierStandingEntry>>, StatusOrError<CsvError>> {
+#[rocket::get("/api/v1/event/<series>/<event>/qualifier-standings?<api_key>&<hide_opted_out>")]
+pub(crate) async fn qualifier_standings(db_pool: &State<PgPool>, http_client: &State<reqwest::Client>, series: crate::series::Series, event: &str, api_key: &str, hide_opted_out: Option<bool>) -> Result<Json<Vec<QualifierStandingEntry>>, StatusOrError<CsvError>> {
     let mut transaction = db_pool.begin().await?;
     let me = Scopes { entrants_read: true, ..Scopes::default() }.validate(&mut transaction, api_key).await?.ok_or(StatusOrError::Status(Status::Forbidden))?;
     let event = event::Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
@@ -744,7 +744,14 @@ pub(crate) async fn qualifier_standings(db_pool: &State<PgPool>, http_client: &S
     let qualifier_kind = event.qualifier_kind(&mut transaction, Some(&me)).await?;
     let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.inner().clone()), None, &event, is_organizer, qualifier_kind, None, true, true).await?;
     let mut entries = Vec::new();
-    for (i, teams::SignupsTeam { members, is_opted_out, .. }) in signups.into_iter().enumerate() {
+    let mut rank = 0i64;
+    for teams::SignupsTeam { members, is_opted_out, .. } in signups {
+        if !is_opted_out {
+            rank += 1;
+        }
+        if is_opted_out && hide_opted_out.unwrap_or(false) {
+            continue;
+        }
         for member in members {
             let (display_name, racetime_id) = match member.user {
                 teams::MemberUser::MidosHouse(user) => (
@@ -755,7 +762,7 @@ pub(crate) async fn qualifier_standings(db_pool: &State<PgPool>, http_client: &S
                 teams::MemberUser::Deleted => (String::from("deleted user"), None),
                 teams::MemberUser::Newcomer => continue,
             };
-            entries.push(QualifierStandingEntry { rank: if is_opted_out { -1 } else { (i + 1) as i64 }, display_name, racetime_id, is_opted_out });
+            entries.push(QualifierStandingEntry { rank: if is_opted_out { -1 } else { rank }, display_name, racetime_id, is_opted_out });
         }
     }
     Ok(Json(entries))
