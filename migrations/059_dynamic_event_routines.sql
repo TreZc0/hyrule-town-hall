@@ -7,7 +7,6 @@ ALTER TABLE events ADD COLUMN hide_entrants BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE events ADD COLUMN start_delay INTEGER NOT NULL DEFAULT 15;
 ALTER TABLE events ADD COLUMN start_delay_open INTEGER;
 ALTER TABLE events ADD COLUMN restrict_chat_in_qualifiers BOOLEAN NOT NULL DEFAULT false;
-ALTER TABLE events ADD COLUMN racetime_goal_name VARCHAR;
 ALTER TABLE events ADD COLUMN is_custom_goal BOOLEAN NOT NULL DEFAULT true;
 ALTER TABLE events ADD COLUMN preroll_mode VARCHAR(10) NOT NULL DEFAULT 'medium';
 ALTER TABLE events ADD COLUMN spoiler_unlock VARCHAR(15) NOT NULL DEFAULT 'after';
