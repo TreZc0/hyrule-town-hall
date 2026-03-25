@@ -279,14 +279,6 @@ pub(crate) enum UnlockSpoilerLog {
 
 pub(crate) enum SeedCommandParseResult {
     Alttpr,
-    #[cfg_attr(not(unix), allow(dead_code))]
-    Regular {
-        settings: seed::Settings,
-        unlock_spoiler_log: UnlockSpoilerLog,
-        language: Language,
-        article: &'static str,
-        description: String,
-    },
     Rsl {
         preset: rsl::VersionedPreset,
         world_count: u8,
@@ -583,7 +575,7 @@ pub(crate) struct GlobalState {
     seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>,
     #[cfg_attr(not(unix), allow(dead_code))]
     avianart_api_key: Option<String>,
-    #[cfg_attr(not(unix), allow(dead_code))]
+    #[allow(dead_code)]
     pub(crate) mmr_api_key: Option<String>,
     /// Set of (racetime.gg category slug, goal name, is_custom) for all events configured in the DB.
     /// Populated at startup; used by should_handle_inner to decide which rooms to handle.
