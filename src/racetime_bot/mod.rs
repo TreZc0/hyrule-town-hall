@@ -279,13 +279,6 @@ pub(crate) enum UnlockSpoilerLog {
 
 pub(crate) enum SeedCommandParseResult {
     Alttpr,
-    Regular {
-        settings: seed::Settings,
-        unlock_spoiler_log: UnlockSpoilerLog,
-        language: Language,
-        article: &'static str,
-        description: String,
-    },
     Rsl {
         preset: rsl::VersionedPreset,
         world_count: u8,
@@ -3836,9 +3829,6 @@ impl RaceHandler<GlobalState> for Handler {
                                 Command::new("echo").args(["hello", "world"]).check("echo").await.to_racetime()?;
                                 unimplemented!()
                             }
-                            SeedCommandParseResult::Regular { settings, unlock_spoiler_log, language, article, description } => {
-                                self.roll_seed(ctx, self.effective_preroll_mode(), self.effective_rando_version(), settings, unlock_spoiler_log, language, article, description).await
-                            },
                             SeedCommandParseResult::Rsl { preset, world_count, unlock_spoiler_log, language, article, description } => self.roll_rsl_seed(ctx, preset, world_count, unlock_spoiler_log, language, article, description).await,
                             SeedCommandParseResult::Tfb { version, unlock_spoiler_log, language, article, description } => self.roll_tfb_seed(ctx, version, unlock_spoiler_log, language, article, description).await,
                             SeedCommandParseResult::TfbDev { coop, unlock_spoiler_log, language, article, description } => self.roll_tfb_dev_seed(ctx, coop, unlock_spoiler_log, language, article, description).await,

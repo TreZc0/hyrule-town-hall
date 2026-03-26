@@ -188,13 +188,6 @@ pub(crate) async fn listen(mut shutdown: rocket::Shutdown, clean_shutdown: Arc<M
                                     }
                                 };
                                 let mut rx = match seed_gen_type.parse_seed_command(&mut transaction, &global_state, is_official, spoiler_seed, no_password, &args).await {
-                                    Ok(SeedCommandParseResult::Regular { mut settings, unlock_spoiler_log, description, .. }) => {
-                                        if no_password {
-                                            settings.remove("password_lock");
-                                        }
-                                        Some(SeedRollUpdate::Message(description)).write(&mut sock).await.expect("error writing to UNIX socket");
-                                        global_state.clone().roll_seed(PrerollMode::Medium, !no_web, None, VersionedBranch::Latest { branch: rando::Branch::Dev }, settings, unlock_spoiler_log)
-                                    }
                                     Ok(SeedCommandParseResult::Alttpr) => unimplemented!(),
                                     Ok(SeedCommandParseResult::Rsl { preset, world_count, unlock_spoiler_log, description, .. }) => {
                                         Some(SeedRollUpdate::Message(description)).write(&mut sock).await.expect("error writing to UNIX socket");
