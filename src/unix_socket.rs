@@ -4,7 +4,6 @@ use {
         ReadErrorKind,
     },
     mhstatus::PrepareStopUpdate,
-    ootr_utils as rando,
     serde_json::Value as Json,
     tokio::net::UnixListener,
     crate::{
@@ -178,7 +177,7 @@ pub(crate) async fn listen(mut shutdown: rocket::Shutdown, clean_shutdown: Arc<M
                                     break
                                 }
                             }
-                            Ok(ClientMessage::Seed { is_official, spoiler_seed, no_password, no_web, seed_gen_type, args }) => {
+                            Ok(ClientMessage::Seed { is_official, spoiler_seed, no_password, no_web: _, seed_gen_type, args }) => {
                                 let mut transaction = match global_state.db_pool.begin().await {
                                     Ok(transaction) => transaction,
                                     Err(e) => {
