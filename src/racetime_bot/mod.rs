@@ -279,6 +279,13 @@ pub(crate) enum UnlockSpoilerLog {
 
 pub(crate) enum SeedCommandParseResult {
     Alttpr,
+    Regular {
+        settings: seed::Settings,
+        unlock_spoiler_log: UnlockSpoilerLog,
+        language: Language,
+        article: &'static str,
+        description: String,
+    },
     Rsl {
         preset: rsl::VersionedPreset,
         world_count: u8,
