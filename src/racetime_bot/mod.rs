@@ -573,6 +573,7 @@ pub(crate) struct GlobalState {
     #[cfg_attr(not(unix), allow(dead_code))]
     clean_shutdown: Arc<Mutex<CleanShutdown>>,
     seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>,
+    pub(crate) extra_room_senders: Arc<RwLock<HashMap<String, mpsc::Sender<String>>>>,
     #[cfg_attr(not(unix), allow(dead_code))]
     avianart_api_key: Option<String>,
     #[allow(dead_code)]
@@ -622,7 +623,7 @@ impl GlobalState {
                 hostname: Cow::Borrowed(racetime_host()),
                 ..racetime::HostInfo::default()
             },
-            new_room_lock, racetime_config, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, discord_ctx, clean_shutdown, seed_metadata, avianart_api_key, mmr_api_key, known_goals,
+            new_room_lock, racetime_config, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, discord_ctx, clean_shutdown, seed_metadata, avianart_api_key, mmr_api_key, known_goals, extra_room_senders: Arc::new(RwLock::new(HashMap::default())),
         }
     }
 
@@ -4186,7 +4187,7 @@ impl RaceHandler<GlobalState> for Handler {
     }
 }
 
-pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, discord_ctx: &DiscordCtx, host_info: &racetime::HostInfo, client_id: &str, client_secret: &str, http_client: &reqwest::Client, clean_shutdown: Arc<Mutex<CleanShutdown>>, cal_event: &cal::Event, event: &event::Data<'static>) -> Result<Option<(bool, String, Option<PgSnowflake<ChannelId>>)>, Error> {
+pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, discord_ctx: &DiscordCtx, host_info: &racetime::HostInfo, client_id: &str, client_secret: &str, http_client: &reqwest::Client, clean_shutdown: Arc<Mutex<CleanShutdown>>, extra_room_senders: &Arc<RwLock<HashMap<String, mpsc::Sender<String>>>>, cal_event: &cal::Event, event: &event::Data<'static>) -> Result<Option<(bool, String, Option<PgSnowflake<ChannelId>>)>, Error> {
     // Get the game_id for the event's series
     let game_id = get_game_id_from_event(&mut *transaction, &event.series.to_string()).await.to_racetime()?;
     
@@ -4354,6 +4355,15 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                     cal::EventKind::Async2 => { sqlx::query!("UPDATE races SET async_room2 = $1 WHERE id = $2", room_url.to_string(), cal_event.race.id as _).execute(&mut **transaction).await.to_racetime()?; }
                     cal::EventKind::Async3 => { sqlx::query!("UPDATE races SET async_room3 = $1 WHERE id = $2", room_url.to_string(), cal_event.race.id as _).execute(&mut **transaction).await.to_racetime()?; }
                 }
+                // Notify the bot immediately so it can start the WebSocket connection now,
+                // rather than waiting for the next 5-second poll tick. new_room_lock (held
+                // by the caller) ensures Handler::new() won't run until after the
+                // transaction commits, so this is safe to send before the commit.
+                lock!(@read senders = extra_room_senders; {
+                    if let Some(sender) = senders.get(&category_slug) {
+                        sender.send(race_slug).await.ok();
+                    }
+                });
                 Ok(room_url)
             }
             Err(Error::Reqwest(e)) if e.status().is_some_and(|status| status.is_server_error()) => {
@@ -4805,7 +4815,7 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                         let mut transaction = global_state.db_pool.begin().await?;
                         let event = cal_event.race.event(&mut transaction).await?;
                         let result = lock!(new_room_lock = global_state.new_room_lock; {
-                            let result = create_room(&mut transaction, &*global_state.discord_ctx.read().await, &global_state.host_info, &global_state.racetime_config.client_id, &global_state.racetime_config.client_secret, &global_state.http_client, global_state.clean_shutdown.clone(), &cal_event, &event).await?;
+                            let result = create_room(&mut transaction, &*global_state.discord_ctx.read().await, &global_state.host_info, &global_state.racetime_config.client_id, &global_state.racetime_config.client_secret, &global_state.http_client, global_state.clean_shutdown.clone(), &global_state.extra_room_senders, &cal_event, &event).await?;
 
                             if let Some((is_room_url, mut msg, notification_channel)) = result {
                                 // Add warning if draft is incomplete
@@ -4956,9 +4966,8 @@ async fn handle_rooms(global_state: Arc<GlobalState>, shutdown: rocket::Shutdown
                 .build().await
             {
                 Ok(bot) => {
-                    // Each bot handles its own room creation independently
-                    // No shared extra_room_tx to avoid cross-category interference
-                    
+                    let sender = bot.extra_room_sender();
+                    lock!(@write senders = global_state.extra_room_senders; senders.insert(category_slug.clone(), sender));
                     let handle = tokio::spawn(async move {
                         let _ = bot.run_until::<Handler, _, _>(shutdown).await;
                     });
