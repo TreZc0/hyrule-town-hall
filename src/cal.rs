@@ -14,6 +14,9 @@ use {
     reqwest::StatusCode,
     rocket_util::Response,
     serenity::all::{
+        ButtonStyle,
+        CreateActionRow,
+        CreateButton,
         CreateMessage,
         CreateSelectMenu,
         CreateSelectMenuKind,
@@ -1278,6 +1281,51 @@ impl Race {
             seed_data.map(Json) as _
         ).execute(&mut **transaction).await?;
         Ok(())
+    }
+
+    pub(crate) async fn notification_description(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+    ) -> sqlx::Result<String> {
+        if self.phase.as_ref().is_some_and(|p| p == "Qualifier") {
+            return Ok(match (&self.round, &self.phase) {
+                (Some(round), _) => round.clone(),
+                (None, Some(phase)) => phase.clone(),
+                (None, None) => "Qualifier".to_string(),
+            });
+        }
+        Ok(match &self.entrants {
+            Entrants::Two([team1, team2]) => format!("{} vs {}",
+                match team1 {
+                    Entrant::MidosHouseTeam(team) => team.name(&mut *transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                    Entrant::Named { name, .. } => name.clone(),
+                    Entrant::Discord { .. } => "Discord User".to_string(),
+                },
+                match team2 {
+                    Entrant::MidosHouseTeam(team) => team.name(&mut *transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                    Entrant::Named { name, .. } => name.clone(),
+                    Entrant::Discord { .. } => "Discord User".to_string(),
+                }
+            ),
+            Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                match team1 {
+                    Entrant::MidosHouseTeam(team) => team.name(&mut *transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                    Entrant::Named { name, .. } => name.clone(),
+                    Entrant::Discord { .. } => "Discord User".to_string(),
+                },
+                match team2 {
+                    Entrant::MidosHouseTeam(team) => team.name(&mut *transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                    Entrant::Named { name, .. } => name.clone(),
+                    Entrant::Discord { .. } => "Discord User".to_string(),
+                },
+                match team3 {
+                    Entrant::MidosHouseTeam(team) => team.name(&mut *transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                    Entrant::Named { name, .. } => name.clone(),
+                    Entrant::Discord { .. } => "Discord User".to_string(),
+                }
+            ),
+            _ => self.round.clone().or_else(|| self.phase.clone()).unwrap_or_else(|| "Race".to_string()),
+        })
     }
 }
 
@@ -4279,6 +4327,11 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(edit_race_form(transaction, &*discord_ctx.read().await, Some(me), uri, csrf.as_ref(), event, race, redirect_to, Some(form.context)).await?)
         } else {
+            let old_schedule_start = match &race.schedule {
+                RaceSchedule::Live { start, .. } => Some(*start),
+                _ => None,
+            };
+
             // Update race schedule with new start dates if organizer
             if is_organizer {
                 match &mut race.schedule {
@@ -4331,6 +4384,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
             }
             race.last_edited_by = Some(me.id);
             race.last_edited_at = Some(Utc::now());
+            let was_ignored = race.ignored;
             race.ignored = value.is_canceled;
             
             // Save original video URLs to check if they changed
@@ -4348,6 +4402,77 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
             }
             race.save(&mut transaction).await?;
 
+            // Send cancel DMs to confirmed volunteers if race was just canceled
+            if !was_ignored && race.ignored {
+                if let Ok(description) = race.notification_description(&mut transaction).await {
+                    let signups = Signup::for_race(&mut transaction, race.id).await.unwrap_or_default();
+                    let discord_ctx = discord_ctx.read().await;
+                    for signup in signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)) {
+                        if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
+                            if let Some(discord) = user.discord {
+                                let discord_user_id = UserId::new(discord.id.get());
+                                let mut msg = MessageBuilder::default();
+                                msg.push("**Race Canceled**\n\nThe race ");
+                                msg.push_mono(&description);
+                                msg.push(" in ");
+                                msg.push(&event.display_name);
+                                msg.push(" has been canceled.");
+                                if let Ok(dm) = discord_user_id.create_dm_channel(&*discord_ctx).await {
+                                    let _ = dm.say(&*discord_ctx, msg.build()).await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Send reschedule DMs to pending+confirmed volunteers if organizer changed the start time
+            let new_schedule_start = match &race.schedule {
+                RaceSchedule::Live { start, .. } => Some(*start),
+                _ => None,
+            };
+            if is_organizer && !race.ignored
+                && new_schedule_start.is_some()
+                && new_schedule_start != old_schedule_start
+            {
+                let start = new_schedule_start.unwrap();
+                if let Ok(description) = race.notification_description(&mut transaction).await {
+                    let signups = Signup::for_race(&mut transaction, race.id).await.unwrap_or_default();
+                    let discord_ctx = discord_ctx.read().await;
+                    for signup in signups.iter().filter(|s| matches!(s.status,
+                        VolunteerSignupStatus::Pending | VolunteerSignupStatus::Confirmed))
+                    {
+                        if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
+                            if let Some(discord) = user.discord {
+                                let discord_user_id = UserId::new(discord.id.get());
+                                let mut msg = MessageBuilder::default();
+                                msg.push("**Race Rescheduled**\n\nThe race ");
+                                msg.push_mono(&description);
+                                msg.push(" in ");
+                                msg.push(&event.display_name);
+                                msg.push(" has been rescheduled.\n\n**New time (in your timezone):** ");
+                                msg.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
+                                msg.push(" (");
+                                msg.push_timestamp(start, serenity_utils::message::TimestampStyle::Relative);
+                                msg.push(")\n\nIf you're no longer available, you can withdraw your signup here: <");
+                                msg.push(&format!("{}/event/{}/{}/races/{}/signups",
+                                    base_uri(), race.series.slug(), race.event, u64::from(race.id)));
+                                msg.push(">");
+                                let button = CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
+                                    .label("Withdraw Signup")
+                                    .style(ButtonStyle::Danger);
+                                let row = CreateActionRow::Buttons(vec![button]);
+                                if let Ok(dm) = discord_user_id.create_dm_channel(&*discord_ctx).await {
+                                    let _ = dm.send_message(&*discord_ctx,
+                                        CreateMessage::new().content(msg.build()).components(vec![row])
+                                    ).await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Update Discord scheduled event if restream URLs changed
             if race.video_urls != original_video_urls {
                 if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&*discord_ctx.read().await, &mut transaction, &race, &event, http_client.inner()).await {
@@ -4364,46 +4489,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
 
                 if !new_languages.is_empty() {
                     // Build race description
-                    let race_description = if race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
-                        match (&race.round, &race.phase) {
-                            (Some(round), _) => round.clone(),
-                            (None, Some(phase)) => phase.clone(),
-                            (None, None) => "Qualifier".to_string(),
-                        }
-                    } else {
-                        match &race.entrants {
-                            Entrants::Two([team1, team2]) => format!("{} vs {}",
-                                match team1 {
-                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                    Entrant::Named { name, .. } => name.clone(),
-                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                },
-                                match team2 {
-                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                    Entrant::Named { name, .. } => name.clone(),
-                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                }
-                            ),
-                            Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
-                                match team1 {
-                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                    Entrant::Named { name, .. } => name.clone(),
-                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                },
-                                match team2 {
-                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                    Entrant::Named { name, .. } => name.clone(),
-                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                },
-                                match team3 {
-                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                    Entrant::Named { name, .. } => name.clone(),
-                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                }
-                            ),
-                            _ => race.round.clone().or_else(|| race.phase.clone()).unwrap_or_else(|| "Race".to_string()),
-                        }
-                    };
+                    let race_description = race.notification_description(&mut transaction).await?;
 
                     // Get race start time for timestamp
                     if let RaceSchedule::Live { start: race_start_time, .. } = race.schedule {

@@ -355,8 +355,20 @@ async fn apply_live_schedule(
             transaction.commit().await?;
         });
 
-        // Update volunteer post if this was a reschedule
-        if was_scheduled {
+        // Fire notification if was rescheduled OR if unscheduled race with surviving signups is now being scheduled
+        let fire_notifications_short = was_scheduled || {
+            let pool = {
+                let data = ctx.data.read().await;
+                data.get::<DbPool>().expect("database connection pool missing from Discord context").clone()
+            };
+            let mut tx = pool.begin().await?;
+            event::roles::Signup::for_race(&mut tx, cal_event.race.id).await
+                .map(|s| s.iter().any(|s| matches!(s.status,
+                    event::roles::VolunteerSignupStatus::Pending |
+                    event::roles::VolunteerSignupStatus::Confirmed)))
+                .unwrap_or(false)
+        };
+        if fire_notifications_short {
             let pool = {
                 let data = ctx.data.read().await;
                 data.get::<DbPool>().expect("database connection pool missing from Discord context").clone()
@@ -375,46 +387,7 @@ async fn apply_live_schedule(
                 .collect();
 
             // Build race description
-            let race_description = if cal_event.race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
-                match (&cal_event.race.round, &cal_event.race.phase) {
-                    (Some(round), _) => round.clone(),
-                    (None, Some(phase)) => phase.clone(),
-                    (None, None) => "Qualifier".to_string(),
-                }
-            } else {
-                match &cal_event.race.entrants {
-                    Entrants::Two([team1, team2]) => format!("{} vs {}",
-                        match team1 {
-                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                            Entrant::Named { name, .. } => name.clone(),
-                            Entrant::Discord { .. } => "Discord User".to_string(),
-                        },
-                        match team2 {
-                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                            Entrant::Named { name, .. } => name.clone(),
-                            Entrant::Discord { .. } => "Discord User".to_string(),
-                        }
-                    ),
-                    Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
-                        match team1 {
-                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                            Entrant::Named { name, .. } => name.clone(),
-                            Entrant::Discord { .. } => "Discord User".to_string(),
-                        },
-                        match team2 {
-                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                            Entrant::Named { name, .. } => name.clone(),
-                            Entrant::Discord { .. } => "Discord User".to_string(),
-                        },
-                        match team3 {
-                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                            Entrant::Named { name, .. } => name.clone(),
-                            Entrant::Discord { .. } => "Discord User".to_string(),
-                        }
-                    ),
-                    _ => cal_event.race.round.clone().or_else(|| cal_event.race.phase.clone()).unwrap_or_else(|| "Race".to_string()),
-                }
-            };
+            let race_description = cal_event.race.notification_description(&mut transaction).await?;
 
             // Send DM to each affected volunteer
             for signup in affected_signups {
@@ -429,9 +402,11 @@ async fn apply_live_schedule(
                         msg.push(" in ");
                         msg.push(&event.display_name);
                         msg.push(" has been rescheduled.\n\n");
-                        msg.push("**New time:** ");
+                        msg.push("**New time (in your timezone):** ");
                         msg.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
-                        msg.push("\n\n");
+                        msg.push(" (");
+                        msg.push_timestamp(start, serenity_utils::message::TimestampStyle::Relative);
+                        msg.push(")\n\n");
                         msg.push("If you're no longer available, you can withdraw your signup using the button below or on the website: <");
                         msg.push(&format!("{}/event/{}/{}/races/{}/signups",
                             base_uri(), cal_event.race.series.slug(), cal_event.race.event, u64::from(cal_event.race.id)));
@@ -480,8 +455,20 @@ async fn apply_live_schedule(
         };
         transaction.commit().await?;
 
-        // Update volunteer post if this was a reschedule
-        if was_scheduled {
+        // Fire notification if was rescheduled OR if unscheduled race with surviving signups is now being scheduled
+        let fire_notifications_long = was_scheduled || {
+            let pool = {
+                let data = ctx.data.read().await;
+                data.get::<DbPool>().expect("database connection pool missing from Discord context").clone()
+            };
+            let mut tx = pool.begin().await?;
+            event::roles::Signup::for_race(&mut tx, cal_event.race.id).await
+                .map(|s| s.iter().any(|s| matches!(s.status,
+                    event::roles::VolunteerSignupStatus::Pending |
+                    event::roles::VolunteerSignupStatus::Confirmed)))
+                .unwrap_or(false)
+        };
+        if fire_notifications_long {
             let pool = {
                 let data = ctx.data.read().await;
                 data.get::<DbPool>().expect("database connection pool missing from Discord context").clone()
@@ -500,46 +487,7 @@ async fn apply_live_schedule(
                 .collect();
 
             // Build race description
-            let race_description = if cal_event.race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
-                match (&cal_event.race.round, &cal_event.race.phase) {
-                    (Some(round), _) => round.clone(),
-                    (None, Some(phase)) => phase.clone(),
-                    (None, None) => "Qualifier".to_string(),
-                }
-            } else {
-                match &cal_event.race.entrants {
-                    Entrants::Two([team1, team2]) => format!("{} vs {}",
-                        match team1 {
-                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                            Entrant::Named { name, .. } => name.clone(),
-                            Entrant::Discord { .. } => "Discord User".to_string(),
-                        },
-                        match team2 {
-                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                            Entrant::Named { name, .. } => name.clone(),
-                            Entrant::Discord { .. } => "Discord User".to_string(),
-                        }
-                    ),
-                    Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
-                        match team1 {
-                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                            Entrant::Named { name, .. } => name.clone(),
-                            Entrant::Discord { .. } => "Discord User".to_string(),
-                        },
-                        match team2 {
-                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                            Entrant::Named { name, .. } => name.clone(),
-                            Entrant::Discord { .. } => "Discord User".to_string(),
-                        },
-                        match team3 {
-                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                            Entrant::Named { name, .. } => name.clone(),
-                            Entrant::Discord { .. } => "Discord User".to_string(),
-                        }
-                    ),
-                    _ => cal_event.race.round.clone().or_else(|| cal_event.race.phase.clone()).unwrap_or_else(|| "Race".to_string()),
-                }
-            };
+            let race_description = cal_event.race.notification_description(&mut transaction).await?;
 
             // Send DM to each affected volunteer
             for signup in affected_signups {
@@ -554,9 +502,11 @@ async fn apply_live_schedule(
                         msg.push(" in ");
                         msg.push(&event.display_name);
                         msg.push(" has been rescheduled.\n\n");
-                        msg.push("**New time:** ");
+                        msg.push("**New time (in your timezone):** ");
                         msg.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
-                        msg.push("\n\n");
+                        msg.push(" (");
+                        msg.push_timestamp(start, serenity_utils::message::TimestampStyle::Relative);
+                        msg.push(")\n\n");
                         msg.push("If you're no longer available, you can withdraw your signup using the button below or on the website: <");
                         msg.push(&format!("{}/event/{}/{}/races/{}/signups",
                             base_uri(), cal_event.race.series.slug(), cal_event.race.event, u64::from(cal_event.race.id)));
@@ -1900,6 +1850,35 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                 .execute(&mut *transaction).await?;
                                         }
 
+                                        // Send "race unscheduled" DMs to pending+confirmed volunteers if schedule was reset
+                                        if reset_schedule {
+                                            let affected_signups: Vec<_> = event::roles::Signup::for_race(&mut transaction, race.id).await
+                                                .unwrap_or_default()
+                                                .into_iter()
+                                                .filter(|s| matches!(s.status, event::roles::VolunteerSignupStatus::Pending | event::roles::VolunteerSignupStatus::Confirmed))
+                                                .collect();
+                                            if !affected_signups.is_empty() {
+                                                if let Ok(description) = race.notification_description(&mut transaction).await {
+                                                    for signup in &affected_signups {
+                                                        if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
+                                                            if let Some(discord) = user.discord {
+                                                                let discord_user_id = UserId::new(discord.id.get());
+                                                                let mut msg = MessageBuilder::default();
+                                                                msg.push("**Race Unscheduled**\n\nThe race ");
+                                                                msg.push_mono(&description);
+                                                                msg.push(" in ");
+                                                                msg.push(&event.display_name);
+                                                                msg.push(" had to be rescheduled. You will be informed once a new start time is set.");
+                                                                if let Ok(dm) = discord_user_id.create_dm_channel(ctx).await {
+                                                                    let _ = dm.say(ctx, msg.build()).await;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
                                         let scheduling_thread = race.scheduling_thread;
                                         transaction.commit().await?;
                                         let verb = if aspects_reset.len() == NonZero::<usize>::MIN { " has" } else { " have" };
@@ -2596,6 +2575,40 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                 sqlx::query!("UPDATE races SET discord_scheduled_event_id = NULL WHERE id = $1", race.id as _).execute(&mut *transaction).await?;
                                             }
                                             transaction.commit().await?;
+
+                                            // Send "race unscheduled" DMs to confirmed volunteers
+                                            {
+                                                let pool = ctx.data.read().await.get::<DbPool>()
+                                                    .expect("database connection pool missing from Discord context").clone();
+                                                let mut tx = pool.begin().await?;
+                                                let affected_signups: Vec<_> = event::roles::Signup::for_race(&mut tx, race.id).await
+                                                    .unwrap_or_default()
+                                                    .into_iter()
+                                                    .filter(|s| matches!(s.status, event::roles::VolunteerSignupStatus::Pending | event::roles::VolunteerSignupStatus::Confirmed))
+                                                    .collect();
+                                                if !affected_signups.is_empty() {
+                                                    if let Ok(description) = race.notification_description(&mut tx).await {
+                                                        for signup in &affected_signups {
+                                                            if let Ok(Some(user)) = User::from_id(&mut *tx, signup.user_id).await {
+                                                                if let Some(discord) = user.discord {
+                                                                    let discord_user_id = UserId::new(discord.id.get());
+                                                                    let mut msg = MessageBuilder::default();
+                                                                    msg.push("**Race Unscheduled**\n\nThe race ");
+                                                                    msg.push_mono(&description);
+                                                                    msg.push(" in ");
+                                                                    msg.push(&event.display_name);
+                                                                    msg.push(" had to be rescheduled. You will be informed once a new start time is set.");
+                                                                    if let Ok(dm) = discord_user_id.create_dm_channel(ctx).await {
+                                                                        let _ = dm.say(ctx, msg.build()).await;
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                // tx dropped without commit (read-only queries only)
+                                            }
+
                                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                                 .ephemeral(false)
                                                 .content(if let Some(game) = race.game {
@@ -3606,112 +3619,125 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 .components(vec![])
                         )).await?;
                     } else if let Some(signup_id_str) = custom_id.strip_prefix("volunteer_withdraw_") {
-                        // Handle volunteer withdrawal button
-                        let (pool, http_client) = {
-                            let data = ctx.data.read().await;
-                            (
-                                data.get::<DbPool>().expect("database connection pool missing from Discord context").clone(),
-                                data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
-                            )
-                        };
-                        let mut transaction = pool.begin().await?;
+                        if let Some(signup_id_str) = signup_id_str.strip_prefix("confirm_") {
+                            // Confirmed withdrawal — perform the actual withdrawal
+                            let (pool, http_client) = {
+                                let data = ctx.data.read().await;
+                                (
+                                    data.get::<DbPool>().expect("database connection pool missing from Discord context").clone(),
+                                    data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
+                                )
+                            };
+                            let mut transaction = pool.begin().await?;
 
-                        // Parse signup ID
-                        let signup_id: Id<Signups> = match signup_id_str.parse::<u64>() {
-                            Ok(id) => Id::from(id),
-                            Err(_) => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                            let signup_id: Id<Signups> = match signup_id_str.parse::<u64>() {
+                                Ok(id) => Id::from(id),
+                                Err(_) => {
+                                    interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                        CreateInteractionResponseMessage::new()
+                                            .content("Invalid signup ID.")
+                                            .components(vec![])
+                                    )).await?;
+                                    return Ok(());
+                                }
+                            };
+
+                            let signup = match event::roles::Signup::from_id(&mut transaction, signup_id).await? {
+                                Some(s) => s,
+                                None => {
+                                    interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                        CreateInteractionResponseMessage::new()
+                                            .content("This signup no longer exists.")
+                                            .components(vec![])
+                                    )).await?;
+                                    return Ok(());
+                                }
+                            };
+
+                            let user = match User::from_discord(&mut *transaction, interaction.user.id).await? {
+                                Some(u) => u,
+                                None => {
+                                    interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                        CreateInteractionResponseMessage::new()
+                                            .content("You need to link your Discord account first.")
+                                            .components(vec![])
+                                    )).await?;
+                                    return Ok(());
+                                }
+                            };
+
+                            if signup.user_id != user.id {
+                                interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                     CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Invalid signup ID.")
+                                        .content("This signup doesn't belong to you.")
+                                        .components(vec![])
                                 )).await?;
                                 return Ok(());
                             }
-                        };
 
-                        // Get signup from database
-                        let signup = match event::roles::Signup::from_id(&mut transaction, signup_id).await? {
-                            Some(s) => s,
-                            None => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                            if matches!(signup.status, event::roles::VolunteerSignupStatus::Aborted) {
+                                interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                     CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("This signup no longer exists.")
+                                        .content("You have already withdrawn from this race.")
+                                        .components(vec![])
                                 )).await?;
                                 return Ok(());
                             }
-                        };
 
-                        // Verify user owns this signup
-                        let user = match User::from_discord(&mut *transaction, interaction.user.id).await? {
-                            Some(u) => u,
-                            None => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                            let race = Race::from_id(&mut transaction, &http_client, signup.race_id).await?;
+                            let race_started = match race.schedule {
+                                RaceSchedule::Live { start, .. } => start <= Utc::now(),
+                                RaceSchedule::Async { start1, start2, start3, .. } => {
+                                    [start1, start2, start3].iter().filter_map(|s| *s).any(|s| s <= Utc::now())
+                                }
+                                _ => false,
+                            };
+
+                            if race_started {
+                                interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                     CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("You need to link your Discord account first.")
+                                        .content("Sorry, you cannot withdraw after the race has started.")
+                                        .components(vec![])
                                 )).await?;
                                 return Ok(());
                             }
-                        };
 
-                        if signup.user_id != user.id {
-                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                            event::roles::Signup::update_status(&mut transaction, signup_id, event::roles::VolunteerSignupStatus::Aborted).await?;
+                            transaction.commit().await?;
+
+                            let _ = volunteer_requests::update_volunteer_post_for_race(
+                                &pool,
+                                ctx,
+                                signup.race_id,
+                            ).await;
+
+                            interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                 CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content("This signup doesn't belong to you.")
+                                    .content("✓ You have successfully withdrawn from this race. Thank you for letting us know!")
+                                    .components(vec![])
                             )).await?;
-                            return Ok(());
-                        }
-
-                        // Check if already withdrawn
-                        if matches!(signup.status, event::roles::VolunteerSignupStatus::Aborted) {
-                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                        } else if signup_id_str == "cancel" {
+                            // User canceled the withdrawal confirmation
+                            interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                 CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content("You have already withdrawn from this race.")
+                                    .content("Withdrawal canceled.")
+                                    .components(vec![])
                             )).await?;
-                            return Ok(());
-                        }
-
-                        // Get race to check if started
-                        let race = Race::from_id(&mut transaction, &http_client, signup.race_id).await?;
-
-                        // Check race hasn't started
-                        let race_started = match race.schedule {
-                            RaceSchedule::Live { start, .. } => start <= Utc::now(),
-                            RaceSchedule::Async { start1, start2, start3, .. } => {
-                                [start1, start2, start3].iter().filter_map(|s| *s).any(|s| s <= Utc::now())
-                            }
-                            _ => false,
-                        };
-
-                        if race_started {
-                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                        } else {
+                            // Initial withdraw button click — show confirmation prompt
+                            let confirm_button = CreateButton::new(format!("volunteer_withdraw_confirm_{signup_id_str}"))
+                                .label("Yes, withdraw")
+                                .style(ButtonStyle::Danger);
+                            let cancel_button = CreateButton::new("volunteer_withdraw_cancel")
+                                .label("Cancel")
+                                .style(ButtonStyle::Secondary);
+                            let row = CreateActionRow::Buttons(vec![confirm_button, cancel_button]);
+                            interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                 CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content("Sorry, you cannot withdraw after the race has started.")
+                                    .content("Are you sure you want to withdraw your signup from this race?")
+                                    .components(vec![row])
                             )).await?;
-                            return Ok(());
                         }
-
-                        // Update signup status to Aborted
-                        event::roles::Signup::update_status(&mut transaction, signup_id, event::roles::VolunteerSignupStatus::Aborted).await?;
-                        transaction.commit().await?;
-
-                        // Update the volunteer info post
-                        let _ = volunteer_requests::update_volunteer_post_for_race(
-                            &pool,
-                            ctx,
-                            signup.race_id,
-                        ).await;
-
-                        // Respond with confirmation (update the message to remove button)
-                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                            CreateInteractionResponseMessage::new()
-                                .content("✓ You have successfully withdrawn from this race. Thank you for letting us know!")
-                                .components(vec![])
-                        )).await?;
                     } else if let Some(rest) = custom_id.strip_prefix("schedule_game_") {
                         // Button click from the BO3/5 schedule disambiguation prompt.
                         // custom_id format: "schedule_game_{game_number}_{unix_timestamp}"
