@@ -1829,9 +1829,8 @@ impl GlobalState {
             let yaml_path = yaml_file.path();
             tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(serde_yml::to_string(&crosskeys_yaml)?.as_bytes()).await.at(&yaml_file)?;
             
-            // Add retry logic with 2 retries
-            const MAX_RETRIES: u8 = 2;
-            
+            const MAX_RETRIES: u8 = 4;
+
             for attempt in 0..=MAX_RETRIES {
                 let output = Command::new(PYTHON)
                     .current_dir("../alttpr")
@@ -1936,8 +1935,7 @@ impl GlobalState {
             let yaml_path = yaml_file.path();
             tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(updated_yaml_content.as_bytes()).await.at(&yaml_file)?;
 
-            // Run DungeonRandomizer.py with the YAML (same as Crosskeys)
-            const MAX_RETRIES: u8 = 2;
+            const MAX_RETRIES: u8 = 4;
 
             for attempt in 0..=MAX_RETRIES {
                 let output = Command::new(PYTHON)
@@ -2732,7 +2730,7 @@ pub(crate) enum SeedRollUpdate {
 }
 
 impl SeedRollUpdate {
-    async fn handle(self, db_pool: &PgPool, ctx: &RaceContext<GlobalState>, state: &ArcRwLock<RaceState>, official_data: Option<&OfficialRaceData>, language: Language, article: &'static str, description: &str) -> Result<(), Error> {
+    async fn handle(self, db_pool: &PgPool, ctx: &RaceContext<GlobalState>, state: &ArcRwLock<RaceState>, official_data: Option<&OfficialRaceData>, language: Language, article: &'static str, description: &str, roll_failed: &Arc<AtomicBool>) -> Result<(), Error> {
         match self {
             Self::Queued(0) => ctx.say("I'm already rolling other multiworld seeds so your seed has been queued. It is at the front of the queue so it will be rolled next.").await?,
             Self::Queued(1) => ctx.say("I'm already rolling other multiworld seeds so your seed has been queued. There is 1 seed in front of it in the queue.").await?,
@@ -3015,6 +3013,7 @@ impl SeedRollUpdate {
                     }
                     transaction.commit().await.to_racetime()?;
                 }
+                roll_failed.store(false, atomic::Ordering::SeqCst);
                 lock!(@write state = state; *state = RaceState::Rolled(seed));
             }
             Self::Error(RollError::Retries { num_retries, last_error }) | Self::Error(RollError::OotrWeb(ootr_web::Error::Retries { num_retries, last_error })) => {
@@ -3024,10 +3023,11 @@ impl SeedRollUpdate {
                     eprintln!("seed rolling failed {num_retries} times, no sample error recorded");
                 }
                 ctx.say(if let French = language {
-                    format!("Désolé @entrants, le randomizer a rapporté une erreur {num_retries} fois de suite donc je vais laisser tomber. Veuillez réessayer et, si l'erreur persiste, essayer de roll une seed de votre côté et contacter TreZc0_.")
+                    format!("Désolé @entrants, le randomizer a rapporté une erreur {num_retries} fois de suite donc je vais laisser tomber. Utilisez !reroll pour réessayer. Si l'erreur persiste, essayer de roll une seed de votre côté et contacter TreZc0_.")
                 } else {
-                    format!("Sorry @entrants, the randomizer reported an error {num_retries} times, so I'm giving up on rolling the seed. Please try again. If this error persists, please report it to TreZc0_.")
-                }).await?; //TODO for official races, explain that retrying is done using !seed
+                    format!("Sorry @entrants, the randomizer reported an error {num_retries} times, so I'm giving up on rolling the seed. Use !reroll to try again. If this error persists, please report it to TreZc0_.")
+                }).await?;
+                roll_failed.store(true, atomic::Ordering::SeqCst);
                 lock!(@write state = state; *state = RaceState::Init);
             }
             Self::Error(e) => {
@@ -3546,6 +3546,7 @@ struct Handler {
     start_saved: bool,
     fpa_enabled: bool,
     locked: bool,
+    roll_failed: Arc<AtomicBool>,
     password_sent: bool,
     race_state: ArcRwLock<RaceState>,
     cleaned_up: Arc<AtomicBool>,
@@ -3794,6 +3795,7 @@ impl Handler {
         let ctx = ctx.clone();
         let state = self.race_state.clone();
         let official_data = self.official_data.clone();
+        let roll_failed = self.roll_failed.clone();
         tokio::spawn(async move {
             lock!(@write state = state; *state = RaceState::Rolling); //TODO ensure only one seed is rolled at a time
             let mut seed_state = None::<SeedRollUpdate>;
@@ -3820,10 +3822,10 @@ impl Handler {
                     select! {
                         () = &mut sleep => {
                             if let Some(update) = seed_state.take() {
-                                update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description).await?;
+                                update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
                             }
                             while let Some(update) = updates.recv().await {
-                                update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description).await?;
+                                update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
                             }
                             break
                         }
@@ -3832,7 +3834,7 @@ impl Handler {
                 }
             } else {
                 while let Some(update) = updates.recv().await {
-                    update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description).await?;
+                    update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
                 }
             }
             Ok::<_, Error>(())
@@ -5016,6 +5018,7 @@ impl RaceHandler<GlobalState> for Handler {
             goal_notifications: None,
             start_saved: false,
             locked: false,
+            roll_failed: Arc::default(),
             password_sent: false,
             race_state: ArcRwLock::new(race_state),
             cleaned_up: Arc::default(),
@@ -5685,42 +5688,45 @@ impl RaceHandler<GlobalState> for Handler {
                 } else {
                     lock!(@write state = self.race_state; match *state {
                         RaceState::Init => {
-                            // Check if user is an entrant or monitor
                             let data = ctx.data().await;
                             let is_entrant = msg.user.as_ref().is_some_and(|user|
                                 data.entrants.iter().any(|e| e.user.as_ref().is_some_and(|u| u.id == user.id))
                             );
+                            let is_monitor = self.can_monitor(ctx, is_monitor, msg).await.to_racetime()?;
 
-                            if !is_entrant && !self.can_monitor(ctx, is_monitor, msg).await.to_racetime()? {
+                            if !is_monitor && !is_entrant {
                                 ctx.say(format!("Sorry {reply_to}, only @entrants or race monitors may use this command.")).await?;
+                            } else if !is_monitor && !self.roll_failed.load(atomic::Ordering::SeqCst) {
+                                ctx.say(format!("Sorry {reply_to}, !reroll is only available after a failed roll attempt.")).await?;
                             } else if let Some(settings) = goal.single_settings() {
-                            // Goal has default settings, use them to roll
-                            let event = self.official_data.as_ref().map(|OfficialRaceData { event, .. }| event);
-                            let unlock_spoiler_log = goal.unlock_spoiler_log(false, false);
-                            ctx.say(format!("@entrants Rerolling seed...")).await?;
-                            self.roll_seed(ctx, goal.preroll_seeds(event.map(|event| (event.series, &*event.event))), goal.rando_version(event), settings, unlock_spoiler_log, goal.language(), "a", format!("seed")).await;
-                        } else if self.official_data.as_ref().and_then(|d| d.event.draft_kind()).is_some() {
-                            // Official draft event — try to reload draft state from DB (allows fixing and retrying after a DB fix)
-                            let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
-                            let room_url: Url = format!("https://{}{}", racetime_host(), ctx.data().await.url).parse().to_racetime()?;
-                            let maybe_cal_event = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, room_url).await.to_racetime()?;
-                            transaction.commit().await.to_racetime()?;
-                            if let Some(cal_event) = maybe_cal_event {
-                                if let Some(draft) = cal_event.race.draft.clone() {
-                                    let unlock_spoiler_log = goal.unlock_spoiler_log(true, false);
-                                    *state = RaceState::Draft { state: draft, unlock_spoiler_log };
-                                    self.advance_draft(ctx, &state).await?;
+                                // Goal has default settings, use them to roll
+                                let event = self.official_data.as_ref().map(|OfficialRaceData { event, .. }| event);
+                                let unlock_spoiler_log = goal.unlock_spoiler_log(false, false);
+                                ctx.say(format!("{reply_to} Attempting to reroll the seed, please wait...")).await?;
+                                self.roll_seed(ctx, goal.preroll_seeds(event.map(|event| (event.series, &*event.event))), goal.rando_version(event), settings, unlock_spoiler_log, goal.language(), "a", format!("seed")).await;
+                            } else if self.official_data.as_ref().and_then(|d| d.event.draft_kind()).is_some() {
+                                // Official draft event — try to reload draft state from DB (allows fixing and retrying after a DB fix)
+                                ctx.say(format!("{reply_to} Attempting to reroll the seed, please wait...")).await?;
+                                let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+                                let room_url: Url = format!("https://{}{}", racetime_host(), ctx.data().await.url).parse().to_racetime()?;
+                                let maybe_cal_event = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, room_url).await.to_racetime()?;
+                                transaction.commit().await.to_racetime()?;
+                                if let Some(cal_event) = maybe_cal_event {
+                                    if let Some(draft) = cal_event.race.draft.clone() {
+                                        let unlock_spoiler_log = goal.unlock_spoiler_log(true, false);
+                                        *state = RaceState::Draft { state: draft, unlock_spoiler_log };
+                                        self.advance_draft(ctx, &state).await?;
+                                    } else {
+                                        ctx.say(format!("Sorry {reply_to}, the draft state for this race is still missing in the database. Please contact a tournament organizer.")).await?;
+                                    }
                                 } else {
-                                    ctx.say(format!("Sorry {reply_to}, the draft state for this race is still missing in the database. Please contact a tournament organizer.")).await?;
+                                    ctx.say(format!("Sorry {reply_to}, failed to find this race in the database.")).await?;
                                 }
                             } else {
-                                ctx.say(format!("Sorry {reply_to}, failed to find this race in the database.")).await?;
+                                // Goal requires parameters
+                                ctx.say(format!("Sorry {reply_to}, this goal requires settings to be specified. Please use the !seed command with the appropriate parameters to roll a seed.")).await?;
                             }
-                        } else {
-                            // Goal requires parameters
-                            ctx.say(format!("Sorry {reply_to}, this goal requires settings to be specified. Please use the !seed command with the appropriate parameters to roll a seed.")).await?;
-                        }
-                    },
+                        },
                     RaceState::Draft { .. } => ctx.say(format!("Sorry {reply_to}, settings are currently being drafted. Please finish the draft first.")).await?,
                     RaceState::Rolling => ctx.say(format!("Sorry {reply_to}, I'm currently rolling a seed. Please wait for it to finish.")).await?,
                     RaceState::Rolled(_) | RaceState::SpoilerSent => ctx.say(format!("Sorry {reply_to}, a seed has already been rolled successfully. Check the race info!")).await?,
@@ -6057,6 +6063,7 @@ impl RaceHandler<GlobalState> for Handler {
                                         start_saved: false,
                                         fpa_enabled: false,
                                         locked: false,
+                                        roll_failed: Arc::default(),
                                         password_sent: false,
                                         race_state: ArcRwLock::new(RaceState::Init),
                                         cleaned_up: cleaned_up.clone(),
