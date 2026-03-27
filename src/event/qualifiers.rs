@@ -243,7 +243,7 @@ pub(crate) struct DeleteForm {
 }
 
 #[rocket::post("/event/<series>/<event>/qualifiers/<race_id>/delete", data = "<form>")]
-pub(crate) async fn delete_race(pool: &State<PgPool>, me: User, csrf: Option<CsrfToken>, series: Series, event: &str, race_id: Id<Races>, form: Form<Contextual<'_, DeleteForm>>) -> Result<Redirect, StatusOrError<event::Error>> {
+pub(crate) async fn delete_race(discord_ctx: &State<RwFuture<DiscordCtx>>, http_client: &State<reqwest::Client>, pool: &State<PgPool>, me: User, csrf: Option<CsrfToken>, series: Series, event: &str, race_id: Id<Races>, form: Form<Contextual<'_, DeleteForm>>) -> Result<Redirect, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let event_data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
@@ -269,6 +269,30 @@ pub(crate) async fn delete_race(pool: &State<PgPool>, me: User, csrf: Option<Csr
 
         if has_teams {
             return Err(StatusOrError::Status(Status::Conflict));
+        }
+
+        // Send cancel DMs to confirmed volunteers before cascade delete
+        if let Ok(race) = Race::from_id(&mut transaction, http_client, race_id).await {
+            if let Ok(description) = race.notification_description(&mut transaction).await {
+                let signups = event::roles::Signup::for_race(&mut transaction, race_id).await.unwrap_or_default();
+                let discord_ctx_lock = discord_ctx.read().await;
+                for signup in signups.iter().filter(|s| matches!(s.status, event::roles::VolunteerSignupStatus::Confirmed)) {
+                    if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
+                        if let Some(discord) = user.discord {
+                            let discord_user_id = UserId::new(discord.id.get());
+                            let mut msg = MessageBuilder::default();
+                            msg.push("**Race Canceled**\n\nThe race ");
+                            msg.push_mono(&description);
+                            msg.push(" in ");
+                            msg.push(&event_data.display_name);
+                            msg.push(" has been canceled and your volunteer signup has been removed.");
+                            if let Ok(dm) = discord_user_id.create_dm_channel(&*discord_ctx_lock).await {
+                                let _ = dm.say(&*discord_ctx_lock, msg.build()).await;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Delete the race (signups will cascade delete automatically)
@@ -599,9 +623,11 @@ pub(crate) async fn post_edit_race(pool: &State<PgPool>, discord_ctx: &State<RwF
                                 msg.push(" in ");
                                 msg.push(&event_data.display_name);
                                 msg.push(" has been rescheduled.\n\n");
-                                msg.push("**New time:** ");
+                                msg.push("**New time (in your timezone):** ");
                                 msg.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
-                                msg.push("\n\n");
+                                msg.push(" (");
+                                msg.push_timestamp(start, serenity_utils::message::TimestampStyle::Relative);
+                                msg.push(")\n\n");
                                 msg.push("If you're no longer available, you can withdraw your signup using the button below or on the website: <");
                                 msg.push(&format!("{}/event/{}/{}/races/{}/signups",
                                     base_uri(), series.slug(), event, u64::from(race_id)));
