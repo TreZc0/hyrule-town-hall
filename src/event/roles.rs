@@ -823,15 +823,15 @@ impl Signup {
         pool: &mut Transaction<'_, Postgres>,
         id: Id<Signups>,
         status: VolunteerSignupStatus,
-    ) -> sqlx::Result<()> {
-        sqlx::query!(
-            r#"UPDATE signups SET status = $1, updated_at = NOW() WHERE id = $2"#,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query!(
+            r#"UPDATE signups SET status = $1, updated_at = NOW() WHERE id = $2 AND status != $1"#,
             status as _,
             id as _
         )
         .execute(&mut **pool)
         .await?;
-        Ok(())
+        Ok(result.rows_affected() > 0)
     }
 
     pub(crate) async fn active_for_user(
@@ -3044,10 +3044,11 @@ pub(crate) async fn manage_roster(
                 }
             };
 
-            Signup::update_status(&mut transaction, value.signup_id, status).await?;
-            
+            let status_changed = Signup::update_status(&mut transaction, value.signup_id, status).await?;
+
             // If the signup is being confirmed, auto-reject overlapping signups for the same user
-            if status == VolunteerSignupStatus::Confirmed {
+            // Only proceed if the status actually changed (guards against double-submit race conditions)
+            if status_changed && status == VolunteerSignupStatus::Confirmed {
                 // Get the user ID for the confirmed signup
                 let signup = Signup::from_id(&mut transaction, value.signup_id).await?
                     .ok_or(StatusOrError::Status(Status::NotFound))?;
