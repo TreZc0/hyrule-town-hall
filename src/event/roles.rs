@@ -599,6 +599,78 @@ impl RoleRequest {
         .unwrap_or(false))
     }
 
+    /// If the role binding has `auto_approve = true`, ensures an approved role request exists for
+    /// this user+binding, creating or upgrading one as needed. Returns `Some(id)` on success, or
+    /// `None` if the binding does not have `auto_approve` enabled (caller should show the normal
+    /// "approval required" error in that case). Must be called within the caller's transaction so
+    /// the approval and any subsequent signup are committed atomically.
+    pub(crate) async fn ensure_approved_for_auto_approve(
+        pool: &mut Transaction<'_, Postgres>,
+        role_binding_id: Id<RoleBindings>,
+        user_id: Id<Users>,
+    ) -> sqlx::Result<Option<Id<RoleRequests>>> {
+        let auto_approve = sqlx::query_scalar!(
+            r#"SELECT auto_approve FROM role_bindings WHERE id = $1"#,
+            role_binding_id as _
+        )
+        .fetch_one(&mut **pool)
+        .await?;
+
+        if !auto_approve {
+            return Ok(None);
+        }
+
+        let existing = sqlx::query!(
+            r#"SELECT id, status as "status!: RoleRequestStatus"
+               FROM role_requests
+               WHERE role_binding_id = $1 AND user_id = $2
+               ORDER BY created_at DESC LIMIT 1"#,
+            role_binding_id as _,
+            user_id as _
+        )
+        .fetch_optional(&mut **pool)
+        .await?;
+
+        let id = if let Some(ref r) = existing {
+            match r.status {
+                RoleRequestStatus::Approved => r.id,
+                RoleRequestStatus::Aborted => {
+                    // Insert a fresh approved request; aborted is a terminal forfeit
+                    sqlx::query_scalar!(
+                        r#"INSERT INTO role_requests (role_binding_id, user_id, notes, status)
+                           VALUES ($1, $2, '', 'approved') RETURNING id"#,
+                        role_binding_id as _,
+                        user_id as _
+                    )
+                    .fetch_one(&mut **pool)
+                    .await?
+                }
+                _ => {
+                    // Pending or Rejected — upgrade in place to approved
+                    sqlx::query_scalar!(
+                        r#"UPDATE role_requests SET status = 'approved', updated_at = NOW()
+                           WHERE id = $1 RETURNING id"#,
+                        r.id
+                    )
+                    .fetch_one(&mut **pool)
+                    .await?
+                }
+            }
+        } else {
+            // No prior request — create a fresh approved one
+            sqlx::query_scalar!(
+                r#"INSERT INTO role_requests (role_binding_id, user_id, notes, status)
+                   VALUES ($1, $2, '', 'approved') RETURNING id"#,
+                role_binding_id as _,
+                user_id as _
+            )
+            .fetch_one(&mut **pool)
+            .await?
+        };
+
+        Ok(Some(Id::from(id as i64)))
+    }
+
     #[allow(dead_code)]
     pub(crate) async fn pending_for_event(
         pool: &mut Transaction<'_, Postgres>,
@@ -2752,14 +2824,76 @@ async fn volunteer_page(
                     : render_language_content_box_end();
                 }
 
-                @if my_approved_roles.iter().any(|req| effective_role_bindings.iter().any(|b| b.id == req.role_binding_id)) && !upcoming_races.is_empty() {
+                @let auto_approve_eligible = effective_role_bindings.iter()
+                    .filter(|b| b.auto_approve && !b.is_disabled)
+                    .filter(|b| !my_requests.iter().any(|req|
+                        req.role_binding_id == b.id
+                            && matches!(req.status, RoleRequestStatus::Pending | RoleRequestStatus::Approved)
+                    ))
+                    .collect::<Vec<_>>();
+                @let has_approved_roles = my_approved_roles.iter().any(|req| effective_role_bindings.iter().any(|b| b.id == req.role_binding_id));
+                @if (has_approved_roles || !auto_approve_eligible.is_empty()) && !upcoming_races.is_empty() {
                     h3 : "Sign Up for Matches";
-                    p : "You have been approved for the following roles. You can now sign up for specific matches:";
 
-                    @for role_request in my_approved_roles {
-                        @let binding = effective_role_bindings.iter().find(|b| b.id == role_request.role_binding_id);
-                        @if let Some(binding) = binding {
-                            h4 {
+                    @if has_approved_roles {
+                        p : "You have been approved for the following roles. You can now sign up for specific matches:";
+                        @for role_request in my_approved_roles {
+                            @let binding = effective_role_bindings.iter().find(|b| b.id == role_request.role_binding_id);
+                            @if let Some(binding) = binding {
+                                h4 {
+                                    : binding.role_type_name;
+                                    : " (";
+                                    : binding.language;
+                                    : ")";
+                                }
+                                @let now = chrono::Utc::now();
+                                @let available_races = upcoming_races.iter().filter(|race| {
+                                    match race.schedule {
+                                        RaceSchedule::Live { start, .. } => start > now,
+                                        _ => false,
+                                    }
+                                }).collect::<Vec<_>>();
+
+                                @if available_races.is_empty() {
+                                    p : "No upcoming races available for signup.";
+                                } else {
+                                    ul {
+                                        @for race in available_races {
+                                            li {
+                                                a(href = uri!(match_signup_page_get(data.series, &*data.event, race.id, _))) : {
+                                                    if race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
+                                                        format!("{} (Qualifier)", race.round.clone().unwrap_or_else(|| "Qualifier".to_string()))
+                                                    } else {
+                                                        match &race.entrants {
+                                                            Entrants::Two([team1, team2]) => format!("{} vs {}",
+                                                                match team1 {
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                },
+                                                                match team2 {
+                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                                                    Entrant::Named { name, .. } => name.clone(),
+                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
+                                                                }
+                                                            ),
+                                                            _ => "TBD vs TBD".to_string(),
+                                                        }
+                                                    }
+                                                };
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    @if !auto_approve_eligible.is_empty() {
+                        h4 : "Open Roles (No Application Required)";
+                        p : "The following roles are open to all volunteers. Click a race to sign up directly:";
+                        @for binding in auto_approve_eligible {
+                            h5 {
                                 : binding.role_type_name;
                                 : " (";
                                 : binding.language;
@@ -2767,7 +2901,6 @@ async fn volunteer_page(
                             }
                             @let now = chrono::Utc::now();
                             @let available_races = upcoming_races.iter().filter(|race| {
-                                // Filter out races that have already started
                                 match race.schedule {
                                     RaceSchedule::Live { start, .. } => start > now,
                                     _ => false,
@@ -2781,7 +2914,6 @@ async fn volunteer_page(
                                     @for race in available_races {
                                         li {
                                             a(href = uri!(match_signup_page_get(data.series, &*data.event, race.id, _))) : {
-                                                // For qualifier races, show the round name (e.g., "Live 1") with "(Qualifier)" indicator
                                                 if race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
                                                     format!("{} (Qualifier)", race.round.clone().unwrap_or_else(|| "Qualifier".to_string()))
                                                 } else {
@@ -2892,9 +3024,12 @@ pub(crate) async fn signup_for_match(
         }
 
         if !RoleRequest::approved_for_user(&mut transaction, value.role_binding_id, me.id).await? {
-            form.context.push_error(form::Error::validation(
-                "You must be approved for this role before you can sign up for matches",
-            ));
+            // For auto-approve bindings, atomically create/upgrade the role request on the spot
+            if RoleRequest::ensure_approved_for_auto_approve(&mut transaction, value.role_binding_id, me.id).await?.is_none() {
+                form.context.push_error(form::Error::validation(
+                    "You must be approved for this role before you can sign up for matches",
+                ));
+            }
         }
 
         if Signup::active_for_user(&mut transaction, race_id, value.role_binding_id, me.id).await? {
@@ -3602,6 +3737,55 @@ async fn match_signup_page(
                         } else {
                             None
                         };
+                        @if disabled {
+                            @let (errors, signup_button) = button_form_ext_disabled(
+                                uri!(signup_for_match(data.series, &*data.event, race_id)),
+                                csrf.as_ref(),
+                                errors,
+                                html! {
+                                    input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                },
+                                &format!("Sign up for {}", binding.role_type_name),
+                                true
+                            );
+                            : errors;
+                            div(class = "button-row") {
+                                : signup_button;
+                            }
+                        } else {
+                            @let mut errors = Vec::new();
+                            : full_form(uri!(signup_for_match(data.series, &*data.event, race_id)), csrf.as_ref(), html! {
+                                input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                @if active_languages.len() > 1 {
+                                    input(type = "hidden", name = "lang", value = current_language.short_code());
+                                }
+                                : form_field("notes", &mut errors, html! {
+                                    label(for = "notes") : "Notes:";
+                                    input(type = "text", name = "notes", id = "notes", maxlength = "60", size = "30", placeholder = "Optional notes for organizers");
+                                });
+                            }, errors, &format!("Sign up for {}", binding.role_type_name));
+                        }
+                        @if let Some(reason) = reason {
+                            p(class = "disabled-reason") : reason;
+                        }
+                    } else if binding.auto_approve {
+                        // Auto-approve binding: offer the signup form directly — the POST handler
+                        // will create an approved role request atomically with the signup.
+                        @let errors = Vec::new();
+                        @let max_reached = confirmed_signups.len() as i32 >= binding.max_count;
+                        @let is_async = matches!(race.schedule, RaceSchedule::Async { .. });
+                        @let is_ended = race.is_ended();
+                        @let disabled = max_reached || is_async || is_ended;
+                        @let reason = if max_reached {
+                            Some("Maximum number of volunteers reached for this role.")
+                        } else if is_async {
+                            Some("Signups are not available for async races.")
+                        } else if is_ended {
+                            Some("This race has ended and can no longer accept signups.")
+                        } else {
+                            None
+                        };
+                        p(class = "auto-approve-note") : "This role is open to all volunteers — signing up will automatically enroll you.";
                         @if disabled {
                             @let (errors, signup_button) = button_form_ext_disabled(
                                 uri!(signup_for_match(data.series, &*data.event, race_id)),

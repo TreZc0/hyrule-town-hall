@@ -3399,12 +3399,34 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             Vec::new()
                         };
 
-                        if approved_requests.is_empty() {
+                        // Get role bindings and current signups for this race (needed for both
+                        // the approved-roles path and the auto-approve path below)
+                        let bindings = event::roles::EffectiveRoleBinding::for_event(&mut transaction, race.series, &race.event).await?;
+                        let signups = event::roles::Signup::for_race(&mut transaction, race_id).await?;
+
+                        // Auto-approve bindings the user can sign up for directly (no prior role
+                        // request needed): not disabled, slot available, not already signed up,
+                        // and user has no pending/approved request for them yet.
+                        let auto_approve_bindings: Vec<&event::roles::EffectiveRoleBinding> = bindings.iter()
+                            .filter(|b| b.auto_approve && !b.is_disabled)
+                            .filter(|b| !approved_requests.iter().any(|r| r.role_binding_id == b.id))
+                            .filter(|b| !signups.iter().any(|s|
+                                s.user_id == user.id &&
+                                s.role_binding_id == b.id &&
+                                matches!(s.status, event::roles::VolunteerSignupStatus::Pending | event::roles::VolunteerSignupStatus::Confirmed)
+                            ))
+                            .filter(|b| {
+                                let confirmed = signups.iter()
+                                    .filter(|s| s.role_binding_id == b.id && matches!(s.status, event::roles::VolunteerSignupStatus::Confirmed))
+                                    .count() as i32;
+                                confirmed < b.max_count
+                            })
+                            .collect();
+
+                        if approved_requests.is_empty() && auto_approve_bindings.is_empty() {
                             let apply_url = if uses_custom_bindings {
-                                // Event uses custom role bindings - send to event volunteer page
                                 format!("{}/event/{}/{}/volunteer-roles", base_uri(), race.series.slug(), race.event)
                             } else if let Some(ref game) = game {
-                                // Event uses game-level bindings - send to game page
                                 format!("{}/games/{}", base_uri(), game.name)
                             } else {
                                 format!("{}/games", base_uri())
@@ -3421,21 +3443,15 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             return Ok(());
                         }
 
-                        // Get role bindings and current signups for this race
-                        let bindings = event::roles::EffectiveRoleBinding::for_event(&mut transaction, race.series, &race.event).await?;
-                        let signups = event::roles::Signup::for_race(&mut transaction, race_id).await?;
-
-                        // Build buttons for each approved role that's still available
+                        // Build buttons: approved roles first, then auto-approve eligible roles
                         let mut buttons = Vec::new();
                         for request in &approved_requests {
-                            // Find the matching binding
                             let binding = bindings.iter().find(|b| b.id == request.role_binding_id);
                             if let Some(binding) = binding {
                                 if binding.is_disabled {
                                     continue;
                                 }
 
-                                // Check if already signed up for this role (only count active signups)
                                 let already_signed = signups.iter().any(|s|
                                     s.user_id == user.id &&
                                     s.role_binding_id == binding.id &&
@@ -3445,7 +3461,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     continue;
                                 }
 
-                                // Check if role is full (confirmed count >= max)
                                 let confirmed_count = signups.iter()
                                     .filter(|s| s.role_binding_id == binding.id && matches!(s.status, event::roles::VolunteerSignupStatus::Confirmed))
                                     .count() as i32;
@@ -3453,7 +3468,6 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     continue;
                                 }
 
-                                // Add button for this role
                                 let label = format!("{} [{}]", binding.role_type_name, binding.language.short_code());
                                 buttons.push(
                                     CreateButton::new(format!("volunteer_role_{}_{}", u64::from(race_id), u64::from(binding.id)))
@@ -3461,11 +3475,23 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         .style(ButtonStyle::Success)
                                 );
 
-                                // Discord limit: max 5 buttons per row, we'll use one row
                                 if buttons.len() >= 5 {
                                     break;
                                 }
                             }
+                        }
+
+                        // Add auto-approve buttons (Primary style to distinguish them)
+                        for binding in &auto_approve_bindings {
+                            if buttons.len() >= 5 {
+                                break;
+                            }
+                            let label = format!("{} [{}] ✦", binding.role_type_name, binding.language.short_code());
+                            buttons.push(
+                                CreateButton::new(format!("volunteer_role_{}_{}", u64::from(race_id), u64::from(binding.id)))
+                                    .label(label)
+                                    .style(ButtonStyle::Primary)
+                            );
                         }
 
                         if buttons.is_empty() {
@@ -3478,10 +3504,16 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         }
 
                         // Show role selection
+                        let prompt = if auto_approve_bindings.is_empty() {
+                            "Select the role you want to sign up for:".to_string()
+                        } else {
+                            "Select the role you want to sign up for. Roles marked ✦ will automatically enroll you:".to_string()
+                        };
+
                         interaction.create_response(ctx, CreateInteractionResponse::Message(
                             CreateInteractionResponseMessage::new()
                                 .ephemeral(true)
-                                .content("Select the role you want to sign up for:")
+                                .content(prompt)
                                 .components(vec![CreateActionRow::Buttons(buttons)])
                         )).await?;
 
@@ -3568,12 +3600,22 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         ).await?;
 
                         if !has_approval {
-                            interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content("You don't have permission for this role.")
-                            )).await?;
-                            return Ok(());
+                            // Check if the binding is auto-approve — if so, create/upgrade the
+                            // role request right here so the signup can proceed atomically.
+                            let auto_approved = event::roles::RoleRequest::ensure_approved_for_auto_approve(
+                                &mut transaction,
+                                binding_id,
+                                user.id,
+                            ).await?;
+
+                            if auto_approved.is_none() {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("You don't have permission for this role.")
+                                )).await?;
+                                return Ok(());
+                            }
                         }
 
                         // Check if already signed up
