@@ -17,6 +17,8 @@ use {
     },
 };
 
+pub(crate) static SYNC_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 // ============================================================================
 // Error Types
 // ============================================================================
@@ -784,7 +786,7 @@ pub(crate) async fn export_race(
     export: &ExportConfig,
     backend: &RestreamingBackend,
     event_display_name: &str,
-) -> Result<String, Error> {
+) -> Result<(), Error> {
     let RaceSchedule::Live { start, .. } = race.schedule else {
         return Err(Error::NotLive);
     };
@@ -839,46 +841,37 @@ pub(crate) async fn export_race(
         }
     };
 
-    // Find existing row or get next available
-    let existing_export = RaceExport::find(transaction, race.id, export.id).await?;
+    // Always check the sheet directly for an existing row with this export ID.
+    // This correctly handles both normal updates and cases where the DB tracking
+    // record was lost (e.g., transaction rollback after a transient Sheets 503 error)
+    // — without this, a lost DB record causes a duplicate row to be inserted on the
+    // next sync run even though the original row is still in the sheet.
+    let id_col_range = format!("'Restream Signups'!{}:{}", backend.hth_export_id_col, backend.hth_export_id_col);
+    let id_values = sheets::read_values_uncached(http_client, &backend.google_sheet_id, &id_col_range).await?;
+    let row_num = id_values.iter().enumerate()
+        .find(|(_, row)| row.get(0).map_or(false, |cell| cell == &export_id))
+        .map(|(idx, _)| idx + 1); // 1-indexed
 
-    if let Some(existing) = &existing_export {
-        // Update existing row - find row by HTH Export ID
-        let id_col_range = format!("'Restream Signups'!{}:{}", backend.hth_export_id_col, backend.hth_export_id_col);
-        let id_values = sheets::read_values_uncached(http_client, &backend.google_sheet_id, &id_col_range).await?;
-
-        let mut row_num = None;
-        for (idx, row) in id_values.iter().enumerate() {
-            if let Some(cell) = row.get(0) {
-                if cell == &existing.sheet_row_id {
-                    row_num = Some(idx + 1); // 1-indexed
-                    break;
-                }
-            }
+    if let Some(row) = row_num {
+        // Update existing row
+        let mut updates = vec![
+            (format!("'Restream Signups'!A{}", row), vec![vec![utc_date]]),
+            (format!("'Restream Signups'!B{}", row), vec![vec![format!("=IF(A{}=\"\",\"\",TEXT(A{},\"ddd\"))", row, row)]]),
+            (format!("'Restream Signups'!C{}", row), vec![vec![dst_formula.replace("{row}", &row.to_string())]]),
+            (format!("'Restream Signups'!D{}", row), vec![vec![format!("=IF(C{}=\"\",\"\",TEXT(C{},\"ddd\"))", row, row)]]),
+            (format!("'Restream Signups'!E{}", row), vec![vec![title]]),
+            (format!("'Restream Signups'!F{}", row), vec![vec![estimate.clone()]]),
+            (format!("'Restream Signups'!G{}", row), vec![vec![format_runner_count(race)]]),
+            (format!("'Restream Signups'!{}{}", backend.commentators_col, row), vec![vec![commentators.join(", ")]]),
+            (format!("'Restream Signups'!{}{}", backend.trackers_col, row), vec![vec![trackers.join(", ")]]),
+            (format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row), vec![vec![export_id.clone()]]),
+        ];
+        if let (Some(restream_channel_col), Some(alias)) = (&backend.restream_channel_col, &restream_channel) {
+            updates.push((format!("'Restream Signups'!{}{}", restream_channel_col, row), vec![vec![alias.clone()]]));
         }
-
-        if let Some(row) = row_num {
-            // Build batch update
-            let mut updates = vec![
-                (format!("'Restream Signups'!A{}", row), vec![vec![utc_date]]),
-                (format!("'Restream Signups'!B{}", row), vec![vec![format!("=IF(A{}=\"\",\"\",TEXT(A{},\"ddd\"))", row, row)]]),
-                (format!("'Restream Signups'!C{}", row), vec![vec![dst_formula.replace("{row}", &row.to_string())]]),
-                (format!("'Restream Signups'!D{}", row), vec![vec![format!("=IF(C{}=\"\",\"\",TEXT(C{},\"ddd\"))", row, row)]]),
-                (format!("'Restream Signups'!E{}", row), vec![vec![title]]),
-                (format!("'Restream Signups'!F{}", row), vec![vec![estimate.clone()]]),
-                (format!("'Restream Signups'!G{}", row), vec![vec![format_runner_count(race)]]),
-                (format!("'Restream Signups'!{}{}", backend.commentators_col, row), vec![vec![commentators.join(", ")]]),
-                (format!("'Restream Signups'!{}{}", backend.trackers_col, row), vec![vec![trackers.join(", ")]]),
-                (format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row), vec![vec![export_id.clone()]]),
-            ];
-            if let (Some(restream_channel_col), Some(alias)) = (&backend.restream_channel_col, &restream_channel) {
-                updates.push((format!("'Restream Signups'!{}{}", restream_channel_col, row), vec![vec![alias.clone()]]));
-            }
-
-            sheets::batch_update_values(http_client, &backend.google_sheet_id, updates).await?;
-        }
+        sheets::batch_update_values(http_client, &backend.google_sheet_id, updates).await?;
     } else {
-        // Insert a new row at position 4 (after the header rows)
+        // No existing row found — insert a new one at position 4 (after header rows)
         let sheet_id = sheets::get_sheet_id(http_client, &backend.google_sheet_id, "Restream Signups").await?;
         sheets::insert_row_at(http_client, &backend.google_sheet_id, sheet_id, 4).await?;
 
@@ -889,6 +882,7 @@ pub(crate) async fn export_race(
             (format!("'Restream Signups'!C{}", row), vec![vec![dst_formula.replace("{row}", &row.to_string())]]),
             (format!("'Restream Signups'!D{}", row), vec![vec![format!("=IF(C{}=\"\",\"\",TEXT(C{},\"ddd\"))", row, row)]]),
             (format!("'Restream Signups'!E{}", row), vec![vec![title]]),
+            (format!("'Restream Signups'!F{}", row), vec![vec![estimate.clone()]]),
             (format!("'Restream Signups'!G{}", row), vec![vec![format_runner_count(race)]]),
             (format!("'Restream Signups'!{}{}", backend.commentators_col, row), vec![vec![commentators.join(", ")]]),
             (format!("'Restream Signups'!{}{}", backend.trackers_col, row), vec![vec![trackers.join(", ")]]),
@@ -899,21 +893,16 @@ pub(crate) async fn export_race(
         }
         sheets::batch_update_values(http_client, &backend.google_sheet_id, updates).await?;
 
-        // Record the export before sorting so it's never lost if the sort fails
-        RaceExport::upsert(transaction, race.id, export.id, &export_id).await?;
-
         // Sort rows from row 4 onwards by date in column A (non-fatal)
         if let Err(e) = sheets::sort_rows_by_column_a(http_client, &backend.google_sheet_id, sheet_id, 4).await {
             eprintln!("ZSR Export: sort after insert failed: {}", e);
         }
-
-        return Ok(export_id);
     }
 
-    // Record the export
+    // Record the export (always, whether insert or update path was taken)
     RaceExport::upsert(transaction, race.id, export.id, &export_id).await?;
 
-    Ok(export_id)
+    Ok(())
 }
 
 /// Remove a race from a Google Sheet
@@ -1028,6 +1017,9 @@ pub(crate) async fn check_and_sync_all_exports(
     pool: &PgPool,
     http_client: &reqwest::Client,
 ) -> Result<(), Error> {
+    // Skip this run if a manual sync (or a previous background run) is still in progress.
+    let Ok(_guard) = SYNC_LOCK.try_lock() else { return Ok(()) };
+
     let mut transaction = pool.begin().await?;
 
     let exports = ExportConfig::all_enabled(&mut transaction).await?;
