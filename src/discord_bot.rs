@@ -911,7 +911,9 @@ fn parse_timestamp(timestamp: &str) -> Option<DateTime<Utc>> {
 }
 
 fn parse_natural_language_timestamp(s: &str) -> Option<DateTime<Utc>> {
-    interim::parse_date_string(s, Utc::now(), interim::Dialect::Us).ok()
+    // `interim` doesn't recognize BST (British Summer Time = UTC+1), so normalize it first.
+    let s = regex_replace!(r"\bBST\b", s, "+01:00");
+    interim::parse_date_string(&s, Utc::now(), interim::Dialect::Us).ok()
 }
 
 pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global_state: Arc<GlobalState>, db_pool: PgPool, http_client: reqwest::Client, config: Config, new_room_lock: Arc<Mutex<()>>, clean_shutdown: Arc<Mutex<CleanShutdown>>, shutdown: rocket::Shutdown) -> serenity_utils::Builder {
