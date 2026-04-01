@@ -841,11 +841,13 @@ pub(crate) async fn export_race(
         }
     };
 
-    // Always check the sheet directly for an existing row with this export ID.
-    // This correctly handles both normal updates and cases where the DB tracking
-    // record was lost (e.g., transaction rollback after a transient Sheets 503 error)
-    // — without this, a lost DB record causes a duplicate row to be inserted on the
-    // next sync run even though the original row is still in the sheet.
+    // Check whether this race already has a DB tracking record.
+    let existing_export = RaceExport::find(transaction, race.id, export.id).await?;
+
+    // Always read the sheet to find the current row position. We use the sheet as
+    // the authoritative source for whether a row exists, which handles the case where
+    // the DB tracking record was lost (e.g. a transaction rollback after a transient
+    // Sheets 503 error left a row in the sheet but no DB record).
     let id_col_range = format!("'Restream Signups'!{}:{}", backend.hth_export_id_col, backend.hth_export_id_col);
     let id_values = sheets::read_values_uncached(http_client, &backend.google_sheet_id, &id_col_range).await?;
     let row_num = id_values.iter().enumerate()
@@ -853,7 +855,9 @@ pub(crate) async fn export_race(
         .map(|(idx, _)| idx + 1); // 1-indexed
 
     if let Some(row) = row_num {
-        // Update existing row
+        // Row found in the sheet — update it in place.
+        // This handles both the normal update path and orphaned rows from previously
+        // failed inserts that never got a DB record written.
         let mut updates = vec![
             (format!("'Restream Signups'!A{}", row), vec![vec![utc_date]]),
             (format!("'Restream Signups'!B{}", row), vec![vec![format!("=IF(A{}=\"\",\"\",TEXT(A{},\"ddd\"))", row, row)]]),
@@ -870,8 +874,10 @@ pub(crate) async fn export_race(
             updates.push((format!("'Restream Signups'!{}{}", restream_channel_col, row), vec![vec![alias.clone()]]));
         }
         sheets::batch_update_values(http_client, &backend.google_sheet_id, updates).await?;
-    } else {
-        // No existing row found — insert a new one at position 4 (after header rows)
+    } else if existing_export.is_none() {
+        // Row not in sheet and no DB record — this is a genuinely new race.
+        // (If the DB record exists but the row is gone, the row was intentionally
+        // deleted from the sheet after the race ended — don't re-insert it.)
         let sheet_id = sheets::get_sheet_id(http_client, &backend.google_sheet_id, "Restream Signups").await?;
         sheets::insert_row_at(http_client, &backend.google_sheet_id, sheet_id, 4).await?;
 
@@ -899,7 +905,7 @@ pub(crate) async fn export_race(
         }
     }
 
-    // Record the export (always, whether insert or update path was taken)
+    // Record the export (always, for all three paths above)
     RaceExport::upsert(transaction, race.id, export.id, &export_id).await?;
 
     Ok(())
@@ -976,6 +982,14 @@ pub(crate) async fn sync_all_races(
                 continue;
             }
         };
+
+        // Skip races that have already been running for more than 30 minutes — leave
+        // any existing sheet row as-is (the sheet is an upcoming-races list, not a results list)
+        if let RaceSchedule::Live { start, .. } = race.schedule {
+            if start < Utc::now() - chrono::Duration::minutes(30) {
+                continue;
+            }
+        }
 
         // Check if race should be removed
         if should_remove_race(&race) {
