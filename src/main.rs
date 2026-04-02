@@ -411,7 +411,7 @@ async fn zsr_export_manager(
     http_client: reqwest::Client,
     shutdown: rocket::Shutdown,
 ) -> Result<(), Error> {
-    let mut interval = tokio::time::interval(Duration::from_secs(5 * 60)); // Check every 5 minutes
+    let mut interval = tokio::time::interval(Duration::from_secs(10 * 60)); // Check every 10 minutes
 
     loop {
         tokio::select! {
