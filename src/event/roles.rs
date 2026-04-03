@@ -1535,7 +1535,7 @@ async fn roles_page(
                                             }
                                             @if !uses_custom_bindings {
                                                 @let is_disabled = EventDisabledRoleBinding::exists_for_binding(&mut transaction, data.series, &data.event, binding.id).await?;
-                                                div(style = "display: flex; justify-content: center; gap: 8px; flex-wrap: wrap;") {
+                                                div(class = "actions", style = "display: flex; justify-content: center; gap: 8px; flex-wrap: wrap;") {
                                                     @if is_disabled {
                                                         @let (errors, enable_button) = button_form(
                                                             uri!(enable_role_binding(data.series, &*data.event, binding.id)),
