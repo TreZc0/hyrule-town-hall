@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO event_discord_role_overrides (series, event, role_binding_id, discord_role_id)\n               VALUES ($1, $2, $3, $4) RETURNING id",
+  "query": "INSERT INTO role_requests (role_binding_id, user_id, notes, status)\n                           VALUES ($1, $2, '', 'approved') RETURNING id",
   "describe": {
     "columns": [
       {
@@ -11,8 +11,6 @@
     ],
     "parameters": {
       "Left": [
-        "Varchar",
-        "Varchar",
         "Int4",
         "Int8"
       ]
@@ -21,5 +19,5 @@
       false
     ]
   },
-  "hash": "f601b41e94fb955a6cdbc22eea0874e2709a2f30ed6a7074f306a88cd7ca4955"
+  "hash": "8db6cefae69f31f071276aa53fe830d3ce07986885ffba7a4df2496e53b48214"
 }

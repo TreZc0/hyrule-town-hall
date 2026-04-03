@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id: PgSnowflake<RoleId>\" FROM discord_roles WHERE guild = $1 AND racetime_team IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: PgSnowflake<RoleId>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "51d737c8b17c19508ae6d5d9802e9cb2a0b68c00939ff19b119d2a1fec3e43aa"
+}

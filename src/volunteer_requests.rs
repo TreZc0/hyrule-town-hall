@@ -36,6 +36,7 @@ struct RoleNeed {
     min_count: i32,
     max_count: i32,
     language: Language,
+    is_full: bool,
 }
 
 /// Represents a match that needs volunteers, with details about which roles need filling.
@@ -252,43 +253,9 @@ async fn post_volunteer_requests_for_event(
             let role_bindings = EffectiveRoleBinding::for_event(&mut *transaction, event_data.series, &event_data.event).await?;
             let signups = Signup::for_race(&mut *transaction, *rid).await?;
 
-            let mut role_needs = Vec::new();
-            for binding in &role_bindings {
-                if binding.is_disabled {
-                    continue;
-                }
+            let (role_needs, has_any_need) = collect_role_needs_for_bindings(&mut *transaction, &role_bindings, &signups).await?;
 
-                let confirmed_signups: Vec<_> = signups.iter()
-                    .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Confirmed))
-                    .collect();
-                let confirmed_count = confirmed_signups.len() as i32;
-
-                let mut confirmed_names = Vec::new();
-                for signup in &confirmed_signups {
-                    if let Ok(Some(user)) = User::from_id(&mut **transaction, signup.user_id).await {
-                        confirmed_names.push(user.display_name().to_owned());
-                    }
-                }
-
-                let pending_count = signups.iter()
-                    .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Pending))
-                    .count() as i32;
-
-                if confirmed_count < binding.max_count || pending_count > 0 {
-                    role_needs.push(RoleNeed {
-                        role_name: binding.role_type_name.clone(),
-                        discord_role_id: binding.discord_role_id,
-                        confirmed_names,
-                        confirmed_count,
-                        pending_count,
-                        min_count: binding.min_count,
-                        max_count: binding.max_count,
-                        language: binding.language,
-                    });
-                }
-            }
-
-            if !role_needs.is_empty() {
+            if has_any_need {
                 all_needs.push(RaceVolunteerNeed {
                     race,
                     matchup,
@@ -411,48 +378,7 @@ async fn get_races_needing_announcements(
         let role_bindings = EffectiveRoleBinding::for_event(&mut *transaction, series, event).await?;
         let signups = Signup::for_race(&mut *transaction, race_id).await?;
 
-        let mut role_needs = Vec::new();
-        let mut has_any_need = false;
-
-        for binding in &role_bindings {
-            if binding.is_disabled {
-                continue;
-            }
-
-            // Get confirmed signups for this role
-            let confirmed_signups: Vec<_> = signups.iter()
-                .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Confirmed))
-                .collect();
-            let confirmed_count = confirmed_signups.len() as i32;
-
-            // Get names of confirmed volunteers
-            let mut confirmed_names = Vec::new();
-            for signup in &confirmed_signups {
-                if let Ok(Some(user)) = User::from_id(&mut **transaction, signup.user_id).await {
-                    confirmed_names.push(user.display_name().to_owned());
-                }
-            }
-
-            // Count pending volunteers for this role
-            let pending_count = signups.iter()
-                .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Pending))
-                .count() as i32;
-
-            // Check if volunteers are needed
-            if confirmed_count < binding.max_count {
-                role_needs.push(RoleNeed {
-                    role_name: binding.role_type_name.clone(),
-                    discord_role_id: binding.discord_role_id,
-                    confirmed_names,
-                    confirmed_count,
-                    pending_count,
-                    min_count: binding.min_count,
-                    max_count: binding.max_count,
-                    language: binding.language,
-                });
-                has_any_need = true;
-            }
-        }
+        let (role_needs, has_any_need) = collect_role_needs_for_bindings(&mut *transaction, &role_bindings, &signups).await?;
 
         if has_any_need {
             needs.push(RaceVolunteerNeed {
@@ -549,6 +475,60 @@ fn format_date_range(start: DateTime<Utc>, end: DateTime<Utc>) -> String {
     }
 }
 
+/// Builds the role needs list for a set of role bindings and signups.
+/// Always includes all non-disabled roles; `is_full` marks roles at capacity.
+/// Returns `(role_needs, has_any_need)` where `has_any_need` is true if any role is not full.
+async fn collect_role_needs_for_bindings(
+    transaction: &mut Transaction<'_, Postgres>,
+    role_bindings: &[EffectiveRoleBinding],
+    signups: &[Signup],
+) -> Result<(Vec<RoleNeed>, bool), sqlx::Error> {
+    let mut role_needs = Vec::new();
+    let mut has_any_need = false;
+
+    for binding in role_bindings {
+        if binding.is_disabled {
+            continue;
+        }
+
+        let confirmed_signups: Vec<_> = signups.iter()
+            .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Confirmed))
+            .collect();
+        let confirmed_count = confirmed_signups.len() as i32;
+
+        let mut confirmed_names = Vec::new();
+        for signup in &confirmed_signups {
+            if let Ok(Some(user)) = User::from_id(&mut **transaction, signup.user_id).await {
+                confirmed_names.push(user.display_name().to_owned());
+            }
+        }
+
+        let pending_count = signups.iter()
+            .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Pending))
+            .count() as i32;
+
+        let is_full = confirmed_count >= binding.max_count;
+
+        role_needs.push(RoleNeed {
+            role_name: binding.role_type_name.clone(),
+            discord_role_id: binding.discord_role_id,
+            confirmed_names,
+            confirmed_count,
+            pending_count,
+            min_count: binding.min_count,
+            max_count: binding.max_count,
+            language: binding.language,
+            is_full,
+        });
+
+        if !is_full {
+            has_any_need = true;
+        }
+    }
+
+    Ok((role_needs, has_any_need))
+}
+
 /// Builds the content and components for a volunteer announcement message.
 /// Returns (content_string, components_vec).
 fn build_announcement_content(
@@ -618,21 +598,29 @@ fn build_announcement_content(
                 msg.push("- ");
                 msg.push(&role_need.role_name);
                 msg.push(": ");
-                if !role_need.confirmed_names.is_empty() {
-                    msg.push(&role_need.confirmed_names.join(", "));
-                    msg.push(" ");
+                if role_need.is_full {
+                    if !role_need.confirmed_names.is_empty() {
+                        msg.push(&role_need.confirmed_names.join(", "));
+                        msg.push(" ");
+                    }
+                    msg.push("(**Full**)");
                 } else {
-                    msg.push("none yet ");
-                }
-                msg.push("(");
-                msg.push(&role_need.confirmed_count.to_string());
-                msg.push("/");
-                msg.push(&role_need.max_count.to_string());
-                msg.push(")");
-                if role_need.pending_count > 0 {
-                    msg.push(" (");
-                    msg.push(&role_need.pending_count.to_string());
-                    msg.push(" pending)");
+                    if !role_need.confirmed_names.is_empty() {
+                        msg.push(&role_need.confirmed_names.join(", "));
+                        msg.push(" ");
+                    } else {
+                        msg.push("none yet ");
+                    }
+                    msg.push("(");
+                    msg.push(&role_need.confirmed_count.to_string());
+                    msg.push("/");
+                    msg.push(&role_need.max_count.to_string());
+                    msg.push(")");
+                    if role_need.pending_count > 0 {
+                        msg.push(" (");
+                        msg.push(&role_need.pending_count.to_string());
+                        msg.push(" pending)");
+                    }
                 }
                 msg.push("\n");
             }
@@ -791,50 +779,9 @@ pub(crate) async fn update_volunteer_post_for_race(
         let role_bindings = EffectiveRoleBinding::for_event(&mut transaction, race_info.series, &race_info.event).await?;
         let signups = Signup::for_race(&mut transaction, *rid).await?;
 
-        let mut role_needs = Vec::new();
-        let mut has_any_need = false;
+        let (role_needs, has_any_need) = collect_role_needs_for_bindings(&mut transaction, &role_bindings, &signups).await?;
 
-        for binding in &role_bindings {
-            if binding.is_disabled {
-                continue;
-            }
-
-            // Get confirmed signups for this role
-            let confirmed_signups: Vec<_> = signups.iter()
-                .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Confirmed))
-                .collect();
-            let confirmed_count = confirmed_signups.len() as i32;
-
-            // Get names of confirmed volunteers
-            let mut confirmed_names = Vec::new();
-            for signup in &confirmed_signups {
-                if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
-                    confirmed_names.push(user.display_name().to_owned());
-                }
-            }
-
-            // Count pending volunteers for this role
-            let pending_count = signups.iter()
-                .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Pending))
-                .count() as i32;
-
-            // Check if volunteers are needed (or if there are any signups to show)
-            if confirmed_count < binding.max_count || pending_count > 0 {
-                role_needs.push(RoleNeed {
-                    role_name: binding.role_type_name.clone(),
-                    discord_role_id: binding.discord_role_id,
-                    confirmed_names,
-                    confirmed_count,
-                    pending_count,
-                    min_count: binding.min_count,
-                    max_count: binding.max_count,
-                    language: binding.language,
-                });
-                has_any_need = true;
-            }
-        }
-
-        if has_any_need || !role_needs.is_empty() {
+        if has_any_need {
             needs.push(RaceVolunteerNeed {
                 race,
                 matchup,
@@ -1015,38 +962,9 @@ pub(crate) async fn update_volunteer_post_by_message_id(
         let role_bindings = EffectiveRoleBinding::for_event(&mut transaction, series, event).await?;
         let signups = Signup::for_race(&mut transaction, *rid).await?;
 
-        let mut role_needs = Vec::new();
-        let mut has_any_need = false;
-        for binding in &role_bindings {
-            if binding.is_disabled { continue; }
-            let confirmed_signups: Vec<_> = signups.iter()
-                .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Confirmed))
-                .collect();
-            let confirmed_count = confirmed_signups.len() as i32;
-            let mut confirmed_names = Vec::new();
-            for signup in &confirmed_signups {
-                if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
-                    confirmed_names.push(user.display_name().to_owned());
-                }
-            }
-            let pending_count = signups.iter()
-                .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Pending))
-                .count() as i32;
-            if confirmed_count < binding.max_count || pending_count > 0 {
-                role_needs.push(RoleNeed {
-                    role_name: binding.role_type_name.clone(),
-                    discord_role_id: binding.discord_role_id,
-                    confirmed_names,
-                    confirmed_count,
-                    pending_count,
-                    min_count: binding.min_count,
-                    max_count: binding.max_count,
-                    language: binding.language,
-                });
-                has_any_need = true;
-            }
-        }
-        if has_any_need || !role_needs.is_empty() {
+        let (role_needs, has_any_need) = collect_role_needs_for_bindings(&mut transaction, &role_bindings, &signups).await?;
+
+        if has_any_need {
             needs.push(RaceVolunteerNeed { race, matchup, role_needs });
         }
     }

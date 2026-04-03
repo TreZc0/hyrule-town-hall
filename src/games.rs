@@ -561,7 +561,11 @@ pub(crate) async fn manage_roles(
                     }
                     tbody {
                         @for binding in &filtered_bindings {
-                            tr(data_binding_id = binding.id.to_string()) {
+                            tr(
+                                data_binding_id = binding.id.to_string(),
+                                data_save_path = format!("/games/{}/roles/binding/{}/edit", game_name, binding.id),
+                                data_delete_path = format!("/games/{}/role-bindings/{}/remove", game_name, binding.id)
+                            ) {
                                 td(class = "role-type") : binding.role_type_name;
                                 td(class = "min-count", data_value = binding.min_count.to_string()) : binding.min_count;
                                 td(class = "max-count", data_value = binding.max_count.to_string()) : binding.max_count;
@@ -936,7 +940,7 @@ pub(crate) async fn manage_roles(
                 });
             }, ping_errors, "Add Game Ping Workflow");
 
-            script(src = static_url!("game-role-binding-edit.js")) {}
+            script(src = static_url!("role-binding-edit.js")) {}
             script(src = static_url!("ping-workflow-edit.js")) {}
         }
     };
