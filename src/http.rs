@@ -201,11 +201,11 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                                     }
                                     br;
                                     //TODO link to preferences
-                                    @if u64::from(me.id) == 16287394041462225947_u64 {
+                                    @if me.is_global_admin() {
                                         a(href = uri!(admin::index)) : "Admin";
                                         br;
                                     }
-                                    @if u64::from(me.id) == 16287394041462225947_u64 {
+                                    @if me.is_global_admin() {
                                         a(href = uri!(admin::game_management_overview)) : "Game Management";
                                         br;
                                     }
@@ -733,9 +733,8 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::roles::revoke_signup,
         event::roles::revoke_role_request,
         event::roles::match_signup_page_get,
-        event::roles::add_discord_override,
-        event::roles::add_discord_override_from_form_data,
-        event::roles::delete_discord_override,
+        event::roles::upsert_role_binding_override,
+        event::roles::delete_role_binding_override,
         event::roles::disable_role_binding,
         event::roles::enable_role_binding,
         event::roles::copy_volunteers_from_event,
@@ -765,17 +764,13 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         seed::get,
         user::profile,
         admin::index,
-        admin::manage_game,
         admin::add_game_form,
         admin::add_game_post,
+        admin::edit_game,
         admin::manage_game_admins,
         admin::add_game_admin,
         admin::remove_game_admin,
-        admin::manage_game_series,
         admin::game_management_overview,
-        admin::game_management,
-        admin::add_game_role_binding,
-        admin::remove_game_role_binding,
         games::list,
         games::get,
         games::manage_admins,

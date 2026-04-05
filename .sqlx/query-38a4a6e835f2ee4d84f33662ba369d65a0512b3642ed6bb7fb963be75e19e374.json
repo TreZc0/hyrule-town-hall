@@ -21,7 +21,19 @@
       {
         "ordinal": 3,
         "name": "status: RoleRequestStatus",
-        "type_info": "Varchar"
+        "type_info": {
+          "Custom": {
+            "name": "role_request_status",
+            "kind": {
+              "Enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "aborted"
+              ]
+            }
+          }
+        }
       },
       {
         "ordinal": 4,

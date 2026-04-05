@@ -572,6 +572,7 @@ pub(crate) async fn sync_export(
     form.verify(&csrf);
 
     if form.value.is_some() {
+        let _guard = zsr_export::SYNC_LOCK.lock().await;
         let mut transaction = pool.begin().await?;
 
         let export = ExportConfig::from_id(&mut transaction, export_id).await?
@@ -607,6 +608,7 @@ pub(crate) async fn sync_all(
     form.verify(&csrf);
 
     if form.value.is_some() {
+        let _guard = zsr_export::SYNC_LOCK.lock().await;
         let mut transaction = pool.begin().await?;
 
         let exports = ExportConfig::for_event(&mut transaction, series, event).await?;

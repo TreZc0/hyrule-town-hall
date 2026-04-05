@@ -87,11 +87,11 @@ impl Table for Signups {
     }
 }
 
-pub(crate) enum EventDiscordRoleOverrides {}
+pub(crate) enum EventRoleBindingOverrides {}
 
-impl Table for EventDiscordRoleOverrides {
+impl Table for EventRoleBindingOverrides {
     fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
-        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM event_discord_role_overrides WHERE id = $1) AS "exists!""#, id as i32)
+        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM event_role_binding_overrides WHERE id = $1) AS "exists!""#, id as i32)
     }
 }
 

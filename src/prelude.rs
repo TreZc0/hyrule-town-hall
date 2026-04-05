@@ -77,6 +77,7 @@ pub(crate) use {
     lazy_regex::{
         regex_captures,
         regex_is_match,
+        regex_replace,
     },
     log_lock::*,
     nonempty_collections::{
