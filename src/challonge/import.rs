@@ -42,7 +42,7 @@ pub(crate) async fn fetch_participants(
         }).await?;
         if resp.data.is_empty() { break }
         all.extend(resp.data);
-        next_url = resp.links.next;
+        next_url = resp.links.next.filter(|next| next != &url);
     }
     client::store_participants(community, tournament, all.clone()).await;
     Ok(all)
@@ -77,7 +77,7 @@ pub(crate) async fn fetch_matches(
         }).await?;
         if resp.data.is_empty() { break }
         all.extend(resp.data);
-        next_url = resp.links.next;
+        next_url = resp.links.next.filter(|next| next != &url);
     }
     client::store_matches(community, tournament, state, all.clone()).await;
     Ok(all)

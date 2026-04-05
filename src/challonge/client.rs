@@ -58,7 +58,7 @@ where
     Fut: Future<Output = Result<T, Error>>,
 {
     let mut limiter = RATE_LIMITER.lock().await;
-    if limiter.daily_reset.elapsed() >= Duration::ZERO {
+    if Instant::now() >= limiter.daily_reset {
         limiter.daily_count = 0;
         limiter.daily_reset = Instant::now() + Duration::from_secs(24 * 60 * 60);
     }
