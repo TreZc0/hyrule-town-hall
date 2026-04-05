@@ -726,6 +726,7 @@ impl Race {
             | Series::TournoiFrancophone
             | Series::TriforceBlitz
             | Series::WeTryToBeBetter
+            | Series::Wolfdash
                 => {} // these series are now scheduled via Mido's House
         }
         races.retain(|race| !race.ignored);

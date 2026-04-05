@@ -314,6 +314,7 @@ pub(crate) enum Goal {
     TwwrMainMiniblins26,
     WeTryToBeBetterS1,
     WeTryToBeBetterS2,
+    WolfdashS5,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -369,6 +370,7 @@ impl Goal {
             Self::TwwrMainMiniblins26 => series == Series::TwwrMain && event == "miniblins26",
             Self::WeTryToBeBetterS1 => series == Series::WeTryToBeBetter && event == "1",
             Self::WeTryToBeBetterS2 => series == Series::WeTryToBeBetter && event == "2",
+            Self::WolfdashS5 => series == Series::Wolfdash && event == "5",
         }
     }
 
@@ -410,6 +412,7 @@ impl Goal {
             | Self::TriforceBlitzProgressionSpoiler
             | Self::WeTryToBeBetterS1
             | Self::WeTryToBeBetterS2
+            | Self::WolfdashS5
                 => true,
         }
     }
@@ -449,6 +452,7 @@ impl Goal {
             Self::TwwrMainMiniblins26 => "Miniblins",
             Self::WeTryToBeBetterS1 => "WeTryToBeBetter",
             Self::WeTryToBeBetterS2 => "WeTryToBeBetter Season 2",
+            Self::WolfdashS5 => "Wolfdash Season 5",
         }
     }
 
@@ -483,6 +487,7 @@ impl Goal {
             | Self::TriforceBlitzProgressionSpoiler
             | Self::TwwrMainWeekly
             | Self::TwwrMainMiniblins26
+            | Self::WolfdashS5
                 => English,
             | Self::TournoiFrancoS4
             | Self::TournoiFrancoS5
@@ -545,6 +550,7 @@ impl Goal {
             | Self::TwwrMainMiniblins26
             | Self::WeTryToBeBetterS1
             | Self::WeTryToBeBetterS2
+            | Self::WolfdashS5
                 => None,
         }
     }
@@ -585,6 +591,7 @@ impl Goal {
             | Self::WeTryToBeBetterS2
             | Self::TwwrMainWeekly
             | Self::TwwrMainMiniblins26
+            | Self::WolfdashS5
                 => PrerollMode::Medium,
             | Self::MixedPoolsS2
             | Self::MixedPoolsS3
@@ -605,7 +612,7 @@ impl Goal {
 
     pub(crate) fn requires_seed(&self) -> bool {
         const NO_SEED_GOALS: &[Goal] = &[
-            // Goal::OotSpeedrunAny,
+            Goal::WolfdashS5,
         ];
 
         !NO_SEED_GOALS.contains(self)
@@ -655,6 +662,7 @@ impl Goal {
                 | Self::MysteryD20
                 | Self::TwwrMainWeekly
                 | Self::TwwrMainMiniblins26
+                | Self::WolfdashS5
                     => UnlockSpoilerLog::Never
             }
         }
@@ -717,6 +725,7 @@ impl Goal {
                 }
             },
             Self::PicRs2 | Self::Rsl => panic!("randomizer version for this goal must be parsed from RSL script"),
+            Self::WolfdashS5 => panic!("randomizer version for this goal is unused"),
         }
     }
 
@@ -752,6 +761,7 @@ impl Goal {
             Self::TriforceBlitz => None, // per-event settings
             Self::TriforceBlitzProgressionSpoiler => Some(tfb::progression_spoiler_settings()),
             Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => None, // handled via settings_string
+            Self::WolfdashS5 => None, // no seed
             Self::WeTryToBeBetterS1 => Some(wttbb::s1_settings()),
             Self::WeTryToBeBetterS2 => Some(wttbb::s2_settings()),
         }
@@ -863,6 +873,7 @@ impl Goal {
             }
             Self::TriforceBlitzProgressionSpoiler => ctx.say("!seed: The current settings for the mode").await?,
             Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => ctx.say("!seed: The permalink validation hash for the race.").await?,
+            Self::WolfdashS5 => unreachable!("WolfdashS5 does not use seeds"),
         }
         Ok(())
     }
@@ -1419,6 +1430,7 @@ impl Goal {
                 },
                 [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn't quite understand that" },
             },
+            Self::WolfdashS5 => unreachable!("WolfdashS5 does not use seeds"),
         })
     }
 }
@@ -4995,6 +5007,11 @@ impl RaceHandler<GlobalState> for Handler {
                                     }),
                                 ],
                             ).await?,
+                            Goal::WolfdashS5 => ctx.send_message(
+                                "Welcome! This is a practice room for Wolfdash Season 5. Learn more at https://midos.house/event/wolfdash/5",
+                                true,
+                                vec![],
+                            ).await?,
                         },
                         RaceState::Rolled(_) => ctx.say("@entrants I just restarted. You may have to reconfigure !breaks and !fpa. Sorry about that.").await?,
                         RaceState::Draft { .. } | RaceState::Rolling | RaceState::SpoilerSent => unreachable!(),
@@ -5157,6 +5174,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 this.roll_seed(ctx, goal.preroll_seeds(event_id), goal.rando_version(Some(event)), settings, goal.unlock_spoiler_log(true, false), English, "a", format!("weekly seed")).await
                             },
                             Goal::TriforceBlitz => this.roll_tfb_dev_seed(ctx, true, goal.unlock_spoiler_log(true, false), English, "a", format!("Triforce Blitz S4 co-op seed")).await,
+                            Goal::WolfdashS5 => unreachable!("WolfdashS5 does not require a seed"),
                         },
                         RaceState::Draft { state: ref draft_state, .. } => {
                             this.advance_draft(ctx, &state).await?;
@@ -5972,6 +5990,7 @@ impl RaceHandler<GlobalState> for Handler {
                     | Goal::WeTryToBeBetterS2
                     | Goal::TwwrMainWeekly
                     | Goal::TwwrMainMiniblins26
+                    | Goal::WolfdashS5
                         => {}
                 }
             }
