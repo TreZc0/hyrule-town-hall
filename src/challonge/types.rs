@@ -22,6 +22,7 @@ pub(crate) struct Match {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct MatchAttributes {
     /// "pending", "open", "complete"
     pub(crate) state: String,
@@ -65,6 +66,7 @@ pub(crate) struct Participant {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ParticipantAttributes {
     pub(crate) name: String,
     pub(crate) seed: Option<i32>,
