@@ -83,6 +83,43 @@ pub(crate) async fn fetch_matches(
     Ok(all)
 }
 
+/// Creates a participant in a Challonge tournament and returns the participant ID.
+///
+/// If `challonge_username` is provided, the participant is linked to that Challonge account.
+pub(crate) async fn create_participant(
+    http_client: &reqwest::Client,
+    config: &Config,
+    community: Option<&str>,
+    tournament: &str,
+    name: &str,
+    challonge_username: Option<&str>,
+) -> Result<String, Error> {
+    let url = client::tournament_url(community, tournament, "participants");
+    let mut attributes = serde_json::json!({ "name": name });
+    if let Some(username) = challonge_username {
+        attributes["username"] = serde_json::Value::String(username.to_owned());
+    }
+    let payload = serde_json::json!({
+        "data": {
+            "type": "Participants",
+            "attributes": attributes,
+        }
+    });
+    let resp: serde_json::Value = client::rate_limited_request(|| async {
+        Ok(client::api_request(http_client, reqwest::Method::POST, &url, &config.challonge_api_key)
+            .json(&payload)
+            .send().await?
+            .detailed_error_for_status().await?
+            .json_with_text_in_error().await?)
+    }).await?;
+    // Extract participant ID from JSONAPI response: { "data": { "id": "123", ... } }
+    match &resp["data"]["id"] {
+        serde_json::Value::String(s) => Ok(s.clone()),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        _ => panic!("Challonge create participant returned unexpected id format: {resp}"),
+    }
+}
+
 /// Auto-link teams by matching Challonge participant usernames to users' OAuth-linked accounts.
 ///
 /// For each participant with a Challonge `username`, finds the Mido's House user whose

@@ -1634,8 +1634,33 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                             }
                         }
                     }
+                    let challonge_info = if let MatchSource::Challonge { community, tournament } = data.match_source() {
+                        Some((community.map(str::to_owned), tournament.to_owned()))
+                    } else {
+                        None
+                    };
                     let Flow { ref requirements, .. } = data.enter_flow.expect("checked above");
                     for requirement in requirements {
+                        if let Requirement::Challonge = requirement {
+                            if let Some((ref community, ref tournament)) = challonge_info {
+                                let challonge_username = me.challonge_id.as_deref();
+                                let display_name = me.display_name();
+                                match challonge::import::create_participant(
+                                    http_client, config, community.as_deref(), tournament,
+                                    &display_name, challonge_username,
+                                ).await {
+                                    Ok(participant_id) => {
+                                        sqlx::query!(
+                                            "UPDATE teams SET challonge_id = $1 WHERE id = $2",
+                                            participant_id, id as _,
+                                        ).execute(&mut *transaction).await?;
+                                    }
+                                    Err(e) => {
+                                        log::error!("Failed to create Challonge participant for {}: {e}", display_name);
+                                    }
+                                }
+                            }
+                        }
                         if let Requirement::StartGG { optional } = requirement {
                             let discord_ctx = discord_ctx.read().await;
                             if !optional || value.startgg_radio == Some(BoolRadio::Yes) {
