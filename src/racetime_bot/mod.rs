@@ -61,8 +61,8 @@ use {
 #[cfg(unix)] use async_proto::Protocol;
 #[cfg(windows)] use directories::UserDirs;
 
-mod report;
 pub(crate) mod seed_gen_type;
+pub(crate) mod report;
 
 #[cfg(unix)] const PYTHON: &str = "python3";
 #[cfg(windows)] const PYTHON: &str = "py";
