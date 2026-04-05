@@ -145,6 +145,11 @@ pub(crate) async fn index(
                 a(href = uri!(add_game_form)) : "Add New Game";
             }
 
+            h2 : "Events";
+            p {
+                a(href = uri!(crate::event::setup::create_get)) : "Create New Event";
+            }
+
             h2 : "ZSR Restreaming Backends";
             p {
                 a(href = uri!(zsr_backends)) : "Manage ZSR Backends";
