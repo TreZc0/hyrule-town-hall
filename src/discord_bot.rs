@@ -1444,6 +1444,13 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             Ok(())
         }))
         .on_interaction_create(|ctx, interaction| Box::pin(async move {
+            let interaction_desc = match interaction {
+                Interaction::Command(cmd) => format!("slash command `/{}`{}", cmd.data.name, cmd.guild_id.map_or(String::new(), |g| format!(" in guild {g}"))),
+                Interaction::Component(comp) => format!("component `{}`{}", comp.data.custom_id, comp.guild_id.map_or(String::new(), |g| format!(" in guild {g}"))),
+                Interaction::Modal(modal) => format!("modal `{}`{}", modal.data.custom_id, modal.guild_id.map_or(String::new(), |g| format!(" in guild {g}"))),
+                other => format!("{:?} interaction", other.kind()),
+            };
+            let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
             match interaction {
                 Interaction::Command(interaction) => {
                     let guild_id = interaction.guild_id.expect("Discord slash command called outside of a guild");
@@ -4140,6 +4147,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 _ => {}
             }
             Ok(())
+            }.await;
+            result.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { format!("{interaction_desc}: {e}").into() })
         }))
         .on_voice_state_update(|ctx, _, new| Box::pin(async move {
             if let Some(source_channel) = new.channel_id {
