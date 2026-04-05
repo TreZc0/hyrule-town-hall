@@ -1,5 +1,5 @@
 use crate::{
-    event::{Data, Tab},
+    event::{Data, Tab, enter},
     prelude::*,
     user::DisplaySource
 };
@@ -1265,12 +1265,12 @@ pub(crate) async fn update_enter_flow(pool: &State<PgPool>, me: User, uri: Origi
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?)
         } else {
-            // Parse enter_flow JSON
+            // Parse enter_flow JSON and validate against Flow struct
             let enter_flow_json = if !value.enter_flow_json.trim().is_empty() {
-                match serde_json::from_str::<serde_json::Value>(&value.enter_flow_json) {
-                    Ok(json) => Some(json),
-                    Err(_) => {
-                        form.context.push_error(form::Error::validation("Invalid JSON format"));
+                match serde_json::from_str::<enter::Flow>(&value.enter_flow_json) {
+                    Ok(_) => Some(serde_json::from_str::<serde_json::Value>(&value.enter_flow_json).expect("already validated as JSON")),
+                    Err(e) => {
+                        form.context.push_error(form::Error::validation(format!("Invalid enter flow: {e}")));
                         None
                     }
                 }
