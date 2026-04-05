@@ -1,6 +1,11 @@
 use {
     std::collections::HashMap,
     tokio::sync::RwLockReadGuard,
+    serenity::all::{
+        CreateActionRow,
+        CreateButton,
+        CreateMessage,
+    },
     crate::{
         prelude::*,
         racetime_bot::*,
@@ -147,7 +152,7 @@ fn determine_overall_winner(game_results: &[startgg::GameResult]) -> startgg::ID
 async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ctx: &RaceContext<GlobalState>, cal_event: &cal::Event, event: &event::Data<'_>, mut entrants: [(Entrant, S, Url); 2]) -> Result<(Transaction<'a, Postgres>, Vec<Id<Races>>), Error> {
     entrants.sort_unstable_by_key(|(_, time, _)| time.sort_key());
     let [(winner, winning_time, winning_room), (loser, losing_time, losing_room)] = entrants;
-    let mut ignored_race_ids: Vec<Id<Races>> = vec![];
+    let ignored_race_ids: Vec<Id<Races>> = vec![];
     if winning_time.is_dnf() && losing_time.is_dnf() {
         if let Some(results_channel) = event.discord_race_results_channel.or(event.discord_organizer_channel) {
             let msg = if_chain! {
@@ -249,24 +254,45 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                 msg.push(losing_room);
             }
             msg.push('>');
-            if event.discord_race_results_channel.is_some() || matches!(cal_event.race.source, cal::Source::StartGG { .. }) {
-                msg.push(" — please manually ");
-                if let Some(results_channel) = event.discord_race_results_channel {
-                    msg.push("post the announcement in ");
-                    msg.mention(&results_channel);
-                }
-                if let Some(startgg_set_url) = cal_event.race.startgg_set_url().to_racetime()? {
-                    if event.discord_race_results_channel.is_some() {
-                        msg.push(" and ");
+            let discord_ctx = ctx.global_state.discord_ctx.read().await;
+            if winning_time.as_duration().is_some() {
+                msg.push("\nPlease decide how to proceed. You can either trigger a rematch or check the results and frame count the VoDs if necessary (<https://somewes.com/frame-count/> can assist you with that process), then report the finalized results via the buttons below.");
+                organizer_channel.send_message(&*discord_ctx, CreateMessage::new()
+                    .content(msg.build())
+                    .components(vec![
+                        CreateActionRow::Buttons(vec![
+                            CreateButton::new(format!("draw_report_result_{}", cal_event.race.id))
+                                .label("Report final result")
+                                .style(ButtonStyle::Primary),
+                            CreateButton::new(format!("draw_restart_race_{}", cal_event.race.id))
+                                .label("Restart race")
+                                .style(ButtonStyle::Danger),
+                        ])
+                    ])
+                ).await.to_racetime()?;
+            } else {
+                // TFB or other non-time score: text only
+                if event.discord_race_results_channel.is_some() || matches!(cal_event.race.source, cal::Source::StartGG { .. }) {
+                    msg.push(" — please manually ");
+                    if let Some(results_channel) = event.discord_race_results_channel {
+                        msg.push("post the announcement in ");
+                        msg.mention(&results_channel);
                     }
-                    msg.push_named_link_no_preview("report the result on start.gg", startgg_set_url);
+                    if let Some(startgg_set_url) = cal_event.race.startgg_set_url().to_racetime()? {
+                        if event.discord_race_results_channel.is_some() {
+                            msg.push(" and ");
+                        }
+                        msg.push_named_link_no_preview("report the result on start.gg", startgg_set_url);
+                    }
+                    msg.push(" after adjusting the times");
                 }
-                msg.push(" after adjusting the times");
+                organizer_channel.say(&*discord_ctx, msg.build()).await.to_racetime()?;
             }
-            //TODO note to manually initialize high seed for next game's draft (if any) and use `/post-status`
-            organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, msg.build()).await.to_racetime()?;
         }
+    } else if let (Some(winner_time), Some(loser_time)) = (winning_time.as_duration(), losing_time.as_duration()) {
+        return complete_1v1_result(transaction, &*ctx.global_state, &cal_event.race, event, winner, winner_time, winning_room, loser, loser_time, losing_room).await;
     } else {
+        // Non-duration score (e.g. TFB piece count): announce result and report to start.gg/draft as applicable.
         if let Some(results_channel) = event.discord_race_results_channel.or(event.discord_organizer_channel) {
             let msg = if_chain! {
                 if let French = event.language;
@@ -350,222 +376,317 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
             };
             results_channel.say(&*ctx.global_state.discord_ctx.read().await, msg).await.to_racetime()?;
         }
-        let mut series_decided = false;
-        match cal_event.race.source {
-            cal::Source::Manual | cal::Source::Sheet { .. } => {}
-            cal::Source::Challonge { .. } => {} //TODO
-            cal::Source::League { id } => if let (Some(winner), Some(loser), Some(winning_time), Some(losing_time)) = (
-                match &winner {
-                    Entrant::MidosHouseTeam(team) => team.members(&mut transaction).await.to_racetime()?.into_iter().exactly_one().ok().and_then(|member| member.racetime).map(|racetime| racetime.id),
-                    Entrant::Discord { racetime_id, .. } | Entrant::Named { racetime_id, .. } => racetime_id.clone(),
+        return report_external_and_init_draft(transaction, &*ctx.global_state, &cal_event.race, event, winner, None, winning_room, loser, None).await;
+    }
+    Ok((transaction, ignored_race_ids))
+}
+
+pub(crate) async fn complete_1v1_result<'a>(
+    mut transaction: Transaction<'a, Postgres>,
+    global_state: &GlobalState,
+    race: &Race,
+    event: &event::Data<'_>,
+    winner: Entrant,
+    winner_time: Option<Duration>,
+    winning_room: Url,
+    loser: Entrant,
+    loser_time: Option<Duration>,
+    losing_room: Url,
+) -> Result<(Transaction<'a, Postgres>, Vec<Id<Races>>), Error> {
+    let fmt_time = |time: Option<Duration>, language: Language| -> Cow<'static, str> {
+        match language {
+            French => time.map_or(Cow::Borrowed("forfait"), |t| Cow::Owned(French.format_duration(t, false))),
+            _ => time.map_or(Cow::Borrowed("DNF"), |t| Cow::Owned(English.format_duration(t, false))),
+        }
+    };
+
+    // 1. Post Discord announcement
+    if let Some(results_channel) = event.discord_race_results_channel.or(event.discord_organizer_channel) {
+        let msg = if_chain! {
+            if let French = event.language;
+            if let Some(phase_round) = match (&race.phase, &race.round) {
+                (Some(phase), Some(round)) => if let Some(Some(phase_round)) = sqlx::query_scalar!("SELECT display_fr FROM phase_round_options WHERE series = $1 AND event = $2 AND phase = $3 AND round = $4", event.series as _, &event.event, phase, round).fetch_optional(&mut *transaction).await.to_racetime()? {
+                    Some(Some(phase_round))
+                } else {
+                    None
                 },
-                match &loser {
-                    Entrant::MidosHouseTeam(team) => team.members(&mut transaction).await.to_racetime()?.into_iter().exactly_one().ok().and_then(|member| member.racetime).map(|racetime| racetime.id),
-                    Entrant::Discord { racetime_id, .. } | Entrant::Named { racetime_id, .. } => racetime_id.clone(),
-                },
-                winning_time.as_duration(),
-                losing_time.as_duration(),
-            ) {
-                let mut form = collect![as HashMap<_, _>:
-                    "id" => id.to_string(),
-                    "racetimeRoom" => format!("https://{}{}", racetime_host(), ctx.data().await.url),
-                    "fpa" => format!("0"), //TODO also report races with FPA calls
-                    "winner" => winner,
-                    "loser" => loser,
-                ];
-                if let Some(winning_time) = winning_time {
-                    form.insert("winningTime", winning_time.as_secs().to_string());
+                (Some(_), None) | (None, Some(_)) => None,
+                (None, None) => Some(None),
+            };
+            if race.game.is_none();
+            then {
+                let mut builder = MessageBuilder::default();
+                if let Some(phase_round) = phase_round {
+                    builder.push_safe(phase_round);
+                    builder.push(" : ");
                 }
-                if let Some(losing_time) = losing_time {
-                    form.insert("losingTime", losing_time.as_secs().to_string());
+                builder.mention_entrant(&mut transaction, event.discord_guild, &winner).await.to_racetime()?;
+                builder.push(" (");
+                builder.push(fmt_time(winner_time, French));
+                builder.push(')');
+                if winning_room != losing_room {
+                    builder.push(" [<");
+                    builder.push(winning_room.to_string());
+                    builder.push(">]");
                 }
-                let request = ctx.global_state.http_client.post("https://league.ootrandomizer.com/reportResultFromMidoHouse")
-                    .bearer_auth(&ctx.global_state.league_api_key)
-                    .form(&form);
-                println!("reporting result to League website: {:?}", serde_urlencoded::to_string(&form));
-                request.send().await?.detailed_error_for_status().await.to_racetime()?;
+                builder.push(if winner.name_is_plural() { " ont battu " } else { " a battu " });
+                builder.mention_entrant(&mut transaction, event.discord_guild, &loser).await.to_racetime()?;
+                builder.push(" (");
+                builder.push(fmt_time(loser_time, French));
+                builder.push(if winning_room == losing_room { ") <" } else { ") [<" });
+                builder.push(losing_room.to_string());
+                builder.push(if winning_room == losing_room { ">" } else { ">]" });
+                builder.build()
+            } else {
+                let mut builder = MessageBuilder::default();
+                let info_prefix = match (&race.phase, &race.round) {
+                    (Some(phase), Some(round)) => Some(format!("{phase} {round}")),
+                    (Some(phase), None) => Some(phase.clone()),
+                    (None, Some(round)) => Some(round.clone()),
+                    (None, None) => None,
+                };
+                match (info_prefix, race.game) {
+                    (Some(prefix), Some(game)) => {
+                        builder.push_safe(prefix);
+                        builder.push(", game ");
+                        builder.push(game.to_string());
+                        builder.push(": ");
+                    }
+                    (Some(prefix), None) => {
+                        builder.push_safe(prefix);
+                        builder.push(": ");
+                    }
+                    (None, Some(game)) => {
+                        builder.push("game ");
+                        builder.push(game.to_string());
+                        builder.push(": ");
+                    }
+                    (None, None) => {}
+                }
+                builder.mention_entrant(&mut transaction, event.discord_guild, &winner).await.to_racetime()?;
+                builder.push(" (");
+                builder.push(fmt_time(winner_time, English));
+                builder.push(')');
+                if winning_room != losing_room {
+                    builder.push(" [<");
+                    builder.push(winning_room.to_string());
+                    builder.push(">]");
+                }
+                builder.push(if winner.name_is_plural() { " defeat " } else { " defeats " });
+                builder.mention_entrant(&mut transaction, event.discord_guild, &loser).await.to_racetime()?;
+                builder.push(" (");
+                builder.push(fmt_time(loser_time, English));
+                builder.push(if winning_room == losing_room { ") <" } else { ") [<" });
+                builder.push(losing_room.to_string());
+                builder.push(if winning_room == losing_room { ">" } else { ">]" });
+                builder.build()
+            }
+        };
+        results_channel.say(&*global_state.discord_ctx.read().await, msg).await.to_racetime()?;
+    }
+
+    report_external_and_init_draft(transaction, global_state, race, event, winner, winner_time, winning_room, loser, loser_time).await
+}
+
+async fn report_external_and_init_draft<'a>(
+    mut transaction: Transaction<'a, Postgres>,
+    global_state: &GlobalState,
+    race: &Race,
+    event: &event::Data<'_>,
+    winner: Entrant,
+    winner_time: Option<Duration>,
+    winning_room: Url,
+    loser: Entrant,
+    loser_time: Option<Duration>,
+) -> Result<(Transaction<'a, Postgres>, Vec<Id<Races>>), Error> {
+    let mut ignored_race_ids: Vec<Id<Races>> = vec![];
+    let mut series_decided = false;
+    match race.source {
+        cal::Source::Manual | cal::Source::Sheet { .. } => {}
+        cal::Source::Challonge { .. } => {} //TODO
+        cal::Source::League { id } => if let (Some(winner_rt), Some(loser_rt)) = (
+            match &winner {
+                Entrant::MidosHouseTeam(team) => team.members(&mut transaction).await.to_racetime()?.into_iter().exactly_one().ok().and_then(|member| member.racetime).map(|racetime| racetime.id),
+                Entrant::Discord { racetime_id, .. } | Entrant::Named { racetime_id, .. } => racetime_id.clone(),
             },
-            cal::Source::StartGG { ref set, .. } => {
-                if let Entrant::MidosHouseTeam(Team { startgg_id: Some(winner_entrant_id), .. }) = &winner {
-                    if let Some(game) = cal_event.race.game {
-                        // This is a multi-game match (best of 3, best of 5, etc.)
-                        let total_games = cal_event.race.game_count(&mut transaction).await.to_racetime()?;
-
-                        let completed_game_results = collect_completed_game_results(
-                            &ctx.global_state.http_client,
-                            &ctx.global_state.startgg_token,
-                            set,
-                            game,
-                            winner_entrant_id
-                        ).await.to_racetime()?;
-
-                        // For hacky double round-robin, the series is decided only when all
-                        // HTH-tracked games are done (game == total_games), regardless of
-                        // win count. start.gg closes the BO1 set after game 1 is reported,
-                        // but we always play both games.
-                        let match_decided = if event.startgg_double_rr {
-                            game as i16 == total_games
-                        } else {
-                            is_match_decided(&completed_game_results, total_games)
-                        };
-
-                        if match_decided {
-                            if event.startgg_double_rr {
-                                let score_data = startgg::query_uncached::<startgg::SetScoreQuery>(
-                                    &ctx.global_state.http_client,
-                                    &ctx.global_state.startgg_token,
-                                    startgg::set_score_query::Variables { set_id: set.clone() },
-                                ).await.to_racetime()?;
-                                let game1_winner_id = score_data.set
-                                    .and_then(|s| s.slots)
-                                    .into_iter()
-                                    .flatten()
-                                    .flatten()
-                                    .find(|slot| slot.standing.as_ref().and_then(|st| st.placement) == Some(1))
-                                    .and_then(|slot| slot.entrant)
-                                    .and_then(|e| e.id)
-                                    .expect("double-RR set score query: no slot with placement=1");
-                                let all_game_results = vec![
-                                    startgg::GameResult { game_num: 1, winner_entrant_id: game1_winner_id },
-                                    startgg::GameResult { game_num: 2, winner_entrant_id: winner_entrant_id.clone() },
-                                ];
-                                // Reset the start.gg set (closed after game 1's report) so we
-                                // can report both games together with the correct combined result.
-                                startgg::query_uncached::<startgg::ResetSetMutation>(
-                                    &ctx.global_state.http_client,
-                                    &ctx.global_state.startgg_token,
-                                    startgg::reset_set_mutation::Variables {
-                                        set_id: set.clone(),
-                                    }
-                                ).await.to_racetime()?;
-                                let overall_winner_id = if is_match_decided(&all_game_results, total_games) {
-                                    Some(determine_overall_winner(&all_game_results))
-                                } else {
-                                    None
-                                };
-                                startgg::query_uncached::<startgg::ReportBracketSetMutation>(
-                                    &ctx.global_state.http_client,
-                                    &ctx.global_state.startgg_token,
-                                    startgg::report_bracket_set_mutation::Variables {
-                                        set_id: set.clone(),
-                                        winner_id: overall_winner_id,
-                                        game_data: Some(all_game_results.iter()
-                                            .map(|gr| Some(gr.to_game_data_input()))
-                                            .collect()),
-                                    }
-                                ).await.to_racetime()?;
+            match &loser {
+                Entrant::MidosHouseTeam(team) => team.members(&mut transaction).await.to_racetime()?.into_iter().exactly_one().ok().and_then(|member| member.racetime).map(|racetime| racetime.id),
+                Entrant::Discord { racetime_id, .. } | Entrant::Named { racetime_id, .. } => racetime_id.clone(),
+            },
+        ) {
+            let mut form = collect![as HashMap<_, _>:
+                "id" => id.to_string(),
+                "racetimeRoom" => winning_room.to_string(),
+                "fpa" => "0".to_owned(),
+                "winner" => winner_rt,
+                "loser" => loser_rt,
+            ];
+            if let Some(t) = winner_time {
+                form.insert("winningTime", t.as_secs().to_string());
+            }
+            if let Some(t) = loser_time {
+                form.insert("losingTime", t.as_secs().to_string());
+            }
+            let request = global_state.http_client.post("https://league.ootrandomizer.com/reportResultFromMidoHouse")
+                .bearer_auth(&global_state.league_api_key)
+                .form(&form);
+            println!("reporting draw-resolved result to League website: {:?}", serde_urlencoded::to_string(&form));
+            request.send().await?.detailed_error_for_status().await.to_racetime()?;
+        },
+        cal::Source::StartGG { ref set, .. } => {
+            if let Entrant::MidosHouseTeam(Team { startgg_id: Some(winner_entrant_id), .. }) = &winner {
+                if let Some(game) = race.game {
+                    let total_games = race.game_count(&mut transaction).await.to_racetime()?;
+                    let completed_game_results = collect_completed_game_results(
+                        &global_state.http_client,
+                        &global_state.startgg_token,
+                        set,
+                        game,
+                        winner_entrant_id,
+                    ).await.to_racetime()?;
+                    let match_decided = if event.startgg_double_rr {
+                        game as i16 == total_games
+                    } else {
+                        is_match_decided(&completed_game_results, total_games)
+                    };
+                    if match_decided {
+                        if event.startgg_double_rr {
+                            let score_data = startgg::query_uncached::<startgg::SetScoreQuery>(
+                                &global_state.http_client,
+                                &global_state.startgg_token,
+                                startgg::set_score_query::Variables { set_id: set.clone() },
+                            ).await.to_racetime()?;
+                            let game1_winner_id = score_data.set
+                                .and_then(|s| s.slots)
+                                .into_iter()
+                                .flatten()
+                                .flatten()
+                                .find(|slot| slot.standing.as_ref().and_then(|st| st.placement) == Some(1))
+                                .and_then(|slot| slot.entrant)
+                                .and_then(|e| e.id)
+                                .expect("double-RR set score query: no slot with placement=1");
+                            let all_game_results = vec![
+                                startgg::GameResult { game_num: 1, winner_entrant_id: game1_winner_id },
+                                startgg::GameResult { game_num: 2, winner_entrant_id: winner_entrant_id.clone() },
+                            ];
+                            startgg::query_uncached::<startgg::ResetSetMutation>(
+                                &global_state.http_client,
+                                &global_state.startgg_token,
+                                startgg::reset_set_mutation::Variables { set_id: set.clone() },
+                            ).await.to_racetime()?;
+                            let overall_winner_id = if is_match_decided(&all_game_results, total_games) {
+                                Some(determine_overall_winner(&all_game_results))
                             } else {
-                                let overall_winner = determine_overall_winner(&completed_game_results);
-
-                                startgg::query_uncached::<startgg::ReportBracketSetMutation>(
-                                    &ctx.global_state.http_client,
-                                    &ctx.global_state.startgg_token,
-                                    startgg::report_bracket_set_mutation::Variables {
-                                        set_id: set.clone(),
-                                        winner_id: Some(overall_winner),
-                                        game_data: Some(completed_game_results.iter()
-                                            .map(|gr| Some(gr.to_game_data_input()))
-                                            .collect()),
-                                    }
-                                ).await.to_racetime()?;
-                            }
-                            ignored_race_ids = cal_event.race.ignore_remaining_games(&mut transaction).await.to_racetime()?;
-                            series_decided = true;
-                        } else if event.startgg_double_rr {
+                                None
+                            };
                             startgg::query_uncached::<startgg::ReportBracketSetMutation>(
-                                &ctx.global_state.http_client,
-                                &ctx.global_state.startgg_token,
+                                &global_state.http_client,
+                                &global_state.startgg_token,
                                 startgg::report_bracket_set_mutation::Variables {
                                     set_id: set.clone(),
-                                    winner_id: Some(winner_entrant_id.clone()),
-                                    game_data: Some(completed_game_results.iter()
-                                        .map(|gr| Some(gr.to_game_data_input()))
-                                        .collect()),
-                                }
+                                    winner_id: overall_winner_id,
+                                    game_data: Some(all_game_results.iter().map(|gr| Some(gr.to_game_data_input())).collect()),
+                                },
                             ).await.to_racetime()?;
                         } else {
+                            let overall_winner = determine_overall_winner(&completed_game_results);
                             startgg::query_uncached::<startgg::ReportBracketSetMutation>(
-                                &ctx.global_state.http_client,
-                                &ctx.global_state.startgg_token,
+                                &global_state.http_client,
+                                &global_state.startgg_token,
                                 startgg::report_bracket_set_mutation::Variables {
                                     set_id: set.clone(),
-                                    winner_id: None, // Don't mark as complete yet
-                                    game_data: Some(completed_game_results.iter()
-                                        .map(|gr| Some(gr.to_game_data_input()))
-                                        .collect()),
-                                }
+                                    winner_id: Some(overall_winner),
+                                    game_data: Some(completed_game_results.iter().map(|gr| Some(gr.to_game_data_input())).collect()),
+                                },
                             ).await.to_racetime()?;
                         }
-                    } else {
-                        startgg::query_uncached::<startgg::ReportOneGameResultMutation>(
-                            &ctx.global_state.http_client,
-                            &ctx.global_state.startgg_token,
-                            startgg::report_one_game_result_mutation::Variables {
+                        ignored_race_ids = race.ignore_remaining_games(&mut transaction).await.to_racetime()?;
+                        series_decided = true;
+                    } else if event.startgg_double_rr {
+                        startgg::query_uncached::<startgg::ReportBracketSetMutation>(
+                            &global_state.http_client,
+                            &global_state.startgg_token,
+                            startgg::report_bracket_set_mutation::Variables {
                                 set_id: set.clone(),
-                                winner_entrant_id: winner_entrant_id.clone(),
-                            }
+                                winner_id: Some(winner_entrant_id.clone()),
+                                game_data: Some(completed_game_results.iter().map(|gr| Some(gr.to_game_data_input())).collect()),
+                            },
+                        ).await.to_racetime()?;
+                    } else {
+                        startgg::query_uncached::<startgg::ReportBracketSetMutation>(
+                            &global_state.http_client,
+                            &global_state.startgg_token,
+                            startgg::report_bracket_set_mutation::Variables {
+                                set_id: set.clone(),
+                                winner_id: None,
+                                game_data: Some(completed_game_results.iter().map(|gr| Some(gr.to_game_data_input())).collect()),
+                            },
                         ).await.to_racetime()?;
                     }
                 } else {
-                    // Winner has no start.gg entrant ID - report error to organizers
-                    if let Some(organizer_channel) = event.discord_organizer_channel {
-                        let mut msg = MessageBuilder::default();
-                        msg.push("failed to report race result to start.gg: <https://");
-                        msg.push(racetime_host());
-                        msg.push(&ctx.data().await.url);
-                        msg.push("> (winner has no start.gg entrant ID)");
-                        organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, msg.build()).await.to_racetime()?;
-                    }
+                    startgg::query_uncached::<startgg::ReportOneGameResultMutation>(
+                        &global_state.http_client,
+                        &global_state.startgg_token,
+                        startgg::report_one_game_result_mutation::Variables {
+                            set_id: set.clone(),
+                            winner_entrant_id: winner_entrant_id.clone(),
+                        },
+                    ).await.to_racetime()?;
                 }
-            },
-            cal::Source::SpeedGaming { .. } => {} //TODO
-        }
-        if_chain! {
-            if !series_decided;
-            if let Entrant::MidosHouseTeam(winner) = winner;
-            if let Entrant::MidosHouseTeam(loser) = loser;
-            if let Some(draft_kind) = event.draft_kind();
-            if let Some(next_game) = cal_event.race.next_game(&mut transaction, &ctx.global_state.http_client).await.to_racetime()?;
-            then {
-                let draft = match draft_kind {
-                    draft::Kind::PickOnly { .. }
-                    | draft::Kind::BanPick { .. }
-                    | draft::Kind::BanOnly { .. } => {
-                        // cal_event.race.draft is a snapshot from when the room opened.
-                        // Reload from DB to get the current state in case Discord picks
-                        // were made after the room was already open (e.g. in test runs).
-                        sqlx::query_scalar!(
-                            r#"SELECT draft_state AS "draft_state: sqlx::types::Json<Draft>" FROM races WHERE id = $1"#,
-                            cal_event.race.id as _,
-                        ).fetch_one(&mut *transaction).await.to_racetime()?
-                            .expect("series-draft race should have draft state")
-                            .0
-                    },
-                    _ => Draft::for_next_game(&mut transaction, draft_kind, loser.id, winner.id).await.to_racetime()?,
-                };
-                sqlx::query!("UPDATE races SET draft_state = $1 WHERE id = $2", sqlx::types::Json(&draft) as _, next_game.id as _).execute(&mut *transaction).await.to_racetime()?;
-                if_chain! {
-                    if let Some(guild_id) = event.discord_guild;
-                    if let Some(scheduling_thread) = next_game.scheduling_thread;
-                    let discord_ctx = ctx.global_state.discord_ctx.read().await;
-                    let data = discord_ctx.data.read().await;
-                    if let Some(Some(command_ids)) = data.get::<CommandIds>().and_then(|command_ids| command_ids.get(&guild_id).copied());
-                    then {
-                        let mut msg_ctx = draft::MessageContext::Discord {
-                            teams: next_game.teams().cloned().collect(),
-                            team: Team::dummy(),
-                            transaction, guild_id, command_ids,
-                        };
-                        let step = draft.next_step(draft_kind, next_game.game, &mut msg_ctx).await.to_racetime()?;
-                        if !step.message.is_empty() {
-                            scheduling_thread.say(&*discord_ctx, step.message).await.to_racetime()?;
-                        }
-                        transaction = msg_ctx.into_transaction();
+            } else if let Some(organizer_channel) = event.discord_organizer_channel {
+                let mut msg = MessageBuilder::default();
+                msg.push("failed to report race result to start.gg: <");
+                msg.push(winning_room.to_string());
+                msg.push("> (winner has no start.gg entrant ID)");
+                organizer_channel.say(&*global_state.discord_ctx.read().await, msg.build()).await.to_racetime()?;
+            }
+        },
+        cal::Source::SpeedGaming { .. } => {}
+    }
+
+    if_chain! {
+        if !series_decided;
+        if let Entrant::MidosHouseTeam(winner) = winner;
+        if let Entrant::MidosHouseTeam(loser) = loser;
+        if let Some(draft_kind) = event.draft_kind();
+        if let Some(next_game) = race.next_game(&mut transaction, &global_state.http_client).await.to_racetime()?;
+        then {
+            let draft = match draft_kind {
+                draft::Kind::PickOnly { .. }
+                | draft::Kind::BanPick { .. }
+                | draft::Kind::BanOnly { .. } => {
+                    sqlx::query_scalar!(
+                        r#"SELECT draft_state AS "draft_state: sqlx::types::Json<Draft>" FROM races WHERE id = $1"#,
+                        race.id as _,
+                    ).fetch_one(&mut *transaction).await.to_racetime()?
+                        .expect("series-draft race should have draft state")
+                        .0
+                },
+                _ => Draft::for_next_game(&mut transaction, draft_kind, loser.id, winner.id).await.to_racetime()?,
+            };
+            sqlx::query!("UPDATE races SET draft_state = $1 WHERE id = $2", sqlx::types::Json(&draft) as _, next_game.id as _).execute(&mut *transaction).await.to_racetime()?;
+            if_chain! {
+                if let Some(guild_id) = event.discord_guild;
+                if let Some(scheduling_thread) = next_game.scheduling_thread;
+                let discord_ctx = global_state.discord_ctx.read().await;
+                let data = discord_ctx.data.read().await;
+                if let Some(Some(command_ids)) = data.get::<CommandIds>().and_then(|command_ids| command_ids.get(&guild_id).copied());
+                then {
+                    let mut msg_ctx = draft::MessageContext::Discord {
+                        teams: next_game.teams().cloned().collect(),
+                        team: Team::dummy(),
+                        transaction, guild_id, command_ids,
+                    };
+                    let step = draft.next_step(draft_kind, next_game.game, &mut msg_ctx).await.to_racetime()?;
+                    if !step.message.is_empty() {
+                        scheduling_thread.say(&*discord_ctx, step.message).await.to_racetime()?;
                     }
+                    transaction = msg_ctx.into_transaction();
                 }
             }
         }
     }
+
     Ok((transaction, ignored_race_ids))
 }
 

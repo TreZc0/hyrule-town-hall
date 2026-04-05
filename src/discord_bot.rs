@@ -15,13 +15,16 @@ use {
         CreateCommand,
         CreateCommandOption,
         CreateForumPost,
+        CreateInputText,
         CreateInteractionResponse,
         CreateInteractionResponseMessage,
         CreateMessage,
+        CreateModal,
         CreateThread,
         EditInteractionResponse,
         EditMessage,
         EditRole,
+        InputTextStyle,
     }, serenity_utils::{
         builder::ErrorNotifier,
         handler::HandlerMethods as _,
@@ -3824,9 +3827,313 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 transaction.rollback().await?;
                             }
                         }
+                    } else if let Some(race_id_str) = custom_id.strip_prefix("draw_report_result_") {
+                        // "Report final result" button on draw message — open a modal with time inputs
+                        let race_id = race_id_str.parse::<i64>().expect("race_id in draw_report_result button");
+                        let (mut transaction, http_client) = {
+                            let data = ctx.data.read().await;
+                            (
+                                data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?,
+                                data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
+                            )
+                        };
+                        let race = Race::from_id(&mut transaction, &http_client, Id::from(race_id as u64)).await
+                            .map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+                        transaction.rollback().await?;
+                        let (name_a, name_b) = match &race.entrants {
+                            Entrants::Two([a, b]) => {
+                                let name_a = match a {
+                                    Entrant::MidosHouseTeam(team) => team.name.clone().unwrap_or_else(|| String::from("Team 1")),
+                                    Entrant::Named { name, .. } => name.clone(),
+                                    _ => String::from("Team 1"),
+                                };
+                                let name_b = match b {
+                                    Entrant::MidosHouseTeam(team) => team.name.clone().unwrap_or_else(|| String::from("Team 2")),
+                                    Entrant::Named { name, .. } => name.clone(),
+                                    _ => String::from("Team 2"),
+                                };
+                                (name_a, name_b)
+                            }
+                            _ => (String::from("Team 1"), String::from("Team 2")),
+                        };
+                        interaction.create_response(ctx, CreateInteractionResponse::Modal(
+                            CreateModal::new(format!("draw_report_modal_{race_id}"), "Report Race Result")
+                                .components(vec![
+                                    CreateActionRow::InputText(
+                                        CreateInputText::new(InputTextStyle::Short, format!("{name_a} time"), "time_a")
+                                            .placeholder("H:MM:SS or HH:MM:SS")
+                                            .required(true)
+                                    ),
+                                    CreateActionRow::InputText(
+                                        CreateInputText::new(InputTextStyle::Short, format!("{name_b} time"), "time_b")
+                                            .placeholder("H:MM:SS or HH:MM:SS")
+                                            .required(true)
+                                    ),
+                                ])
+                        )).await?;
+                    } else if let Some(race_id_str) = custom_id.strip_prefix("draw_restart_race_") {
+                        // "Restart race" button on draw message — show ephemeral confirmation
+                        let race_id = race_id_str.parse::<i64>().expect("race_id in draw_restart_race button");
+                        let msg_id = interaction.message.id;
+                        let channel_id = interaction.message.channel_id;
+                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                            .ephemeral(true)
+                            .content("Are you sure you want to restart this race? This will reset the schedule, seed data, and draft for this game.")
+                            .components(vec![
+                                CreateActionRow::Buttons(vec![
+                                    CreateButton::new(format!("draw_restart_confirm_{race_id}_{channel_id}_{msg_id}"))
+                                        .label("Yes, restart")
+                                        .style(ButtonStyle::Danger),
+                                    CreateButton::new(format!("draw_restart_cancel_{race_id}"))
+                                        .label("Cancel")
+                                        .style(ButtonStyle::Secondary),
+                                ])
+                            ])
+                        )).await?;
+                    } else if custom_id.starts_with("draw_restart_cancel_") {
+                        // Cancel restart — update ephemeral confirmation to "Cancelled."
+                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                            CreateInteractionResponseMessage::new()
+                                .content("Cancelled.")
+                                .components(vec![])
+                        )).await?;
+                    } else if let Some(params) = custom_id.strip_prefix("draw_restart_confirm_") {
+                        // Confirm restart — reset the race and ping participants
+                        // custom_id format: "draw_restart_confirm_{race_id}_{channel_id}_{msg_id}"
+                        let mut parts = params.rsplitn(3, '_');
+                        let msg_id = MessageId::new(parts.next().expect("msg_id in draw_restart_confirm").parse::<u64>().expect("msg_id parse"));
+                        let orig_channel_id = ChannelId::new(parts.next().expect("channel_id in draw_restart_confirm").parse::<u64>().expect("channel_id parse"));
+                        let race_id = parts.next().expect("race_id in draw_restart_confirm").parse::<i64>().expect("race_id parse");
+                        // Acknowledge interaction — update ephemeral confirmation to show progress
+                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                            CreateInteractionResponseMessage::new()
+                                .content("Restarting race...")
+                                .components(vec![])
+                        )).await?;
+                        let (mut transaction, http_client) = {
+                            let data = ctx.data.read().await;
+                            (
+                                data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?,
+                                data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
+                            )
+                        };
+                        let race = Race::from_id(&mut transaction, &http_client, Id::from(race_id as u64)).await
+                            .map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+                        let event = race.event(&mut transaction).await
+                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                        let is_organizer = event.organizers(&mut transaction).await
+                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                            .into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
+                        if !is_organizer {
+                            transaction.rollback().await?;
+                            // Update ephemeral message with error
+                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                .content("You must be an event organizer to use this command.")
+                            ).await?;
+                            return Ok(());
+                        }
+                        // Reset draft if applicable
+                        let draft = if_chain! {
+                            if let Some(draft_kind) = event.draft_kind();
+                            if let Some(ref existing_draft) = race.draft;
+                            if let Entrants::Two(entrants) = &race.entrants;
+                            if let Ok(low_seed) = entrants.iter()
+                                .filter_map(as_variant!(Entrant::MidosHouseTeam))
+                                .filter(|team| team.id != existing_draft.high_seed)
+                                .exactly_one();
+                            then {
+                                Some(Draft::for_next_game(&mut transaction, draft_kind, existing_draft.high_seed, low_seed.id).await?)
+                            } else {
+                                None
+                            }
+                        };
+                        let scheduling_thread = race.scheduling_thread;
+                        // Collect team member Discord IDs before consuming race
+                        let team_discord_ids: Vec<PgSnowflake<UserId>> = {
+                            let team_ids = race.teams().map(|t| t.id).collect_vec();
+                            if team_ids.is_empty() {
+                                vec![]
+                            } else {
+                                sqlx::query_scalar!(
+                                    r#"SELECT DISTINCT u.discord_id AS "discord_id!: PgSnowflake<UserId>" FROM users u JOIN team_members tm ON u.id = tm.member WHERE tm.team = ANY($1) AND u.discord_id IS NOT NULL"#,
+                                    &team_ids as _
+                                ).fetch_all(&mut *transaction).await?
+                            }
+                        };
+                        let race_id_typed = race.id;
+                        let race = Race {
+                            schedule: RaceSchedule::Unscheduled,
+                            schedule_updated_at: Some(Utc::now()),
+                            fpa_invoked: false,
+                            breaks_used: false,
+                            draft,
+                            seed: seed::Data::default(),
+                            notified: false,
+                            async_notified_1: false,
+                            async_notified_2: false,
+                            async_notified_3: false,
+                            // explicitly listing remaining fields so additions are handled correctly
+                            id: race.id,
+                            series: race.series,
+                            event: race.event,
+                            source: race.source,
+                            entrants: race.entrants,
+                            phase: race.phase,
+                            round: race.round,
+                            game: race.game,
+                            scheduling_thread: race.scheduling_thread,
+                            video_urls: race.video_urls,
+                            restreamers: race.restreamers,
+                            last_edited_by: race.last_edited_by,
+                            last_edited_at: race.last_edited_at,
+                            ignored: race.ignored,
+                            schedule_locked: race.schedule_locked,
+                            discord_scheduled_event_id: race.discord_scheduled_event_id,
+                            volunteer_request_sent: race.volunteer_request_sent,
+                            volunteer_request_message_id: race.volunteer_request_message_id,
+                        };
+                        race.save(&mut transaction).await
+                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                        sqlx::query!(
+                            "UPDATE races SET async_thread1 = NULL, async_thread2 = NULL, async_thread3 = NULL, async_seed1 = FALSE, async_seed2 = FALSE, async_seed3 = FALSE, async_ready1 = FALSE, async_ready2 = FALSE, async_ready3 = FALSE, seed_data = NULL WHERE id = $1",
+                            race_id_typed as _
+                        ).execute(&mut *transaction).await?;
+                        sqlx::query!("DELETE FROM async_times WHERE race_id = $1", race_id_typed as _)
+                            .execute(&mut *transaction).await?;
+                        transaction.commit().await?;
+                        // Ping participants in scheduling thread
+                        if let Some(thread_id) = scheduling_thread {
+                            if !team_discord_ids.is_empty() {
+                                let mut msg = MessageBuilder::default();
+                                for PgSnowflake(user_id) in &team_discord_ids {
+                                    msg.mention(user_id);
+                                    msg.push(' ');
+                                }
+                                msg.push("A rematch for this game has been triggered — please reschedule.");
+                                thread_id.say(ctx, msg.build()).await?;
+                            }
+                        }
+                        // Remove buttons from the original draw message
+                        orig_channel_id.edit_message(ctx, msg_id, EditMessage::new().components(vec![])).await.ok();
+                        // Update the ephemeral confirmation
+                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                            .content("Race has been restarted.")
+                        ).await?;
                     } else {
                         panic!("received message component interaction with unknown custom ID {custom_id:?}")
                     },
+                },
+                Interaction::Modal(interaction) => {
+                    if let Some(race_id_str) = interaction.data.custom_id.strip_prefix("draw_report_modal_") {
+                        let race_id = race_id_str.parse::<i64>().expect("race_id in draw_report_modal");
+                        // Extract time inputs from modal (synchronous — do before deferring)
+                        let mut time_a_str = None;
+                        let mut time_b_str = None;
+                        for row in &interaction.data.components {
+                            for component in &row.components {
+                                if let ActionRowComponent::InputText(input) = component {
+                                    match input.custom_id.as_str() {
+                                        "time_a" => time_a_str = input.value.clone(),
+                                        "time_b" => time_b_str = input.value.clone(),
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                        let (Some(time_a_str), Some(time_b_str)) = (time_a_str, time_b_str) else {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new().ephemeral(true).content("Error: missing time inputs.")
+                            )).await?;
+                            return Ok(());
+                        };
+                        let Some((total_a, _)) = parse_hms(&time_a_str) else {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new().ephemeral(true)
+                                    .content(format!("Invalid time format for first team: \"{time_a_str}\". Use H:MM:SS or HH:MM:SS."))
+                            )).await?;
+                            return Ok(());
+                        };
+                        let Some((total_b, _)) = parse_hms(&time_b_str) else {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new().ephemeral(true)
+                                    .content(format!("Invalid time format for second team: \"{time_b_str}\". Use H:MM:SS or HH:MM:SS."))
+                            )).await?;
+                            return Ok(());
+                        };
+                        if total_a == total_b {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new().ephemeral(true)
+                                    .content("Error: the two times are identical — cannot determine a winner. Please enter different times.")
+                            )).await?;
+                            return Ok(());
+                        }
+                        // Times parsed successfully — defer the response
+                        interaction.create_response(ctx, CreateInteractionResponse::Defer(
+                            CreateInteractionResponseMessage::new()
+                        )).await?;
+                        let (mut transaction, http_client) = {
+                            let data = ctx.data.read().await;
+                            (
+                                data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?,
+                                data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
+                            )
+                        };
+                        let race = Race::from_id(&mut transaction, &http_client, Id::from(race_id as u64)).await
+                            .map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+                        let event = race.event(&mut transaction).await
+                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                        let is_organizer = event.organizers(&mut transaction).await
+                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                            .into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
+                        if !is_organizer {
+                            transaction.rollback().await?;
+                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                .content("You must be an event organizer to use this command.")
+                            ).await?;
+                            return Ok(());
+                        }
+                        let Entrants::Two([entrant_a, entrant_b]) = race.entrants.clone() else {
+                            transaction.rollback().await?;
+                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                .content("Error: this race does not have exactly two teams.")
+                            ).await?;
+                            return Ok(());
+                        };
+                        let room = match &race.schedule {
+                            RaceSchedule::Live { room: Some(url), .. } => url.clone(),
+                            _ => {
+                                transaction.rollback().await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Error: could not determine race room URL from race record.")
+                                ).await?;
+                                return Ok(());
+                            }
+                        };
+                        let dur_a = Duration::from_secs(total_a as u64);
+                        let dur_b = Duration::from_secs(total_b as u64);
+                        let (winner, winner_time, loser, loser_time) = if total_a <= total_b {
+                            (entrant_a, dur_a, entrant_b, dur_b)
+                        } else {
+                            (entrant_b, dur_b, entrant_a, dur_a)
+                        };
+                        let global_state = ctx.data.read().await.get::<GlobalState>().expect("global state missing from Discord context").clone();
+                        let (transaction, _) = racetime_bot::report::complete_1v1_result(
+                            transaction,
+                            &*global_state,
+                            &race,
+                            &event,
+                            winner,
+                            Some(winner_time),
+                            room.clone(),
+                            loser,
+                            Some(loser_time),
+                            room,
+                        ).await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                        transaction.commit().await?;
+                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                            .content("Result reported successfully.")
+                        ).await?;
+                    }
                 },
                 _ => {}
             }
