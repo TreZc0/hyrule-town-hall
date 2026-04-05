@@ -8,17 +8,24 @@ use rocket::response::content::RawText;
 async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
     let header = event.header(&mut transaction, me.as_ref(), Tab::Setup, false).await?;
 
-    // Load enter_flow and rando_version as raw JSON for display in form
-    let (enter_flow_json, rando_version_json) = sqlx::query!(r#"
+    // Load enter_flow, rando_version, seed_gen_type and seed_config as raw values for display in form
+    let (enter_flow_json, rando_version_json, seed_gen_type_str, seed_config_json) = sqlx::query!(r#"
         SELECT enter_flow AS "enter_flow: serde_json::Value",
-               rando_version AS "rando_version: serde_json::Value"
+               rando_version AS "rando_version: serde_json::Value",
+               seed_gen_type,
+               seed_config AS "seed_config: serde_json::Value"
         FROM events WHERE series = $1 AND event = $2
     "#, event.series as _, &*event.event)
     .fetch_one(&mut *transaction).await
-    .map(|row| (row.enter_flow, row.rando_version))?;
+    .map(|row| (row.enter_flow, row.rando_version, row.seed_gen_type, row.seed_config))?;
 
     // Format enter_flow JSON for display
     let enter_flow_string = match &enter_flow_json {
+        Some(json) => serde_json::to_string_pretty(json).unwrap_or_default(),
+        None => String::new(),
+    };
+
+    let seed_config_string = match &seed_config_json {
         Some(json) => serde_json::to_string_pretty(json).unwrap_or_default(),
         None => String::new(),
     };
@@ -245,13 +252,13 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                         : form_field("open_stream_delay", &mut errors, html! {
                             label(for = "open_stream_delay") : "Open Stream Delay";
                             input(type = "text", id = "open_stream_delay", name = "open_stream_delay", value = ctx.field_value("open_stream_delay").unwrap_or(&unparse_duration(event.open_stream_delay)), style = "width: 100%; max-width: 600px;");
-                            label(class = "help") : " (Format: '1:23:45' or '1h 23m 45s')";
+                            label(class = "help") : " (Format: '15s')";
                         });
 
                         : form_field("invitational_stream_delay", &mut errors, html! {
                             label(for = "invitational_stream_delay") : "Invitational Stream Delay";
                             input(type = "text", id = "invitational_stream_delay", name = "invitational_stream_delay", value = ctx.field_value("invitational_stream_delay").unwrap_or(&unparse_duration(event.invitational_stream_delay)), style = "width: 100%; max-width: 600px;");
-                            label(class = "help") : " (Format: '1:23:45' or '1h 23m 45s')";
+                            label(class = "help") : " (Format: '30s')";
                         });
 
                         : form_field("hide_teams_tab", &mut errors, html! {
@@ -408,6 +415,47 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             input(type = "checkbox", id = "startgg_double_rr", name = "startgg_double_rr", checked? = ctx.field_value("startgg_double_rr").map_or(event.startgg_double_rr, |value| value == "on"));
                             label(for = "startgg_double_rr") : "start.gg double round-robin mode";
                             label(class = "help") : " (When enabled with a start.gg round-robin best-of-1 bracket, HTH schedules 2 games per set and force-closes the start.gg set after both are played.)";
+                        });
+
+                        : form_field("is_live_event", &mut errors, html! {
+                            input(type = "checkbox", id = "is_live_event", name = "is_live_event", checked? = ctx.field_value("is_live_event").map_or(event.is_live_event, |value| value == "on"));
+                            label(for = "is_live_event") : "Is Live Event";
+                            label(class = "help") : " (When enabled, rooms are created for scheduled races. Used for SpeedGaming live broadcasts.)";
+                        });
+
+                        h3 : "Seed Generation";
+
+                        : form_field("seed_gen_type", &mut errors, html! {
+                            label(for = "seed_gen_type") : "Seed Gen Type";
+                            select(id = "seed_gen_type", name = "seed_gen_type", style = "width: 100%; max-width: 600px;") {
+                                option(value = "", selected? = ctx.field_value("seed_gen_type").map_or(seed_gen_type_str.is_none(), |v| v.is_empty())) : "None (manual / external)";
+                                @for (val, label) in &[
+                                    ("alttpr_dr", "ALTTPR Door Rando"),
+                                    ("alttpr_avianart", "ALTTPR Avianart"),
+                                    ("ootr", "OoTR"),
+                                    ("ootr_tfb", "OoTR Triforce Blitz"),
+                                    ("ootr_rsl", "OoTR RSL"),
+                                    ("twwr", "The Wind Waker Randomizer"),
+                                    ("mmr", "MMR"),
+                                ] {
+                                    option(value = val, selected? = ctx.field_value("seed_gen_type").map_or(seed_gen_type_str.as_deref() == Some(val), |v| v == *val)) : *label;
+                                }
+                            }
+                            label(class = "help") : " (Determines how seeds are generated for races in this event.)";
+                        });
+
+                        : form_field("seed_config", &mut errors, html! {
+                            label(for = "seed_config") : "Seed Config JSON";
+                            textarea(id = "seed_config", name = "seed_config", rows = "6", style = "font-family: monospace; width: 100%; max-width: 800px;") {
+                                : ctx.field_value("seed_config").unwrap_or(&seed_config_string);
+                            }
+                            label(class = "help") : " (JSON config for the seed gen type. Leave empty if not applicable.)";
+                            details {
+                                summary : "Examples by seed gen type";
+                                pre(style = "font-size: 13px; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                    : "// alttpr_dr — boothisman.de presets:\n{\"source\": \"boothisman\"}\n\n// alttpr_dr — teams agree on settings via custom_choices:\n{\"source\": \"mutual_choices\"}\n\n// alttpr_dr — mystery pool from a weights URL:\n{\"source\": \"mystery_pool\", \"mystery_weights_url\": \"https://example.com/weights.yaml\"}\n\n// twwr — default permalink:\n{\"permalink\": \"MS45MC4wAEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}";
+                                }
+                            }
                         });
                     }, errors.clone(), "Save Basic Info");
                     
@@ -649,6 +697,9 @@ pub(crate) struct SetupForm {
     spoiler_unlock: String,
     is_custom_goal: bool,
     startgg_double_rr: bool,
+    is_live_event: bool,
+    seed_gen_type: Option<String>,
+    seed_config: Option<String>,
 }
 
 #[rocket::post("/event/<series>/<event>/setup", data = "<form>")]
@@ -874,6 +925,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             let racetime_goal_slug = value.racetime_goal_slug.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
             let draft_kind = value.draft_kind.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
             let qualifier_score_kind = value.qualifier_score_kind.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+            let seed_gen_type = value.seed_gen_type.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
 
             let draft_config_json: Option<serde_json::Value> = if let Some(ref dc_str) = value.draft_config {
                 if dc_str.trim().is_empty() {
@@ -883,6 +935,22 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                         Ok(v) => Some(v),
                         Err(e) => {
                             form.context.push_error(form::Error::validation(format!("Invalid draft config JSON: {e}")).with_name("draft_config"));
+                            None
+                        }
+                    }
+                }
+            } else {
+                None
+            };
+
+            let seed_config_json: Option<serde_json::Value> = if let Some(ref sc_str) = value.seed_config {
+                if sc_str.trim().is_empty() {
+                    None
+                } else {
+                    match serde_json::from_str(sc_str) {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            form.context.push_error(form::Error::validation(format!("Invalid seed config JSON: {e}")).with_name("seed_config"));
                             None
                         }
                     }
@@ -1014,7 +1082,8 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                     start_delay = $41, start_delay_open = $42, restrict_chat_in_qualifiers = $43,
                     async_start_delay = $44, startgg_double_rr = $45,
                     preroll_mode = $46, spoiler_unlock = $47, is_custom_goal = $48,
-                    fpa_enabled = $49, swiss_standings = $50, rando_version = $51
+                    fpa_enabled = $49, swiss_standings = $50, rando_version = $51,
+                    is_live_event = $52, seed_gen_type = $53, seed_config = $54
                 WHERE series = $33 AND event = $34
             "#,
                 value.display_name,
@@ -1067,7 +1136,10 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 value.is_custom_goal,
                 value.fpa_enabled,
                 value.swiss_standings,
-                rando_version.unwrap()
+                rando_version.unwrap(),
+                value.is_live_event,
+                seed_gen_type,
+                seed_config_json as _,
             ).execute(&mut *transaction).await?;
 
             transaction.commit().await?;
@@ -1447,6 +1519,47 @@ fn create_form_content(me: &Option<User>, _uri: &Origin<'_>, csrf: Option<&CsrfT
                             label(for = "is_custom_goal") : "Is Custom Goal";
                             label(class = "help") : " (When enabled, the racetime.gg goal is a custom goal rather than a standard one.)";
                         });
+
+                        : form_field("is_live_event", &mut errors, html! {
+                            input(type = "checkbox", id = "is_live_event", name = "is_live_event", checked? = ctx.field_value("is_live_event").map_or(false, |value| value == "on"));
+                            label(for = "is_live_event") : "Is Live Event";
+                            label(class = "help") : " (When enabled, rooms are created for scheduled races. Used for SpeedGaming live broadcasts.)";
+                        });
+
+                        h3 : "Seed Generation";
+
+                        : form_field("seed_gen_type", &mut errors, html! {
+                            label(for = "seed_gen_type") : "Seed Gen Type";
+                            select(id = "seed_gen_type", name = "seed_gen_type", style = "width: 100%; max-width: 600px;") {
+                                option(value = "", selected? = ctx.field_value("seed_gen_type").map_or(true, |v| v.is_empty())) : "None (manual / external)";
+                                @for (val, label) in &[
+                                    ("alttpr_dr", "ALTTPR Door Rando"),
+                                    ("alttpr_avianart", "ALTTPR Avianart"),
+                                    ("ootr", "OoTR"),
+                                    ("ootr_tfb", "OoTR Triforce Blitz"),
+                                    ("ootr_rsl", "OoTR RSL"),
+                                    ("twwr", "The Wind Waker Randomizer"),
+                                    ("mmr", "MMR"),
+                                ] {
+                                    option(value = val, selected? = ctx.field_value("seed_gen_type").map_or(false, |v| v == *val)) : *label;
+                                }
+                            }
+                            label(class = "help") : " (Determines how seeds are generated for races in this event.)";
+                        });
+
+                        : form_field("seed_config", &mut errors, html! {
+                            label(for = "seed_config") : "Seed Config JSON";
+                            textarea(id = "seed_config", name = "seed_config", rows = "6", style = "font-family: monospace; width: 100%; max-width: 800px;") {
+                                : ctx.field_value("seed_config").unwrap_or(&String::new());
+                            }
+                            label(class = "help") : " (JSON config for the seed gen type. Leave empty if not applicable.)";
+                            details {
+                                summary : "Examples by seed gen type";
+                                pre(style = "font-size: 13px; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                    : "// alttpr_dr — boothisman.de presets:\n{\"source\": \"boothisman\"}\n\n// alttpr_dr — teams agree on settings via custom_choices:\n{\"source\": \"mutual_choices\"}\n\n// alttpr_dr — mystery pool from a weights URL:\n{\"source\": \"mystery_pool\", \"mystery_weights_url\": \"https://example.com/weights.yaml\"}\n\n// twwr — default permalink:\n{\"permalink\": \"MS45MC4wAEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}";
+                                }
+                            }
+                        });
                     }, errors.clone(), "Create Event");
                 }
             }
@@ -1501,6 +1614,9 @@ pub(crate) struct CreateEventForm {
     #[field(default = String::from("after"))]
     spoiler_unlock: String,
     is_custom_goal: bool,
+    is_live_event: bool,
+    seed_gen_type: Option<String>,
+    seed_config: Option<String>,
 }
 
 #[rocket::post("/event/new", data = "<form>")]
@@ -1561,6 +1677,7 @@ pub(crate) async fn create_post(pool: &State<PgPool>, me: User, uri: Origin<'_>,
         let racetime_goal_slug = value.racetime_goal_slug.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
         let draft_kind = value.draft_kind.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
         let qualifier_score_kind = value.qualifier_score_kind.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+        let seed_gen_type = value.seed_gen_type.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
 
         // Parse draft_config JSON
         let draft_config_json: Option<serde_json::Value> = if let Some(ref dc_str) = value.draft_config {
@@ -1571,6 +1688,23 @@ pub(crate) async fn create_post(pool: &State<PgPool>, me: User, uri: Origin<'_>,
                     Ok(v) => Some(v),
                     Err(e) => {
                         form.context.push_error(form::Error::validation(format!("Invalid draft config JSON: {e}")).with_name("draft_config"));
+                        None
+                    }
+                }
+            }
+        } else {
+            None
+        };
+
+        // Parse seed_config JSON
+        let seed_config_json: Option<serde_json::Value> = if let Some(ref sc_str) = value.seed_config {
+            if sc_str.trim().is_empty() {
+                None
+            } else {
+                match serde_json::from_str(sc_str) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        form.context.push_error(form::Error::validation(format!("Invalid seed config JSON: {e}")).with_name("seed_config"));
                         None
                     }
                 }
@@ -1612,8 +1746,9 @@ pub(crate) async fn create_post(pool: &State<PgPool>, me: User, uri: Origin<'_>,
             INSERT INTO events (series, event, display_name, team_config, language, listed,
                 racetime_goal_slug, draft_kind, draft_config, qualifier_score_kind,
                 is_single_race, hide_entrants, start_delay, start_delay_open, restrict_chat_in_qualifiers,
-                preroll_mode, spoiler_unlock, is_custom_goal)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                preroll_mode, spoiler_unlock, is_custom_goal, is_live_event,
+                seed_gen_type, seed_config)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
         "#,
             series as _,
             &value.event,
@@ -1633,6 +1768,9 @@ pub(crate) async fn create_post(pool: &State<PgPool>, me: User, uri: Origin<'_>,
             &value.preroll_mode,
             &value.spoiler_unlock,
             value.is_custom_goal,
+            value.is_live_event,
+            seed_gen_type,
+            seed_config_json as _,
         ).execute(&mut *transaction).await?;
 
         transaction.commit().await?;
