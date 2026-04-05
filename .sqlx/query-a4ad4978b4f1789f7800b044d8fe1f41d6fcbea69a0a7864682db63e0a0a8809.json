@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id: Id<Races>\", round, start, room FROM races WHERE series = $1 AND event = $2 AND phase = 'Seeding' LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Races>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "round",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "room",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "a4ad4978b4f1789f7800b044d8fe1f41d6fcbea69a0a7864682db63e0a0a8809"
+}

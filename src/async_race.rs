@@ -846,7 +846,8 @@ impl AsyncRaceManager {
                 content.push_line("");
             }
 
-            let part_label = match async_part {
+            let display_order = Self::get_display_order(&race, async_part);
+            let part_label = match display_order {
                 1 => "First",
                 2 => "Second",
                 _ => "Third",

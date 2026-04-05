@@ -67,6 +67,7 @@ pub(crate) enum Series {
     TriforceBlitz,
     TwwrMain,
     WeTryToBeBetter,
+    Wolfdash,
 }
 
 impl Series {
@@ -93,6 +94,7 @@ impl Series {
             Self::TriforceBlitz => "tfb",
             Self::TwwrMain => "twwrmain",
             Self::WeTryToBeBetter => "wttbb",
+            Self::Wolfdash => "wolfdash",
         }
     }
 
@@ -119,6 +121,7 @@ impl Series {
             Self::TriforceBlitz => "Triforce Blitz",
             Self::TwwrMain => "TWWR Racing Community",
             Self::WeTryToBeBetter => "WeTryToBeBetter",
+            Self::Wolfdash => "Wolfdash",
         }
     }
 
@@ -129,6 +132,7 @@ impl Series {
             Self::CoOp | Self::MixedPools | Self::Scrubs | Self::SpeedGaming | Self::WeTryToBeBetter => TimeDelta::hours(3),
             Self::CopaDoBrasil | Self::League | Self::NineDaysOfSaws | Self::SongsOfHope | Self::Standard | Self::TournoiFrancophone => TimeDelta::hours(3) + TimeDelta::minutes(30),
             Self::Mq | Self::Multiworld | Self::Pictionary => TimeDelta::hours(4),
+            Self::Wolfdash => TimeDelta::hours(3) + TimeDelta::minutes(15),
             Self::Rsl => TimeDelta::hours(4) + TimeDelta::minutes(30),
         }
     }
