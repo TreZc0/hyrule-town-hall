@@ -1613,6 +1613,7 @@ pub(crate) enum Error {
     #[error(transparent)] ParseInt(#[from] std::num::ParseIntError),
     #[error(transparent)] Reqwest(#[from] reqwest::Error),
     #[error(transparent)] SeedData(#[from] seed::ExtraDataError),
+    #[error(transparent)] Challonge(#[from] challonge::client::Error),
     #[error(transparent)] Sheets(#[from] sheets::Error),
     #[error(transparent)] Sql(#[from] sqlx::Error),
     #[error(transparent)] StartGG(#[from] startgg::Error),
@@ -1644,6 +1645,7 @@ impl<E: Into<Error>> From<E> for StatusOrError<Error> {
 impl IsNetworkError for Error {
     fn is_network_error(&self) -> bool {
         match self {
+            Self::Challonge(e) => e.is_network_error(),
             Self::ChronoParse(_) => false,
             Self::Discord(_) => false,
             Self::Draft(e) => e.is_network_error(),
@@ -2768,7 +2770,13 @@ pub(crate) async fn import_races_form(mut transaction: Transaction<'_, Postgres>
                 p : "This event has no source for importing races configured.";
             }
         },
-        MatchSource::Challonge { community, tournament } => if me.is_some() {
+        MatchSource::Challonge { community, tournament } => if event.auto_import {
+            html! {
+                article {
+                    p : "Races for this event are imported automatically every 5 minutes.";
+                }
+            }
+        } else if me.is_some() {
             let (races, skips) = challonge::races_to_import(&mut transaction, http_client, config, &event, community, tournament).await?;
             if races.is_empty() {
                 html! {
@@ -3067,7 +3075,12 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                 if event.auto_import {
                     match event.match_source() {
                         MatchSource::Manual => {}
-                        MatchSource::Challonge { .. } => {} // Challonge's API doesn't provide enough data to automate race imports
+                        MatchSource::Challonge { community, tournament } => {
+                            let (races, _) = challonge::races_to_import(&mut transaction, &http_client, &config, &event, community, tournament).await?;
+                            for race in races {
+                                transaction = import_race(transaction, &*discord_ctx.read().await, race).await?;
+                            }
+                        }
                         MatchSource::League => if event.is_started(&mut transaction).await? {
                             let mut races = Vec::default();
                             for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE series = $1 AND event = $2"#, event.series as _, &event.event).fetch_all(&mut *transaction).await? {

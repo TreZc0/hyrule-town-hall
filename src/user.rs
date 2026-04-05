@@ -572,6 +572,28 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
     } else {
         html! {}
     };
+    let challonge = if let Some(ref challonge_id) = user.challonge_id {
+        html! {
+            p {
+                : "Challonge: ";
+                bdi : challonge_id;
+                @if me.as_ref().is_some_and(|me| me.id == user.id) {
+                    form(method = "post", action = uri!(crate::auth::unlink_challonge), style = "display: inline; margin-left: 2em") {
+                        : csrf;
+                        button(type = "submit") : "Unlink";
+                    }
+                }
+            }
+        }
+    } else if me.as_ref().is_some_and(|me| me.id == user.id) {
+        html! {
+            p {
+                a(href = uri!(crate::auth::challonge_login(Some(uri!(profile(id)))))) : "Connect a Challonge account";
+            }
+        }
+    } else {
+        html! {}
+    };
     let mut events_organized = user.events_organized(&mut transaction).await?;
     events_organized.retain(|event| event.listed);
     events_organized.sort_by_key(|event| (event.base_start.is_some(), Reverse(event.base_start)));
@@ -589,6 +611,7 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
         : racetime;
         : discord;
         : startgg;
+        : challonge;
         @if user.is_archivist {
             p {
                 : "This user is an archivist: ";

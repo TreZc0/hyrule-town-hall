@@ -200,7 +200,13 @@ struct ChallongeResponse<T> {
 
 #[derive(Deserialize)]
 struct ChallongeUser {
-    id: String,
+    #[allow(dead_code)] id: String,
+    attributes: ChallongeUserAttributes,
+}
+
+#[derive(Deserialize)]
+struct ChallongeUserAttributes {
+    username: String,
 }
 
 #[rocket::async_trait]
@@ -461,7 +467,7 @@ pub(crate) enum ChallongeCallbackError {
 pub(crate) async fn challonge_callback(pool: &State<PgPool>, me: User, http_client: &State<reqwest::Client>, token: TokenResponse<Challonge>, cookies: &CookieJar<'_>) -> Result<Redirect, ChallongeCallbackError> {
     let mut transaction = pool.begin().await?;
     let challonge_user = handle_challonge_token_response(http_client, &token).await?;
-    sqlx::query!("UPDATE users SET challonge_id = $1 WHERE id = $2", challonge_user.id, me.id as _).execute(&mut *transaction).await?;
+    sqlx::query!("UPDATE users SET challonge_id = $1 WHERE id = $2", challonge_user.attributes.username, me.id as _).execute(&mut *transaction).await?;
     transaction.commit().await?;
     let redirect_uri = cookies.get("redirect_to").and_then(|cookie| rocket::http::uri::Origin::try_from(cookie.value()).ok()).map_or_else(|| uri!(crate::http::index), |uri| uri.into_owned());
     Ok(Redirect::to(redirect_uri))
@@ -649,6 +655,16 @@ pub(crate) async fn unlink_startgg(pool: &State<PgPool>, me: User, csrf: Option<
     form.verify(&csrf);
     if form.value.is_some() {
         sqlx::query!("UPDATE users SET startgg_id = NULL WHERE id = $1", me.id as _).execute(&**pool).await?;
+    }
+    Ok(Redirect::to(uri!(crate::user::profile(me.id))))
+}
+
+#[rocket::post("/unlink/challonge", data = "<form>")]
+pub(crate) async fn unlink_challonge(pool: &State<PgPool>, me: User, csrf: Option<CsrfToken>, form: Form<Contextual<'_, UnlinkForm>>) -> Result<Redirect, UnlinkError> {
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.value.is_some() {
+        sqlx::query!("UPDATE users SET challonge_id = NULL WHERE id = $1", me.id as _).execute(&**pool).await?;
     }
     Ok(Redirect::to(uri!(crate::user::profile(me.id))))
 }

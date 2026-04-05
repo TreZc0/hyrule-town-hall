@@ -4600,29 +4600,13 @@ async fn report_async_race_to_external_platforms(
                 _ => None,
             };
             if let Some(winner_team) = winner_team {
-                let match_id = id.clone();
-                let winner_id = winner_team.challonge_id.clone();
-                if let Some(winner_id) = winner_id {
-                    let endpoint = format!("https://api.challonge.com/v2/matches/{}/report", match_id);
-                    let payload = serde_json::json!({
-                        "match": {
-                            "winner_id": winner_id,
-                            "scores_csv": "1-0"
-                        }
-                    });
-                    match http_client.put(&endpoint)
-                        .header(reqwest::header::ACCEPT, "application/json")
-                        .header(reqwest::header::CONTENT_TYPE, "application/vnd.api+json")
-                        .header("Authorization-Type", "v1")
-                        .header(reqwest::header::AUTHORIZATION, challonge_api_key)
-                        .json(&payload)
-                        .send()
-                        .await {
-                            Ok(_) => {},
-                            Err(e) => {
-                                eprintln!("Failed to report async race result to challonge: {:?}", e);
-                            }
-                        }
+                if let Some(ref winner_id) = winner_team.challonge_id {
+                    match challonge::report::report_result(
+                        http_client, challonge_api_key, id, winner_id, &[(1, 0)],
+                    ).await {
+                        Ok(()) => {},
+                        Err(e) => log::error!("Failed to report async race result to Challonge: {e:?}"),
+                    }
                 }
             }
         }

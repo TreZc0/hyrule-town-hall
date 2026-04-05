@@ -647,6 +647,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         auth::unlink_racetime,
         auth::unlink_discord,
         auth::unlink_startgg,
+        auth::unlink_challonge,
         cal::index_help,
         cal::index,
         cal::for_series,

@@ -694,47 +694,54 @@ impl<'a> Data<'a> {
         }
     }
 
-    /// Returns Swiss standings for this event, if it's a Startgg event
+    /// Returns Swiss standings for this event
     pub(crate) async fn swiss_standings(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config) -> Result<Option<Vec<startgg::SwissStanding>>, Error> {
-        if !matches!(self.match_source(), MatchSource::StartGG(_)) {
-            return Ok(None);
-        }
+        match self.match_source() {
+            MatchSource::StartGG(_) => {
+                // Extract the Startgg slug from the event URL
+                let slug = match self.url.as_ref().and_then(|url| url.path().strip_prefix('/').map(|s| s.to_string())) {
+                    Some(s) if !s.is_empty() => s,
+                    _ => return Ok(None),
+                };
 
-        // Extract the Startgg slug from the event URL
-        let slug = match self.url.as_ref().and_then(|url| url.path().strip_prefix('/').map(|s| s.to_string())) {
-            Some(s) if !s.is_empty() => s,
-            _ => return Ok(None),
-        };
+                let startgg_token = &config.startgg;
 
-        // Get the Startgg token
-        let startgg_token = &config.startgg;
+                // Get resigned teams for this event to exclude them from bye prediction
+                let resigned_entrant_ids = sqlx::query!(
+                    r#"SELECT startgg_id FROM teams
+                       WHERE series = $1 AND event = $2 AND resigned = TRUE AND startgg_id IS NOT NULL"#,
+                    self.series as _,
+                    &self.event
+                )
+                .fetch_all(&mut **transaction)
+                .await
+                .ok()
+                .map(|rows| rows.into_iter()
+                    .filter_map(|row| row.startgg_id)
+                    .map(|id| id.to_string())
+                    .collect::<HashSet<_>>());
 
-        // Get resigned teams for this event to exclude them from bye prediction
-        let resigned_entrant_ids = sqlx::query!(
-            r#"SELECT startgg_id FROM teams 
-               WHERE series = $1 AND event = $2 AND resigned = TRUE AND startgg_id IS NOT NULL"#,
-            self.series as _,
-            &self.event
-        )
-        .fetch_all(&mut **transaction)
-        .await
-        .ok()
-        .map(|rows| rows.into_iter()
-            .filter_map(|row| row.startgg_id)
-            .map(|id| id.to_string())
-            .collect::<HashSet<_>>());
-
-        // Fetch Swiss standings
-        match startgg::swiss_standings(http_client, config, &slug, startgg_token, resigned_entrant_ids.as_ref()).await {
-            Ok(standings) => Ok(Some(standings)),
-            Err(startgg::Error::GraphQL(errors)) => {
-                // Check if it's a query complexity error
-                if errors.iter().any(|e| e.message.contains("query complexity is too high")) {
-                    log::warn!("Startgg API query complexity too high for event {}", slug);
+                match startgg::swiss_standings(http_client, config, &slug, startgg_token, resigned_entrant_ids.as_ref()).await {
+                    Ok(standings) => Ok(Some(standings)),
+                    Err(startgg::Error::GraphQL(errors)) => {
+                        if errors.iter().any(|e| e.message.contains("query complexity is too high")) {
+                            log::warn!("Startgg API query complexity too high for event {}", slug);
+                        }
+                        Ok(None)
+                    },
+                    Err(_) => Ok(None),
                 }
-                Ok(None) // Return None if API call fails
-            },
-            Err(_) => Ok(None), // Return None for other errors
+            }
+            MatchSource::Challonge { community, tournament } => {
+                match challonge::standings::swiss_standings(http_client, config, community, tournament).await {
+                    Ok(standings) => Ok(Some(standings)),
+                    Err(e) => {
+                        log::warn!("Challonge swiss standings error for {}/{}: {e}", self.series.slug(), self.event);
+                        Ok(None)
+                    }
+                }
+            }
+            _ => Ok(None),
         }
     }
 
@@ -791,7 +798,7 @@ impl<'a> Data<'a> {
                         a(class = "button", href = uri!(races(self.series, &*self.event))) : "Races";
                     }
                 }
-                @if matches!(self.match_source(), MatchSource::StartGG(_)) && self.swiss_standings {
+                @if matches!(self.match_source(), MatchSource::StartGG(_) | MatchSource::Challonge { .. }) && self.swiss_standings {
                     @if let Tab::SwissStandings = tab {
                         a(class = "button selected", href? = is_subpage.then(|| uri!(swiss_standings(self.series, &*self.event)))) : "Swiss Standings";
                     } else {
@@ -3360,51 +3367,16 @@ pub(crate) async fn swiss_standings(
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     
-    // Only show for Startgg events with swiss_standings enabled
-    if !matches!(data.match_source(), MatchSource::StartGG(_)) || !data.swiss_standings {
+    // Only show for events with swiss_standings enabled and a supported match source
+    if !matches!(data.match_source(), MatchSource::StartGG(_) | MatchSource::Challonge { .. }) || !data.swiss_standings {
         return Err(StatusOrError::Status(Status::NotFound));
     }
     
     let header = data.header(&mut transaction, me.as_ref(), Tab::SwissStandings, false).await?;
-    
-    // Extract the Startgg slug from the event URL
-    let slug = match data.url.as_ref().and_then(|url| url.path().strip_prefix('/').map(|s| s.to_string())) {
-        Some(s) if !s.is_empty() => s,
-        _ => return Err(StatusOrError::Status(Status::NotFound)),
-    };
-    
-    // Get the Startgg token
-    let startgg_token = &config.startgg;
-    
-    // Get resigned teams for this event to exclude them from bye prediction
-    let resigned_entrant_ids = sqlx::query!(
-        r#"SELECT startgg_id FROM teams 
-           WHERE series = $1 AND event = $2 AND resigned = TRUE AND startgg_id IS NOT NULL"#,
-        series as _,
-        event
-    )
-            .fetch_all(&mut *transaction)
-    .await
-    .ok()
-    .map(|rows| rows.into_iter()
-        .filter_map(|row| row.startgg_id)
-        .map(|id| id.to_string())
-        .collect::<HashSet<_>>());
 
-    // Fetch Swiss standings
-    let standings = match startgg::swiss_standings(
-        http_client.inner(),
-        &*config,
-        &slug,
-        startgg_token,
-        resigned_entrant_ids.as_ref(),
-    ).await {
-        Ok(standings) => standings,
-        Err(_) => {
-            // Return empty standings if API call fails
-            Vec::new()
-        }
-    };
+    let standings = data.swiss_standings(&mut transaction, http_client.inner(), &*config).await
+        .unwrap_or(None)
+        .unwrap_or_default();
     
     let content = html! {
         : header;

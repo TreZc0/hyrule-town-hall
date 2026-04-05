@@ -781,38 +781,12 @@ pub(crate) async fn swiss_standings_endpoint(
     let mut transaction = db_pool.begin().await?;
     let _me = Scopes { entrants_read: true, ..Scopes::default() }.validate(&mut transaction, api_key).await?.ok_or(StatusOrError::Status(Status::Forbidden))?;
     let event_data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    // Only allow for Startgg events with swiss_standings enabled
-    if !matches!(event_data.match_source(), MatchSource::StartGG(_)) || !event_data.swiss_standings {
+    if !matches!(event_data.match_source(), MatchSource::StartGG(_) | MatchSource::Challonge { .. }) || !event_data.swiss_standings {
         return Err(StatusOrError::Status(Status::NotFound));
     }
-    let startgg_token = &config.startgg;
-    // Extract slug from the event's URL
-    let slug = match event_data.url.as_ref().and_then(|url| url.path().strip_prefix('/').map(|s| s.to_string())) {
-        Some(s) if !s.is_empty() => s,
-        _ => return Err(StatusOrError::Status(Status::NotFound)),
-    };
-    // Get resigned teams for this event to exclude them from bye prediction
-    let resigned_entrant_ids = sqlx::query!(
-        r#"SELECT startgg_id FROM teams 
-           WHERE series = $1 AND event = $2 AND resigned = TRUE AND startgg_id IS NOT NULL"#,
-        series as _,
-        event
-    )
-    .fetch_all(&mut *transaction)
-    .await
-    .ok()
-            .map(|rows| rows.into_iter()
-            .filter_map(|row| row.startgg_id)
-            .map(|id| id.to_string())
-            .collect::<HashSet<_>>());
-
-    let standings = startgg::swiss_standings(
-        http_client.inner(),
-        &*config,
-        &slug,
-        startgg_token,
-        resigned_entrant_ids.as_ref(),
-    ).await.map_err(|_| StatusOrError::Status(Status::NotFound))?;
+    let standings = event_data.swiss_standings(&mut transaction, http_client.inner(), &*config).await
+        .map_err(|_| StatusOrError::Status(Status::NotFound))?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     Ok(Json(standings))
 }
 

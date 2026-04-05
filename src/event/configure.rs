@@ -104,15 +104,15 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                     } //TODO make editable
                 } else {
                     : full_form(uri!(post(event.series, &*event.event)), csrf, html! {
-                        @if let MatchSource::StartGG(_) = event.match_source() {
+                        @if matches!(event.match_source(), MatchSource::StartGG(_) | MatchSource::Challonge { .. }) {
                             : form_field("auto_import", &mut errors, html! {
                                 input(type = "checkbox", id = "auto_import", name = "auto_import", checked? = ctx.field_value("auto_import").map_or(event.auto_import, |value| value == "on"));
-                                label(for = "auto_import") : "Automatically import new races from start.gg";
+                                label(for = "auto_import") : "Automatically import new races";
                                 label(class = "help") : " (If this option is turned off, you can import races by clicking the Import button on the Races tab.)";
                             });
                             : form_field("sync_startgg_ids", &mut errors, html! {
-                                button(type = "submit", name = "sync_startgg_ids", value = "sync") : "Sync StartGG Participant IDs";
-                                label(class = "help") : "(This will attempt to match teams with solo players to their StartGG entrant IDs.)";
+                                button(type = "submit", name = "sync_startgg_ids", value = "sync") : "Sync Tournament Participant IDs";
+                                label(class = "help") : "(This will attempt to match teams to their tournament participant IDs on challonge/start.gg)";
                             });
                         }
                         : form_field("min_schedule_notice", &mut errors, html! {
@@ -284,33 +284,51 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
         } else {
             None
         };
-        // Handle StartGG sync first, regardless of other validation errors
+        // Handle participant ID sync first, regardless of other validation errors
         if let Some(_) = value.sync_startgg_ids {
-            if let MatchSource::StartGG(event_slug) = data.match_source() {
-                match sync_startgg_participant_ids(&mut transaction, &data, &event_slug).await {
-                    Ok(sync_result) => {
-                        transaction.commit().await?;
-                        let success_msg = format!("Sync completed: {} teams synced, {} teams could not be synced", 
-                            sync_result.synced_count, sync_result.failed_count);
-                        let redirect_url = if !sync_result.failed_teams.is_empty() {
-                            let failed_list = sync_result.failed_teams.join(", ");
-                            format!("{}?sync_success={}&sync_failed={}", 
-                                uri!(get(series, event)), 
-                                urlencoding::encode(&success_msg),
-                                urlencoding::encode(&failed_list))
-                        } else {
-                            format!("{}?sync_success={}", 
-                                uri!(get(series, event)), 
-                                urlencoding::encode(&success_msg))
-                        };
-                        return Ok(RedirectOrContent::Redirect(Redirect::to(redirect_url)));
-                    }
-                    Err(sync_error) => {
-                        form.context.push_error(form::Error::validation(format!("Failed to sync StartGG participant IDs: {}", sync_error)));
+            let sync_result = match data.match_source() {
+                MatchSource::StartGG(event_slug) => {
+                    sync_startgg_participant_ids(&mut transaction, &data, &event_slug).await
+                }
+                MatchSource::Challonge { community, tournament } => {
+                    match Config::load().await {
+                        Ok(config) => {
+                            let http_client = reqwest::Client::new();
+                            match challonge::import::sync_team_challonge_ids(&mut transaction, &http_client, &config, data.series, &data.event, community, tournament).await {
+                                Ok(synced_count) => Ok(SyncResult {
+                                    synced_count,
+                                    failed_count: 0,
+                                    failed_teams: Vec::new(),
+                                }),
+                                Err(e) => Err(format!("Challonge sync error: {e}").into()),
+                            }
+                        }
+                        Err(e) => Err(format!("Failed to load config: {e}").into()),
                     }
                 }
-            } else {
-                form.context.push_error(form::Error::validation("This event does not have a StartGG source configured."));
+                _ => Err("This event does not have a tournament source configured.".into()),
+            };
+            match sync_result {
+                Ok(sync_result) => {
+                    transaction.commit().await?;
+                    let success_msg = format!("Sync completed: {} teams synced, {} teams could not be synced",
+                        sync_result.synced_count, sync_result.failed_count);
+                    let redirect_url = if !sync_result.failed_teams.is_empty() {
+                        let failed_list = sync_result.failed_teams.join(", ");
+                        format!("{}?sync_success={}&sync_failed={}",
+                            uri!(get(series, event)),
+                            urlencoding::encode(&success_msg),
+                            urlencoding::encode(&failed_list))
+                    } else {
+                        format!("{}?sync_success={}",
+                            uri!(get(series, event)),
+                            urlencoding::encode(&success_msg))
+                    };
+                    return Ok(RedirectOrContent::Redirect(Redirect::to(redirect_url)));
+                }
+                Err(sync_error) => {
+                    form.context.push_error(form::Error::validation(format!("Failed to sync participant IDs: {}", sync_error)));
+                }
             }
         }
 
