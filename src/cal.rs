@@ -1374,7 +1374,7 @@ impl Race {
         &self,
         transaction: &mut Transaction<'_, Postgres>,
     ) -> sqlx::Result<String> {
-        if self.phase.as_ref().is_some_and(|p| p == "Qualifier") {
+        if self.phase.as_ref().is_some_and(|p| p == "Qualifier" || p == "Seeding") {
             return Ok(match (&self.round, &self.phase) {
                 (Some(round), _) => round.clone(),
                 (None, Some(phase)) => phase.clone(),

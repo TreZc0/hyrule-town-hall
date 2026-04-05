@@ -711,6 +711,26 @@ impl Handler {
                 //TODO note to manually initialize high seed for next game's draft (if any) and use `/post-status`
                 organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, msg.build()).await.to_racetime()?;
             }
+        } else if cal_event.race.phase.as_deref() == Some("Seeding") {
+            // Seeding race: assign qualifier_rank based on finish order
+            let mut entrants: Vec<_> = data.entrants.iter()
+                .filter_map(|e| e.user.as_ref().map(|u| (&u.id, e.finish_time)))
+                .collect();
+            entrants.sort_by_key(|(_, t)| (t.is_none(), *t));
+            for (rank, (rt_id, _)) in entrants.iter().enumerate() {
+                if let Some(user) = User::from_racetime(&mut *transaction, rt_id).await.to_racetime()? {
+                    if let Some(team) = Team::from_event_and_member(&mut transaction, event.series, &event.event, user.id).await.to_racetime()? {
+                        sqlx::query!("UPDATE teams SET qualifier_rank = $1 WHERE id = $2", rank as i16 + 1, team.id as _)
+                            .execute(&mut *transaction).await.to_racetime()?;
+                    }
+                }
+            }
+            if let Some(organizer_channel) = event.discord_organizer_channel {
+                let room = Url::parse(&format!("https://{}{}", racetime_host(), data.url)).to_racetime()?;
+                organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, format!("Seeding race finished — qualifier ranks assigned: <{room}>")).await.to_racetime()?;
+            }
+            transaction.commit().await.to_racetime()?;
+            return Ok(());
         } else {
             let mut ignored_race_ids = Vec::new();
             match event.team_config {
