@@ -32,7 +32,7 @@ pub(crate) async fn fetch_participants(
         return Ok(cached);
     }
     let mut all = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
+    let mut seen_ids = HashSet::new();
     let mut next_url: Option<Url> = Some(client::tournament_url(community, tournament, "participants").parse()?);
     for _ in 0..10 {
         let Some(url) = next_url.take() else { break };
@@ -70,7 +70,7 @@ pub(crate) async fn fetch_matches(
         return Ok(cached);
     }
     let mut all = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
+    let mut seen_ids = HashSet::new();
     let base = client::tournament_url(community, tournament, "matches");
     let mut next_url: Option<Url> = Some({
         let mut url: Url = base.parse()?;
