@@ -216,18 +216,21 @@ impl Requirement {
             Self::Challonge => Some(me.challonge_id.is_some()),
             Self::StartGG { .. } => Some(me.startgg_id.is_some()),
             Self::StartGGEventSignup { event_slug, .. } => Some(if let Some(startgg_id) = &me.startgg_id {
+                eprintln!("[StartGGEventSignup] Checking event: {}", event_slug);
+                eprintln!("[StartGGEventSignup] User HTH ID: {}, User StartGG ID: {}", me.id, startgg_id);
                 let entrants = startgg::fetch_event_entrants(http_client, config, event_slug).await?;
-                let found = entrants.iter().any(|(_, _, user_ids)| {
-                    user_ids.iter().filter_map(|id| id.as_ref()).any(|id| id == startgg_id)
-                });
-                if !found {
-                    eprintln!("[StartGGEventSignup] User {} not found in event {}. User ID: {}, Total entrants: {}",
-                        me.id, event_slug, startgg_id, entrants.len());
-                    eprintln!("[StartGGEventSignup] Entrant user IDs: {:?}",
-                        entrants.iter().flat_map(|(_, _, user_ids)| user_ids.iter().filter_map(|id| id.as_ref())).collect::<Vec<_>>());
-                }
+                eprintln!("[StartGGEventSignup] Fetched {} entrants", entrants.len());
+
+                let all_user_ids: Vec<_> = entrants.iter()
+                    .flat_map(|(_, _, user_ids)| user_ids.iter().filter_map(|id| id.as_ref()))
+                    .collect();
+                eprintln!("[StartGGEventSignup] All entrant user IDs: {:?}", all_user_ids);
+
+                let found = all_user_ids.iter().any(|id| id == startgg_id);
+                eprintln!("[StartGGEventSignup] User found in entrants: {}", found);
                 found
             } else {
+                eprintln!("[StartGGEventSignup] User has no StartGG account connected");
                 false
             }),
             Self::TextField { .. } => Some(false),
