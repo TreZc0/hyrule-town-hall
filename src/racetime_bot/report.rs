@@ -247,7 +247,33 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
     } else if losing_time.time_window(&winning_time).is_some_and(|time_window| time_window <= event.retime_window) {
         if let Some(organizer_channel) = event.discord_organizer_channel {
             let mut msg = MessageBuilder::default();
-            msg.push("Race finished too close for automatic reporting (potential draw): <");
+            msg.push("Race");
+            // Add matchup info: (Player A vs. Player B, Phase - Round)
+            let mut matchup_parts = Vec::new();
+            let discord_ctx = ctx.global_state.discord_ctx.read().await;
+            // Get entrant names
+            if let (Some(winner_name), Some(loser_name)) = (
+                winner.name(&mut transaction, &*discord_ctx).await.to_racetime()?,
+                loser.name(&mut transaction, &*discord_ctx).await.to_racetime()?
+            ) {
+                matchup_parts.push(format!("{} vs. {}", winner_name, loser_name));
+            }
+            // Add phase/round info
+            let phase_round = match (&cal_event.race.phase, &cal_event.race.round) {
+                (Some(phase), Some(round)) => Some(format!("{} - {}", phase, round)),
+                (Some(phase), None) => Some(phase.clone()),
+                (None, Some(round)) => Some(round.clone()),
+                (None, None) => None,
+            };
+            if let Some(phase_round) = phase_round {
+                matchup_parts.push(phase_round);
+            }
+            if !matchup_parts.is_empty() {
+                msg.push(" (");
+                msg.push(matchup_parts.join(", "));
+                msg.push(")");
+            }
+            msg.push(" finished too close for automatic reporting (potential draw): <");
             msg.push(winning_room.to_string());
             if winning_room != losing_room {
                 msg.push("> and <");
