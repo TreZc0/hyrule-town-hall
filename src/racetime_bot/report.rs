@@ -247,7 +247,7 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
     } else if losing_time.time_window(&winning_time).is_some_and(|time_window| time_window <= event.retime_window) {
         if let Some(organizer_channel) = event.discord_organizer_channel {
             let mut msg = MessageBuilder::default();
-            msg.push("race finished as a draw: <");
+            msg.push("Race finished too close for automatic reporting (potential draw): <");
             msg.push(winning_room.to_string());
             if winning_room != losing_room {
                 msg.push("> and <");
@@ -256,7 +256,7 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
             msg.push('>');
             let discord_ctx = ctx.global_state.discord_ctx.read().await;
             if winning_time.as_duration().is_some() {
-                msg.push("\nPlease decide how to proceed. You can either trigger a rematch or check the results and frame count the VoDs if necessary (<https://somewes.com/frame-count/> can assist you with that process), then report the finalized results via the buttons below.");
+                msg.push("\nPlease decide how to proceed. You can either trigger a rematch or check the results and frame count the VoDs if necessary (<https://somewes.com/frame-count/>), then report the finalized results via the buttons below.");
                 organizer_channel.send_message(&*discord_ctx, CreateMessage::new()
                     .content(msg.build())
                     .components(vec![
