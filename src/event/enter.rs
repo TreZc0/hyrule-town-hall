@@ -217,9 +217,16 @@ impl Requirement {
             Self::StartGG { .. } => Some(me.startgg_id.is_some()),
             Self::StartGGEventSignup { event_slug, .. } => Some(if let Some(startgg_id) = &me.startgg_id {
                 let entrants = startgg::fetch_event_entrants(http_client, config, event_slug).await?;
-                entrants.iter().any(|(_, _, user_ids)| {
+                let found = entrants.iter().any(|(_, _, user_ids)| {
                     user_ids.iter().filter_map(|id| id.as_ref()).any(|id| id == startgg_id)
-                })
+                });
+                if !found {
+                    eprintln!("[StartGGEventSignup] User {} not found in event {}. User ID: {}, Total entrants: {}",
+                        me.id, event_slug, startgg_id, entrants.len());
+                    eprintln!("[StartGGEventSignup] Entrant user IDs: {:?}",
+                        entrants.iter().flat_map(|(_, _, user_ids)| user_ids.iter().filter_map(|id| id.as_ref())).collect::<Vec<_>>());
+                }
+                found
             } else {
                 false
             }),

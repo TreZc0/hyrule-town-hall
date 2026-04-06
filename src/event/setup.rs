@@ -404,7 +404,7 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                                         : r#"{
   "requirements": [
     {
-      "type": "startggEventSignup",
+      "type": "startGGEventSignup",
       "eventSlug": "tournament/wolfdash/event/open-bracket",
       "text": "Sign up to <a href='https://start.gg/tournament/wolfdash' target='_blank'>WolfDash on start.gg</a>",
       "errorText": "You must register for WolfDash on start.gg before entering here."
@@ -1033,27 +1033,32 @@ pub(crate) async fn update_enter_flow(pool: &State<PgPool>, me: User, uri: Origi
                 match serde_json::from_str::<enter::Flow>(&value.enter_flow_json) {
                     Ok(_) => Some(serde_json::from_str::<serde_json::Value>(&value.enter_flow_json).expect("already validated as JSON")),
                     Err(e) => {
-                        form.context.push_error(form::Error::validation(format!("Invalid enter flow: {e}")));
+                        form.context.push_error(form::Error::validation(format!("Invalid enter flow: {e}")).with_name("enter_flow_json"));
                         None
                     }
                 }
             } else {
                 None
             };
-            
-            // Update database
-            sqlx::query!(r#"
-                UPDATE events 
-                SET enter_flow = $1
-                WHERE series = $2 AND event = $3
-            "#,
-                enter_flow_json,
-                event_data.series as _,
-                &event_data.event
-            ).execute(&mut *transaction).await?;
-            
-            transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+
+            // Check for validation errors before updating database
+            if form.context.errors().next().is_some() {
+                RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?)
+            } else {
+                // Update database
+                sqlx::query!(r#"
+                    UPDATE events
+                    SET enter_flow = $1
+                    WHERE series = $2 AND event = $3
+                "#,
+                    enter_flow_json,
+                    event_data.series as _,
+                    &event_data.event
+                ).execute(&mut *transaction).await?;
+
+                transaction.commit().await?;
+                RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+            }
         }
     } else {
         RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?)
