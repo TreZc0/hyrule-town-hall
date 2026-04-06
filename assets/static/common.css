@@ -714,3 +714,10 @@ p.error {
   padding: 1rem;
   margin-top: -2px;
 }
+
+/* Mobile-only: break long code elements */
+@media (max-width: 767px) {
+  code {
+    word-break: break-word;
+  }
+}

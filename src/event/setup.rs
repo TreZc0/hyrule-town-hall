@@ -558,6 +558,20 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
 }"#;
                                     }
 
+                                    h4(style = "margin-top: 20px; color: #333;") : "Start.gg Event Signup Validation:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "requirements": [
+    {
+      "type": "startggEventSignup",
+      "eventSlug": "tournament/wolfdash/event/open-bracket",
+      "text": "Sign up to <a href='https://start.gg/tournament/wolfdash' target='_blank'>WolfDash on start.gg</a>",
+      "errorText": "You must register for WolfDash on start.gg before entering here."
+    }
+  ]
+}"#;
+                                    }
+
                                     h4(style = "margin-top: 20px; color: #333;") : "External / Manual Requirement:";
                                     pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
                                         : r#"{
