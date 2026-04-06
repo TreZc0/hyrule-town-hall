@@ -74,6 +74,15 @@ pub(crate) enum Requirement {
         #[serde(default)]
         optional: bool,
     },
+    /// Must be signed up to a specific start.gg event
+    #[serde(rename_all = "camelCase")]
+    StartGGEventSignup {
+        event_slug: String,
+        #[serde(default)]
+        #[serde_as(as = "Option<DeserializeRawHtml>")]
+        text: Option<RawHtml<String>>,
+        error_text: Option<String>,
+    },
     /// Must fill a custom text field
     #[serde(rename_all = "camelCase")]
     TextField {
@@ -120,30 +129,6 @@ pub(crate) enum Requirement {
     Poll {
         document: Option<Url>,
     },
-    /// For Crosskeys, opt in to or out of "All Dungeons" as a goal
-    AllDungeonsOk,
-    /// For Tournoi Francophone-style settings drafts, opt in to or out of hard settings
-    HardSettingsOk,
-    /// For Crosskeys, opt in to or out of hovering being allowed
-    HoveringOk,
-    /// For Crosskeys, opt in to or out of "Inverted" as a world state
-    InvertedOk,
-    /// For Crosskeys, opt in to or out of starting with an activate flute.
-    FluteOk,
-    /// For Crosskeys, opt in to or out of "Keydrop" as an item setting
-    KeydropOk,
-    /// For Crosskeys, opt in to or out of mirror scroll
-    MirrorScrollOk,
-    /// For Tournoi Francophone-style settings drafts, opt in to or out of Master Quest
-    MqOk,
-    /// For Crosskeys, opt in to or out of waiving the tournament required stream delay.
-    NoDelayOk,
-    /// For RSL-style weights drafts, opt into RSL-Lite weights
-    LiteOk,
-    /// For Crosskeys, opt in to or out of pseudoboots
-    PbOk,
-    /// For Crosskeys, opt in to or out of playing with ZW (formerly Zelgawoods).
-    ZwOk,
     /// Must agree to be restreamed
     RestreamConsent {
         #[serde(default)]
@@ -201,7 +186,7 @@ struct RequirementStatus {
 }
 
 impl Requirement {
-    async fn is_checked(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: &User, data: &Data<'_>) -> Result<Option<bool>, Error> {
+    async fn is_checked(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: &User, data: &Data<'_>, config: &Config) -> Result<Option<bool>, Error> {
         let mut cache = teams::Cache::new(http_client.clone());
         Ok(match self {
             Self::RaceTime => Some(me.racetime.is_some()),
@@ -230,24 +215,20 @@ impl Requirement {
             }),
             Self::Challonge => Some(me.challonge_id.is_some()),
             Self::StartGG { .. } => Some(me.startgg_id.is_some()),
+            Self::StartGGEventSignup { event_slug, .. } => Some(if let Some(startgg_id) = &me.startgg_id {
+                let entrants = startgg::fetch_event_entrants(http_client, config, event_slug).await?;
+                entrants.iter().any(|(_, _, user_ids)| {
+                    user_ids.iter().filter_map(|id| id.as_ref()).any(|id| id == startgg_id)
+                })
+            } else {
+                false
+            }),
             Self::TextField { .. } => Some(false),
             Self::TextField2 { .. } => Some(false),
             Self::YesNo { .. } => Some(false),
             Self::BooleanChoice { .. } => Some(false),
             Self::Rules { .. } => Some(false),
             Self::Poll { .. } => Some(false),
-            Self::AllDungeonsOk { .. } => Some(false),
-            Self::FluteOk { .. } => Some(false),
-            Self::HardSettingsOk { .. } => Some(false),
-            Self::HoveringOk { .. } => Some(false),
-            Self::InvertedOk { .. } => Some(false),
-            Self::KeydropOk { .. } => Some(false),
-            Self::LiteOk { .. } => Some(false),
-            Self::MirrorScrollOk { .. } => Some(false),
-            Self::MqOk { .. } => Some(false),
-            Self::NoDelayOk { .. } => Some(false),
-            Self::PbOk { .. } => Some(false),
-            Self::ZwOk { .. } => Some(false),
             Self::RestreamConsent { .. } => Some(false),
             Self::Qualifier { .. } => Some(false),
             Self::TripleQualifier { .. } => Some('checked: {
@@ -301,7 +282,7 @@ impl Requirement {
         })
     }
 
-    async fn check_get(&self, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, data: &Data<'_>, is_checked: Option<bool>, redirect_uri: rocket::http::uri::Origin<'_>, defaults: &pic::EnterFormDefaults<'_>) -> Result<RequirementStatus, Error> {
+    async fn check_get(&self, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, data: &Data<'_>, is_checked: Option<bool>, redirect_uri: rocket::http::uri::Origin<'_>, defaults: &pic::EnterFormDefaults<'_>, me: &User, _config: &Config) -> Result<RequirementStatus, Error> {
         Ok(match self {
             Self::RaceTime => {
                 let mut html_content = html! {
@@ -458,6 +439,29 @@ impl Requirement {
                     }),
                 }
             }
+            Self::StartGGEventSignup { event_slug, text, .. } => {
+                let event_slug = event_slug.clone();
+                let text = text.clone();
+                let mut html_content = if let Some(text) = text {
+                    text
+                } else {
+                    html! {
+                        : "Sign up to ";
+                        a(href = format!("https://start.gg/{}", event_slug), target = "_blank") : "the event on start.gg";
+                    }
+                };
+                if !is_checked.unwrap() && me.startgg_id.is_none() {
+                    html_content = html! {
+                        a(href = uri!(crate::auth::startgg_login(Some(redirect_uri))), target = "_blank") : "Connect a start.gg account to your Hyrule Town Hall account";
+                        : " and ";
+                        : html_content;
+                    };
+                }
+                RequirementStatus {
+                    blocks_submit: !is_checked.unwrap(),
+                    html_content: Box::new(move |_| html_content),
+                }
+            }
             &Self::TextField { ref label, long, .. } => {
                 let label = label.clone();
                 let value = defaults.field_value("text_field").map(|value| value.to_owned());
@@ -577,211 +581,6 @@ impl Requirement {
                                 a(href = poll_url, target = "_blank") : "the settings poll";
                                 : ".";
                             }
-                        });
-                    }),
-                }
-            }
-            Self::AllDungeonsOk => {
-                let yes_checked = defaults.field_value("all_dungeons_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("all_dungeons_ok").is_some_and(|value| value == "no");
-                RequirementStatus {
-                    blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("all_dungeons_ok", errors, html! {
-                            label(for = "all_dungeons_ok") : "Opt-in for All Dungeons goal?";
-                            br;
-                            input(id = "all_dungeons_ok-yes", type = "radio", name = "all_dungeons_ok", value = "yes", checked? = yes_checked);
-                            label(for = "all_dungeons_ok-yes") : "Yes";
-                            input(id = "all_dungeons_ok-no", type = "radio", name = "all_dungeons_ok", value = "no", checked? = no_checked);
-                            label(for = "all_dungeons_ok-no") : "No";
-                        });
-                    }),
-                }
-            }
-            Self::FluteOk => {
-                let yes_checked = defaults.field_value("flute_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("flute_ok").is_some_and(|value| value == "no");
-                RequirementStatus {
-                    blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("flute_ok", errors, html! {
-                            label(for = "flute_ok") : "Opt-in for starting with an activated flute?";
-                            br;
-                            input(id = "flute_ok-yes", type = "radio", name = "flute_ok", value = "yes", checked? = yes_checked);
-                            label(for = "flute_ok-yes") : "Yes";
-                            input(id = "flute_ok-no", type = "radio", name = "flute_ok", value = "no", checked? = no_checked);
-                            label(for = "flute_ok-no") : "No";
-                        });
-                    }),
-                }
-            }
-            Self::HardSettingsOk => {
-                let yes_checked = defaults.field_value("hard_settings_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("hard_settings_ok").is_some_and(|value| value == "no");
-                RequirementStatus {
-                    blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("hard_settings_ok", errors, html! {
-                            label(for = "hard_settings_ok") : "Allow hardcore settings?";
-                            br;
-                            input(id = "hard_settings_ok-yes", type = "radio", name = "hard_settings_ok", value = "yes", checked? = yes_checked);
-                            label(for = "hard_settings_ok-yes") : "Yes";
-                            input(id = "hard_settings_ok-no", type = "radio", name = "hard_settings_ok", value = "no", checked? = no_checked);
-                            label(for = "hard_settings_ok-no") : "No";
-                        });
-                    }),
-                }
-            }
-            Self::HoveringOk => {
-                let yes_checked = defaults.field_value("hover_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("hover_ok").is_some_and(|value| value == "no");
-                RequirementStatus {
-                    blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("hover_ok", errors, html! {
-                            label(for = "hover_ok") : "Allow hovering and moldorm bouncing in your races (with opponent consent)?";
-                            br;
-                            input(id = "hover_ok-yes", type = "radio", name = "hover_ok", value = "yes", checked? = yes_checked);
-                            label(for = "hover_ok-yes") : "Yes";
-                            input(id = "hover_ok-no", type = "radio", name = "hover_ok", value = "no", checked? = no_checked);
-                            label(for = "hover_ok-no") : "No";
-                        });
-                    }),
-                }
-            }
-            Self::InvertedOk => {
-                let yes_checked = defaults.field_value("inverted_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("inverted_ok").is_some_and(|value| value == "no");
-                RequirementStatus {
-                    blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("inverted_ok", errors, html! {
-                            label(for = "inverted_ok") : "Opt-in for Inverted world state?";
-                            br;
-                            input(id = "inverted_ok-yes", type = "radio", name = "inverted_ok", value = "yes", checked? = yes_checked);
-                            label(for = "inverted_ok-yes") : "Yes";
-                            input(id = "inverted_ok-no", type = "radio", name = "inverted_ok", value = "no", checked? = no_checked);
-                            label(for = "inverted_ok-no") : "No";
-                        });
-                    }),
-                }
-            }
-            Self::KeydropOk => {
-                let yes_checked = defaults.field_value("keydrop_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("keydrop_ok").is_some_and(|value| value == "no");
-                RequirementStatus {
-                    blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("keydrop_ok", errors, html! {
-                            label(for = "keydrop_ok") : "Opt-in for keydrop?";
-                            br;
-                            input(id = "keydrop_ok-yes", type = "radio", name = "keydrop_ok", value = "yes", checked? = yes_checked);
-                            label(for = "keydrop_ok-yes") : "Yes";
-                            input(id = "keydrop_ok-no", type = "radio", name = "keydrop_ok", value = "no", checked? = no_checked);
-                            label(for = "keydrop_ok-no") : "No";
-                        });
-                    }),
-                }
-            }
-            Self::LiteOk => {
-                let yes_checked = defaults.field_value("lite_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("lite_ok").is_some_and(|value| value == "no");
-                RequirementStatus {
-                    blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("lite_ok", errors, html! {
-                            label(for = "lite_ok") : "Allow RSL-Lite?";
-                            br;
-                            input(id = "lite_ok-yes", type = "radio", name = "lite_ok", value = "yes", checked? = yes_checked);
-                            label(for = "lite_ok-yes") : "Yes";
-                            input(id = "lite_ok-no", type = "radio", name = "lite_ok", value = "no", checked? = no_checked);
-                            label(for = "lite_ok-no") : "No";
-                        });
-                    }),
-                }
-            }
-            Self::MirrorScrollOk => {
-                let yes_checked = defaults.field_value("mirror_scroll_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("mirror_scroll_ok").is_some_and(|value| value == "no");
-                RequirementStatus {
-                    blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("mirror_scroll_ok", errors, html! {
-                            label(for = "mirror_scroll_ok") : "Opt-in for mirror scroll?";
-                            br;
-                            input(id = "mirror_scroll_ok-yes", type = "radio", name = "mirror_scroll_ok", value = "yes", checked? = yes_checked);
-                            label(for = "mirror_scroll_ok-yes") : "Yes";
-                            input(id = "mirror_scroll_ok-no", type = "radio", name = "mirror_scroll_ok", value = "no", checked? = no_checked);
-                            label(for = "mirror_scroll_ok-no") : "No";
-                        });
-                    }),
-                }
-            }
-            Self::MqOk => {
-                let yes_checked = defaults.field_value("mq_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("mq_ok").is_some_and(|value| value == "no");
-                RequirementStatus {
-                    blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("mq_ok", errors, html! {
-                            label(for = "mq_ok") : "Allow Master Quest?";
-                            br;
-                            input(id = "mq_ok-yes", type = "radio", name = "mq_ok", value = "yes", checked? = yes_checked);
-                            label(for = "mq_ok-yes") : "Yes";
-                            input(id = "mq_ok-no", type = "radio", name = "mq_ok", value = "no", checked? = no_checked);
-                            label(for = "mq_ok-no") : "No";
-                        });
-                    }),
-                }
-            }
-            Self::NoDelayOk => {
-                let yes_checked = defaults.field_value("no_delay_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("no_delay_ok").is_some_and(|value| value == "no");
-                RequirementStatus {
-                    blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("no_delay_ok", errors, html! {
-                            label(for = "no_delay_ok") : "Opt-in for no stream delay?";
-                            br;
-                            input(id = "no_delay_ok-yes", type = "radio", name = "no_delay_ok", value = "yes", checked? = yes_checked);
-                            label(for = "no_delay_ok-yes") : "Yes";
-                            input(id = "no_delay_ok-no", type = "radio", name = "no_delay_ok", value = "no", checked? = no_checked);
-                            label(for = "no_delay_ok-no") : "No";
-                        });
-                    }),
-                }
-            }
-            Self::PbOk => {
-                let yes_checked = defaults.field_value("pb_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("pb_ok").is_some_and(|value| value == "no");
-                RequirementStatus {
-                    blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("pb_ok", errors, html! {
-                            label(for = "pb_ok") : "Opt-in for pseudoboots?";
-                            br;
-                            input(id = "pb_ok-yes", type = "radio", name = "pb_ok", value = "yes", checked? = yes_checked);
-                            label(for = "pb_ok-yes") : "Yes";
-                            input(id = "pb_ok-no", type = "radio", name = "pb_ok", value = "no", checked? = no_checked);
-                            label(for = "pb_ok-no") : "No";
-                        });
-                    }),
-                }
-            }
-            Self::ZwOk => {
-                let yes_checked = defaults.field_value("zw_ok").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("zw_ok").is_some_and(|value| value == "no");
-                RequirementStatus {
-                    blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("zw_ok", errors, html! {
-                            // TODO: Maybe add a link here explaining ZW?
-                            label(for = "zw_ok") : "Opt-in for ZW?";
-                            br;
-                            input(id = "zw_ok-yes", type = "radio", name = "zw_ok", value = "yes", checked? = yes_checked);
-                            label(for = "zw_ok-yes") : "Yes";
-                            input(id = "zw_ok-no", type = "radio", name = "zw_ok", value = "no", checked? = no_checked);
-                            label(for = "zw_ok-no") : "No";
                         });
                     }),
                 }
@@ -975,17 +774,20 @@ impl Requirement {
         })
     }
 
-    async fn check_form(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: &User, data: &Data<'_>, form_ctx: &mut Context<'_>, value: &EnterForm) -> Result<(), Error> {
+    async fn check_form(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: &User, data: &Data<'_>, form_ctx: &mut Context<'_>, value: &EnterForm, config: &Config) -> Result<(), Error> {
         match self {
-            Self::StartGG { optional: false } => if !self.is_checked(transaction, http_client, discord_ctx, me, data).await?.unwrap_or(false) {
+            Self::StartGG { optional: false } => if !self.is_checked(transaction, http_client, discord_ctx, me, data, config).await?.unwrap_or(false) {
                 form_ctx.push_error(form::Error::validation("A start.gg account is required to enter this event.")); //TODO link to /login/startgg
             },
             Self::StartGG { optional: true } => match value.startgg_radio {
-                Some(BoolRadio::Yes) => if !self.is_checked(transaction, http_client, discord_ctx, me, data).await?.unwrap_or(false) {
+                Some(BoolRadio::Yes) => if !self.is_checked(transaction, http_client, discord_ctx, me, data, config).await?.unwrap_or(false) {
                     form_ctx.push_error(form::Error::validation("Sign in with start.gg or opt out of start.gg integration.").with_name("startgg_radio")); //TODO link to /login/startgg
                 },
                 Some(BoolRadio::No) => {}
                 None => form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("startgg_radio")),
+            },
+            Self::StartGGEventSignup { .. } => if !self.is_checked(transaction, http_client, discord_ctx, me, data, config).await?.unwrap_or(false) {
+                form_ctx.push_error(form::Error::validation("You must be signed up to the event on start.gg to enter."));
             },
             Self::TextField { regex, regex_error_messages, fallback_error_message, .. } => if !regex.is_match(&value.text_field) {
                 let error_message = if let Some((_, error_message)) = regex_error_messages.iter().find(|(regex, _)| regex.is_match(&value.text_field)) {
@@ -1015,42 +817,6 @@ impl Requirement {
             Self::Poll { .. } => if !value.confirm {
                 form_ctx.push_error(form::Error::validation("This field is required.").with_name("confirm"));
             },
-            Self::AllDungeonsOk => if value.all_dungeons_ok.is_none() {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("all_dungeons_ok"));
-            },
-            Self::FluteOk => if value.flute_ok.is_none() {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("flute_ok"));
-            },
-            Self::HardSettingsOk => if value.hard_settings_ok.is_none() {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("hard_settings_ok"));
-            },
-            Self::HoveringOk => if value.hover_ok.is_none() {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("hover_ok"));
-            },
-            Self::InvertedOk => if value.inverted_ok.is_none() {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("inverted_ok"));
-            },
-            Self::KeydropOk => if value.keydrop_ok.is_none() {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("keydrop_ok"));
-            },
-            Self::LiteOk => if value.lite_ok.is_none() {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("lite_ok"));
-            },
-            Self::MirrorScrollOk => if value.mirror_scroll_ok.is_none() {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("mirror_scroll_ok"));
-            },
-            Self::MqOk => if value.mq_ok.is_none() {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("mq_ok"));
-            },
-            Self::NoDelayOk => if value.no_delay_ok.is_none() {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("no_delay_ok"));
-            },
-            Self::PbOk => if value.pb_ok.is_none() {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("pb_ok"));
-            }
-            Self::ZwOk => if value.zw_ok.is_none() {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("zw_ok"));
-            }
             Self::RestreamConsent { optional: false, .. } => if !value.restream_consent {
                 form_ctx.push_error(form::Error::validation("Restream consent is required to enter this event.").with_name("restream_consent"));
             },
@@ -1067,7 +833,7 @@ impl Requirement {
                     form_ctx.push_error(form::Error::validation("The qualifier seed is not yet available."));
                 }
             }
-            Self::TripleQualifier { async_starts, async_ends, .. } => if !self.is_checked(transaction, http_client, discord_ctx, me, data).await?.unwrap_or(false) {
+            Self::TripleQualifier { async_starts, async_ends, .. } => if !self.is_checked(transaction, http_client, discord_ctx, me, data, config).await?.unwrap_or(false) {
                 let now = Utc::now();
                 if (*async_starts).into_iter().zip_eq(*async_ends).any(|(async_start, async_end)| now >= async_start && now < async_end) {
                     if !value.confirm {
@@ -1080,7 +846,7 @@ impl Requirement {
             Self::External { blocks_submit, .. } => if *blocks_submit {
                 form_ctx.push_error(form::Error::validation("Please complete event entry via the external method."));
             },
-            _ => if !self.is_checked(transaction, http_client, discord_ctx, me, data).await?.unwrap_or(false) {
+            _ => if !self.is_checked(transaction, http_client, discord_ctx, me, data, config).await?.unwrap_or(false) {
                 form_ctx.push_error(form::Error::validation(match self {
                     Self::RaceTime => Cow::Borrowed("A racetime.gg account is required to enter this event. Go to your Hyrule Town Hall profile and select 'Connect a racetime.gg account'."), //TODO direct link?
                     Self::RaceTimeInvite { error_text, .. } => if me.racetime.is_some() {
@@ -1100,6 +866,15 @@ impl Requirement {
                         Cow::Borrowed("You must join the event's Discord server to enter.")
                     }, //TODO invite link?
                     Self::Challonge => Cow::Borrowed("A Challonge account is required to enter this event."), //TODO link to /login/challonge
+                    Self::StartGGEventSignup { error_text, .. } => if me.startgg_id.is_some() {
+                        if let Some(error_text) = error_text {
+                            Cow::Owned(error_text.clone())
+                        } else {
+                            Cow::Borrowed("You must be signed up to the event on start.gg to enter.")
+                        }
+                    } else {
+                        Cow::Borrowed("Connect a start.gg account to your Hyrule Town Hall profile and sign up to the event on start.gg.") //TODO direct link?
+                    },
                     Self::QualifierPlacement { .. } => Cow::Borrowed("You have not secured a qualifying placement."), //TODO different message if the player has overqualified or overqualifying due to opt-outs is still possible
                     Self::RslLeaderboard => Cow::Borrowed("You have not finished the required number of races on the RSL leaderboard."), //TODO link to rsl.one
                     | Self::StartGG { .. }
@@ -1108,18 +883,6 @@ impl Requirement {
                     | Self::YesNo { .. }
                     | Self::Rules { .. }
                     | Self::Poll { .. }
-                    | Self::AllDungeonsOk
-                    | Self::FluteOk
-                    | Self::HoveringOk
-                    | Self::HardSettingsOk
-                    | Self::InvertedOk
-                    | Self::KeydropOk
-                    | Self::LiteOk
-                    | Self::MirrorScrollOk
-                    | Self::MqOk
-                    | Self::NoDelayOk
-                    | Self::PbOk
-                    | Self::ZwOk
                     | Self::RestreamConsent { .. }
                     | Self::Qualifier { .. }
                     | Self::TripleQualifier { .. }
@@ -1132,12 +895,12 @@ impl Requirement {
         Ok(())
     }
 
-    async fn request_qualifier(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: &User, data: &Data<'_>) -> Result<Option<AsyncKind>, Error> {
+    async fn request_qualifier(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: &User, data: &Data<'_>, config: &Config) -> Result<Option<AsyncKind>, Error> {
         Ok(match self {
             Requirement::Qualifier { .. } => Some(AsyncKind::Qualifier1),
             Requirement::TripleQualifier { async_starts, async_ends, .. } => {
                 let now = Utc::now();
-                if self.is_checked(transaction, http_client, discord_ctx, me, data).await?.unwrap_or(false) {
+                if self.is_checked(transaction, http_client, discord_ctx, me, data, config).await?.unwrap_or(false) {
                     None
                 } else {
                     (*async_starts).into_iter()
@@ -1226,7 +989,7 @@ pub(crate) struct EnterForm {
     custom_choices: HashMap<String, String>,
 }
 
-pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, data: Data<'_>, defaults: pic::EnterFormDefaults<'_>) -> Result<RawHtml<String>, Error> {
+pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, data: Data<'_>, defaults: pic::EnterFormDefaults<'_>, config: &Config) -> Result<RawHtml<String>, Error> {
     //TODO if already entered, redirect to status page
     let my_invites = if let Some(ref me) = me {
         sqlx::query_scalar!(r#"SELECT team AS "team: Id<Teams>" FROM teams, team_members WHERE series = $1 AND event = $2 AND member = $3 AND status = 'unconfirmed'"#, data.series as _, &*data.event, me.id as _).fetch_all(&mut *transaction).await?
@@ -1304,10 +1067,10 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                             let mut request_qualifier = false;
                             let mut requirements_display = Vec::with_capacity(requirements.len());
                             for requirement in requirements {
-                                let is_checked = requirement.is_checked(&mut transaction, http_client, discord_ctx, me, &data).await?;
-                                let status = requirement.check_get(http_client, discord_ctx, &data, is_checked, uri!(get(data.series, &*data.event, defaults.my_role(), defaults.teammate())), &defaults).await?;
+                                let is_checked = requirement.is_checked(&mut transaction, http_client, discord_ctx, me, &data, config).await?;
+                                let status = requirement.check_get(http_client, discord_ctx, &data, is_checked, uri!(get(data.series, &*data.event, defaults.my_role(), defaults.teammate())), &defaults, me, config).await?;
                                 if status.blocks_submit { can_submit = false }
-                                if requirement.request_qualifier(&mut transaction, http_client, discord_ctx, me, &data).await?.is_some() { request_qualifier = true }
+                                if requirement.request_qualifier(&mut transaction, http_client, discord_ctx, me, &data, config).await?.is_some() { request_qualifier = true }
                                 requirements_display.push((is_checked, status.html_content));
                             }
                             let preface = html! {
@@ -1518,10 +1281,10 @@ fn enter_form_step2<'a, 'b: 'a, 'c: 'a, 'd: 'a>(mut transaction: Transaction<'a,
 }
 
 #[rocket::get("/event/<series>/<event>/enter?<my_role>&<teammate>")]
-pub(crate) async fn get(pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, my_role: Option<pic::Role>, teammate: Option<Id<Users>>) -> Result<RawHtml<String>, StatusOrError<Error>> {
+pub(crate) async fn get(config: &State<Config>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, my_role: Option<pic::Role>, teammate: Option<Id<Users>>) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    Ok(enter_form(transaction, http_client, discord_ctx, me, uri, csrf.as_ref(), data, pic::EnterFormDefaults::Values { my_role, teammate }).await?)
+    Ok(enter_form(transaction, http_client, discord_ctx, me, uri, csrf.as_ref(), data, pic::EnterFormDefaults::Values { my_role, teammate }, config).await?)
 }
 
 #[rocket::post("/event/<series>/<event>/enter", data = "<form>")]
@@ -1546,8 +1309,8 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                         }
                     } else {
                         for requirement in requirements {
-                            requirement.check_form(&mut transaction, http_client, discord_ctx, &me, &data, &mut form.context, value).await?;
-                            if let Some(async_kind) = requirement.request_qualifier(&mut transaction, http_client, discord_ctx, &me, &data).await? {
+                            requirement.check_form(&mut transaction, http_client, discord_ctx, &me, &data, &mut form.context, value, config).await?;
+                            if let Some(async_kind) = requirement.request_qualifier(&mut transaction, http_client, discord_ctx, &me, &data, config).await? {
                                 request_qualifier = Some(async_kind);
                             }
                         }
@@ -1988,5 +1751,5 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
             return Ok(RedirectOrContent::Content(enter_form_step2(transaction, Some(me), uri, http_client, csrf.as_ref(), data, mw::EnterFormStep2Defaults::Context(form.context)).await?))
         }
     }
-    Ok(RedirectOrContent::Content(enter_form(transaction, http_client, discord_ctx, Some(me), uri, csrf.as_ref(), data, pic::EnterFormDefaults::Context(form.context)).await?))
+    Ok(RedirectOrContent::Content(enter_form(transaction, http_client, discord_ctx, Some(me), uri, csrf.as_ref(), data, pic::EnterFormDefaults::Context(form.context), config).await?))
 }
