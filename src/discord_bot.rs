@@ -3837,7 +3837,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         }
                     } else if let Some(race_id_str) = custom_id.strip_prefix("draw_report_result_") {
                         // "Report final result" button on draw message — open a modal with time inputs
-                        let race_id = race_id_str.parse::<i64>().expect("race_id in draw_report_result button");
+                        let race_id = race_id_str.parse::<u64>().expect("race_id in draw_report_result button");
                         let (mut transaction, http_client) = {
                             let data = ctx.data.read().await;
                             (
@@ -3845,7 +3845,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
                             )
                         };
-                        let race = Race::from_id(&mut transaction, &http_client, Id::from(race_id as u64)).await
+                        let race = Race::from_id(&mut transaction, &http_client, Id::from(race_id)).await
                             .map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
                         transaction.rollback().await?;
                         let (name_a, name_b) = match &race.entrants {
@@ -3881,7 +3881,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         )).await?;
                     } else if let Some(race_id_str) = custom_id.strip_prefix("draw_restart_race_") {
                         // "Restart race" button on draw message — show ephemeral confirmation
-                        let race_id = race_id_str.parse::<i64>().expect("race_id in draw_restart_race button");
+                        let race_id = race_id_str.parse::<u64>().expect("race_id in draw_restart_race button");
                         let msg_id = interaction.message.id;
                         let channel_id = interaction.message.channel_id;
                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -3911,7 +3911,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let mut parts = params.rsplitn(3, '_');
                         let msg_id = MessageId::new(parts.next().expect("msg_id in draw_restart_confirm").parse::<u64>().expect("msg_id parse"));
                         let orig_channel_id = ChannelId::new(parts.next().expect("channel_id in draw_restart_confirm").parse::<u64>().expect("channel_id parse"));
-                        let race_id = parts.next().expect("race_id in draw_restart_confirm").parse::<i64>().expect("race_id parse");
+                        let race_id = parts.next().expect("race_id in draw_restart_confirm").parse::<u64>().expect("race_id parse");
                         // Acknowledge interaction — update ephemeral confirmation to show progress
                         interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                             CreateInteractionResponseMessage::new()
@@ -3925,7 +3925,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
                             )
                         };
-                        let race = Race::from_id(&mut transaction, &http_client, Id::from(race_id as u64)).await
+                        let race = Race::from_id(&mut transaction, &http_client, Id::from(race_id)).await
                             .map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
                         let event = race.event(&mut transaction).await
                             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
@@ -4034,7 +4034,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 },
                 Interaction::Modal(interaction) => {
                     if let Some(race_id_str) = interaction.data.custom_id.strip_prefix("draw_report_modal_") {
-                        let race_id = race_id_str.parse::<i64>().expect("race_id in draw_report_modal");
+                        let race_id = race_id_str.parse::<u64>().expect("race_id in draw_report_modal");
                         // Extract time inputs from modal (synchronous — do before deferring)
                         let mut time_a_str = None;
                         let mut time_b_str = None;
@@ -4087,7 +4087,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
                             )
                         };
-                        let race = Race::from_id(&mut transaction, &http_client, Id::from(race_id as u64)).await
+                        let race = Race::from_id(&mut transaction, &http_client, Id::from(race_id)).await
                             .map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
                         let event = race.event(&mut transaction).await
                             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
