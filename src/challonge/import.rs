@@ -32,6 +32,7 @@ pub(crate) async fn fetch_participants(
         return Ok(cached);
     }
     let mut all = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
     let mut next_url: Option<Url> = Some(client::tournament_url(community, tournament, "participants").parse()?);
     for _ in 0..10 {
         let Some(url) = next_url.take() else { break };
@@ -42,7 +43,15 @@ pub(crate) async fn fetch_participants(
                 .json_with_text_in_error().await?)
         }).await?;
         if resp.data.is_empty() { break }
-        all.extend(resp.data);
+        let mut duplicate = false;
+        for item in resp.data {
+            if !seen_ids.insert(item.id.clone()) {
+                duplicate = true;
+                break;
+            }
+            all.push(item);
+        }
+        if duplicate { break }
         next_url = resp.links.next.filter(|next| next != &url);
     }
     client::store_participants(community, tournament, all.clone()).await;
@@ -61,6 +70,7 @@ pub(crate) async fn fetch_matches(
         return Ok(cached);
     }
     let mut all = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
     let base = client::tournament_url(community, tournament, "matches");
     let mut next_url: Option<Url> = Some({
         let mut url: Url = base.parse()?;
@@ -78,7 +88,15 @@ pub(crate) async fn fetch_matches(
                 .json_with_text_in_error().await?)
         }).await?;
         if resp.data.is_empty() { break }
-        all.extend(resp.data);
+        let mut duplicate = false;
+        for item in resp.data {
+            if !seen_ids.insert(item.id.clone()) {
+                duplicate = true;
+                break;
+            }
+            all.push(item);
+        }
+        if duplicate { break }
         next_url = resp.links.next.filter(|next| next != &url);
     }
     client::store_matches(community, tournament, state, all.clone()).await;
@@ -189,14 +207,14 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
                     Entrant::MidosHouseTeam(team1.clone()),
                     Entrant::MidosHouseTeam(team2.clone()),
                 ]),
-                phase: set.attributes.as_ref().map(|a| {
+                phase: None,
+                round: set.attributes.as_ref().map(|a| {
                     if a.round < 0 {
-                        format!("Losers Round {}", a.round.abs())
+                        format!("LB Round {}", a.round.abs())
                     } else {
-                        format!("Round {}", a.round)
+                        format!("WB Round {}", a.round)
                     }
                 }),
-                round: set.attributes.as_ref().map(|a| a.identifier.clone()),
                 game: None,
                 scheduling_thread: None,
                 schedule: RaceSchedule::Unscheduled,
