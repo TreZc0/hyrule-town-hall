@@ -3847,23 +3847,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         };
                         let race = Race::from_id(&mut transaction, &http_client, Id::from(race_id)).await
                             .map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
-                        transaction.rollback().await?;
                         let (name_a, name_b) = match &race.entrants {
                             Entrants::Two([a, b]) => {
-                                let name_a = match a {
-                                    Entrant::MidosHouseTeam(team) => team.name.clone().unwrap_or_else(|| String::from("Team 1")),
-                                    Entrant::Named { name, .. } => name.clone(),
-                                    _ => String::from("Team 1"),
-                                };
-                                let name_b = match b {
-                                    Entrant::MidosHouseTeam(team) => team.name.clone().unwrap_or_else(|| String::from("Team 2")),
-                                    Entrant::Named { name, .. } => name.clone(),
-                                    _ => String::from("Team 2"),
-                                };
+                                let name_a = a.name(&mut transaction, ctx).await?
+                                    .map(|n| n.into_owned())
+                                    .unwrap_or_else(|| String::from("Team 1"));
+                                let name_b = b.name(&mut transaction, ctx).await?
+                                    .map(|n| n.into_owned())
+                                    .unwrap_or_else(|| String::from("Team 2"));
                                 (name_a, name_b)
                             }
                             _ => (String::from("Team 1"), String::from("Team 2")),
                         };
+                        transaction.rollback().await?;
                         interaction.create_response(ctx, CreateInteractionResponse::Modal(
                             CreateModal::new(format!("draw_report_modal_{race_id}"), "Report Race Result")
                                 .components(vec![
@@ -4080,68 +4076,71 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         interaction.create_response(ctx, CreateInteractionResponse::Defer(
                             CreateInteractionResponseMessage::new()
                         )).await?;
-                        let (mut transaction, http_client) = {
-                            let data = ctx.data.read().await;
-                            (
-                                data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?,
-                                data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
-                            )
-                        };
-                        let race = Race::from_id(&mut transaction, &http_client, Id::from(race_id)).await
-                            .map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
-                        let event = race.event(&mut transaction).await
-                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                        let is_organizer = event.organizers(&mut transaction).await
-                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
-                            .into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
-                        if !is_organizer {
-                            transaction.rollback().await?;
-                            interaction.edit_response(ctx, EditInteractionResponse::new()
-                                .content("You must be an event organizer to use this command.")
-                            ).await?;
-                            return Ok(());
-                        }
-                        let Entrants::Two([entrant_a, entrant_b]) = race.entrants.clone() else {
-                            transaction.rollback().await?;
-                            interaction.edit_response(ctx, EditInteractionResponse::new()
-                                .content("Error: this race does not have exactly two teams.")
-                            ).await?;
-                            return Ok(());
-                        };
-                        let room = match &race.schedule {
-                            RaceSchedule::Live { room: Some(url), .. } => url.clone(),
-                            _ => {
+                        let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
+                            let (mut transaction, http_client) = {
+                                let data = ctx.data.read().await;
+                                (
+                                    data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?,
+                                    data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
+                                )
+                            };
+                            let race = Race::from_id(&mut transaction, &http_client, Id::from(race_id)).await
+                                .map_err(|_| Error::Sql(sqlx::Error::RowNotFound))?;
+                            let event = race.event(&mut transaction).await
+                                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                            let is_organizer = event.organizers(&mut transaction).await
+                                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                                .into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
+                            if !is_organizer {
                                 transaction.rollback().await?;
-                                interaction.edit_response(ctx, EditInteractionResponse::new()
-                                    .content("Error: could not determine race room URL from race record.")
-                                ).await?;
-                                return Ok(());
+                                return Err("You must be an event organizer to use this command.".into());
                             }
-                        };
-                        let dur_a = Duration::from_secs(total_a as u64);
-                        let dur_b = Duration::from_secs(total_b as u64);
-                        let (winner, winner_time, loser, loser_time) = if total_a <= total_b {
-                            (entrant_a, dur_a, entrant_b, dur_b)
-                        } else {
-                            (entrant_b, dur_b, entrant_a, dur_a)
-                        };
-                        let global_state = ctx.data.read().await.get::<GlobalState>().expect("global state missing from Discord context").clone();
-                        let (transaction, _) = racetime_bot::report::complete_1v1_result(
-                            transaction,
-                            &*global_state,
-                            &race,
-                            &event,
-                            winner,
-                            Some(winner_time),
-                            room.clone(),
-                            loser,
-                            Some(loser_time),
-                            room,
-                        ).await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                        transaction.commit().await?;
-                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                            .content("Result reported successfully.")
-                        ).await?;
+                            let Entrants::Two([entrant_a, entrant_b]) = race.entrants.clone() else {
+                                transaction.rollback().await?;
+                                return Err("Error: this race does not have exactly two teams.".into());
+                            };
+                            let room = match &race.schedule {
+                                RaceSchedule::Live { room: Some(url), .. } => url.clone(),
+                                _ => {
+                                    transaction.rollback().await?;
+                                    return Err("Error: could not determine race room URL from race record.".into());
+                                }
+                            };
+                            let dur_a = Duration::from_secs(total_a as u64);
+                            let dur_b = Duration::from_secs(total_b as u64);
+                            let (winner, winner_time, loser, loser_time) = if total_a <= total_b {
+                                (entrant_a, dur_a, entrant_b, dur_b)
+                            } else {
+                                (entrant_b, dur_b, entrant_a, dur_a)
+                            };
+                            let global_state = ctx.data.read().await.get::<GlobalState>().expect("global state missing from Discord context").clone();
+                            let (transaction, _) = racetime_bot::report::complete_1v1_result(
+                                transaction,
+                                &*global_state,
+                                &race,
+                                &event,
+                                winner,
+                                Some(winner_time),
+                                room.clone(),
+                                loser,
+                                Some(loser_time),
+                                room,
+                            ).await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                            transaction.commit().await?;
+                            Ok(())
+                        }.await;
+                        match result {
+                            Ok(()) => {
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Final results submitted")
+                                ).await?;
+                            }
+                            Err(e) => {
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content(format!("Error: {}", e))
+                                ).await?;
+                            }
+                        }
                     }
                 },
                 _ => {}
