@@ -33,7 +33,8 @@ pub(crate) async fn fetch_participants(
     }
     let mut all = Vec::new();
     let mut next_url: Option<Url> = Some(client::tournament_url(community, tournament, "participants").parse()?);
-    while let Some(url) = next_url {
+    for _ in 0..10 {
+        let Some(url) = next_url.take() else { break };
         let resp: ParticipantsResponse = client::rate_limited_request(|| async {
             Ok(client::api_request(http_client, reqwest::Method::GET, url.clone(), &config.challonge_api_key)
                 .send().await?
@@ -68,7 +69,8 @@ pub(crate) async fn fetch_matches(
         }
         url
     });
-    while let Some(url) = next_url {
+    for _ in 0..10 {
+        let Some(url) = next_url.take() else { break };
         let resp: MatchesResponse = client::rate_limited_request(|| async {
             Ok(client::api_request(http_client, reqwest::Method::GET, url.clone(), &config.challonge_api_key)
                 .send().await?

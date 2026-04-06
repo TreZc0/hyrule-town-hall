@@ -12,7 +12,7 @@ use super::types::*;
 
 /// Challonge has a 5000 requests/month limit.
 /// Safe daily limit: ~160 requests (5000/31)
-const SAFE_DAILY_LIMIT: u32 = 160;
+const SAFE_DAILY_LIMIT: u32 = 500;
 const MIN_REQUEST_INTERVAL: Duration = Duration::from_millis(100);
 
 const PARTICIPANTS_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
