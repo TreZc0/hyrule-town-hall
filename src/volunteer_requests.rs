@@ -180,6 +180,8 @@ async fn post_volunteer_requests_for_event(
     channel_id: ChannelId,
     lead_time: Duration,
 ) -> Result<CheckResult, Error> {
+    const MAX_RACES_PER_POST: usize = 8;
+
     let now = Utc::now();
     let cutoff = now + lead_time;
 
@@ -196,31 +198,47 @@ async fn post_volunteer_requests_for_event(
     }
 
     let count = races_needing_volunteers.len();
+    let http_client = reqwest::Client::new();
 
-    // Check if there's an existing active post we can add to
-    // Find a message ID from a race that hasn't started yet in this event
-    let existing_message = sqlx::query_scalar!(
-        r#"SELECT volunteer_request_message_id AS "volunteer_request_message_id: PgSnowflake<MessageId>"
+    // Find all existing active posts with their current race counts, ordered by earliest race.
+    // We'll fill these up to MAX_RACES_PER_POST before creating new posts.
+    let existing_messages = sqlx::query!(
+        r#"SELECT
+            volunteer_request_message_id AS "message_id: PgSnowflake<MessageId>",
+            COUNT(*) AS "race_count!: i64"
         FROM races
         WHERE series = $1
           AND event = $2
           AND volunteer_request_message_id IS NOT NULL
           AND start > $3
           AND ignored = false
-        ORDER BY start ASC
-        LIMIT 1"#,
+        GROUP BY volunteer_request_message_id
+        ORDER BY MIN(start) ASC"#,
         event_data.series as _,
         &*event_data.event,
         now
     )
-    .fetch_optional(&mut **transaction)
-    .await?
-    .flatten();
+    .fetch_all(&mut **transaction)
+    .await?;
 
-    let message_id = if let Some(PgSnowflake(existing_id)) = existing_message {
-        // Add new races to the existing post
-        // First, mark them as notified with the existing message ID
-        for need in &races_needing_volunteers {
+    let mut remaining = races_needing_volunteers.as_slice();
+
+    // Fill existing posts up to MAX_RACES_PER_POST
+    for existing in &existing_messages {
+        if remaining.is_empty() { break; }
+        let existing_id = match existing.message_id {
+            Some(PgSnowflake(id)) => id,
+            None => continue,
+        };
+        let current_count = existing.race_count as usize;
+        if current_count >= MAX_RACES_PER_POST { continue; }
+
+        let slots = MAX_RACES_PER_POST - current_count;
+        let to_add = remaining.len().min(slots);
+        let (chunk, rest) = remaining.split_at(to_add);
+        remaining = rest;
+
+        for need in chunk {
             sqlx::query!(
                 "UPDATE races SET volunteer_request_sent = true, volunteer_request_message_id = $2 WHERE id = $1",
                 need.race.id as _,
@@ -230,9 +248,7 @@ async fn post_volunteer_requests_for_event(
             .await?;
         }
 
-        // Now update the post using the existing update logic
-        // Get all races that share this message ID
-        let http_client = reqwest::Client::new();
+        // Rebuild the full message for this post
         let all_race_ids = sqlx::query_scalar!(
             r#"SELECT id AS "id: Id<Races>"
             FROM races
@@ -244,52 +260,37 @@ async fn post_volunteer_requests_for_event(
         .fetch_all(&mut **transaction)
         .await?;
 
-        // Build volunteer needs for all races in this post
         let mut all_needs = Vec::new();
         for rid in &all_race_ids {
-            let race = Race::from_id(&mut *transaction, &http_client, *rid).await?;
-
+            let race = match Race::from_id(&mut *transaction, &http_client, *rid).await {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("volunteer post update: failed to load race {rid:?}: {e}");
+                    continue;
+                }
+            };
             let matchup = get_matchup_description(&mut *transaction, &race).await?;
             let role_bindings = EffectiveRoleBinding::for_event(&mut *transaction, event_data.series, &event_data.event).await?;
             let signups = Signup::for_race(&mut *transaction, *rid).await?;
-
             let (role_needs, has_any_need) = collect_role_needs_for_bindings(&mut *transaction, &role_bindings, &signups).await?;
-
             if has_any_need {
-                all_needs.push(RaceVolunteerNeed {
-                    race,
-                    matchup,
-                    role_needs,
-                });
+                all_needs.push(RaceVolunteerNeed { race, matchup, role_needs });
             }
         }
 
-        // Build and edit the message (no pings — pings are handled by volunteer_pings workflows)
-        let (content, components) = build_announcement_content(
-            &all_needs,
-            event_data,
-            now,
-            cutoff,
-        );
-
-        if let Err(_e) = channel_id.edit_message(
+        let (content, components) = build_announcement_content(&all_needs, event_data, now, cutoff);
+        if let Err(e) = channel_id.edit_message(
             discord_ctx,
             existing_id,
-            EditMessage::new()
-                .content(content)
-                .components(components)
-        ).await {}
+            EditMessage::new().content(content).components(components)
+        ).await {
+            eprintln!("volunteer post update: failed to edit message {existing_id}: {e}");
+        }
+    }
 
-        existing_id
-    } else {
-        // Create a new post (no pings — pings are handled by volunteer_pings workflows)
-        let message = build_announcement_message(
-            &races_needing_volunteers,
-            event_data,
-            now,
-            cutoff,
-        );
-
+    // Create new posts for any remaining races, in chunks of MAX_RACES_PER_POST
+    for chunk in remaining.chunks(MAX_RACES_PER_POST) {
+        let message = build_announcement_message(chunk, event_data, now, cutoff);
         let posted_message = match channel_id.send_message(discord_ctx, message).await {
             Ok(msg) => msg,
             Err(e) => {
@@ -297,9 +298,7 @@ async fn post_volunteer_requests_for_event(
                 return Err(e.into());
             }
         };
-
-        // Mark all races as notified and store the message ID
-        for need in &races_needing_volunteers {
+        for need in chunk {
             sqlx::query!(
                 "UPDATE races SET volunteer_request_sent = true, volunteer_request_message_id = $2 WHERE id = $1",
                 need.race.id as _,
@@ -308,11 +307,8 @@ async fn post_volunteer_requests_for_event(
             .execute(&mut **transaction)
             .await?;
         }
+    }
 
-        posted_message.id
-    };
-
-    let _ = message_id; // Suppress unused warning
     Ok(CheckResult::Posted(count))
 }
 
@@ -770,7 +766,13 @@ pub(crate) async fn update_volunteer_post_for_race(
     // Build volunteer needs for all races in this post
     let mut needs = Vec::new();
     for rid in &race_ids {
-        let race = Race::from_id(&mut transaction, &http_client, *rid).await?;
+        let race = match Race::from_id(&mut transaction, &http_client, *rid).await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("volunteer post update: failed to load race {rid:?}: {e}");
+                continue;
+            }
+        };
 
         // Get matchup description
         let matchup = get_matchup_description(&mut transaction, &race).await?;
@@ -957,7 +959,13 @@ pub(crate) async fn update_volunteer_post_by_message_id(
     // Build volunteer needs for remaining races
     let mut needs = Vec::new();
     for rid in &race_ids {
-        let race = Race::from_id(&mut transaction, &http_client, *rid).await?;
+        let race = match Race::from_id(&mut transaction, &http_client, *rid).await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("volunteer post update: failed to load race {rid:?}: {e}");
+                continue;
+            }
+        };
         let matchup = get_matchup_description(&mut transaction, &race).await?;
         let role_bindings = EffectiveRoleBinding::for_event(&mut transaction, series, event).await?;
         let signups = Signup::for_race(&mut transaction, *rid).await?;
