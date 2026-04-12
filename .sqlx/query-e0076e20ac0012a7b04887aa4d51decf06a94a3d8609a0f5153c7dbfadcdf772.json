@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                id,\n                series AS \"series: Series\",\n                event,\n                backend_id,\n                title,\n                description,\n                estimate_override,\n                delay_minutes,\n                nodecg_pk,\n                trigger_condition AS \"trigger_condition: ExportTrigger\",\n                enabled\n            FROM zsr_restream_exports\n            WHERE series = $1 AND event = $2\n            ORDER BY backend_id\n        ",
+  "query": "\n            SELECT\n                id,\n                series AS \"series: Series\",\n                event,\n                backend_id,\n                title,\n                description,\n                estimate_override,\n                delay_minutes,\n                nodecg_pk,\n                trigger_condition AS \"trigger_condition: ExportTrigger\",\n                enabled,\n                append_mode\n            FROM zsr_restream_exports\n            WHERE enabled = true\n            ORDER BY series, event, backend_id\n        ",
   "describe": {
     "columns": [
       {
@@ -68,13 +68,15 @@
         "ordinal": 10,
         "name": "enabled",
         "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "append_mode",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
-      "Left": [
-        "Text",
-        "Text"
-      ]
+      "Left": []
     },
     "nullable": [
       false,
@@ -87,8 +89,9 @@
       false,
       true,
       false,
+      false,
       false
     ]
   },
-  "hash": "0ccd8b48ed2c91128cd19a103cc0ccdff8cf45dcb086c8516aa43b4e6d0f8ec8"
+  "hash": "e0076e20ac0012a7b04887aa4d51decf06a94a3d8609a0f5153c7dbfadcdf772"
 }

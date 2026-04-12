@@ -253,6 +253,7 @@ pub(crate) struct ExportConfig {
     pub(crate) nodecg_pk: Option<i32>,
     pub(crate) trigger_condition: ExportTrigger,
     pub(crate) enabled: bool,
+    pub(crate) append_mode: bool,
 }
 
 impl ExportConfig {
@@ -273,7 +274,8 @@ impl ExportConfig {
                 delay_minutes,
                 nodecg_pk,
                 trigger_condition AS "trigger_condition: ExportTrigger",
-                enabled
+                enabled,
+                append_mode
             FROM zsr_restream_exports
             WHERE id = $1
         "#, id)
@@ -299,7 +301,8 @@ impl ExportConfig {
                 delay_minutes,
                 nodecg_pk,
                 trigger_condition AS "trigger_condition: ExportTrigger",
-                enabled
+                enabled,
+                append_mode
             FROM zsr_restream_exports
             WHERE series = $1 AND event = $2
             ORDER BY backend_id
@@ -324,7 +327,8 @@ impl ExportConfig {
                 delay_minutes,
                 nodecg_pk,
                 trigger_condition AS "trigger_condition: ExportTrigger",
-                enabled
+                enabled,
+                append_mode
             FROM zsr_restream_exports
             WHERE enabled = true
             ORDER BY series, event, backend_id
@@ -345,14 +349,15 @@ impl ExportConfig {
         delay_minutes: i32,
         nodecg_pk: Option<i32>,
         trigger_condition: ExportTrigger,
+        append_mode: bool,
     ) -> Result<Self, sqlx::Error> {
         let id = sqlx::query_scalar!(r#"
             INSERT INTO zsr_restream_exports (
                 series, event, backend_id,
                 title, description, estimate_override, delay_minutes, nodecg_pk,
-                trigger_condition
+                trigger_condition, append_mode
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING id
         "#,
             series as _,
@@ -363,7 +368,8 @@ impl ExportConfig {
             estimate_override,
             delay_minutes,
             nodecg_pk,
-            trigger_condition as _
+            trigger_condition as _,
+            append_mode
         )
         .fetch_one(&mut **transaction)
         .await?;
@@ -380,6 +386,7 @@ impl ExportConfig {
             nodecg_pk,
             trigger_condition,
             enabled: true,
+            append_mode,
         })
     }
 
@@ -394,6 +401,7 @@ impl ExportConfig {
         nodecg_pk: Option<i32>,
         trigger_condition: ExportTrigger,
         enabled: bool,
+        append_mode: bool,
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(r#"
             UPDATE zsr_restream_exports SET
@@ -404,6 +412,7 @@ impl ExportConfig {
                 nodecg_pk = $6,
                 trigger_condition = $7,
                 enabled = $8,
+                append_mode = $9,
                 updated_at = NOW()
             WHERE id = $1
         "#,
@@ -414,7 +423,8 @@ impl ExportConfig {
             delay_minutes,
             nodecg_pk,
             trigger_condition as _,
-            enabled
+            enabled,
+            append_mode
         )
         .execute(&mut **transaction)
         .await?;
@@ -647,12 +657,36 @@ pub(crate) async fn build_race_title(
 
     // Combine: EventName: Round/Phase (G{n}) - Matchup
     let game_suffix = race.game.map(|g| format!(" (G{})", g)).unwrap_or_default();
-    if let Some(round) = &race.round {
+    let mut title = if let Some(round) = &race.round {
         format!("{}: {}{} - {}", event_name, round, game_suffix, matchup)
     } else if let Some(phase) = &race.phase {
         format!("{}: {}{} - {}", event_name, phase, game_suffix, matchup)
     } else {
         format!("{}: {}{}", event_name, matchup, game_suffix)
+    };
+
+    // Append draft mode if enabled and available
+    if export.append_mode {
+        if let Some(mode) = get_race_mode(race) {
+            title = format!("{} [{}]", title, mode);
+        }
+    }
+
+    title
+}
+
+/// Get the draft mode for a race if available
+fn get_race_mode(race: &Race) -> Option<&str> {
+    use crate::series::alttprde;
+
+    if race.series == Series::AlttprDe {
+        race.game
+            .and_then(|game| race.draft.as_ref().and_then(|draft|
+                alttprde::mode_for_game(&draft.settings, game)
+            ))
+            .map(|mode| mode.display)
+    } else {
+        None
     }
 }
 
@@ -883,8 +917,8 @@ pub(crate) async fn export_race(
     // Calculate start time with delay
     let delayed_start = start + chrono::Duration::minutes(export.delay_minutes as i64);
 
-    // Format UTC date
-    let utc_date = delayed_start.format("%b %d, %l:%M%p").to_string().replace("  ", " ");
+    // Format UTC date with zero-padded hour
+    let utc_date = delayed_start.format("%b %d, %I:%M%p").to_string();
 
     // Build title
     let title = build_race_title(transaction, race, export, event_display_name).await;
