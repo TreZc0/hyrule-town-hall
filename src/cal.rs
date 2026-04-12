@@ -2561,7 +2561,16 @@ pub(crate) async fn race_table(
                                     // Only show "Add Hash" for games that support hashes (not TWWR)
                                     @let supports_hash = !matches!(event.rando_version, Some(racetime_bot::VersionedBranch::Tww { .. }));
                                     @let add_hash_url = options.can_edit.then(|| uri!(cal::add_file_hash(race.series, &*race.event, race.id))).filter(|_| supports_hash);
-                                    : seed::table_cell(now, &race.seed, true, add_hash_url, &mut *transaction, game_id).await?;
+                                    // Extract draft mode for display if applicable
+                                    @let draft_mode = if race.series == Series::AlttprDe {
+                                        race.draft.as_ref()
+                                            .and_then(|draft| race.game)
+                                            .and_then(|game| race.draft.as_ref().and_then(|draft| alttprde::mode_for_game(&draft.settings, game)))
+                                            .map(|mode| mode.display)
+                                    } else {
+                                        None
+                                    };
+                                    : seed::table_cell(now, &race.seed, true, add_hash_url, &mut *transaction, game_id, draft_mode).await?;
                                 } else {
                                     // hide seed if unfinished async
                                     //TODO show to the team that played the 1st async half
