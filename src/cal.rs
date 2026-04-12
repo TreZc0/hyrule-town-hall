@@ -2563,10 +2563,18 @@ pub(crate) async fn race_table(
                                     @let add_hash_url = options.can_edit.then(|| uri!(cal::add_file_hash(race.series, &*race.event, race.id))).filter(|_| supports_hash);
                                     // Extract draft mode for display if applicable
                                     @let draft_mode = if race.series == Series::AlttprDe {
-                                        race.draft.as_ref()
-                                            .and_then(|draft| race.game)
-                                            .and_then(|game| race.draft.as_ref().and_then(|draft| alttprde::mode_for_game(&draft.settings, game)))
-                                            .map(|mode| mode.display)
+                                        if matches!(racetime_bot::Goal::for_event(race.series, &race.event), Some(racetime_bot::Goal::AlttprDeRivalsCupBrackets | racetime_bot::Goal::AlttprDeRivalsCupGroups)) {
+                                            race.draft.as_ref().and_then(|draft| {
+                                                let game = race.game.unwrap_or(1);
+                                                let preset = draft.settings.get(&*format!("game{game}_preset")).map(|v| v.as_ref())?;
+                                                alttprde::RIVALS_CUP_PRESETS.iter().find(|p| p.preset == preset).map(|p| p.display_name)
+                                            })
+                                        } else {
+                                            race.draft.as_ref()
+                                                .and_then(|_| race.game)
+                                                .and_then(|game| race.draft.as_ref().and_then(|draft| alttprde::mode_for_game(&draft.settings, game)))
+                                                .map(|mode| mode.display)
+                                        }
                                     } else {
                                         None
                                     };
