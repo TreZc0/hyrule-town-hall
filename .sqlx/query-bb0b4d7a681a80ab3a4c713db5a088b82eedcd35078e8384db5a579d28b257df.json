@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            UPDATE zsr_restream_exports SET\n                title = $2,\n                description = $3,\n                estimate_override = $4,\n                delay_minutes = $5,\n                nodecg_pk = $6,\n                trigger_condition = $7,\n                enabled = $8,\n                updated_at = NOW()\n            WHERE id = $1\n        ",
+  "query": "\n            UPDATE zsr_restream_exports SET\n                title = $2,\n                description = $3,\n                estimate_override = $4,\n                delay_minutes = $5,\n                nodecg_pk = $6,\n                trigger_condition = $7,\n                enabled = $8,\n                append_mode = $9,\n                updated_at = NOW()\n            WHERE id = $1\n        ",
   "describe": {
     "columns": [],
     "parameters": {
@@ -23,10 +23,11 @@
             }
           }
         },
+        "Bool",
         "Bool"
       ]
     },
     "nullable": []
   },
-  "hash": "788167cc3ca7b8d172689708e185c4508863c2ab11545420975e84c55ab1f81b"
+  "hash": "bb0b4d7a681a80ab3a4c713db5a088b82eedcd35078e8384db5a579d28b257df"
 }

@@ -233,6 +233,11 @@ pub(crate) async fn get(
                             option(value = "when_volunteer_signed_up") : "When Volunteer Signed Up";
                         }
                     });
+
+                    : form_field("append_mode", &mut Vec::new(), html! {
+                        input(type = "checkbox", id = "append_mode", name = "append_mode");
+                        label(for = "append_mode") : " Append draft mode to title in brackets";
+                    });
                 }, Vec::new(), "Add Export");
             }
 
@@ -271,6 +276,7 @@ pub(crate) struct AddExportForm {
     delay_minutes: i32,
     nodecg_pk: Option<i32>,
     trigger_condition: String,
+    append_mode: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/zsr-export", data = "<form>")]
@@ -315,6 +321,7 @@ pub(crate) async fn add_export(
             value.delay_minutes,
             value.nodecg_pk,
             trigger,
+            value.append_mode,
         ).await?;
 
         // Get backend and event data to ensure description entry exists
@@ -425,6 +432,11 @@ pub(crate) async fn edit_export(
                     input(type = "checkbox", id = "enabled", name = "enabled", checked? = export.enabled);
                     label(for = "enabled") : " Enabled";
                 });
+
+                : form_field("append_mode", &mut Vec::new(), html! {
+                    input(type = "checkbox", id = "append_mode", name = "append_mode", checked? = export.append_mode);
+                    label(for = "append_mode") : " Append draft mode to title in brackets";
+                });
             }, Vec::new(), "Save Changes");
 
             p {
@@ -456,6 +468,7 @@ pub(crate) struct UpdateExportForm {
     nodecg_pk: Option<i32>,
     trigger_condition: String,
     enabled: bool,
+    append_mode: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/zsr-export/<export_id>/edit", data = "<form>")]
@@ -499,6 +512,7 @@ pub(crate) async fn update_export(
             value.nodecg_pk,
             trigger,
             value.enabled,
+            value.append_mode,
         ).await?;
 
         transaction.commit().await?;
