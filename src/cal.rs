@@ -2581,6 +2581,15 @@ pub(crate) async fn race_table(
                                             : "Practice";
                                         }
                                     }
+                                    // Show drafted preset for upcoming races that have a completed draft
+                                    @if let Some(ref draft) = race.draft {
+                                        @let game = race.game.unwrap_or(1);
+                                        @if let Some(mode) = draft.settings.get(&*format!("game{game}_preset")).and_then(|v| event.draft_kind().and_then(|kind| kind.preset_display_name(v.as_ref()))) {
+                                            div(class = "draft-mode") {
+                                                strong : mode;
+                                            }
+                                        }
+                                    }
                                 }
                                 
                                 // Add Settings link for races with custom options
