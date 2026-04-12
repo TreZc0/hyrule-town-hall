@@ -2313,6 +2313,10 @@ pub(crate) async fn race_table(
                     break 'has_settings true
                 }
             }
+            // Check for any event with a completed preset draft (game1_preset in draft_state)
+            if race.draft.as_ref().is_some_and(|d| d.settings.contains_key("game1_preset")) {
+                break 'has_settings true
+            }
         }
         false
     };
@@ -2562,22 +2566,11 @@ pub(crate) async fn race_table(
                                     @let supports_hash = !matches!(event.rando_version, Some(racetime_bot::VersionedBranch::Tww { .. }));
                                     @let add_hash_url = options.can_edit.then(|| uri!(cal::add_file_hash(race.series, &*race.event, race.id))).filter(|_| supports_hash);
                                     // Extract draft mode for display if applicable
-                                    @let draft_mode = if race.series == Series::AlttprDe {
-                                        if matches!(racetime_bot::Goal::for_event(race.series, &race.event), Some(racetime_bot::Goal::AlttprDeRivalsCupBrackets | racetime_bot::Goal::AlttprDeRivalsCupGroups)) {
-                                            race.draft.as_ref().and_then(|draft| {
-                                                let game = race.game.unwrap_or(1);
-                                                let preset = draft.settings.get(&*format!("game{game}_preset")).map(|v| v.as_ref())?;
-                                                alttprde::RIVALS_CUP_PRESETS.iter().find(|p| p.preset == preset).map(|p| p.display_name)
-                                            })
-                                        } else {
-                                            race.draft.as_ref()
-                                                .and_then(|_| race.game)
-                                                .and_then(|game| race.draft.as_ref().and_then(|draft| alttprde::mode_for_game(&draft.settings, game)))
-                                                .map(|mode| mode.display)
-                                        }
-                                    } else {
-                                        None
-                                    };
+                                    @let draft_mode = race.draft.as_ref().and_then(|draft| {
+                                        let game = race.game.unwrap_or(1);
+                                        let preset = draft.settings.get(&*format!("game{game}_preset"))?;
+                                        event.draft_kind().and_then(|kind| kind.preset_display_name(preset.as_ref()))
+                                    });
                                     : seed::table_cell(now, &race.seed, true, add_hash_url, &mut *transaction, game_id, draft_mode).await?;
                                 } else {
                                     // hide seed if unfinished async
@@ -2609,6 +2602,15 @@ pub(crate) async fn race_table(
                                     @if let Ok(crosskeys_options) = racetime_bot::CrosskeysRaceOptions::for_race_with_transaction(&mut *transaction, race).await {
                                         span(class = "settings-link", data_tooltip = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str_no_delay())) {
                                             : "-Hover for Settings-";
+                                        }
+                                    }
+                                }
+                                // Show drafted preset for any event with a completed preset draft
+                                @if let Some(ref draft) = race.draft {
+                                    @let game = race.game.unwrap_or(1);
+                                    @if let Some(mode) = draft.settings.get(&*format!("game{game}_preset")).and_then(|v| event.draft_kind().and_then(|kind| kind.preset_display_name(v.as_ref()))) {
+                                        div(class = "draft-mode") {
+                                            strong : mode;
                                         }
                                     }
                                 }

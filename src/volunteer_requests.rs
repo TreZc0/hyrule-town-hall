@@ -420,22 +420,13 @@ async fn get_matchup_description(
         _ => "Unknown matchup".to_string(),
     };
 
-    // Extract draft mode for AlttprDe events
-    let draft_mode = if race.series == Series::AlttprDe {
-        if matches!(racetime_bot::Goal::for_event(race.series, &race.event), Some(racetime_bot::Goal::AlttprDeRivalsCupBrackets | racetime_bot::Goal::AlttprDeRivalsCupGroups)) {
-            race.draft.as_ref().and_then(|draft| {
-                let game = race.game.unwrap_or(1);
-                let preset = draft.settings.get(&*format!("game{game}_preset")).map(|v| v.as_ref())?;
-                alttprde::RIVALS_CUP_PRESETS.iter().find(|p| p.preset == preset).map(|p| p.display_name)
-            })
-        } else {
-            race.game
-                .and_then(|game| race.draft.as_ref().and_then(|draft| alttprde::mode_for_game(&draft.settings, game)))
-                .map(|mode| mode.display)
-        }
-    } else {
-        None
-    };
+    let draft_mode = race.draft.as_ref().and_then(|draft| {
+        let game = race.game.unwrap_or(1);
+        let preset = draft.settings.get(&*format!("game{game}_preset"))?;
+        racetime_bot::Goal::for_event(race.series, &race.event)
+            .and_then(|g| g.draft_kind())
+            .and_then(|kind: draft::Kind| kind.preset_display_name(preset.as_ref()))
+    });
 
     // Add round and/or phase info if available, then draft mode
     let mut result = match (&race.round, &race.phase) {

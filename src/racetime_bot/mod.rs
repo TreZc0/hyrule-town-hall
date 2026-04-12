@@ -501,7 +501,7 @@ impl Goal {
         }
     }
 
-    fn draft_kind(&self) -> Option<draft::Kind> {
+    pub(crate) fn draft_kind(&self) -> Option<draft::Kind> {
         match self {
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => Some(draft::Kind::BanPick {
                 options: alttprde::DE9_PRESETS,
