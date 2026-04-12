@@ -431,7 +431,7 @@ enum SpoilerStatus {
     NotFound,
 }
 
-pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bool, add_hash_url: Option<rocket::http::uri::Origin<'_>>, transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<RawHtml<String>, ExtraDataError> {
+pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bool, add_hash_url: Option<rocket::http::uri::Origin<'_>>, transaction: &mut Transaction<'_, Postgres>, game_id: i32, draft_mode: Option<&str>) -> Result<RawHtml<String>, ExtraDataError> {
     //TODO show seed password when appropriate
     let extra = seed.extra(now).await?;
     let mut seed_links = match seed.files() {
@@ -508,10 +508,26 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
             });
         }
     }
-    Ok(match (extra.file_hash, seed_links) {
-        (None, None) => html! {},
-        (None, Some(seed_links)) => seed_links,
-        (Some(file_hash), None) => html! {
+    Ok(match (extra.file_hash, seed_links, draft_mode) {
+        (None, None, None) => html! {},
+        (None, None, Some(mode)) => html! {
+            div(class = "draft-mode") {
+                strong : mode;
+            }
+        },
+        (None, Some(seed_links), None) => seed_links,
+        (None, Some(seed_links), Some(mode)) => html! {
+            div(class = "draft-mode") {
+                strong : mode;
+            }
+            : seed_links;
+        },
+        (Some(file_hash), None, draft_mode) => html! {
+            @if let Some(mode) = draft_mode {
+                div(class = "draft-mode") {
+                    strong : mode;
+                }
+            }
             div(class = "hash") {
                 @for hash_icon_name in file_hash {
                     @if let Some(hash_icon_data) = HashIconData::by_name(transaction, game_id, &hash_icon_name).await? {
@@ -522,8 +538,13 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
                 }
             }
         },
-        (Some(file_hash), Some(seed_links)) => html! {
+        (Some(file_hash), Some(seed_links), draft_mode) => html! {
             div(class = "seed") {
+                @if let Some(mode) = draft_mode {
+                    div(class = "draft-mode") {
+                        strong : mode;
+                    }
+                }
                 div(class = "hash") {
                     @for hash_icon_name in file_hash {
                         @if let Some(hash_icon_data) = HashIconData::by_name(transaction, game_id, &hash_icon_name).await? {
@@ -552,7 +573,7 @@ pub(crate) async fn table(seeds: impl Stream<Item = Data>, spoiler_logs: bool, t
             tbody {
                 @while let Some(seed) = seeds.next().await {
                     tr {
-                        td : table_cell(now, &seed, spoiler_logs, None, transaction, game_id).await?;
+                        td : table_cell(now, &seed, spoiler_logs, None, transaction, game_id, None).await?;
                     }
                 }
             }
