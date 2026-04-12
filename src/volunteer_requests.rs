@@ -420,13 +420,29 @@ async fn get_matchup_description(
         _ => "Unknown matchup".to_string(),
     };
 
-    // Add round and/or phase info if available
-    match (&race.round, &race.phase) {
-        (Some(round), Some(phase)) => Ok(format!("{} ({}, {})", matchup, round, phase)),
-        (Some(round), None) => Ok(format!("{} ({})", matchup, round)),
-        (None, Some(phase)) => Ok(format!("{} ({})", matchup, phase)),
-        (None, None) => Ok(matchup),
+    // Extract draft mode for AlttprDe events
+    let draft_mode = if race.series == Series::AlttprDe {
+        race.game
+            .and_then(|game| race.draft.as_ref().and_then(|draft| alttprde::mode_for_game(&draft.settings, game)))
+            .map(|mode| mode.display)
+    } else {
+        None
+    };
+
+    // Add round and/or phase info if available, then draft mode
+    let mut result = match (&race.round, &race.phase) {
+        (Some(round), Some(phase)) => format!("{} ({}, {})", matchup, round, phase),
+        (Some(round), None) => format!("{} ({})", matchup, round),
+        (None, Some(phase)) => format!("{} ({})", matchup, phase),
+        (None, None) => matchup,
+    };
+
+    // Append draft mode if present
+    if let Some(mode) = draft_mode {
+        result = format!("{} [{}]", result, mode);
     }
+
+    Ok(result)
 }
 
 /// Gets a display name for an entrant.
