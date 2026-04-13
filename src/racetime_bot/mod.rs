@@ -6151,6 +6151,37 @@ impl RaceHandler<GlobalState> for Handler {
             }
             _ => {}
         }
+        // If a Discord button draft was completed while the room is already open, pick it up and roll.
+        if matches!(data.status.value, RaceStatusValue::Open | RaceStatusValue::Invitational) {
+            if let Some(draft_kind) = goal.draft_kind() {
+                if draft_kind.uses_button_draft() {
+                    let game = self.official_data.as_ref().and_then(|d| d.cal_event.race.game);
+                    lock!(@write state = self.race_state; {
+                        let unlock_spoiler_log_if_incomplete = if let RaceState::Draft { state: ref draft, unlock_spoiler_log } = *state {
+                            let step = draft.next_step(draft_kind, game, &mut draft::MessageContext::None).await.to_racetime()?;
+                            if matches!(step.kind, draft::StepKind::Done(_)) { None } else { Some(unlock_spoiler_log) }
+                        } else {
+                            None
+                        };
+                        if let Some(unlock_spoiler_log) = unlock_spoiler_log_if_incomplete {
+                            let room_url: Url = format!("https://{}{}", racetime_host(), ctx.data().await.url).parse().to_racetime()?;
+                            let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+                            let maybe_cal_event = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, room_url).await.to_racetime()?;
+                            transaction.commit().await.to_racetime()?;
+                            if let Some(cal_event) = maybe_cal_event {
+                                if let Some(new_draft) = cal_event.race.draft {
+                                    let new_step = new_draft.next_step(draft_kind, game, &mut draft::MessageContext::None).await.to_racetime()?;
+                                    if matches!(new_step.kind, draft::StepKind::Done(_)) {
+                                        *state = RaceState::Draft { state: new_draft, unlock_spoiler_log };
+                                        self.advance_draft(ctx, &state).await?;
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        }
         Ok(())
     }
 

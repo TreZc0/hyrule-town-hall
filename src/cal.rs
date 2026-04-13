@@ -309,7 +309,10 @@ impl RaceSchedule {
 
     pub(crate) fn set_live_start(&mut self, new_start: DateTime<Utc>) {
         match self {
-            Self::Live { start, .. } => *start = new_start,
+            Self::Live { start, room, .. } => {
+                *start = new_start;
+                *room = None; // old room is invalid when rescheduling
+            }
             _ => *self = Self::Live { start: new_start, end: None, room: None },
         }
     }
@@ -2297,6 +2300,9 @@ pub(crate) async fn race_table(
                     hash_map::Entry::Vacant(entry) => entry.insert(race.event(&mut *transaction).await?),
                 };
                 if event.single_settings.is_none() && race.single_settings(&mut *transaction).await?.is_some() {
+                    break 'has_seeds true
+                }
+                if race.draft.as_ref().is_some_and(|d| d.settings.contains_key(&*format!("game{}_preset", race.game.unwrap_or(1)))) {
                     break 'has_seeds true
                 }
             }
