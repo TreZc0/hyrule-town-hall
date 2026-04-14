@@ -282,7 +282,7 @@ dependencies = [
  "futures",
  "semver",
  "serde_json",
- "serenity",
+ "serenity 0.12.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite 0.28.0",
@@ -4856,7 +4856,7 @@ dependencies = [
  "serde_urlencoded",
  "serde_with",
  "serde_yml",
- "serenity",
+ "serenity 0.12.5 (git+https://github.com/TreZc0/serenity.git?branch=fix-permission-removal)",
  "serenity-utils",
  "smart-default",
  "sqlx",
@@ -6967,7 +6967,6 @@ dependencies = [
  "futures",
  "levenshtein",
  "mime_guess",
- "mini-moka",
  "parking_lot",
  "percent-encoding",
  "reqwest 0.12.28",
@@ -6988,6 +6987,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "serenity"
+version = "0.12.5"
+source = "git+https://github.com/TreZc0/serenity.git?branch=fix-permission-removal#8df6f173fc5920bfc2d01ae94a60e64acebe50d8"
+dependencies = [
+ "arrayvec",
+ "async-trait",
+ "base64 0.22.1",
+ "bitflags 2.10.0",
+ "bytes",
+ "dashmap 5.5.3",
+ "flate2",
+ "futures",
+ "mime_guess",
+ "mini-moka",
+ "parking_lot",
+ "percent-encoding",
+ "reqwest 0.12.28",
+ "rustc-hash",
+ "secrecy",
+ "serde",
+ "serde_cow",
+ "serde_json",
+ "time",
+ "tokio",
+ "tokio-tungstenite 0.21.0",
+ "tracing",
+ "typemap_rev",
+ "typesize",
+ "url",
+]
+
+[[package]]
 name = "serenity-utils"
 version = "0.11.0"
 source = "git+https://github.com/fenhl/serenity-utils#fcb4038a4fa9088e3c8f2bbc686659f477188a91"
@@ -6996,7 +7027,7 @@ dependencies = [
  "derive_more 0.99.20",
  "futures",
  "parking_lot",
- "serenity",
+ "serenity 0.12.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "serenity-utils-derive",
  "shlex",
  "thiserror 1.0.69",
