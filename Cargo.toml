@@ -83,7 +83,7 @@ serde_plain = "1"
 serde_urlencoded = "0.7.1"
 serde_with = { version = "3", features = ["json"] }
 serde_yml = "0.0.12"
-serenity = { version = "0.12.5", git = "https://github.com/TreZc0/serenity.git", branch = "fix-permission-removal", default-features = false, features = ["client", "gateway", "model", "rustls_backend", "temp_cache"] }
+serenity = { version = "0.12.5", default-features = false, features = ["client", "gateway", "model", "rustls_backend", "temp_cache"] }
 serenity-utils = { git = "https://github.com/fenhl/serenity-utils" }
 smart-default = "0.7.1"
 sqlx = { version = "0.8.3", default-features = false, features = ["chrono", "json", "macros", "postgres", "runtime-tokio", "tls-rustls-ring-webpki", "uuid"] }
@@ -105,3 +105,6 @@ xdg = "3"
 
 [target.'cfg(windows)'.dependencies]
 directories = "6"
+
+[patch.crates-io]
+serenity = { git = "https://github.com/TreZc0/serenity.git", branch = "fix-permission-removal" }
