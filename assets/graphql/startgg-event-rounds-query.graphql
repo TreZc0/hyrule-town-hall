@@ -1,0 +1,12 @@
+query EventRoundsQuery($event_slug: String!, $page: Int!) {
+  event(slug: $event_slug) {
+    sets(page: $page) {
+      pageInfo {
+        totalPages
+      }
+      nodes {
+        fullRoundText
+      }
+    }
+  }
+}

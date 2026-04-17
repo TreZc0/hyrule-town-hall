@@ -232,7 +232,7 @@ pub(crate) enum DataError {
     NonexistentUser,
 }
 
-pub(crate) struct PhaseConfig {
+pub(crate) struct RoundConfig {
     pub(crate) restream_consent_required: bool,
     pub(crate) scheduling_deadline: Option<DateTime<Utc>>,
 }
@@ -620,12 +620,12 @@ impl<'a> Data<'a> {
         game::Game::from_series(transaction, self.series).await.map_err(DataError::from)
     }
 
-    pub(crate) async fn phase_configs(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<HashMap<String, PhaseConfig>, Error> {
+    pub(crate) async fn round_configs(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<HashMap<String, RoundConfig>, Error> {
         let rows = sqlx::query!(
-            "SELECT phase, restream_consent_required, scheduling_deadline FROM event_phase_configs WHERE series = $1 AND event = $2",
+            "SELECT round, restream_consent_required, scheduling_deadline FROM event_round_configs WHERE series = $1 AND event = $2",
             self.series as _, &self.event
         ).fetch_all(&mut **transaction).await?;
-        Ok(rows.into_iter().map(|row| (row.phase, PhaseConfig {
+        Ok(rows.into_iter().map(|row| (row.round, RoundConfig {
             restream_consent_required: row.restream_consent_required,
             scheduling_deadline: row.scheduling_deadline,
         })).collect())

@@ -2219,41 +2219,41 @@ pub(crate) async fn apply_round_mapping(pool: &State<PgPool>, me: User, uri: Ori
 // ── Round Management ─────────────────────────────────────────────────────────
 
 async fn rounds_form(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>) -> Result<RawHtml<String>, event::Error> {
-    let phase_configs = event.phase_configs(&mut transaction).await?;
+    let round_configs = event.round_configs(&mut transaction).await?;
 
-    let mut phases: Vec<String> = sqlx::query_scalar!(
-        "SELECT DISTINCT phase FROM races WHERE series = $1 AND event = $2 AND phase IS NOT NULL ORDER BY phase",
+    let mut rounds: Vec<String> = sqlx::query_scalar!(
+        "SELECT DISTINCT round FROM races WHERE series = $1 AND event = $2 AND round IS NOT NULL ORDER BY round",
         event.series as _, &event.event
     ).fetch_all(&mut *transaction).await?.into_iter().flatten().collect();
 
-    for phase in phase_configs.keys() {
-        if !phases.contains(phase) {
-            phases.push(phase.clone());
+    for round in round_configs.keys() {
+        if !rounds.contains(round) {
+            rounds.push(round.clone());
         }
     }
 
-    // Supplement with phase names from start.gg for events with no races yet
+    // Supplement with round names from start.gg for events with no races yet
     if let MatchSource::StartGG(event_slug) = event.match_source() {
-        if let Ok(startgg_phases) = startgg::event_phases(http_client, config, event_slug).await {
-            for phase in startgg_phases {
-                if !phases.contains(&phase) {
-                    phases.push(phase);
+        if let Ok(startgg_rounds) = startgg::event_rounds(http_client, config, event_slug).await {
+            for round in startgg_rounds {
+                if !rounds.contains(&round) {
+                    rounds.push(round);
                 }
             }
         }
     }
 
-    phases.sort();
+    rounds.sort();
 
     let csrf_token = csrf.map(|c| c.authenticity_token());
 
     let content = html! {
-        h1 : "Manage Rounds";
+        h1 : "Manage Rounds and Deadlines";
         p {
             a(href = uri!(get(event.series, &*event.event))) : "← Back to Configure";
         }
 
-        h2 : "Apply to All Phases";
+        h2 : "Apply to All Rounds";
         form(method = "POST", action = uri!(rounds_apply_all(event.series, &*event.event)).to_string()) {
             @if let Some(ref token) = csrf_token {
                 input(type = "hidden", name = "csrf", value = token);
@@ -2269,12 +2269,12 @@ async fn rounds_form(mut transaction: Transaction<'_, Postgres>, http_client: &r
                     td { input(type = "datetime-local", name = "scheduling_deadline"); }
                 }
             }
-            button(type = "submit") : "Apply to all phases";
+            button(type = "submit") : "Apply to all rounds";
         }
 
-        h2 : "Per-Phase Settings";
-        @if phases.is_empty() {
-            p : "No phases found. Import races or add phase configs to get started.";
+        h2 : "Per-Round Settings";
+        @if rounds.is_empty() {
+            p : "No rounds found. Import races to get started.";
         } else {
             form(method = "POST", action = uri!(rounds_save(event.series, &*event.event)).to_string()) {
                 @if let Some(ref token) = csrf_token {
@@ -2283,20 +2283,20 @@ async fn rounds_form(mut transaction: Transaction<'_, Postgres>, http_client: &r
                 input(type = "hidden", name = "tz_offset", value = "0");
                 table {
                     tr {
-                        th : "Phase";
+                        th : "Round";
                         th : "Restream consent required";
                         th : "Scheduling deadline (your local time)";
                     }
-                    @for phase in &phases {
-                        @let cfg = phase_configs.get(phase);
+                    @for round in &rounds {
+                        @let cfg = round_configs.get(round);
                         tr {
                             td {
-                                input(type = "hidden", name = "phase", value = phase);
-                                : phase;
+                                input(type = "hidden", name = "round", value = round);
+                                : round;
                             }
                             td {
                                 input(type = "checkbox", name = "restream_consent_required",
-                                      value = phase,
+                                      value = round,
                                       checked? = cfg.map_or(false, |c| c.restream_consent_required));
                             }
                             td {
@@ -2315,7 +2315,7 @@ async fn rounds_form(mut transaction: Transaction<'_, Postgres>, http_client: &r
         }
 
         h2 : "Stamp Deadlines onto Open Races";
-        p : "Updates all open races to use their phase's current deadline. Resets reminder flags so notifications are re-sent.";
+        p : "Updates all open races to use their round's current deadline. Resets reminder flags so notifications are re-sent.";
         form(method = "POST", action = uri!(rounds_apply_deadlines(event.series, &*event.event)).to_string()) {
             @if let Some(ref token) = csrf_token {
                 input(type = "hidden", name = "csrf", value = token);
@@ -2377,26 +2377,26 @@ pub(crate) async fn rounds_apply_all(pool: &State<PgPool>, me: User, _uri: Origi
             .and_then(|s| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M").ok())
             .map(|ndt| (ndt + tz_offset).and_utc());
 
-        let mut phases: Vec<String> = sqlx::query_scalar!(
-            "SELECT DISTINCT phase FROM races WHERE series = $1 AND event = $2 AND phase IS NOT NULL",
+        let mut rounds: Vec<String> = sqlx::query_scalar!(
+            "SELECT DISTINCT round FROM races WHERE series = $1 AND event = $2 AND round IS NOT NULL",
             data.series as _, &data.event
         ).fetch_all(&mut *transaction).await?.into_iter().flatten().collect();
-        let config_phases: Vec<String> = sqlx::query_scalar!(
-            "SELECT phase FROM event_phase_configs WHERE series = $1 AND event = $2",
+        let config_rounds: Vec<String> = sqlx::query_scalar!(
+            "SELECT round FROM event_round_configs WHERE series = $1 AND event = $2",
             data.series as _, &data.event
         ).fetch_all(&mut *transaction).await?;
-        for p in config_phases {
-            if !phases.contains(&p) { phases.push(p); }
+        for r in config_rounds {
+            if !rounds.contains(&r) { rounds.push(r); }
         }
 
-        for phase in phases {
+        for round in rounds {
             sqlx::query!(
-                "INSERT INTO event_phase_configs (series, event, phase, restream_consent_required, scheduling_deadline)
+                "INSERT INTO event_round_configs (series, event, round, restream_consent_required, scheduling_deadline)
                  VALUES ($1, $2, $3, $4, $5)
-                 ON CONFLICT (series, event, phase) DO UPDATE
+                 ON CONFLICT (series, event, round) DO UPDATE
                  SET restream_consent_required = EXCLUDED.restream_consent_required,
                      scheduling_deadline        = EXCLUDED.scheduling_deadline",
-                data.series as _, &data.event, &phase, value.restream_consent_required, deadline
+                data.series as _, &data.event, &round, value.restream_consent_required, deadline
             ).execute(&mut *transaction).await?;
         }
         transaction.commit().await?;
@@ -2408,7 +2408,7 @@ pub(crate) async fn rounds_apply_all(pool: &State<PgPool>, me: User, _uri: Origi
 pub(crate) struct RoundsSaveForm {
     #[field(default = String::new())]
     csrf: String,
-    phase: Vec<String>,
+    round: Vec<String>,
     restream_consent_required: Vec<String>,
     scheduling_deadline: Vec<String>,
     tz_offset: Option<i32>,
@@ -2425,20 +2425,20 @@ pub(crate) async fn rounds_save(pool: &State<PgPool>, me: User, _uri: Origin<'_>
     }
     if let Some(ref value) = form.value {
         let tz_offset = chrono::Duration::minutes(value.tz_offset.unwrap_or(0) as i64);
-        for (i, phase) in value.phase.iter().enumerate() {
-            if phase.is_empty() { continue; }
-            let consent = value.restream_consent_required.contains(phase);
+        for (i, round) in value.round.iter().enumerate() {
+            if round.is_empty() { continue; }
+            let consent = value.restream_consent_required.contains(round);
             let deadline = value.scheduling_deadline.get(i)
                 .filter(|s| !s.is_empty())
                 .and_then(|s| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M").ok())
                 .map(|ndt| (ndt + tz_offset).and_utc());
             sqlx::query!(
-                "INSERT INTO event_phase_configs (series, event, phase, restream_consent_required, scheduling_deadline)
+                "INSERT INTO event_round_configs (series, event, round, restream_consent_required, scheduling_deadline)
                  VALUES ($1, $2, $3, $4, $5)
-                 ON CONFLICT (series, event, phase) DO UPDATE
+                 ON CONFLICT (series, event, round) DO UPDATE
                  SET restream_consent_required = EXCLUDED.restream_consent_required,
                      scheduling_deadline        = EXCLUDED.scheduling_deadline",
-                data.series as _, &data.event, phase, consent, deadline
+                data.series as _, &data.event, round, consent, deadline
             ).execute(&mut *transaction).await?;
         }
         transaction.commit().await?;
@@ -2464,15 +2464,15 @@ pub(crate) async fn rounds_apply_deadlines(pool: &State<PgPool>, me: User, _uri:
     if form.value.is_some() {
         sqlx::query!(r#"
             UPDATE races r
-            SET scheduling_deadline         = epc.scheduling_deadline,
+            SET scheduling_deadline         = erc.scheduling_deadline,
                 deadline_reminded_3d        = false,
                 deadline_reminded_24h       = false,
                 deadline_organizer_notified = false
-            FROM event_phase_configs epc
+            FROM event_round_configs erc
             WHERE r.series = $1 AND r.event = $2
-              AND epc.series = $1 AND epc.event = $2
-              AND r.phase = epc.phase
-              AND epc.scheduling_deadline IS NOT NULL
+              AND erc.series = $1 AND erc.event = $2
+              AND r.round = erc.round
+              AND erc.scheduling_deadline IS NOT NULL
               AND r.end_time IS NULL
               AND NOT r.ignored
         "#, data.series as _, &data.event).execute(&mut *transaction).await?;
@@ -2487,10 +2487,10 @@ pub(crate) async fn rounds_apply_deadlines(pool: &State<PgPool>, me: User, _uri:
               AND r.end_time IS NULL
               AND NOT r.ignored
               AND NOT EXISTS (
-                  SELECT 1 FROM event_phase_configs epc
-                  WHERE epc.series = $1 AND epc.event = $2
-                    AND epc.phase = r.phase
-                    AND epc.scheduling_deadline IS NOT NULL
+                  SELECT 1 FROM event_round_configs erc
+                  WHERE erc.series = $1 AND erc.event = $2
+                    AND erc.round = r.round
+                    AND erc.scheduling_deadline IS NOT NULL
               )
         "#, data.series as _, &data.event).execute(&mut *transaction).await?;
 

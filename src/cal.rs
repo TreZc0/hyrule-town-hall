@@ -423,7 +423,7 @@ impl Race {
             total,
             finished,
             r.phase,
-            round,
+            r.round,
             scheduling_thread AS "scheduling_thread: PgSnowflake<ChannelId>",
             draft_state AS "draft_state: Json<Draft>",
             start,
@@ -475,12 +475,12 @@ impl Race {
             volunteer_request_sent,
             volunteer_request_message_id AS "volunteer_request_message_id: PgSnowflake<MessageId>",
             r.scheduling_deadline,
-            COALESCE(epc.restream_consent_required, false) AS "restream_consent_required!"
+            COALESCE(erc.restream_consent_required, false) AS "restream_consent_required!"
         FROM races r
-        LEFT JOIN event_phase_configs epc
-               ON epc.series = r.series
-              AND epc.event  = r.event
-              AND epc.phase  = r.phase
+        LEFT JOIN event_round_configs erc
+               ON erc.series = r.series
+              AND erc.event  = r.event
+              AND erc.round  = r.round
         WHERE r.id = $1"#, id as _).fetch_one(&mut **transaction).await?;
         let source = if let Some(id) = row.challonge_match {
             Source::Challonge { id }
@@ -2210,10 +2210,10 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
             } else {
                 None
             };
-            let phase_deadline = if let Some(ref phase) = phase {
+            let phase_deadline = if let Some(ref round) = round {
                 sqlx::query_scalar!(
-                    "SELECT scheduling_deadline FROM event_phase_configs WHERE series = $1 AND event = $2 AND phase = $3",
-                    event.series as _, &event.event, phase
+                    "SELECT scheduling_deadline FROM event_round_configs WHERE series = $1 AND event = $2 AND round = $3",
+                    event.series as _, &event.event, round
                 ).fetch_optional(&mut *transaction).await?.flatten()
             } else {
                 None
@@ -2616,12 +2616,12 @@ pub(crate) async fn race_table(
                                         @let game = race.game.unwrap_or(1);
                                         @if let Some(mode) = draft.settings.get(&*format!("game{game}_preset")).and_then(|v| event.draft_kind().and_then(|kind| kind.preset_display_name(v.as_ref()))) {
                                             div(class = "draft-mode") {
-                                                strong : mode;
+                                                : mode;
                                             }
                                         }
                                     }
                                 }
-                                
+
                                 // Add Settings link for races with custom options
                                 @if race.show_seed() || race.is_ended() || matches!(race.schedule, RaceSchedule::Unscheduled | RaceSchedule::Async { .. } | RaceSchedule::Live { .. }) {
                                     @if let Some(racetime_bot::Goal::Crosskeys2025) = racetime_bot::Goal::for_event(race.series, &race.event) {
@@ -2649,7 +2649,7 @@ pub(crate) async fn race_table(
                                     @let game = race.game.unwrap_or(1);
                                     @if let Some(mode) = draft.settings.get(&*format!("game{game}_preset")).and_then(|v| event.draft_kind().and_then(|kind| kind.preset_display_name(v.as_ref()))) {
                                         div(class = "draft-mode") {
-                                            strong : mode;
+                                            : mode;
                                         }
                                     }
                                 }
