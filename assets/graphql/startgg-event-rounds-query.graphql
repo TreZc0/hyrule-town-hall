@@ -6,6 +6,9 @@ query EventRoundsQuery($event_slug: String!, $page: Int!) {
       }
       nodes {
         fullRoundText
+        phaseGroup {
+          bracketType
+        }
       }
     }
   }

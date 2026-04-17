@@ -208,8 +208,11 @@ pub(crate) async fn event_rounds(http_client: &reqwest::Client, config: &Config,
                 }),
             }) => {
                 for node in nodes.into_iter().flatten() {
+                    if matches!(node.phase_group.and_then(|pg| pg.bracket_type), Some(event_rounds_query::BracketType::ROUND_ROBIN)) {
+                        continue;
+                    }
                     if let Some(text) = node.full_round_text {
-                        rounds.insert(text);
+                        rounds.insert(text.replace("Winners", "WB").replace("Losers", "LB"));
                     }
                 }
                 total_pages
@@ -361,6 +364,7 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
         } else {
             None
         };
+        let pre_mapping_round = round.clone();
         if let Some(row) = sqlx::query!("
             SELECT mapped_phase, mapped_round
             FROM startgg_phase_round_mappings
@@ -383,6 +387,7 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
         let normalize = |s: String| s.replace("Winners", "WB").replace("Losers", "LB");
         phase = phase.map(&normalize);
         round = round.map(normalize);
+        let canonical_round = pre_mapping_round.map(normalize);
         races.push(Race {
             id: Id::new(&mut *transaction).await?,
             series: event.series,
@@ -434,10 +439,10 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
             volunteer_request_sent: false,
             volunteer_request_message_id: None,
             restream_consent_required: false,
-            scheduling_deadline: if let Some(ref round) = round {
+            scheduling_deadline: if let Some(ref cr) = canonical_round {
                 sqlx::query_scalar!(
                     "SELECT scheduling_deadline FROM event_round_configs WHERE series = $1 AND event = $2 AND round = $3",
-                    event.series as _, &event.event, round
+                    event.series as _, &event.event, cr
                 ).fetch_optional(&mut **transaction).await?.flatten()
             } else {
                 None

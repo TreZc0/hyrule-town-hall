@@ -480,7 +480,7 @@ impl Race {
         LEFT JOIN event_round_configs erc
                ON erc.series = r.series
               AND erc.event  = r.event
-              AND erc.round  = r.round
+              AND (erc.round = r.round OR r.round ILIKE '% ' || erc.round)
         WHERE r.id = $1"#, id as _).fetch_one(&mut **transaction).await?;
         let source = if let Some(id) = row.challonge_match {
             Source::Challonge { id }

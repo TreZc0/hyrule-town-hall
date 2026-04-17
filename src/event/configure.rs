@@ -2221,18 +2221,9 @@ pub(crate) async fn apply_round_mapping(pool: &State<PgPool>, me: User, uri: Ori
 async fn rounds_form(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>) -> Result<RawHtml<String>, event::Error> {
     let round_configs = event.round_configs(&mut transaction).await?;
 
-    let mut rounds: Vec<String> = sqlx::query_scalar!(
-        "SELECT DISTINCT round FROM races WHERE series = $1 AND event = $2 AND round IS NOT NULL ORDER BY round",
-        event.series as _, &event.event
-    ).fetch_all(&mut *transaction).await?.into_iter().flatten().collect();
+    let mut rounds: Vec<String> = round_configs.keys().cloned().collect();
 
-    for round in round_configs.keys() {
-        if !rounds.contains(round) {
-            rounds.push(round.clone());
-        }
-    }
-
-    // Supplement with round names from start.gg for events with no races yet
+    // Primary source: start.gg API round names (canonical, normalized, no pool names, no qualifiers)
     if let MatchSource::StartGG(event_slug) = event.match_source() {
         if let Ok(startgg_rounds) = startgg::event_rounds(http_client, config, event_slug).await {
             for round in startgg_rounds {
@@ -2471,7 +2462,7 @@ pub(crate) async fn rounds_apply_deadlines(pool: &State<PgPool>, me: User, _uri:
             FROM event_round_configs erc
             WHERE r.series = $1 AND r.event = $2
               AND erc.series = $1 AND erc.event = $2
-              AND r.round = erc.round
+              AND (erc.round = r.round OR r.round ILIKE '% ' || erc.round)
               AND erc.scheduling_deadline IS NOT NULL
               AND r.end_time IS NULL
               AND NOT r.ignored
@@ -2489,7 +2480,7 @@ pub(crate) async fn rounds_apply_deadlines(pool: &State<PgPool>, me: User, _uri:
               AND NOT EXISTS (
                   SELECT 1 FROM event_round_configs erc
                   WHERE erc.series = $1 AND erc.event = $2
-                    AND erc.round = r.round
+                    AND (erc.round = r.round OR r.round ILIKE '% ' || erc.round)
                     AND erc.scheduling_deadline IS NOT NULL
               )
         "#, data.series as _, &data.event).execute(&mut *transaction).await?;
