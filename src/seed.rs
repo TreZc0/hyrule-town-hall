@@ -328,20 +328,20 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
         (None, None, None) => html! {},
         (None, None, Some(mode)) => html! {
             div(class = "draft-mode") {
-                strong : mode;
+                : mode;
             }
         },
         (None, Some(seed_links), None) => seed_links,
         (None, Some(seed_links), Some(mode)) => html! {
             div(class = "draft-mode") {
-                strong : mode;
+                : mode;
             }
             : seed_links;
         },
         (Some(file_hash), None, draft_mode) => html! {
             @if let Some(mode) = draft_mode {
                 div(class = "draft-mode") {
-                    strong : mode;
+                    : mode;
                 }
             }
             div(class = "hash") {
@@ -358,7 +358,7 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
             div(class = "seed") {
                 @if let Some(mode) = draft_mode {
                     div(class = "draft-mode") {
-                        strong : mode;
+                        : mode;
                     }
                 }
                 div(class = "hash") {
