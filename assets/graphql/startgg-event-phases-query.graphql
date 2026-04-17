@@ -1,0 +1,17 @@
+query EventPhasesQuery($event_slug: String!) {
+  event(slug: $event_slug) {
+    phases {
+      id
+      name
+      phaseGroups {
+        nodes {
+          bracketType
+          rounds {
+            number
+            bestOf
+          }
+        }
+      }
+    }
+  }
+}

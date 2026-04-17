@@ -232,6 +232,11 @@ pub(crate) enum DataError {
     NonexistentUser,
 }
 
+pub(crate) struct PhaseConfig {
+    pub(crate) restream_consent_required: bool,
+    pub(crate) scheduling_deadline: Option<DateTime<Utc>>,
+}
+
 impl<'a> Data<'a> {
     pub(crate) async fn new(transaction: &mut Transaction<'_, Postgres>, series: Series, event: impl Into<Cow<'a, str>>) -> Result<Option<Data<'a>>, DataError> {
         let event = event.into();
@@ -613,6 +618,17 @@ impl<'a> Data<'a> {
     #[allow(dead_code)]
     pub(crate) async fn game(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Option<game::Game>, DataError> {
         game::Game::from_series(transaction, self.series).await.map_err(DataError::from)
+    }
+
+    pub(crate) async fn phase_configs(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<HashMap<String, PhaseConfig>, Error> {
+        let rows = sqlx::query!(
+            "SELECT phase, restream_consent_required, scheduling_deadline FROM event_phase_configs WHERE series = $1 AND event = $2",
+            self.series as _, &self.event
+        ).fetch_all(&mut **transaction).await?;
+        Ok(rows.into_iter().map(|row| (row.phase, PhaseConfig {
+            restream_consent_required: row.restream_consent_required,
+            scheduling_deadline: row.scheduling_deadline,
+        })).collect())
     }
 
     pub(crate) async fn organizers(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<User>, Error> {
@@ -1278,6 +1294,8 @@ pub(crate) async fn races(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
                 discord_scheduled_event_id: None,
                 volunteer_request_sent: false,
                 volunteer_request_message_id: None,
+                scheduling_deadline: None,
+                restream_consent_required: false,
             });
         }
     }
@@ -2011,7 +2029,7 @@ pub(crate) async fn status_post(pool: &State<PgPool>, http_client: &State<reqwes
     Ok(if let Some(ref value) = form.value {
         if row.restream_consent && !value.restream_consent {
             //TODO check if restream consent can still be revoked according to tournament rules, offer to resign if not
-            if Race::for_event(&mut transaction, http_client, &data).await?.into_iter().any(|race| !race.is_ended() && !race.video_urls.is_empty()) {
+            if Race::for_event(&mut transaction, http_client, &data).await?.into_iter().any(|race| !race.is_ended() && !race.video_urls.is_empty() && !race.restream_consent_required) {
                 form.context.push_error(form::Error::validation("There is a restream planned for one of your upcoming races. Please contact an event organizer if you would like to cancel.").with_name("restream_consent"));
             }
         }

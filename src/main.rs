@@ -33,6 +33,7 @@ use {
 };
 
 mod admin;
+mod deadline_notifications;
 mod api;
 mod async_race;
 mod avianart;
@@ -155,6 +156,7 @@ enum Error {
     #[error(transparent)] Task(#[from] tokio::task::JoinError),
     #[error(transparent)] VolunteerRequests(#[from] volunteer_requests::Error),
     #[cfg(unix)] #[error(transparent)] Wheel(#[from] wheel::Error),
+    #[error(transparent)] DeadlineNotifications(#[from] deadline_notifications::Error),
     #[error(transparent)] ZsrExport(#[from] zsr_export::Error),
     #[cfg(unix)] #[error(transparent)] Write(#[from] async_proto::WriteError),
 }
@@ -331,6 +333,11 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
         });
+        let deadline_task = tokio::spawn(deadline_notifications::deadline_notification_manager(db_pool.clone(), discord_builder.ctx_fut.clone(), rocket.shutdown())).map(|res| match res {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(Error::from(e)),
+            Err(e) => Err(Error::Task(e)),
+        });
         let rocket_task = tokio::spawn(rocket.launch()).map(|res| match res {
             Ok(Ok(Rocket { .. })) => Ok(()),
             Ok(Err(e)) => Err(Error::from(e)),
@@ -347,7 +354,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Err(e) => Err(Error::from(e)),
         });
         #[cfg(not(unix))] let unix_socket_task = future::ok(());
-        let ((), (), (), (), (), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, async_race_task, volunteer_request_task, zsr_export_task, weekly_race_task, rocket_task, unix_socket_task)?;
+        let ((), (), (), (), (), (), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, async_race_task, volunteer_request_task, zsr_export_task, weekly_race_task, deadline_task, rocket_task, unix_socket_task)?;
     }
     Ok(())
 }

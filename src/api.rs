@@ -414,7 +414,7 @@ struct Race(cal::Race);
     /// Requires an API key with `entrants_read` scope.
     #[graphql(guard = Scopes { entrants_read: true, ..Scopes::default() })]
     async fn restream_consent(&self) -> Option<bool> {
-        self.0.teams_opt().map(|mut teams| teams.all(|team| team.restream_consent))
+        self.0.teams_opt().map(|mut teams| self.0.restream_consent_required || teams.all(|team| team.restream_consent))
     }
 
     /// All restream URLs for this race, organized by language.

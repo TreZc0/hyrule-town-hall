@@ -181,6 +181,30 @@ pub(crate) struct ResetSetMutation;
 )]
 pub(crate) struct SetScoreQuery;
 
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "assets/graphql/startgg-schema.json",
+    query_path = "assets/graphql/startgg-event-phases-query.graphql",
+    skip_default_scalars, // workaround for https://github.com/smashgg/developer-portal/issues/171
+    variables_derives = "Clone, PartialEq, Eq, Hash",
+    response_derives = "Debug, Clone",
+)]
+pub(crate) struct EventPhasesQuery;
+
+/// Returns the phase names for a start.gg event, for use on the round management page.
+pub(crate) async fn event_phases(http_client: &reqwest::Client, config: &Config, event_slug: &str) -> Result<Vec<String>, Error> {
+    let response = query_cached::<EventPhasesQuery>(http_client, &config.startgg, event_phases_query::Variables {
+        event_slug: event_slug.to_owned(),
+    }).await?;
+    let phases = match response.event {
+        Some(event_phases_query::EventPhasesQueryEvent { phases: Some(phases) }) => phases,
+        _ => return Ok(Vec::default()),
+    };
+    Ok(phases.into_iter()
+        .filter_map(|p| p.and_then(|p| p.name))
+        .collect())
+}
+
 /// Helper type for building game data when reporting multi-game sets
 #[derive(Clone, Debug)]
 pub(crate) struct GameResult {
@@ -390,6 +414,15 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
             discord_scheduled_event_id: None,
             volunteer_request_sent: false,
             volunteer_request_message_id: None,
+            restream_consent_required: false,
+            scheduling_deadline: if let Some(ref phase) = phase {
+                sqlx::query_scalar!(
+                    "SELECT scheduling_deadline FROM event_phase_configs WHERE series = $1 AND event = $2 AND phase = $3",
+                    event.series as _, &event.event, phase
+                ).fetch_optional(&mut **transaction).await?.flatten()
+            } else {
+                None
+            },
             phase,
             round,
         });

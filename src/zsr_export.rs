@@ -562,9 +562,11 @@ pub(crate) async fn should_export_race(
     }
 
     // Check restream consent for all teams
-    if let Some(mut teams) = race.teams_opt() {
-        if !teams.all(|team| team.restream_consent) {
-            return Ok(false);
+    if !race.restream_consent_required {
+        if let Some(mut teams) = race.teams_opt() {
+            if !teams.all(|team| team.restream_consent) {
+                return Ok(false);
+            }
         }
     }
 

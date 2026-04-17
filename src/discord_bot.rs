@@ -1846,6 +1846,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             discord_scheduled_event_id: race.discord_scheduled_event_id,
                                             volunteer_request_sent: race.volunteer_request_sent,
                                             volunteer_request_message_id: race.volunteer_request_message_id,
+                                            scheduling_deadline: race.scheduling_deadline,
+                                            restream_consent_required: race.restream_consent_required,
                                         };
                                         race.save(&mut transaction).await?;
 
@@ -3994,6 +3996,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             discord_scheduled_event_id: race.discord_scheduled_event_id,
                             volunteer_request_sent: race.volunteer_request_sent,
                             volunteer_request_message_id: race.volunteer_request_message_id,
+                            scheduling_deadline: race.scheduling_deadline,
+                            restream_consent_required: race.restream_consent_required,
                         };
                         race.save(&mut transaction).await
                             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
@@ -4335,6 +4339,11 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
                 content.push('.');
             }
         }
+    }
+    if let Some(deadline) = race.scheduling_deadline {
+        content.push_line("");
+        content.push_line("");
+        content.push(format!("You have until <t:{}:F> to schedule this race.", deadline.timestamp()));
     }
     if title.len() > 100 {
         // Discord thread titles are limited to 100 characters, unclear on specifics, limit to 100 bytes to be safe
