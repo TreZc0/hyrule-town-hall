@@ -3839,6 +3839,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     } else if let Some(race_id_str) = custom_id.strip_prefix("draw_report_result_") {
                         // "Report final result" button on draw message — open a modal with time inputs
                         let race_id = race_id_str.parse::<u64>().expect("race_id in draw_report_result button");
+                        let orig_msg_id = interaction.message.id;
+                        let orig_channel_id = interaction.message.channel_id;
                         let (mut transaction, http_client) = {
                             let data = ctx.data.read().await;
                             (
@@ -3862,7 +3864,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         };
                         transaction.rollback().await?;
                         interaction.create_response(ctx, CreateInteractionResponse::Modal(
-                            CreateModal::new(format!("draw_report_modal_{race_id}"), "Report Race Result")
+                            CreateModal::new(format!("draw_report_modal_{race_id}_{orig_channel_id}_{orig_msg_id}"), "Report Race Result")
                                 .components(vec![
                                     CreateActionRow::InputText(
                                         CreateInputText::new(InputTextStyle::Short, format!("{name_a} time"), "time_a")
@@ -4031,8 +4033,11 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     },
                 },
                 Interaction::Modal(interaction) => {
-                    if let Some(race_id_str) = interaction.data.custom_id.strip_prefix("draw_report_modal_") {
-                        let race_id = race_id_str.parse::<u64>().expect("race_id in draw_report_modal");
+                    if let Some(params) = interaction.data.custom_id.strip_prefix("draw_report_modal_") {
+                        let mut parts = params.rsplitn(3, '_');
+                        let orig_msg_id = MessageId::new(parts.next().expect("msg_id in draw_report_modal").parse::<u64>().expect("msg_id parse"));
+                        let orig_channel_id = ChannelId::new(parts.next().expect("channel_id in draw_report_modal").parse::<u64>().expect("channel_id parse"));
+                        let race_id = parts.next().expect("race_id in draw_report_modal").parse::<u64>().expect("race_id parse");
                         // Extract time inputs from modal (synchronous — do before deferring)
                         let mut time_a_str = None;
                         let mut time_b_str = None;
@@ -4133,6 +4138,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         }.await;
                         match result {
                             Ok(()) => {
+                                orig_channel_id.edit_message(ctx, orig_msg_id, EditMessage::new().components(vec![])).await.ok();
                                 interaction.edit_response(ctx, EditInteractionResponse::new()
                                     .content("Final results submitted")
                                 ).await?;
