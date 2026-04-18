@@ -357,7 +357,7 @@ async fn get_races_needing_announcements(
         // Check restream consent - all teams must have consented
         // Skip this check for open-entry races and qualifiers
         if !matches!(race.entrants, Entrants::Open) && !race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
-            if race.restream_consent_required {
+            if !race.restream_consent_required {
                 if let Some(mut teams) = race.teams_opt() {
                     if !teams.all(|team| team.restream_consent) {
                         continue;
@@ -824,7 +824,7 @@ pub(crate) async fn update_volunteer_post_for_race(
     if needs.is_empty() {
         let _ = channel_id.delete_message(discord_ctx, message_id).await;
         sqlx::query!(
-            "UPDATE races SET volunteer_request_message_id = NULL WHERE volunteer_request_message_id = $1",
+            "UPDATE races SET volunteer_request_message_id = NULL, volunteer_request_sent = false WHERE volunteer_request_message_id = $1",
             PgSnowflake(message_id) as _
         )
         .execute(&mut *transaction)
