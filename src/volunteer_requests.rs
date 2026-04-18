@@ -210,6 +210,7 @@ async fn post_volunteer_requests_for_event(
         WHERE series = $1
           AND event = $2
           AND volunteer_request_message_id IS NOT NULL
+          AND volunteer_request_sent = true
           AND start > $3
           AND ignored = false
         GROUP BY volunteer_request_message_id
