@@ -2219,6 +2219,11 @@ pub(crate) async fn apply_round_mapping(pool: &State<PgPool>, me: User, uri: Ori
 // ── Round Management ─────────────────────────────────────────────────────────
 
 async fn rounds_form(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>) -> Result<RawHtml<String>, event::Error> {
+    let query_string = uri.0.query().map(|q| q.to_string());
+    let saved = query_string.as_deref().map_or(false, |q| {
+        q.split('&').any(|param| param == "saved=1")
+    });
+
     let round_configs = event.round_configs(&mut transaction).await?;
 
     let mut rounds: Vec<String> = round_configs.keys().cloned().collect();
@@ -2240,6 +2245,11 @@ async fn rounds_form(mut transaction: Transaction<'_, Postgres>, http_client: &r
 
     let content = html! {
         h1 : "Manage Rounds and Deadlines";
+        @if saved {
+            div(class = "success") {
+                p : "Round settings saved successfully.";
+            }
+        }
         p {
             a(href = uri!(get(event.series, &*event.event))) : "← Back to Configure";
         }
@@ -2392,7 +2402,7 @@ pub(crate) async fn rounds_apply_all(pool: &State<PgPool>, me: User, _uri: Origi
         }
         transaction.commit().await?;
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(rounds_get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(format!("{}?saved=1", uri!(rounds_get(series, event))))))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -2434,7 +2444,7 @@ pub(crate) async fn rounds_save(pool: &State<PgPool>, me: User, _uri: Origin<'_>
         }
         transaction.commit().await?;
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(rounds_get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(format!("{}?saved=1", uri!(rounds_get(series, event))))))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -2487,5 +2497,5 @@ pub(crate) async fn rounds_apply_deadlines(pool: &State<PgPool>, me: User, _uri:
 
         transaction.commit().await?;
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(rounds_get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(format!("{}?saved=1", uri!(rounds_get(series, event))))))
 }
