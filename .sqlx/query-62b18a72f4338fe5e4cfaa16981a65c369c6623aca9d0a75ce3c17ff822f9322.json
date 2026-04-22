@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n            volunteer_request_message_id AS \"message_id: PgSnowflake<MessageId>\",\n            COUNT(*) AS \"race_count!: i64\"\n        FROM races\n        WHERE series = $1\n          AND event = $2\n          AND volunteer_request_message_id IS NOT NULL\n          AND volunteer_request_sent = true\n          AND start > $3\n          AND ignored = false\n        GROUP BY volunteer_request_message_id\n        ORDER BY MIN(start) ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "message_id: PgSnowflake<MessageId>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "race_count!: i64",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      true,
+      null
+    ]
+  },
+  "hash": "62b18a72f4338fe5e4cfaa16981a65c369c6623aca9d0a75ce3c17ff822f9322"
+}
