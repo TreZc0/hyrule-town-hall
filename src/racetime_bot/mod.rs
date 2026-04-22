@@ -6368,7 +6368,16 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                 // transaction commits, so this is safe to send before the commit.
                 lock!(@read senders = extra_room_senders; {
                     if let Some(sender) = senders.get(&category_slug) {
-                        sender.send(race_slug).await.ok();
+                        match sender.try_send(race_slug.clone()) {
+                            Ok(()) => {}
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(race_slug)) => {
+                                let sender = sender.clone();
+                                tokio::spawn(async move {
+                                    sender.send(race_slug).await.ok();
+                                });
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
+                        }
                     }
                 });
                 Ok(room_url)
