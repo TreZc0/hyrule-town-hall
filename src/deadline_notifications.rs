@@ -48,6 +48,10 @@ async fn run_passes(db_pool: &PgPool, discord_ctx: &DiscordCtx) -> Result<(), Er
           AND NOT deadline_reminded_3d
           AND NOT schedule_locked
           AND end_time IS NULL
+          AND start IS NULL
+          AND async_start1 IS NULL
+          AND async_start2 IS NULL
+          AND async_start3 IS NULL
     "#).fetch_all(db_pool).await?;
 
     for row in rows {
@@ -72,6 +76,10 @@ async fn run_passes(db_pool: &PgPool, discord_ctx: &DiscordCtx) -> Result<(), Er
           AND NOT deadline_reminded_24h
           AND NOT schedule_locked
           AND end_time IS NULL
+          AND start IS NULL
+          AND async_start1 IS NULL
+          AND async_start2 IS NULL
+          AND async_start3 IS NULL
     "#).fetch_all(db_pool).await?;
 
     for row in rows {
@@ -106,6 +114,10 @@ async fn run_passes(db_pool: &PgPool, discord_ctx: &DiscordCtx) -> Result<(), Er
           AND NOT r.deadline_organizer_notified
           AND NOT r.schedule_locked
           AND r.end_time IS NULL
+          AND r.start IS NULL
+          AND r.async_start1 IS NULL
+          AND r.async_start2 IS NULL
+          AND r.async_start3 IS NULL
     "#).fetch_all(db_pool).await?;
 
     for row in rows {
