@@ -6787,10 +6787,29 @@ async fn prepare_seeds(global_state: Arc<GlobalState>, mut seed_cache_rx: watch:
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CreateRoomsError {
     #[error(transparent)] Cal(#[from] cal::Error),
-    #[error(transparent)] Discord(#[from] serenity::Error),
     #[error(transparent)] EventData(#[from] event::DataError),
     #[error(transparent)] RaceTime(#[from] Error),
     #[error(transparent)] Sql(#[from] sqlx::Error),
+}
+
+async fn try_discord_send<T, F, Fut>(make_request: F, context: &str)
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = serenity::Result<T>>,
+{
+    for attempt in 0..3u8 {
+        match make_request().await {
+            Ok(_) => return,
+            Err(e) => {
+                if attempt < 2 {
+                    eprintln!("Failed to {} (attempt {}): {}; retrying...", context, attempt + 1, e);
+                    sleep(Duration::from_secs(10)).await;
+                } else {
+                    eprintln!("Failed to {} after 3 attempts: {}", context, e);
+                }
+            }
+        }
+    }
 }
 
 async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shutdown) -> Result<(), CreateRoomsError> {
@@ -6849,17 +6868,23 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                             _ => format!("unlisted room for async part: {msg}"),
                         };
                         if let Some(channel) = event.discord_organizer_channel {
-                            channel.say(&*ctx, &msg).await?;
+                            try_discord_send(|| channel.say(&*ctx, &msg), "post async room message to organizer channel").await;
                         } else {
                             // DM Admin
-                            ADMIN_USER.create_dm_channel(&*ctx).await?.say(&*ctx, &msg).await?;
+                            match ADMIN_USER.create_dm_channel(&*ctx).await {
+                                Ok(dm) => try_discord_send(|| dm.say(&*ctx, &msg), "post async room message to admin DM").await,
+                                Err(e) => eprintln!("Failed to create admin DM channel for async room message: {}", e),
+                            }
                         }
                         // Start a new transaction for querying team members
                         let mut transaction = global_state.db_pool.begin().await?;
                         for team in cal_event.active_teams() {
                             for member in team.members(&mut transaction).await? {
                                 if let Some(discord) = member.discord {
-                                    discord.id.create_dm_channel(&*ctx).await?.say(&*ctx, &msg).await?;
+                                    match discord.id.create_dm_channel(&*ctx).await {
+                                        Ok(dm) => try_discord_send(|| dm.say(&*ctx, &msg), "DM team member about async race room").await,
+                                        Err(e) => eprintln!("Failed to create DM channel for team member: {}", e),
+                                    }
                                 }
                             }
                         }
@@ -6867,34 +6892,29 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                     } else {
                         // For weekly races with a configured notification channel, use that instead
                         if let Some(PgSnowflake(channel_id)) = notification_channel {
-                            if let Err(e) = channel_id.say(&*ctx, &msg).await {
-                                eprintln!("Failed to post race message to weekly notification channel: {}", e);
-                            }
+                            try_discord_send(|| channel_id.say(&*ctx, &msg), "post race message to weekly notification channel").await;
                         } else {
                             if_chain! {
                                 if !cal_event.is_private_async_part();
                                 if let Some(channel) = event.discord_race_room_channel;
                                 then {
                                     if let Some(thread) = cal_event.race.scheduling_thread {
-                                        if let Err(e) = thread.say(&*ctx, &msg).await {
-                                            eprintln!("Failed to post race message to scheduling thread: {}", e);
-                                        }
-                                        if let Err(e) = channel.send_message(&*ctx, CreateMessage::default().content(msg).allowed_mentions(CreateAllowedMentions::default())).await {
-                                            eprintln!("Failed to post race message to Discord race room channel: {}", e);
-                                        }
+                                        try_discord_send(|| thread.say(&*ctx, &msg), "post race message to scheduling thread").await;
+                                        try_discord_send(|| channel.send_message(&*ctx, CreateMessage::default().content(&msg[..]).allowed_mentions(CreateAllowedMentions::default())), "post race message to Discord race room channel").await;
                                     } else {
-                                        if let Err(e) = channel.say(&*ctx, msg).await {
-                                            eprintln!("Failed to post race message to Discord race room channel: {}", e);
-                                        }
+                                        try_discord_send(|| channel.say(&*ctx, &msg), "post race message to Discord race room channel").await;
                                     }
                                 } else {
                                     if let Some(thread) = cal_event.race.scheduling_thread {
-                                        thread.say(&*ctx, msg).await?;
+                                        try_discord_send(|| thread.say(&*ctx, &msg), "post race message to scheduling thread").await;
                                     } else if let Some(channel) = event.discord_organizer_channel {
-                                        channel.say(&*ctx, msg).await?;
+                                        try_discord_send(|| channel.say(&*ctx, &msg), "post race message to organizer channel").await;
                                     } else {
                                         // DM Admin
-                                        ADMIN_USER.create_dm_channel(&*ctx).await?.say(&*ctx, msg).await?;
+                                        match ADMIN_USER.create_dm_channel(&*ctx).await {
+                                            Ok(dm) => try_discord_send(|| dm.say(&*ctx, &msg), "post race message to admin DM").await,
+                                            Err(e) => eprintln!("Failed to create admin DM channel: {}", e),
+                                        }
                                     }
                                 }
                             }
