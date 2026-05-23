@@ -466,6 +466,7 @@ impl<'a> Data<'a> {
         match self.series {
             Series::AlttprDe => false,
             Series::BattleRoyale => false,
+            Series::Cabookey => false,
             Series::CoOp => false,
             Series::CopaDoBrasil => false,
             Series::Crosskeys => false,
@@ -1107,6 +1108,7 @@ pub(crate) async fn info(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
     let series_content = match data.series {
         Series::AlttprDe => alttprde::info(&mut transaction, &data).await?,
         Series::BattleRoyale => ohko::info(&mut transaction, &data).await?,
+        Series::Cabookey => cabookey::info(&mut transaction, &data).await?,
         Series::CoOp => coop::info(&mut transaction, &data).await?,
         Series::CopaDoBrasil => br::info(&mut transaction, &data).await?,
         Series::Crosskeys => xkeys::info(&mut transaction, &data).await?,
@@ -1814,6 +1816,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                     } else {
                         @match data.series {
                             | Series::AlttprDe
+                            | Series::Cabookey
                             | Series::CoOp
                             | Series::CopaDoBrasil
                             | Series::Crosskeys

@@ -25,6 +25,7 @@ use {
 
 pub(crate) mod alttprde;
 pub(crate) mod br;
+pub(crate) mod cabookey;
 pub(crate) mod coop;
 pub(crate) mod fr;
 pub(crate) mod league;
@@ -50,6 +51,7 @@ pub(crate) mod wolfdash;
 pub(crate) enum Series {
     AlttprDe,
     BattleRoyale,
+    Cabookey,
     CoOp,
     CopaDoBrasil,
     Crosskeys,
@@ -77,6 +79,7 @@ impl Series {
         match self {
             Self::AlttprDe => "alttprde",
             Self::BattleRoyale => "ohko",
+            Self::Cabookey => "cabookey",
             Self::CoOp => "coop",
             Self::CopaDoBrasil => "br",
             Self::Crosskeys => "xkeys",
@@ -104,6 +107,7 @@ impl Series {
         match self {
             Self::AlttprDe => "Deutsche ALTTPR Turniere",
             Self::BattleRoyale => "Battle Royale",
+            Self::Cabookey => "Cabookey Tournaments",
             Self::CoOp => "Co-op Tournaments",
             Self::CopaDoBrasil => "Copa do Brasil",
             Self::Crosskeys => "Crosskeys Tournaments",
@@ -130,7 +134,7 @@ impl Series {
     pub(crate) fn default_race_duration(&self) -> TimeDelta {
         match self {
             Self::TriforceBlitz => TimeDelta::hours(2),
-            Self::AlttprDe | Self::BattleRoyale | Self::Crosskeys | Self::MysteryD | Self::TwwrMain => TimeDelta::hours(2) + TimeDelta::minutes(30),
+            Self::AlttprDe | Self::BattleRoyale | Self::Cabookey | Self::Crosskeys | Self::MysteryD | Self::TwwrMain => TimeDelta::hours(2) + TimeDelta::minutes(30),
             Self::CoOp | Self::MixedPools | Self::Scrubs | Self::SpeedGaming | Self::WeTryToBeBetter => TimeDelta::hours(3),
             Self::CopaDoBrasil | Self::League | Self::NineDaysOfSaws | Self::SongsOfHope | Self::Standard | Self::TournoiFrancophone => TimeDelta::hours(3) + TimeDelta::minutes(30),
             Self::Mq | Self::Multiworld | Self::Pictionary => TimeDelta::hours(4),
