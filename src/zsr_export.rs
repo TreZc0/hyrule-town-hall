@@ -678,18 +678,8 @@ pub(crate) async fn build_race_title(
 }
 
 /// Get the draft mode for a race if available
-fn get_race_mode(race: &Race) -> Option<&str> {
-    use crate::series::alttprde;
-
-    if race.series == Series::AlttprDe {
-        race.game
-            .and_then(|game| race.draft.as_ref().and_then(|draft|
-                alttprde::mode_for_game(&draft.settings, game)
-            ))
-            .map(|mode| mode.display)
-    } else {
-        None
-    }
+fn get_race_mode(_race: &Race) -> Option<&str> {
+    None
 }
 
 /// Get display name for an entrant

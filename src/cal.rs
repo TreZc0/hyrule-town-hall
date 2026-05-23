@@ -720,8 +720,6 @@ impl Race {
             | Series::MixedPools
             | Series::Mq
             | Series::MysteryD
-            | Series::NineDaysOfSaws
-            | Series::Pictionary
             | Series::SongsOfHope
             | Series::SpeedGaming
             | Series::TournoiFrancophone
@@ -2565,9 +2563,9 @@ pub(crate) async fn race_table(
                                     @let draft_mode = race.draft.as_ref().and_then(|draft| {
                                         let game = race.game.unwrap_or(1);
                                         let preset = draft.settings.get(&*format!("game{game}_preset"))?;
-                                        event.draft_kind().and_then(|kind| kind.preset_display_name(preset.as_ref()))
+                                        event.draft_kind().and_then(|kind| kind.preset_display_name(preset.as_ref()).map(|s| s.to_owned()))
                                     });
-                                    : seed::table_cell(now, &race.seed, true, add_hash_url, &mut *transaction, game_id, draft_mode).await?;
+                                    : seed::table_cell(now, &race.seed, true, add_hash_url, &mut *transaction, game_id, draft_mode.as_deref()).await?;
                                 } else {
                                     // hide seed if unfinished async
                                     //TODO show to the team that played the 1st async half
@@ -2580,7 +2578,7 @@ pub(crate) async fn race_table(
                                     // Show drafted preset for upcoming races that have a completed draft
                                     @if let Some(ref draft) = race.draft {
                                         @let game = race.game.unwrap_or(1);
-                                        @if let Some(mode) = draft.settings.get(&*format!("game{game}_preset")).and_then(|v| event.draft_kind().and_then(|kind| kind.preset_display_name(v.as_ref()))) {
+                                        @if let Some(mode) = draft.settings.get(&*format!("game{game}_preset")).and_then(|v| event.draft_kind().and_then(|kind| kind.preset_display_name(v.as_ref()).map(|s| s.to_owned()))) {
                                             div(class = "draft-mode") {
                                                 : mode;
                                             }
@@ -2612,7 +2610,7 @@ pub(crate) async fn race_table(
                                 // Show drafted preset for any event with a completed preset draft
                                 @if let Some(ref draft) = race.draft {
                                     @let game = race.game.unwrap_or(1);
-                                    @if let Some(mode) = draft.settings.get(&*format!("game{game}_preset")).and_then(|v| event.draft_kind().and_then(|kind| kind.preset_display_name(v.as_ref()))) {
+                                    @if let Some(mode) = draft.settings.get(&*format!("game{game}_preset")).and_then(|v| event.draft_kind().and_then(|kind| kind.preset_display_name(v.as_ref()).map(|s| s.to_owned()))) {
                                         div(class = "draft-mode") {
                                             : mode;
                                         }

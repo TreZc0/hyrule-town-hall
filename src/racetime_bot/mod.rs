@@ -366,6 +366,9 @@ impl seed_gen_type::SeedGenType {
             Self::OoTR | Self::Mmr => {
                 ctx.say("!seed: The settings used for this event.").await?;
             }
+            Self::Owr => {
+                ctx.say("!seed: Rolls this race's seed.").await?;
+            }
         }
         Ok(())
     }
@@ -510,6 +513,11 @@ impl seed_gen_type::SeedGenType {
                 [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn’t quite understand that" },
             },
             Self::OoTR | Self::Mmr => return Ok(SeedCommandParseResult::Error { language: English, msg: "This seed type rolls settings from the event config; use the bot’s !seed command in the race room instead.".into() }),
+            Self::Owr => match args {
+                [] => SeedCommandParseResult::Alttpr,
+                [arg] if arg == "base" => SeedCommandParseResult::Alttpr,
+                [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn’t quite understand that" },
+            },
         })
     }
 }
@@ -981,6 +989,27 @@ impl GlobalState {
         update_rx
     }
 
+    /// Roll an OWR (Open World Randomizer) seed by applying player choices to the base config.
+    pub(crate) fn roll_owr_seed(self: Arc<Self>, choices: HashMap<String, String>, config: OwrSeedConfig) -> mpsc::Receiver<SeedRollUpdate> {
+        let uuid = Uuid::new_v4();
+        let mut settings = config.base_settings;
+        for patch in config.choice_patches {
+            if choices.get(patch.key).is_some_and(|v| v == "yes") {
+                (patch.apply)(&mut settings);
+            }
+        }
+        let meta = AlttprDoorRandoMeta { bps: true, name: uuid.to_string(), race: true, skip_playthrough: true, spoiler: "full", suppress_rom: true };
+        let mut yaml = AlttprDoorRandoYaml { placements: HashMap::default(), settings: HashMap::default(), start_inventory: HashMap::default(), meta };
+        yaml.settings.insert(1, settings);
+        if !config.start_inventory.is_empty() {
+            yaml.start_inventory.insert(1, config.start_inventory);
+        }
+        match serde_yml::to_string(&yaml) {
+            Ok(yaml_content) => self.roll_alttpr_dr_seed(yaml_content, uuid, "../alttpr", false),
+            Err(e) => alttpr_dr_error_receiver(e.into()),
+        }
+    }
+
     /// Unified seed rolling dispatcher: rolls a seed for an event based on its `seed_gen_type`.
     ///
     /// Replaces the `match goal { ... }` dispatch blocks in `handle_race()` and elsewhere.
@@ -1420,11 +1449,13 @@ fn build_crosskeys_yaml(opts: &CrosskeysRaceOptions, uuid: Uuid) -> Result<Strin
         mapshuffle: 1,
         mirrorscroll,
         mode: world_state,
+        ow_mixed: None,
         pottery: keydrop_mode,
         pseudoboots,
         shuffle: "crossed",
         shuffletavern: 0,
         skullwoods,
+        swords: None,
     };
     if !agreed.contains("zw") {
         yaml.placements.insert(1, AlttprDoorRandoPlacements { pinball_room: "Small Key (Skull Woods)" });
@@ -4244,12 +4275,12 @@ impl RaceHandler<GlobalState> for Handler {
         }
         // If a Discord button draft was completed while the room is already open, pick it up and roll.
         if matches!(data.status.value, RaceStatusValue::Open | RaceStatusValue::Invitational) {
-            if let Some(draft_kind) = goal.draft_kind() {
+            if let Some(draft_kind) = self.official_data.as_ref().and_then(|d| d.event.draft_kind()) {
                 if draft_kind.uses_button_draft() {
                     let game = self.official_data.as_ref().and_then(|d| d.cal_event.race.game);
                     lock!(@write state = self.race_state; {
                         let unlock_spoiler_log_if_incomplete = if let RaceState::Draft { state: ref draft, unlock_spoiler_log } = *state {
-                            let step = draft.next_step(draft_kind, game, &mut draft::MessageContext::None).await.to_racetime()?;
+                            let step = draft.next_step(&draft_kind, game, &mut draft::MessageContext::None).await.to_racetime()?;
                             if matches!(step.kind, draft::StepKind::Done(_)) { None } else { Some(unlock_spoiler_log) }
                         } else {
                             None
@@ -4261,7 +4292,7 @@ impl RaceHandler<GlobalState> for Handler {
                             transaction.commit().await.to_racetime()?;
                             if let Some(cal_event) = maybe_cal_event {
                                 if let Some(new_draft) = cal_event.race.draft {
-                                    let new_step = new_draft.next_step(draft_kind, game, &mut draft::MessageContext::None).await.to_racetime()?;
+                                    let new_step = new_draft.next_step(&draft_kind, game, &mut draft::MessageContext::None).await.to_racetime()?;
                                     if matches!(new_step.kind, draft::StepKind::Done(_)) {
                                         *state = RaceState::Draft { state: new_draft, unlock_spoiler_log };
                                         self.advance_draft(ctx, &state).await?;
