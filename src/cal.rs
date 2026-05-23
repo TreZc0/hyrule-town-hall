@@ -309,7 +309,10 @@ impl RaceSchedule {
 
     pub(crate) fn set_live_start(&mut self, new_start: DateTime<Utc>) {
         match self {
-            Self::Live { start, .. } => *start = new_start,
+            Self::Live { start, room, .. } => {
+                *start = new_start;
+                *room = None; // old room is invalid when rescheduling
+            }
             _ => *self = Self::Live { start: new_start, end: None, room: None },
         }
     }
@@ -390,6 +393,8 @@ pub(crate) struct Race {
     pub(crate) volunteer_request_sent: bool,
     pub(crate) volunteer_request_message_id: Option<PgSnowflake<MessageId>>,
     pub(crate) racetime_goal_slug: Option<String>,
+    pub(crate) scheduling_deadline: Option<DateTime<Utc>>,
+    pub(crate) restream_consent_required: bool,
 }
 
 impl Race {
@@ -418,8 +423,8 @@ impl Race {
             p2_twitch,
             total,
             finished,
-            phase,
-            round,
+            r.phase,
+            r.round,
             scheduling_thread AS "scheduling_thread: PgSnowflake<ChannelId>",
             draft_state AS "draft_state: Json<Draft>",
             r.start,
@@ -463,8 +468,15 @@ impl Race {
             discord_scheduled_event_id AS "discord_scheduled_event_id: PgSnowflake<ScheduledEventId>",
             volunteer_request_sent,
             volunteer_request_message_id AS "volunteer_request_message_id: PgSnowflake<MessageId>",
-            e.racetime_goal_slug
-        FROM races r LEFT JOIN events e ON r.series = e.series AND r.event = e.event
+            e.racetime_goal_slug,
+            r.scheduling_deadline,
+            COALESCE(erc.restream_consent_required, false) AS "restream_consent_required!"
+        FROM races r
+        LEFT JOIN events e ON r.series = e.series AND r.event = e.event
+        LEFT JOIN event_round_configs erc
+               ON erc.series = r.series
+              AND erc.event  = r.event
+              AND (erc.round = r.round OR r.round ILIKE '% ' || erc.round)
         WHERE r.id = $1"#, id as _).fetch_one(&mut **transaction).await?;
         let source = if let Some(id) = row.challonge_match {
             Source::Challonge { id }
@@ -606,6 +618,8 @@ impl Race {
             volunteer_request_sent: row.volunteer_request_sent,
             volunteer_request_message_id: row.volunteer_request_message_id.map(|PgSnowflake(id)| PgSnowflake(id)),
             racetime_goal_slug: row.racetime_goal_slug,
+            scheduling_deadline: row.scheduling_deadline,
+            restream_consent_required: row.restream_consent_required,
             id, source, entrants,
         })
     }
@@ -625,6 +639,64 @@ impl Race {
                 "1" => {} // no match data available
                 _ => {} // new events are scheduled via Mido's House
             },
+            Series::NineDaysOfSaws | Series::Pictionary => if let Some(race) = races.iter_mut().find(|race| race.series == event.series && race.event == event.event) {
+                race.schedule = if let Some(start) = event.start(&mut *transaction).await? {
+                    RaceSchedule::Live {
+                        end: event.end,
+                        room: event.url.clone(),
+                        start,
+                    }
+                } else {
+                    RaceSchedule::Unscheduled
+                };
+                if let Some(english_video_url) = event.video_url.clone() {
+                    race.video_urls.entry(English).or_insert(english_video_url);
+                }
+                race
+            } else {
+                races.push(Self {
+                    id: Id::<Races>::new(&mut *transaction).await?,
+                    series: event.series,
+                    event: event.event.to_string(),
+                    source: Source::Manual,
+                    entrants: Entrants::Open,
+                    phase: None,
+                    round: None,
+                    game: None,
+                    scheduling_thread: None,
+                    schedule: if let Some(start) = event.start(&mut *transaction).await? {
+                        RaceSchedule::Live {
+                            end: event.end,
+                            room: event.url.clone(),
+                            start,
+                        }
+                    } else {
+                        RaceSchedule::Unscheduled
+                    },
+                    schedule_updated_at: None,
+                    fpa_invoked: false,
+                    breaks_used: false,
+                    draft: None,
+                    seed: seed::Data::default(),
+                    video_urls: event.video_url.iter().map(|video_url| (English, video_url.clone())).collect(), //TODO sync between event and race? Video URL fields for other languages on event::Data?
+                    restreamers: HashMap::default(),
+                    last_edited_by: None,
+                    last_edited_at: None,
+                    ignored: false,
+                    schedule_locked: false,
+                    notified: false,
+                    async_notified_1: false,
+                    async_notified_2: false,
+                    async_notified_3: false,
+                    discord_scheduled_event_id: None,
+                    volunteer_request_sent: false,
+                    volunteer_request_message_id: None,
+                    racetime_goal_slug: None,
+                    scheduling_deadline: None,
+                    restream_consent_required: false,
+                });
+                races.last_mut().expect("just pushed")
+            }.save(&mut *transaction).await?,
             Series::Rsl => match &*event.event {
                 "1" => {} // no match data available
                 _ => {} // new events are scheduled via Mido's House
@@ -641,6 +713,7 @@ impl Race {
                 _ => {} // other TWWR events are scheduled via Mido's House
             },
             | Series::AlttprDe
+            | Series::Cabookey
             | Series::CoOp //TODO add archives of seasons 1 and 2?
             | Series::CopaDoBrasil
             | Series::Crosskeys
@@ -1208,10 +1281,10 @@ impl Race {
         };
         let seed_data = self.seed.to_seed_data();
         sqlx::query!("
-            INSERT INTO races              (startgg_set, start, series, event, async_start2, async_start1, room, scheduling_thread, async_room1, async_room2, draft_state, async_end1, async_end2, end_time, team1, team2, hash1, hash2, hash3, hash4, hash5, game, id,  p1,  p2,  last_edited_by, last_edited_at, video_url, phase, round, ignored, p3,  startgg_event, total, finished, video_url_fr, restreamer, restreamer_fr, video_url_pt, restreamer_pt, p1_twitch, p2_twitch, p1_discord, p2_discord, schedule_locked, team3, schedule_updated_at, video_url_de, restreamer_de, sheet_timestamp, league_id, p1_racetime, p2_racetime, async_start3, async_room3, async_end3, challonge_match, seed_password, speedgaming_id, notified, fpa_invoked, breaks_used, async_notified_1, async_notified_2, async_notified_3, discord_scheduled_event_id, seed_data)
-            VALUES                         ($1,          $2,    $3,     $4,    $5,           $6,           $7,   $8,                $9,          $10,         $11,         $12,        $13,        $14,      $15,   $16,   $17,   $18,   $19,   $20,   $21,   $22,  $23, $24, $25, $26,            $27,            $28,       $29,   $30,   $31,     $32, $33,           $34,   $35,      $36,          $37,        $38,           $39,          $40,           $41,       $42,       $43,        $44,        $45,             $46,   $47,                 $48,          $49,           $50,             $51,       $52,         $53,         $54,          $55,         $56,        $57,             $58,           $59,            $60,      $61,         $62,          $63,        $64,        $65,                       $66,       $67)
-            ON CONFLICT (id) DO UPDATE SET (startgg_set, start, series, event, async_start2, async_start1, room, scheduling_thread, async_room1, async_room2, draft_state, async_end1, async_end2, end_time, team1, team2, hash1, hash2, hash3, hash4, hash5, game, id,  p1,  p2,  last_edited_by, last_edited_at, video_url, phase, round, ignored, p3,  startgg_event, total, finished, video_url_fr, restreamer, restreamer_fr, video_url_pt, restreamer_pt, p1_twitch, p2_twitch, p1_discord, p2_discord, schedule_locked, team3, schedule_updated_at, video_url_de, restreamer_de, sheet_timestamp, league_id, p1_racetime, p2_racetime, async_start3, async_room3, async_end3, challonge_match, seed_password, speedgaming_id, notified, fpa_invoked, breaks_used, async_notified_1, async_notified_2, async_notified_3, discord_scheduled_event_id, seed_data)
-            =                              ($1,          $2,    $3,     $4,    $5,           $6,           $7,   $8,                $9,          $10,         $11,         $12,        $13,        $14,      $15,   $16,   $17,   $18,   $19,   $20,   $21,   $22,  $23, $24, $25, $26,            $27,            $28,       $29,   $30,   $31,     $32, $33,           $34,   $35,      $36,          $37,        $38,           $39,          $40,           $41,       $42,       $43,        $44,        $45,             $46,   $47,                 $48,          $49,           $50,             $51,       $52,         $53,         $54,          $55,         $56,        $57,             $58,           $59,            $60,      $61,         $62,          $63,        $64,        $65,                       $66,       $67)
+            INSERT INTO races              (startgg_set, start, series, event, async_start2, async_start1, room, scheduling_thread, async_room1, async_room2, draft_state, async_end1, async_end2, end_time, team1, team2, hash1, hash2, hash3, hash4, hash5, game, id,  p1,  p2,  last_edited_by, last_edited_at, video_url, phase, round, ignored, p3,  startgg_event, total, finished, video_url_fr, restreamer, restreamer_fr, video_url_pt, restreamer_pt, p1_twitch, p2_twitch, p1_discord, p2_discord, schedule_locked, team3, schedule_updated_at, video_url_de, restreamer_de, sheet_timestamp, league_id, p1_racetime, p2_racetime, async_start3, async_room3, async_end3, challonge_match, seed_password, speedgaming_id, notified, fpa_invoked, breaks_used, async_notified_1, async_notified_2, async_notified_3, discord_scheduled_event_id, seed_data,   scheduling_deadline)
+            VALUES                         ($1,          $2,    $3,     $4,    $5,           $6,           $7,   $8,                $9,          $10,         $11,         $12,        $13,        $14,      $15,   $16,   $17,   $18,   $19,   $20,   $21,   $22,  $23, $24, $25, $26,            $27,            $28,       $29,   $30,   $31,     $32, $33,           $34,   $35,      $36,          $37,        $38,           $39,          $40,           $41,       $42,       $43,        $44,        $45,             $46,   $47,                 $48,          $49,           $50,             $51,       $52,         $53,         $54,          $55,         $56,        $57,             $58,           $59,            $60,      $61,         $62,          $63,        $64,        $65,                       $66,       $67,         $68)
+            ON CONFLICT (id) DO UPDATE SET (startgg_set, start, series, event, async_start2, async_start1, room, scheduling_thread, async_room1, async_room2, draft_state, async_end1, async_end2, end_time, team1, team2, hash1, hash2, hash3, hash4, hash5, game, id,  p1,  p2,  last_edited_by, last_edited_at, video_url, phase, round, ignored, p3,  startgg_event, total, finished, video_url_fr, restreamer, restreamer_fr, video_url_pt, restreamer_pt, p1_twitch, p2_twitch, p1_discord, p2_discord, schedule_locked, team3, schedule_updated_at, video_url_de, restreamer_de, sheet_timestamp, league_id, p1_racetime, p2_racetime, async_start3, async_room3, async_end3, challonge_match, seed_password, speedgaming_id, notified, fpa_invoked, breaks_used, async_notified_1, async_notified_2, async_notified_3, discord_scheduled_event_id, seed_data,   scheduling_deadline)
+            =                              ($1,          $2,    $3,     $4,    $5,           $6,           $7,   $8,                $9,          $10,         $11,         $12,        $13,        $14,      $15,   $16,   $17,   $18,   $19,   $20,   $21,   $22,  $23, $24, $25, $26,            $27,            $28,       $29,   $30,   $31,     $32, $33,           $34,   $35,      $36,          $37,        $38,           $39,          $40,           $41,       $42,       $43,        $44,        $45,             $46,   $47,                 $48,          $49,           $50,             $51,       $52,         $53,         $54,          $55,         $56,        $57,             $58,           $59,            $60,      $61,         $62,          $63,        $64,        $65,                       $66,       $67,         $68)
         ",
             startgg_set as _,
             start,
@@ -1279,7 +1352,8 @@ impl Race {
             self.async_notified_2,
             self.async_notified_3,
             self.discord_scheduled_event_id as _,
-            seed_data.map(Json) as _
+            seed_data.map(Json) as _,
+            self.scheduling_deadline
         ).execute(&mut **transaction).await?;
         Ok(())
     }
@@ -2108,6 +2182,14 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
             } else {
                 None
             };
+            let phase_deadline = if let Some(ref round) = round {
+                sqlx::query_scalar!(
+                    "SELECT scheduling_deadline FROM event_round_configs WHERE series = $1 AND event = $2 AND round = $3",
+                    event.series as _, &event.event, round
+                ).fetch_optional(&mut *transaction).await?.flatten()
+            } else {
+                None
+            };
             let mut scheduling_thread = None;
             for game in 1..=value.game_count {
                 let mut race = Race {
@@ -2150,6 +2232,8 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
                     volunteer_request_sent: false,
                     volunteer_request_message_id: None,
                     racetime_goal_slug: None,
+                    scheduling_deadline: phase_deadline,
+                    restream_consent_required: false,
                     scheduling_thread,
                 };
                 if game == 1 {
@@ -2213,6 +2297,9 @@ pub(crate) async fn race_table(
                     hash_map::Entry::Vacant(entry) => entry.insert(race.event(&mut *transaction).await?),
                 };
                 if event.single_settings.is_none() && race.single_settings(&mut *transaction).await?.is_some() {
+                    break 'has_seeds true
+                }
+                if race.draft.as_ref().is_some_and(|d| d.settings.contains_key(&*format!("game{}_preset", race.game.unwrap_or(1)))) {
                     break 'has_seeds true
                 }
             }
@@ -2443,7 +2530,7 @@ pub(crate) async fn race_table(
                                     RaceSchedule::Live { end, .. } => end.is_none_or(|end_time| end_time > Utc::now()),
                                     RaceSchedule::Async { .. } => false, // asyncs not eligible
                                 };
-                                @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                @let all_teams_consented = race.restream_consent_required || race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
                                 @if scheduled && all_teams_consented {
                                         @if let Some(user) = user {
                                             @let is_organizer = event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(user));
@@ -2475,14 +2562,11 @@ pub(crate) async fn race_table(
                                     @let supports_hash = !matches!(event.rando_version, Some(racetime_bot::VersionedBranch::Tww { .. }));
                                     @let add_hash_url = options.can_edit.then(|| uri!(cal::add_file_hash(race.series, &*race.event, race.id))).filter(|_| supports_hash);
                                     // Extract draft mode for display if applicable
-                                    @let draft_mode = if race.series == Series::AlttprDe {
-                                        race.draft.as_ref()
-                                            .and_then(|draft| race.game)
-                                            .and_then(|game| race.draft.as_ref().and_then(|draft| alttprde::mode_for_game(&draft.settings, game)))
-                                            .map(|mode| mode.display)
-                                    } else {
-                                        None
-                                    };
+                                    @let draft_mode = race.draft.as_ref().and_then(|draft| {
+                                        let game = race.game.unwrap_or(1);
+                                        let preset = draft.settings.get(&*format!("game{game}_preset"))?;
+                                        event.draft_kind().and_then(|kind| kind.preset_display_name(preset.as_ref()))
+                                    });
                                     : seed::table_cell(now, &race.seed, true, add_hash_url, &mut *transaction, game_id, draft_mode).await?;
                                 } else {
                                     // hide seed if unfinished async
@@ -2493,8 +2577,17 @@ pub(crate) async fn race_table(
                                             : "Practice";
                                         }
                                     }
+                                    // Show drafted preset for upcoming races that have a completed draft
+                                    @if let Some(ref draft) = race.draft {
+                                        @let game = race.game.unwrap_or(1);
+                                        @if let Some(mode) = draft.settings.get(&*format!("game{game}_preset")).and_then(|v| event.draft_kind().and_then(|kind| kind.preset_display_name(v.as_ref()))) {
+                                            div(class = "draft-mode") {
+                                                : mode;
+                                            }
+                                        }
+                                    }
                                 }
-                                
+
                                 // Add Settings link for races with per-race player-chosen settings
                                 @if race.show_seed() || race.is_ended() || matches!(race.schedule, RaceSchedule::Unscheduled | RaceSchedule::Async { .. } | RaceSchedule::Live { .. }) {
                                     @if let Some(sgt) = event.seed_gen_type.as_ref() {
@@ -2516,15 +2609,26 @@ pub(crate) async fn race_table(
                                         }
                                     }
                                 }
+                                // Show drafted preset for any event with a completed preset draft
+                                @if let Some(ref draft) = race.draft {
+                                    @let game = race.game.unwrap_or(1);
+                                    @if let Some(mode) = draft.settings.get(&*format!("game{game}_preset")).and_then(|v| event.draft_kind().and_then(|kind| kind.preset_display_name(v.as_ref()))) {
+                                        div(class = "draft-mode") {
+                                            : mode;
+                                        }
+                                    }
+                                }
                             }
                         }
                         @if options.show_restream_consent {
                             td {
-                                @if let Some(mut teams) = race.teams_opt() {
+                                @if race.restream_consent_required {
+                                    : "Required";
+                                } else if let Some(mut teams) = race.teams_opt() {
                                     @if teams.all(|team| team.restream_consent) {
                                         : "✓";
                                     } else {
-                                        : "x";
+                                        : "✗";
                                     }
                                 }
                             }
@@ -2539,7 +2643,7 @@ pub(crate) async fn race_table(
                                     } else if options.can_edit {
                                         @match race.schedule {
                                             RaceSchedule::Live { .. } => {
-                                                @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                                @let all_teams_consented = race.restream_consent_required || race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
                                                 @if all_teams_consented {
                                                     a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
                                                 }
@@ -2556,7 +2660,7 @@ pub(crate) async fn race_table(
                             @if race.is_ended() {
                                 @match race.schedule {
                                     RaceSchedule::Live { .. } => {
-                                        @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                        @let all_teams_consented = race.restream_consent_required || race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
                                         @if all_teams_consented {
                                             @let signups = Signup::for_race(&mut *transaction, race.id).await?;
                                             @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
@@ -2648,7 +2752,7 @@ pub(crate) async fn race_table(
                             } else {
                                 @match race.schedule {
                                     RaceSchedule::Live { .. } => {
-                                        @let all_teams_consented = race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                        @let all_teams_consented = race.restream_consent_required || race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
                                         @if all_teams_consented {
                                             @let signups = Signup::for_race(&mut *transaction, race.id).await?;
                                             @let pending_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Pending)).collect::<Vec<_>>();
@@ -3158,6 +3262,8 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                     volunteer_request_sent: false,
                                     volunteer_request_message_id: None,
                                     racetime_goal_slug: None,
+                                    scheduling_deadline: None,
+                                    restream_consent_required: false,
                                 };
                                 if let Some(race) = races.iter_mut().find(|race| if let Source::League { id } = race.source { id == match_data.id } else { false }) {
                                     if !race.schedule_locked {
@@ -3401,6 +3507,8 @@ pub(crate) async fn ensure_weekly_races(
                     volunteer_request_sent: false,
                     volunteer_request_message_id: None,
                     racetime_goal_slug: None,
+                    scheduling_deadline: None,
+                    restream_consent_required: false,
                     schedule,
                 };
                 race.save(&mut *transaction).await?;

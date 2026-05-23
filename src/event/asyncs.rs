@@ -113,8 +113,8 @@ async fn asyncs_form(
                                         Series::TriforceBlitz => {
                                             th : "TFB UUID";
                                         }
-                                        Series::Crosskeys => {
-                                            th : "Crosskeys UUID";
+                                        Series::Cabookey | Series::Crosskeys => {
+                                            th : "ALTTPR UUID";
                                         }
                                         Series::AlttprDe => {
                                             th : "Avianart Seed";
@@ -162,7 +162,7 @@ async fn asyncs_form(
                                             Series::TriforceBlitz => {
                                                 td : row.tfb_uuid.map(|u| u.to_string()).unwrap_or_default();
                                             }
-                                            Series::Crosskeys => {
+                                            Series::Cabookey | Series::Crosskeys => {
                                                 td : row.xkeys_uuid.map(|u| u.to_string()).unwrap_or_default();
                                             }
                                             Series::AlttprDe => {
@@ -207,7 +207,7 @@ async fn asyncs_form(
                     @let hidden_fields = match event.series {
                         Series::TwwrMain => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid", "avianart_hash"].as_slice(),
                         Series::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid", "avianart_hash"].as_slice(),
-                        Series::Crosskeys => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "avianart_hash"].as_slice(),
+                        Series::Cabookey | Series::Crosskeys => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "avianart_hash"].as_slice(),
                         Series::AlttprDe => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "xkeys_uuid"].as_slice(),
                         _ => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "avianart_hash"].as_slice(),
                     };
@@ -244,9 +244,9 @@ async fn asyncs_form(
                                     input(type = "text", name = "tfb_uuid", id = "tfb_uuid", value = ctx.field_value("tfb_uuid").unwrap_or(&default_tfb_uuid));
                                 });
                             }
-                            Series::Crosskeys => {
+                            Series::Cabookey | Series::Crosskeys => {
                                 : form_field("xkeys_uuid", &mut errors, html! {
-                                    label(for = "xkeys_uuid") : "Crosskeys UUID";
+                                    label(for = "xkeys_uuid") : "ALTTPR UUID";
                                     input(type = "text", name = "xkeys_uuid", id = "xkeys_uuid", value = ctx.field_value("xkeys_uuid").unwrap_or(&default_xkeys_uuid));
                                 });
                             }
@@ -370,7 +370,7 @@ pub(crate) async fn post(
         let hidden_fields = match event_data.series {
             Series::TwwrMain => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid"].as_slice(),
             Series::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid"].as_slice(),
-            Series::Crosskeys => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid"].as_slice(),
+            Series::Cabookey | Series::Crosskeys => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid"].as_slice(),
             _ => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid"].as_slice(),
         };
         let has_relevant_errors = form

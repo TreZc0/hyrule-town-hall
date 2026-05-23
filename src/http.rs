@@ -340,6 +340,56 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
             if started || has_started_qualifier { &mut ongoing_events_unlisted } else { &mut upcoming_events_unlisted }.push(event);
         }
     }
+    let mut ongoing_by_game = Vec::new();
+    for event in ongoing_events {
+        let game = event.game(&mut transaction).await.map_err(event::Error::from)?;
+        let key = game.as_ref().map(|g| g.id);
+        if let Some(pos) = ongoing_by_game.iter().position(|(g, _): &(Option<game::Game>, Vec<_>)| g.as_ref().map(|g| g.id) == key) {
+            ongoing_by_game[pos].1.push((event, false));
+        } else {
+            ongoing_by_game.push((game, vec![(event, false)]));
+        }
+    }
+    for event in ongoing_events_unlisted {
+        let game = event.game(&mut transaction).await.map_err(event::Error::from)?;
+        let key = game.as_ref().map(|g| g.id);
+        if let Some(pos) = ongoing_by_game.iter().position(|(g, _): &(Option<game::Game>, Vec<_>)| g.as_ref().map(|g| g.id) == key) {
+            ongoing_by_game[pos].1.push((event, true));
+        } else {
+            ongoing_by_game.push((game, vec![(event, true)]));
+        }
+    }
+    ongoing_by_game.sort_by(|(a, _), (b, _)| match (a.as_ref(), b.as_ref()) {
+        (None, None) => Equal,
+        (None, Some(_)) => Greater,
+        (Some(_), None) => Less,
+        (Some(ga), Some(gb)) => ga.display_name.cmp(&gb.display_name),
+    });
+    let mut upcoming_by_game = Vec::new();
+    for event in upcoming_events {
+        let game = event.game(&mut transaction).await.map_err(event::Error::from)?;
+        let key = game.as_ref().map(|g| g.id);
+        if let Some(pos) = upcoming_by_game.iter().position(|(g, _): &(Option<game::Game>, Vec<_>)| g.as_ref().map(|g| g.id) == key) {
+            upcoming_by_game[pos].1.push((event, false));
+        } else {
+            upcoming_by_game.push((game, vec![(event, false)]));
+        }
+    }
+    for event in upcoming_events_unlisted {
+        let game = event.game(&mut transaction).await.map_err(event::Error::from)?;
+        let key = game.as_ref().map(|g| g.id);
+        if let Some(pos) = upcoming_by_game.iter().position(|(g, _): &(Option<game::Game>, Vec<_>)| g.as_ref().map(|g| g.id) == key) {
+            upcoming_by_game[pos].1.push((event, true));
+        } else {
+            upcoming_by_game.push((game, vec![(event, true)]));
+        }
+    }
+    upcoming_by_game.sort_by(|(a, _), (b, _)| match (a.as_ref(), b.as_ref()) {
+        (None, None) => Equal,
+        (None, Some(_)) => Greater,
+        (Some(_), None) => Less,
+        (Some(ga), Some(gb)) => ga.display_name.cmp(&gb.display_name),
+    });
     let page_content = html! {
         h1 : "Welcome to the Hyrule Town Hall!";
         p {
@@ -373,17 +423,23 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
             }
             div {
                 h2 : "Ongoing events";
-                ul {
-                    @if ongoing_events.is_empty() && ongoing_events_unlisted.is_empty() {
-                        i : "(none currently)";
-                    } else {
-                        @for event in ongoing_events {
-                            li : event;
-                        }
-                        @for event in ongoing_events_unlisted {
+                @if ongoing_by_game.is_empty() {
+                    i : "(none currently)";
+                } else {
+                    ul {
+                        @for (game, events) in ongoing_by_game {
                             li {
-                                : event;
-                                : " (not public)";
+                                b : game.as_ref().map(|g| g.display_name.as_str()).unwrap_or("Other");
+                                ul {
+                                    @for (event, is_unlisted) in events {
+                                        li {
+                                            : event;
+                                            @if is_unlisted {
+                                                : " (not public)";
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -391,26 +447,26 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
             }
             div {
                 h2 : "Upcoming events";
-                ul {
-                    @if upcoming_events.is_empty() && upcoming_events_unlisted.is_empty() {
-                        i : "(none currently)";
-                    } else {
-                        @for event in upcoming_events {
+                @if upcoming_by_game.is_empty() {
+                    i : "(none currently)";
+                } else {
+                    ul {
+                        @for (game, events) in upcoming_by_game {
                             li {
-                                : event;
-                                @if let Some(start) = event.start(&mut transaction).await? {
-                                    : " — ";
-                                    : format_datetime(start, DateTimeFormat { long: false, running_text: false });
-                                }
-                            }
-                        }
-                        @for event in upcoming_events_unlisted {
-                            li {
-                                : event;
-                                : " (not public)";
-                                @if let Some(start) = event.start(&mut transaction).await? {
-                                    : " — ";
-                                    : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                b : game.as_ref().map(|g| g.display_name.as_str()).unwrap_or("Other");
+                                ul {
+                                    @for (event, is_unlisted) in events {
+                                        li {
+                                            : event;
+                                            @if is_unlisted {
+                                                : " (not public)";
+                                            }
+                                            @if let Some(start) = event.start(&mut transaction).await? {
+                                                : " — ";
+                                                : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -719,6 +775,10 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::configure::add_round_mapping,
         event::configure::remove_round_mapping,
         event::configure::apply_round_mapping,
+        event::configure::rounds_get,
+        event::configure::rounds_save,
+        event::configure::rounds_apply_all,
+        event::configure::rounds_apply_deadlines,
         event::configure::search_users,
         event::configure::restreamer_search,
         event::configure::video_url_suggestions,

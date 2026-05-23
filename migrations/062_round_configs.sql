@@ -1,0 +1,3 @@
+ALTER TABLE public.event_phase_configs RENAME TO event_round_configs;
+ALTER TABLE public.event_round_configs RENAME COLUMN phase TO round;
+ALTER TABLE public.event_round_configs RENAME CONSTRAINT event_phase_configs_series_event_phase_key TO event_round_configs_series_event_round_key;

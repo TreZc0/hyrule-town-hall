@@ -1,7 +1,8 @@
 use {
     chrono::{DateTime, Duration, Utc},
     serenity::all::{ButtonStyle, CreateActionRow, CreateButton, CreateMessage, EditMessage},
-    serenity::model::id::{ChannelId, MessageId},
+    serenity::http::HttpError,
+    serenity::model::{ModelError, id::{ChannelId, MessageId}},
     serenity_utils::message::TimestampStyle,
     sqlx::{PgPool, Postgres, Transaction},
     std::collections::BTreeMap,
@@ -23,6 +24,17 @@ pub(crate) enum Error {
     #[error(transparent)] Event(#[from] event::DataError),
     #[error(transparent)] Sql(#[from] sqlx::Error),
     #[error(transparent)] Serenity(#[from] serenity::Error),
+}
+
+fn is_unknown_message(e: &serenity::Error) -> bool {
+    matches!(
+        e,
+        serenity::Error::Http(HttpError::UnsuccessfulRequest(res)) if res.error.code == 10008
+    )
+}
+
+fn is_message_too_long(e: &serenity::Error) -> bool {
+    matches!(e, serenity::Error::Model(ModelError::MessageTooLong(_)))
 }
 
 /// Details about a volunteer role that needs filling.
@@ -65,8 +77,6 @@ pub(crate) async fn check_and_post_volunteer_requests(
     pool: &PgPool,
     discord_ctx: &DiscordCtx,
 ) -> Result<(), Error> {
-    let mut transaction = pool.begin().await?;
-
     // Get all events with volunteer requests enabled
     let enabled_events = sqlx::query!(
         r#"SELECT
@@ -78,7 +88,7 @@ pub(crate) async fn check_and_post_volunteer_requests(
         WHERE volunteer_requests_enabled = true
           AND discord_volunteer_info_channel IS NOT NULL"#
     )
-    .fetch_all(&mut *transaction)
+    .fetch_all(pool)
     .await?;
 
     for event_row in enabled_events {
@@ -89,13 +99,18 @@ pub(crate) async fn check_and_post_volunteer_requests(
         };
 
         // Get event data for display name
-        let event_data = match event::Data::new(&mut transaction, event_row.series, &event_row.event).await? {
-            Some(data) => data,
-            None => continue,
+        let event_data = {
+            let mut transaction = pool.begin().await?;
+            let data = event::Data::new(&mut transaction, event_row.series, &event_row.event).await?;
+            transaction.commit().await?;
+            match data {
+                Some(data) => data,
+                None => continue,
+            }
         };
 
         let _ = post_volunteer_requests_for_event(
-            &mut transaction,
+            pool,
             discord_ctx,
             &event_data,
             channel_id,
@@ -111,7 +126,6 @@ pub(crate) async fn check_and_post_volunteer_requests(
         ).await;
     }
 
-    transaction.commit().await?;
     Ok(())
 }
 
@@ -123,8 +137,6 @@ pub(crate) async fn check_and_post_for_event(
     series: Series,
     event: &str,
 ) -> Result<CheckResult, Error> {
-    let mut transaction = pool.begin().await?;
-
     // Get event settings
     let event_settings = sqlx::query!(
         r#"SELECT
@@ -136,7 +148,7 @@ pub(crate) async fn check_and_post_for_event(
         series as _,
         event
     )
-    .fetch_optional(&mut *transaction)
+    .fetch_optional(pool)
     .await?;
 
     let settings = match event_settings {
@@ -155,50 +167,50 @@ pub(crate) async fn check_and_post_for_event(
 
     let lead_time = Duration::hours(settings.volunteer_request_lead_time_hours as i64);
 
-    let event_data = match event::Data::new(&mut transaction, series, event).await? {
-        Some(data) => data,
-        None => return Ok(CheckResult::NotEnabled),
+    let event_data = {
+        let mut transaction = pool.begin().await?;
+        let data = event::Data::new(&mut transaction, series, event).await?;
+        transaction.commit().await?;
+        match data {
+            Some(data) => data,
+            None => return Ok(CheckResult::NotEnabled),
+        }
     };
 
     let result = post_volunteer_requests_for_event(
-        &mut transaction,
+        pool,
         discord_ctx,
         &event_data,
         channel_id,
         lead_time,
     ).await?;
 
-    transaction.commit().await?;
     Ok(result)
 }
 
 /// Posts volunteer requests for a specific event. Used by both the background task and manual trigger.
 async fn post_volunteer_requests_for_event(
-    transaction: &mut Transaction<'_, Postgres>,
+    pool: &PgPool,
     discord_ctx: &DiscordCtx,
     event_data: &event::Data<'_>,
     channel_id: ChannelId,
     lead_time: Duration,
 ) -> Result<CheckResult, Error> {
-    const MAX_RACES_PER_POST: usize = 8;
+    const MAX_RACES_PER_POST: usize = 5;
 
     let now = Utc::now();
     let cutoff = now + lead_time;
+    let mut transaction = pool.begin().await?;
 
     // Find races needing volunteer announcements
     let races_needing_volunteers = get_races_needing_announcements(
-        transaction,
+        &mut transaction,
         event_data.series,
         &event_data.event,
         lead_time,
     ).await?;
 
-    if races_needing_volunteers.is_empty() {
-        return Ok(CheckResult::NoRacesNeeded);
-    }
-
     let count = races_needing_volunteers.len();
-    let http_client = reqwest::Client::new();
 
     // Find all existing active posts with their current race counts, ordered by earliest race.
     // We'll fill these up to MAX_RACES_PER_POST before creating new posts.
@@ -210,6 +222,7 @@ async fn post_volunteer_requests_for_event(
         WHERE series = $1
           AND event = $2
           AND volunteer_request_message_id IS NOT NULL
+          AND volunteer_request_sent = true
           AND start > $3
           AND ignored = false
         GROUP BY volunteer_request_message_id
@@ -218,38 +231,45 @@ async fn post_volunteer_requests_for_event(
         &*event_data.event,
         now
     )
-    .fetch_all(&mut **transaction)
+    .fetch_all(&mut *transaction)
     .await?;
 
+    if races_needing_volunteers.is_empty() && existing_messages.is_empty() {
+        transaction.commit().await?;
+        return Ok(CheckResult::NoRacesNeeded);
+    }
+
+    struct ExistingPostPlan {
+        message_id: MessageId,
+        add_race_ids: Vec<Id<Races>>,
+        content: String,
+        components: Vec<CreateActionRow>,
+    }
+
+    let http_client = reqwest::Client::new();
+    let mut existing_post_plans = Vec::new();
     let mut remaining = races_needing_volunteers.as_slice();
 
-    // Fill existing posts up to MAX_RACES_PER_POST
+    // Plan updates for existing posts while the transaction is open.
     for existing in &existing_messages {
-        if remaining.is_empty() { break; }
         let existing_id = match existing.message_id {
             Some(PgSnowflake(id)) => id,
             None => continue,
         };
-        let current_count = existing.race_count as usize;
-        if current_count >= MAX_RACES_PER_POST { continue; }
 
-        let slots = MAX_RACES_PER_POST - current_count;
-        let to_add = remaining.len().min(slots);
-        let (chunk, rest) = remaining.split_at(to_add);
-        remaining = rest;
-
-        for need in chunk {
-            sqlx::query!(
-                "UPDATE races SET volunteer_request_sent = true, volunteer_request_message_id = $2 WHERE id = $1",
-                need.race.id as _,
-                PgSnowflake(existing_id) as _
-            )
-            .execute(&mut **transaction)
-            .await?;
+        let mut add_race_ids = Vec::new();
+        if !remaining.is_empty() {
+            let current_count = existing.race_count as usize;
+            if current_count < MAX_RACES_PER_POST {
+                let slots = MAX_RACES_PER_POST - current_count;
+                let to_add = remaining.len().min(slots);
+                let (chunk, rest) = remaining.split_at(to_add);
+                remaining = rest;
+                add_race_ids.extend(chunk.iter().map(|need| need.race.id));
+            }
         }
 
-        // Rebuild the full message for this post
-        let all_race_ids = sqlx::query_scalar!(
+        let mut all_race_ids = sqlx::query_scalar!(
             r#"SELECT id AS "id: Id<Races>"
             FROM races
             WHERE volunteer_request_message_id = $1
@@ -257,40 +277,75 @@ async fn post_volunteer_requests_for_event(
             ORDER BY start ASC NULLS LAST"#,
             PgSnowflake(existing_id) as _
         )
-        .fetch_all(&mut **transaction)
+        .fetch_all(&mut *transaction)
         .await?;
+        all_race_ids.extend(add_race_ids.iter().copied());
 
-        let mut all_needs = Vec::new();
-        for rid in &all_race_ids {
-            let race = match Race::from_id(&mut *transaction, &http_client, *rid).await {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("volunteer post update: failed to load race {rid:?}: {e}");
-                    continue;
-                }
-            };
-            let matchup = get_matchup_description(&mut *transaction, &race).await?;
-            let role_bindings = EffectiveRoleBinding::for_event(&mut *transaction, event_data.series, &event_data.event).await?;
-            let signups = Signup::for_race(&mut *transaction, *rid).await?;
-            let (role_needs, has_any_need) = collect_role_needs_for_bindings(&mut *transaction, &role_bindings, &signups).await?;
-            if has_any_need {
-                all_needs.push(RaceVolunteerNeed { race, matchup, role_needs });
-            }
-        }
+        let all_needs = build_volunteer_needs_for_race_ids(
+            &mut transaction,
+            event_data,
+            &all_race_ids,
+            &http_client,
+        ).await?;
 
         let (content, components) = build_announcement_content(&all_needs, event_data, now, cutoff);
+        existing_post_plans.push(ExistingPostPlan {
+            message_id: existing_id,
+            add_race_ids,
+            content,
+            components,
+        });
+    }
+
+    let mut new_posts = Vec::new();
+    for chunk in remaining.chunks(MAX_RACES_PER_POST) {
+        let race_ids = chunk.iter().map(|need| need.race.id).collect::<Vec<_>>();
+        let message = build_announcement_message(chunk, event_data, now, cutoff);
+        new_posts.push((race_ids, message));
+    }
+
+    transaction.commit().await?;
+
+    for plan in existing_post_plans {
         if let Err(e) = channel_id.edit_message(
             discord_ctx,
-            existing_id,
-            EditMessage::new().content(content).components(components)
+            plan.message_id,
+            EditMessage::new().content(plan.content).components(plan.components),
         ).await {
-            eprintln!("volunteer post update: failed to edit message {existing_id}: {e}");
+            eprintln!("volunteer post update: failed to edit message {}: {e}", plan.message_id);
+            if is_unknown_message(&e) || is_message_too_long(&e) {
+                if is_message_too_long(&e) {
+                    let _ = channel_id.delete_message(discord_ctx, plan.message_id).await;
+                }
+                let mut cleanup_tx = pool.begin().await?;
+                sqlx::query!(
+                    "UPDATE races SET volunteer_request_sent = false, volunteer_request_message_id = NULL \
+                     WHERE volunteer_request_message_id = $1",
+                    PgSnowflake(plan.message_id) as _
+                )
+                .execute(&mut *cleanup_tx)
+                .await?;
+                cleanup_tx.commit().await?;
+            }
+            continue;
+        }
+
+        if !plan.add_race_ids.is_empty() {
+            let mut update_tx = pool.begin().await?;
+            for race_id in plan.add_race_ids {
+                sqlx::query!(
+                    "UPDATE races SET volunteer_request_sent = true, volunteer_request_message_id = $2 WHERE id = $1",
+                    race_id as _,
+                    PgSnowflake(plan.message_id) as _
+                )
+                .execute(&mut *update_tx)
+                .await?;
+            }
+            update_tx.commit().await?;
         }
     }
 
-    // Create new posts for any remaining races, in chunks of MAX_RACES_PER_POST
-    for chunk in remaining.chunks(MAX_RACES_PER_POST) {
-        let message = build_announcement_message(chunk, event_data, now, cutoff);
+    for (race_ids, message) in new_posts {
         let posted_message = match channel_id.send_message(discord_ctx, message).await {
             Ok(msg) => msg,
             Err(e) => {
@@ -298,18 +353,66 @@ async fn post_volunteer_requests_for_event(
                 return Err(e.into());
             }
         };
-        for need in chunk {
+        let mut update_tx = pool.begin().await?;
+        for race_id in race_ids {
             sqlx::query!(
                 "UPDATE races SET volunteer_request_sent = true, volunteer_request_message_id = $2 WHERE id = $1",
-                need.race.id as _,
+                race_id as _,
                 PgSnowflake(posted_message.id) as _
             )
-            .execute(&mut **transaction)
+            .execute(&mut *update_tx)
             .await?;
+        }
+        update_tx.commit().await?;
+    }
+
+    if count == 0 {
+        Ok(CheckResult::NoRacesNeeded)
+    } else {
+        Ok(CheckResult::Posted(count))
+    }
+}
+
+async fn build_volunteer_needs_for_race_ids(
+    transaction: &mut Transaction<'_, Postgres>,
+    event_data: &event::Data<'_>,
+    race_ids: &[Id<Races>],
+    http_client: &reqwest::Client,
+) -> Result<Vec<RaceVolunteerNeed>, Error> {
+    let role_bindings = EffectiveRoleBinding::for_event(
+        &mut *transaction,
+        event_data.series,
+        &event_data.event,
+    ).await?;
+    let mut needs = Vec::new();
+
+    for rid in race_ids {
+        let race = match Race::from_id(&mut *transaction, http_client, *rid).await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("volunteer post update: failed to load race {rid:?}: {e}");
+                continue;
+            }
+        };
+        let matchup = get_matchup_description(&mut *transaction, &race).await?;
+        let signups = Signup::for_race(&mut *transaction, *rid).await?;
+        let (role_needs, has_any_need) = collect_role_needs_for_bindings(
+            &mut *transaction,
+            &role_bindings,
+            &signups,
+        ).await?;
+
+        if has_any_need {
+            needs.push(RaceVolunteerNeed { race, matchup, role_needs });
         }
     }
 
-    Ok(CheckResult::Posted(count))
+    needs.sort_by_key(|need| match need.race.schedule {
+        RaceSchedule::Live { start, .. } => start,
+        _ => Utc::now(),
+    });
+
+    Ok(needs)
 }
 
 /// Finds races that need volunteer announcements for a specific event.
@@ -357,13 +460,15 @@ async fn get_races_needing_announcements(
         // Check restream consent - all teams must have consented
         // Skip this check for open-entry races and qualifiers
         if !matches!(race.entrants, Entrants::Open) && !race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
-            if let Some(mut teams) = race.teams_opt() {
-                if !teams.all(|team| team.restream_consent) {
+            if !race.restream_consent_required {
+                if let Some(mut teams) = race.teams_opt() {
+                    if !teams.all(|team| team.restream_consent) {
+                        continue;
+                    }
+                } else {
+                    // Not all entrants are Mido's House teams, skip
                     continue;
                 }
-            } else {
-                // Not all entrants are Mido's House teams, skip
-                continue;
             }
         }
 
@@ -420,14 +525,13 @@ async fn get_matchup_description(
         _ => "Unknown matchup".to_string(),
     };
 
-    // Extract draft mode for AlttprDe events
-    let draft_mode = if race.series == Series::AlttprDe {
-        race.game
-            .and_then(|game| race.draft.as_ref().and_then(|draft| alttprde::mode_for_game(&draft.settings, game)))
-            .map(|mode| mode.display)
-    } else {
-        None
-    };
+    let draft_mode = race.draft.as_ref().and_then(|draft| {
+        let game = race.game.unwrap_or(1);
+        let preset = draft.settings.get(&*format!("game{game}_preset"))?;
+        racetime_bot::Goal::for_event(race.series, &race.event)
+            .and_then(|g| g.draft_kind())
+            .and_then(|kind: draft::Kind| kind.preset_display_name(preset.as_ref()))
+    });
 
     // Add round and/or phase info if available, then draft mode
     let mut result = match (&race.round, &race.phase) {
@@ -780,33 +884,12 @@ pub(crate) async fn update_volunteer_post_for_race(
     };
 
     // Build volunteer needs for all races in this post
-    let mut needs = Vec::new();
-    for rid in &race_ids {
-        let race = match Race::from_id(&mut transaction, &http_client, *rid).await {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("volunteer post update: failed to load race {rid:?}: {e}");
-                continue;
-            }
-        };
-
-        // Get matchup description
-        let matchup = get_matchup_description(&mut transaction, &race).await?;
-
-        // Get role bindings and check volunteer counts
-        let role_bindings = EffectiveRoleBinding::for_event(&mut transaction, race_info.series, &race_info.event).await?;
-        let signups = Signup::for_race(&mut transaction, *rid).await?;
-
-        let (role_needs, has_any_need) = collect_role_needs_for_bindings(&mut transaction, &role_bindings, &signups).await?;
-
-        if has_any_need {
-            needs.push(RaceVolunteerNeed {
-                race,
-                matchup,
-                role_needs,
-            });
-        }
-    }
+    let mut needs = build_volunteer_needs_for_race_ids(
+        &mut transaction,
+        &event_data,
+        &race_ids,
+        &http_client,
+    ).await?;
 
     // Calculate current time
     let now = Utc::now();
@@ -819,16 +902,18 @@ pub(crate) async fn update_volunteer_post_for_race(
         }
     });
 
-    // All races in this post have started — delete the now-empty Discord message
+    // All races in this post have started - delete the now-empty Discord message
     if needs.is_empty() {
+        transaction.commit().await?;
         let _ = channel_id.delete_message(discord_ctx, message_id).await;
+        let mut cleanup_tx = pool.begin().await?;
         sqlx::query!(
-            "UPDATE races SET volunteer_request_message_id = NULL WHERE volunteer_request_message_id = $1",
+            "UPDATE races SET volunteer_request_message_id = NULL, volunteer_request_sent = false WHERE volunteer_request_message_id = $1",
             PgSnowflake(message_id) as _
         )
-        .execute(&mut *transaction)
+        .execute(&mut *cleanup_tx)
         .await?;
-        transaction.commit().await?;
+        cleanup_tx.commit().await?;
         return Ok(());
     }
 
@@ -844,16 +929,32 @@ pub(crate) async fn update_volunteer_post_for_race(
         cutoff,
     );
 
+    transaction.commit().await?;
+
     // Edit the message
-    if let Err(_e) = channel_id.edit_message(
+    if let Err(e) = channel_id.edit_message(
         discord_ctx,
         message_id,
         EditMessage::new()
             .content(content)
             .components(components)
-    ).await {}
+    ).await {
+        if is_unknown_message(&e) || is_message_too_long(&e) {
+            if is_message_too_long(&e) {
+                let _ = channel_id.delete_message(discord_ctx, message_id).await;
+            }
+            let mut cleanup_tx = pool.begin().await?;
+            sqlx::query!(
+                "UPDATE races SET volunteer_request_sent = false, volunteer_request_message_id = NULL \
+                 WHERE volunteer_request_message_id = $1",
+                PgSnowflake(message_id) as _
+            )
+            .execute(&mut *cleanup_tx)
+            .await?;
+            cleanup_tx.commit().await?;
+        }
+    }
 
-    transaction.commit().await?;
     Ok(())
 }
 
@@ -955,15 +1056,16 @@ pub(crate) async fn update_volunteer_post_by_message_id(
     .await?;
 
     if race_ids.is_empty() {
-        // No races left for this post — delete the Discord message
+        transaction.commit().await?;
         let _ = channel_id.delete_message(discord_ctx, message_id).await;
+        let mut cleanup_tx = pool.begin().await?;
         sqlx::query!(
             "UPDATE races SET volunteer_request_message_id = NULL WHERE volunteer_request_message_id = $1",
             PgSnowflake(message_id) as _
         )
-        .execute(&mut *transaction)
+        .execute(&mut *cleanup_tx)
         .await?;
-        transaction.commit().await?;
+        cleanup_tx.commit().await?;
         return Ok(());
     }
 
@@ -973,50 +1075,55 @@ pub(crate) async fn update_volunteer_post_by_message_id(
     };
 
     // Build volunteer needs for remaining races
-    let mut needs = Vec::new();
-    for rid in &race_ids {
-        let race = match Race::from_id(&mut transaction, &http_client, *rid).await {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("volunteer post update: failed to load race {rid:?}: {e}");
-                continue;
-            }
-        };
-        let matchup = get_matchup_description(&mut transaction, &race).await?;
-        let role_bindings = EffectiveRoleBinding::for_event(&mut transaction, series, event).await?;
-        let signups = Signup::for_race(&mut transaction, *rid).await?;
-
-        let (role_needs, has_any_need) = collect_role_needs_for_bindings(&mut transaction, &role_bindings, &signups).await?;
-
-        if has_any_need {
-            needs.push(RaceVolunteerNeed { race, matchup, role_needs });
-        }
-    }
+    let mut needs = build_volunteer_needs_for_race_ids(
+        &mut transaction,
+        &event_data,
+        &race_ids,
+        &http_client,
+    ).await?;
 
     let now = Utc::now();
     needs.retain(|need| matches!(need.race.schedule, RaceSchedule::Live { start, .. } if start > now));
 
     if needs.is_empty() {
+        transaction.commit().await?;
         let _ = channel_id.delete_message(discord_ctx, message_id).await;
+        let mut cleanup_tx = pool.begin().await?;
         sqlx::query!(
             "UPDATE races SET volunteer_request_message_id = NULL WHERE volunteer_request_message_id = $1",
             PgSnowflake(message_id) as _
         )
-        .execute(&mut *transaction)
+        .execute(&mut *cleanup_tx)
         .await?;
-        transaction.commit().await?;
+        cleanup_tx.commit().await?;
         return Ok(());
     }
 
     let lead_time = Duration::hours(event_config.volunteer_request_lead_time_hours as i64);
     let (content, components) = build_announcement_content(&needs, &event_data, now, now + lead_time);
 
-    if let Err(_e) = channel_id.edit_message(
+    transaction.commit().await?;
+
+    if let Err(e) = channel_id.edit_message(
         discord_ctx,
         message_id,
         EditMessage::new().content(content).components(components),
-    ).await {}
+    ).await {
+        if is_unknown_message(&e) || is_message_too_long(&e) {
+            if is_message_too_long(&e) {
+                let _ = channel_id.delete_message(discord_ctx, message_id).await;
+            }
+            let mut cleanup_tx = pool.begin().await?;
+            sqlx::query!(
+                "UPDATE races SET volunteer_request_sent = false, volunteer_request_message_id = NULL \
+                 WHERE volunteer_request_message_id = $1",
+                PgSnowflake(message_id) as _
+            )
+            .execute(&mut *cleanup_tx)
+            .await?;
+            cleanup_tx.commit().await?;
+        }
+    }
 
-    transaction.commit().await?;
     Ok(())
 }

@@ -2372,28 +2372,44 @@ pub(crate) struct AlttprDoorRandoPlacements {
     pinball_room: &'static str,
 }
 
-#[derive(Clone, Serialize)]
+pub(crate) struct OwrChoicePatch {
+    pub(crate) key: &'static str,
+    pub(crate) apply: fn(&mut AlttprDoorRandoSetting),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct OwrSeedConfig {
+    pub(crate) base_settings: AlttprDoorRandoSetting,
+    pub(crate) start_inventory: &'static [&'static str],
+    pub(crate) choice_patches: &'static [OwrChoicePatch],
+}
+
+#[derive(Clone, Copy, Serialize)]
 pub(crate) struct AlttprDoorRandoSetting {
-    accessibility: &'static str,
-    bigkeyshuffle: u8,
-    compassshuffle: u8,
-    crystals_ganon: &'static str,
-    crystals_gt: &'static str,
-    dropshuffle: &'static str,
-    flute_mode: &'static str,
-    goal: &'static str,
-    item_functionality: &'static str,
-    key_logic_algorithm: &'static str,
-    keyshuffle: &'static str,
-    linked_drops: &'static str,
-    mapshuffle: u8,
-    mirrorscroll: u8,
-    mode: &'static str,
-    pottery: &'static str,
-    pseudoboots: u8,
-    shuffle: &'static str,
-    shuffletavern: u8,
-    skullwoods: &'static str,
+    pub(crate) accessibility: &'static str,
+    pub(crate) bigkeyshuffle: u8,
+    pub(crate) compassshuffle: u8,
+    pub(crate) crystals_ganon: &'static str,
+    pub(crate) crystals_gt: &'static str,
+    pub(crate) dropshuffle: &'static str,
+    pub(crate) flute_mode: &'static str,
+    pub(crate) goal: &'static str,
+    pub(crate) item_functionality: &'static str,
+    pub(crate) key_logic_algorithm: &'static str,
+    pub(crate) keyshuffle: &'static str,
+    pub(crate) linked_drops: &'static str,
+    pub(crate) mapshuffle: u8,
+    pub(crate) mirrorscroll: u8,
+    pub(crate) mode: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) ow_mixed: Option<u8>,
+    pub(crate) pottery: &'static str,
+    pub(crate) pseudoboots: u8,
+    pub(crate) shuffle: &'static str,
+    pub(crate) shuffletavern: u8,
+    pub(crate) skullwoods: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) swords: Option<&'static str>,
 }
 
 #[derive(Clone, Serialize)]
@@ -2853,6 +2869,15 @@ impl Handler {
         ctx.send_message(format!("@entrants Remember: this race will be played with {}!",
                                     race_options_str
                                 ), true, Vec::default()).await.expect("failed to send race options");
+    }
+
+    async fn roll_owr_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
+        let official_start = cal_event.start().expect("handling room for official race without start time");
+        let delay_until = official_start - TimeDelta::minutes(10);
+
+        let choices = owr_choices_for_race(&ctx.global_state.db_pool, &cal_event.race).await;
+        let description = owr_choices_description(&choices);
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_owr_seed(choices, cabookey::OWR_CONFIG), language, article, format!("seed with {description}"), false).await;
     }
 
     async fn roll_mysteryd20_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
@@ -4171,6 +4196,37 @@ impl RaceHandler<GlobalState> for Handler {
             }
             _ => {}
         }
+        // If a Discord button draft was completed while the room is already open, pick it up and roll.
+        if matches!(data.status.value, RaceStatusValue::Open | RaceStatusValue::Invitational) {
+            if let Some(draft_kind) = goal.draft_kind() {
+                if draft_kind.uses_button_draft() {
+                    let game = self.official_data.as_ref().and_then(|d| d.cal_event.race.game);
+                    lock!(@write state = self.race_state; {
+                        let unlock_spoiler_log_if_incomplete = if let RaceState::Draft { state: ref draft, unlock_spoiler_log } = *state {
+                            let step = draft.next_step(draft_kind, game, &mut draft::MessageContext::None).await.to_racetime()?;
+                            if matches!(step.kind, draft::StepKind::Done(_)) { None } else { Some(unlock_spoiler_log) }
+                        } else {
+                            None
+                        };
+                        if let Some(unlock_spoiler_log) = unlock_spoiler_log_if_incomplete {
+                            let room_url: Url = format!("https://{}{}", racetime_host(), ctx.data().await.url).parse().to_racetime()?;
+                            let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+                            let maybe_cal_event = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, room_url).await.to_racetime()?;
+                            transaction.commit().await.to_racetime()?;
+                            if let Some(cal_event) = maybe_cal_event {
+                                if let Some(new_draft) = cal_event.race.draft {
+                                    let new_step = new_draft.next_step(draft_kind, game, &mut draft::MessageContext::None).await.to_racetime()?;
+                                    if matches!(new_step.kind, draft::StepKind::Done(_)) {
+                                        *state = RaceState::Draft { state: new_draft, unlock_spoiler_log };
+                                        self.advance_draft(ctx, &state).await?;
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        }
         Ok(())
     }
 
@@ -4363,7 +4419,16 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                 // transaction commits, so this is safe to send before the commit.
                 lock!(@read senders = extra_room_senders; {
                     if let Some(sender) = senders.get(&category_slug) {
-                        sender.send(race_slug).await.ok();
+                        match sender.try_send(race_slug.clone()) {
+                            Ok(()) => {}
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(race_slug)) => {
+                                let sender = sender.clone();
+                                tokio::spawn(async move {
+                                    sender.send(race_slug).await.ok();
+                                });
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
+                        }
                     }
                 });
                 Ok(room_url)
@@ -4792,10 +4857,29 @@ async fn prepare_seeds(global_state: Arc<GlobalState>, mut shutdown: rocket::Shu
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CreateRoomsError {
     #[error(transparent)] Cal(#[from] cal::Error),
-    #[error(transparent)] Discord(#[from] serenity::Error),
     #[error(transparent)] EventData(#[from] event::DataError),
     #[error(transparent)] RaceTime(#[from] Error),
     #[error(transparent)] Sql(#[from] sqlx::Error),
+}
+
+async fn try_discord_send<T, F, Fut>(make_request: F, context: &str)
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = serenity::Result<T>>,
+{
+    for attempt in 0..3u8 {
+        match make_request().await {
+            Ok(_) => return,
+            Err(e) => {
+                if attempt < 2 {
+                    eprintln!("Failed to {} (attempt {}): {}; retrying...", context, attempt + 1, e);
+                    sleep(Duration::from_secs(10)).await;
+                } else {
+                    eprintln!("Failed to {} after 3 attempts: {}", context, e);
+                }
+            }
+        }
+    }
 }
 
 async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shutdown) -> Result<(), CreateRoomsError> {
@@ -4854,17 +4938,23 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                             _ => format!("unlisted room for async part: {msg}"),
                         };
                         if let Some(channel) = event.discord_organizer_channel {
-                            channel.say(&*ctx, &msg).await?;
+                            try_discord_send(|| channel.say(&*ctx, &msg), "post async room message to organizer channel").await;
                         } else {
                             // DM Admin
-                            ADMIN_USER.create_dm_channel(&*ctx).await?.say(&*ctx, &msg).await?;
+                            match ADMIN_USER.create_dm_channel(&*ctx).await {
+                                Ok(dm) => try_discord_send(|| dm.say(&*ctx, &msg), "post async room message to admin DM").await,
+                                Err(e) => eprintln!("Failed to create admin DM channel for async room message: {}", e),
+                            }
                         }
                         // Start a new transaction for querying team members
                         let mut transaction = global_state.db_pool.begin().await?;
                         for team in cal_event.active_teams() {
                             for member in team.members(&mut transaction).await? {
                                 if let Some(discord) = member.discord {
-                                    discord.id.create_dm_channel(&*ctx).await?.say(&*ctx, &msg).await?;
+                                    match discord.id.create_dm_channel(&*ctx).await {
+                                        Ok(dm) => try_discord_send(|| dm.say(&*ctx, &msg), "DM team member about async race room").await,
+                                        Err(e) => eprintln!("Failed to create DM channel for team member: {}", e),
+                                    }
                                 }
                             }
                         }
@@ -4872,34 +4962,29 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                     } else {
                         // For weekly races with a configured notification channel, use that instead
                         if let Some(PgSnowflake(channel_id)) = notification_channel {
-                            if let Err(e) = channel_id.say(&*ctx, &msg).await {
-                                eprintln!("Failed to post race message to weekly notification channel: {}", e);
-                            }
+                            try_discord_send(|| channel_id.say(&*ctx, &msg), "post race message to weekly notification channel").await;
                         } else {
                             if_chain! {
                                 if !cal_event.is_private_async_part();
                                 if let Some(channel) = event.discord_race_room_channel;
                                 then {
                                     if let Some(thread) = cal_event.race.scheduling_thread {
-                                        if let Err(e) = thread.say(&*ctx, &msg).await {
-                                            eprintln!("Failed to post race message to scheduling thread: {}", e);
-                                        }
-                                        if let Err(e) = channel.send_message(&*ctx, CreateMessage::default().content(msg).allowed_mentions(CreateAllowedMentions::default())).await {
-                                            eprintln!("Failed to post race message to Discord race room channel: {}", e);
-                                        }
+                                        try_discord_send(|| thread.say(&*ctx, &msg), "post race message to scheduling thread").await;
+                                        try_discord_send(|| channel.send_message(&*ctx, CreateMessage::default().content(&msg[..]).allowed_mentions(CreateAllowedMentions::default())), "post race message to Discord race room channel").await;
                                     } else {
-                                        if let Err(e) = channel.say(&*ctx, msg).await {
-                                            eprintln!("Failed to post race message to Discord race room channel: {}", e);
-                                        }
+                                        try_discord_send(|| channel.say(&*ctx, &msg), "post race message to Discord race room channel").await;
                                     }
                                 } else {
                                     if let Some(thread) = cal_event.race.scheduling_thread {
-                                        thread.say(&*ctx, msg).await?;
+                                        try_discord_send(|| thread.say(&*ctx, &msg), "post race message to scheduling thread").await;
                                     } else if let Some(channel) = event.discord_organizer_channel {
-                                        channel.say(&*ctx, msg).await?;
+                                        try_discord_send(|| channel.say(&*ctx, &msg), "post race message to organizer channel").await;
                                     } else {
                                         // DM Admin
-                                        ADMIN_USER.create_dm_channel(&*ctx).await?.say(&*ctx, msg).await?;
+                                        match ADMIN_USER.create_dm_channel(&*ctx).await {
+                                            Ok(dm) => try_discord_send(|| dm.say(&*ctx, &msg), "post race message to admin DM").await,
+                                            Err(e) => eprintln!("Failed to create admin DM channel: {}", e),
+                                        }
                                     }
                                 }
                             }

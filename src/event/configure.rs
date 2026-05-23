@@ -1,6 +1,7 @@
 use {
     serenity::model::id::{ChannelId, RoleId},
     crate::{
+        config::Config,
         discord_bot::PgSnowflake,
         event::{
             Data,
@@ -194,6 +195,9 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                         li {
                             a(href = uri!(round_labels_get(event.series, &*event.event))) : "Manage round labels";
                         }
+                    }
+                    li {
+                        a(href = uri!(rounds_get(event.series, &*event.event))) : "Manage rounds and deadlines";
                     }
                 }
             }
@@ -2229,4 +2233,288 @@ pub(crate) async fn apply_round_mapping(pool: &State<PgPool>, me: User, uri: Ori
         }
     }
     Ok(RedirectOrContent::Redirect(Redirect::to(uri!(round_labels_get(series, event)))))
+}
+
+// ── Round Management ─────────────────────────────────────────────────────────
+
+async fn rounds_form(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>) -> Result<RawHtml<String>, event::Error> {
+    let query_string = uri.0.query().map(|q| q.to_string());
+    let saved = query_string.as_deref().map_or(false, |q| {
+        q.split('&').any(|param| param == "saved=1")
+    });
+
+    let round_configs = event.round_configs(&mut transaction).await?;
+
+    let mut rounds: Vec<String> = round_configs.keys().cloned().collect();
+
+    // Primary source: start.gg API round names (canonical, normalized, no pool names, no qualifiers)
+    if let MatchSource::StartGG(event_slug) = event.match_source() {
+        if let Ok(startgg_rounds) = startgg::event_rounds(http_client, config, event_slug).await {
+            for round in startgg_rounds {
+                if !rounds.contains(&round) {
+                    rounds.push(round);
+                }
+            }
+        }
+    }
+
+    rounds.sort();
+
+    let csrf_token = csrf.map(|c| c.authenticity_token());
+
+    let content = html! {
+        h1 : "Manage Rounds and Deadlines";
+        @if saved {
+            div(class = "success") {
+                p : "Round settings saved successfully.";
+            }
+        }
+        p {
+            a(href = uri!(get(event.series, &*event.event))) : "← Back to Configure";
+        }
+
+        h2 : "Apply to All Rounds";
+        form(method = "POST", action = uri!(rounds_apply_all(event.series, &*event.event)).to_string()) {
+            @if let Some(ref token) = csrf_token {
+                input(type = "hidden", name = "csrf", value = token);
+            }
+            input(type = "hidden", name = "tz_offset", value = "0");
+            table {
+                tr {
+                    th : "Restream consent required";
+                    th : "Scheduling deadline (your local time)";
+                }
+                tr {
+                    td { input(type = "checkbox", name = "restream_consent_required"); }
+                    td { input(type = "datetime-local", name = "scheduling_deadline"); }
+                }
+            }
+            button(type = "submit") : "Apply to all rounds";
+        }
+
+        h2 : "Per-Round Settings";
+        @if rounds.is_empty() {
+            p : "No rounds found. Import races to get started.";
+        } else {
+            form(method = "POST", action = uri!(rounds_save(event.series, &*event.event)).to_string()) {
+                @if let Some(ref token) = csrf_token {
+                    input(type = "hidden", name = "csrf", value = token);
+                }
+                input(type = "hidden", name = "tz_offset", value = "0");
+                table {
+                    tr {
+                        th : "Round";
+                        th : "Restream consent required";
+                        th : "Scheduling deadline (your local time)";
+                    }
+                    @for round in &rounds {
+                        @let cfg = round_configs.get(round);
+                        tr {
+                            td {
+                                input(type = "hidden", name = "round", value = round);
+                                : round;
+                            }
+                            td {
+                                input(type = "checkbox", name = "restream_consent_required",
+                                      value = round,
+                                      checked? = cfg.map_or(false, |c| c.restream_consent_required));
+                            }
+                            td {
+                                @let deadline_utc = cfg
+                                    .and_then(|c| c.scheduling_deadline)
+                                    .map(|dt| dt.format("%Y-%m-%dT%H:%M").to_string())
+                                    .unwrap_or_default();
+                                input(type = "datetime-local", name = "scheduling_deadline",
+                                      data_utc = &deadline_utc, value = &deadline_utc);
+                            }
+                        }
+                    }
+                }
+                button(type = "submit") : "Save";
+            }
+        }
+
+        h2 : "Stamp Deadlines onto Open Races";
+        p : "Updates all open races to use their round's current deadline. Resets reminder flags so notifications are re-sent.";
+        form(method = "POST", action = uri!(rounds_apply_deadlines(event.series, &*event.event)).to_string()) {
+            @if let Some(ref token) = csrf_token {
+                input(type = "hidden", name = "csrf", value = token);
+            }
+            button(type = "submit") : "Apply deadlines to open races";
+        }
+
+        script {
+            : RawHtml(r#"
+                document.addEventListener('DOMContentLoaded', function() {
+                    var offset = new Date().getTimezoneOffset();
+                    document.querySelectorAll('input[name="tz_offset"]').forEach(function(el) { el.value = offset; });
+                    document.querySelectorAll('input[type="datetime-local"][data-utc]').forEach(function(el) {
+                        var utc = el.dataset.utc;
+                        if (!utc) return;
+                        var d = new Date(utc + 'Z');
+                        var pad = function(n) { return String(n).padStart(2, '0'); };
+                        el.value = d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+                    });
+                });
+            "#);
+        }
+    };
+
+    Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Manage Rounds — {}", event.display_name), html! {
+        : content;
+    }).await?)
+}
+
+#[rocket::get("/event/<series>/<event>/configure/rounds")]
+pub(crate) async fn rounds_get(pool: &State<PgPool>, http_client: &State<reqwest::Client>, config: &State<Config>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    Ok(rounds_form(transaction, http_client, config, me, uri, csrf.as_ref(), data).await?)
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct RoundsApplyAllForm {
+    #[field(default = String::new())]
+    csrf: String,
+    restream_consent_required: bool,
+    scheduling_deadline: Option<String>,
+    tz_offset: Option<i32>,
+}
+
+#[rocket::post("/event/<series>/<event>/configure/rounds/apply-all", data = "<form>")]
+pub(crate) async fn rounds_apply_all(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, RoundsApplyAllForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+    if let Some(ref value) = form.value {
+        let tz_offset = chrono::Duration::minutes(value.tz_offset.unwrap_or(0) as i64);
+        let deadline = value.scheduling_deadline.as_deref()
+            .filter(|s| !s.is_empty())
+            .and_then(|s| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M").ok())
+            .map(|ndt| (ndt + tz_offset).and_utc());
+
+        let mut rounds: Vec<String> = sqlx::query_scalar!(
+            "SELECT DISTINCT round FROM races WHERE series = $1 AND event = $2 AND round IS NOT NULL",
+            data.series as _, &data.event
+        ).fetch_all(&mut *transaction).await?.into_iter().flatten().collect();
+        let config_rounds: Vec<String> = sqlx::query_scalar!(
+            "SELECT round FROM event_round_configs WHERE series = $1 AND event = $2",
+            data.series as _, &data.event
+        ).fetch_all(&mut *transaction).await?;
+        for r in config_rounds {
+            if !rounds.contains(&r) { rounds.push(r); }
+        }
+
+        for round in rounds {
+            sqlx::query!(
+                "INSERT INTO event_round_configs (series, event, round, restream_consent_required, scheduling_deadline)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (series, event, round) DO UPDATE
+                 SET restream_consent_required = EXCLUDED.restream_consent_required,
+                     scheduling_deadline        = EXCLUDED.scheduling_deadline",
+                data.series as _, &data.event, &round, value.restream_consent_required, deadline
+            ).execute(&mut *transaction).await?;
+        }
+        transaction.commit().await?;
+    }
+    Ok(RedirectOrContent::Redirect(Redirect::to(format!("{}?saved=1", uri!(rounds_get(series, event))))))
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct RoundsSaveForm {
+    #[field(default = String::new())]
+    csrf: String,
+    round: Vec<String>,
+    restream_consent_required: Vec<String>,
+    scheduling_deadline: Vec<String>,
+    tz_offset: Option<i32>,
+}
+
+#[rocket::post("/event/<series>/<event>/configure/rounds", data = "<form>")]
+pub(crate) async fn rounds_save(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, RoundsSaveForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+    if let Some(ref value) = form.value {
+        let tz_offset = chrono::Duration::minutes(value.tz_offset.unwrap_or(0) as i64);
+        for (i, round) in value.round.iter().enumerate() {
+            if round.is_empty() { continue; }
+            let consent = value.restream_consent_required.contains(round);
+            let deadline = value.scheduling_deadline.get(i)
+                .filter(|s| !s.is_empty())
+                .and_then(|s| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M").ok())
+                .map(|ndt| (ndt + tz_offset).and_utc());
+            sqlx::query!(
+                "INSERT INTO event_round_configs (series, event, round, restream_consent_required, scheduling_deadline)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (series, event, round) DO UPDATE
+                 SET restream_consent_required = EXCLUDED.restream_consent_required,
+                     scheduling_deadline        = EXCLUDED.scheduling_deadline",
+                data.series as _, &data.event, round, consent, deadline
+            ).execute(&mut *transaction).await?;
+        }
+        transaction.commit().await?;
+    }
+    Ok(RedirectOrContent::Redirect(Redirect::to(format!("{}?saved=1", uri!(rounds_get(series, event))))))
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct RoundsApplyDeadlinesForm {
+    #[field(default = String::new())]
+    csrf: String,
+}
+
+#[rocket::post("/event/<series>/<event>/configure/rounds/apply-deadlines", data = "<form>")]
+pub(crate) async fn rounds_apply_deadlines(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, RoundsApplyDeadlinesForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+    if form.value.is_some() {
+        sqlx::query!(r#"
+            UPDATE races r
+            SET scheduling_deadline         = erc.scheduling_deadline,
+                deadline_reminded_3d        = false,
+                deadline_reminded_24h       = false,
+                deadline_organizer_notified = false
+            FROM event_round_configs erc
+            WHERE r.series = $1 AND r.event = $2
+              AND erc.series = $1 AND erc.event = $2
+              AND (erc.round = r.round OR r.round ILIKE '% ' || erc.round)
+              AND erc.scheduling_deadline IS NOT NULL
+              AND r.end_time IS NULL
+              AND NOT r.ignored
+        "#, data.series as _, &data.event).execute(&mut *transaction).await?;
+
+        sqlx::query!(r#"
+            UPDATE races r
+            SET scheduling_deadline         = NULL,
+                deadline_reminded_3d        = false,
+                deadline_reminded_24h       = false,
+                deadline_organizer_notified = false
+            WHERE r.series = $1 AND r.event = $2
+              AND r.end_time IS NULL
+              AND NOT r.ignored
+              AND NOT EXISTS (
+                  SELECT 1 FROM event_round_configs erc
+                  WHERE erc.series = $1 AND erc.event = $2
+                    AND (erc.round = r.round OR r.round ILIKE '% ' || erc.round)
+                    AND erc.scheduling_deadline IS NOT NULL
+              )
+        "#, data.series as _, &data.event).execute(&mut *transaction).await?;
+
+        transaction.commit().await?;
+    }
+    Ok(RedirectOrContent::Redirect(Redirect::to(format!("{}?saved=1", uri!(rounds_get(series, event))))))
 }

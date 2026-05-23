@@ -807,8 +807,7 @@ dependencies = [
 [[package]]
 name = "command_attr"
 version = "0.5.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8208103c5e25a091226dfa8d61d08d0561cc14f31b25691811ba37d4ec9b157b"
+source = "git+https://github.com/TreZc0/serenity.git?branch=fix-permission-removal#8df6f173fc5920bfc2d01ae94a60e64acebe50d8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6952,8 +6951,7 @@ dependencies = [
 [[package]]
 name = "serenity"
 version = "0.12.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bde37f42765dfdc34e2a039e0c84afbf79a3101c1941763b0beb816c2f17541"
+source = "git+https://github.com/TreZc0/serenity.git?branch=fix-permission-removal#8df6f173fc5920bfc2d01ae94a60e64acebe50d8"
 dependencies = [
  "arrayvec",
  "async-trait",

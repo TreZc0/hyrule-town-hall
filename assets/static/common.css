@@ -358,6 +358,11 @@ p.error {
   background-color: #ffc0c0;
   color: black;
 }
+.success {
+  border: 1px solid #009000;
+  background-color: #90ff90;
+  color: black;
+}
 .info {
   border: 1px solid #00c0c0;
   background-color: #c0ffff;
