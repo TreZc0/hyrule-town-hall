@@ -525,12 +525,11 @@ async fn get_matchup_description(
         _ => "Unknown matchup".to_string(),
     };
 
+    let event_data = event::Data::new(transaction, race.series, &race.event).await.ok().flatten();
     let draft_mode = race.draft.as_ref().and_then(|draft| {
         let game = race.game.unwrap_or(1);
         let preset = draft.settings.get(&*format!("game{game}_preset"))?;
-        racetime_bot::Goal::for_event(race.series, &race.event)
-            .and_then(|g| g.draft_kind())
-            .and_then(|kind: draft::Kind| kind.preset_display_name(preset.as_ref()))
+        event_data.as_ref()?.draft_kind().and_then(|kind| kind.preset_display_name(preset.as_ref()))
     });
 
     // Add round and/or phase info if available, then draft mode

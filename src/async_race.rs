@@ -246,6 +246,19 @@ impl AsyncRaceManager {
         content.push(display_order.to_string());
         content.push(" of this round.");
 
+        if let Some(racetime_bot::seed_gen_type::SeedGenType::Owr) = event.seed_gen_type.as_ref() {
+            let choices = racetime_bot::owr_choices_for_race(db_pool, race).await;
+            let description = racetime_bot::owr_choices_description(&choices);
+
+            content.push_line("");
+            content.push_line("");
+            content.push("---");
+            content.push_line("");
+            content.push(format!("**Seed Settings:** {description}"));
+            content.push_line("");
+            content.push("---");
+        }
+
         if let Some(racetime_bot::seed_gen_type::SeedGenType::AlttprDoorRando { source: racetime_bot::seed_gen_type::AlttprDrSource::MutualChoices }) = event.seed_gen_type.as_ref() {
             let crosskeys_options = racetime_bot::CrosskeysRaceOptions::for_race(db_pool, race).await;
 

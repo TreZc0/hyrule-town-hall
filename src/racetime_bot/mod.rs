@@ -1036,6 +1036,10 @@ impl GlobalState {
                     .to_owned();
                 self.roll_avianart_seed(preset)
             }
+            SeedGenType::Owr => {
+                let choices = owr_choices_for_race(&self.db_pool, &cal_event.race).await;
+                self.roll_owr_seed(choices, cabookey::OWR_CONFIG)
+            }
             SeedGenType::TWWR { permalink } => {
                 let version = event.rando_version.clone();
                 self.roll_twwr_seed(version, permalink.clone(), unlock_spoiler_log)
@@ -2119,6 +2123,41 @@ struct Breaks {
     interval: Duration,
 }
 
+pub(crate) async fn owr_choices_for_race(db_pool: &PgPool, race: &Race) -> HashMap<String, String> {
+    let team_ids = race.teams().map(|t| t.id).collect_vec();
+    let rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", team_ids as _)
+        .fetch_all(db_pool)
+        .await
+        .expect("failed to read team choices for OWR race");
+
+    let mut merged: HashMap<String, String> = HashMap::default();
+    if let Some(first) = rows.first() {
+        if let Some(obj) = first.custom_choices.as_object() {
+            for (k, v) in obj {
+                if v.as_str() == Some("yes") {
+                    merged.insert(k.clone(), "yes".to_string());
+                }
+            }
+        }
+        for row in &rows[1..] {
+            merged.retain(|k, _| row.custom_choices.get(k.as_str()).is_some_and(|v| v == "yes"));
+        }
+    }
+    merged
+}
+
+pub(crate) fn owr_choices_description(choices: &HashMap<String, String>) -> String {
+    let active: Vec<&str> = choices.iter()
+        .filter(|(_, v)| v.as_str() == "yes")
+        .map(|(k, _)| k.as_str())
+        .collect();
+    if active.is_empty() {
+        "base settings".to_string()
+    } else {
+        active.join(", ")
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct CrosskeysRaceOptions {
     /// Custom_choices keys where every team agreed (all said "yes").
@@ -2647,6 +2686,10 @@ impl Handler {
                     Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MutualChoices }) => {
                         let cal_event = self.official_data.as_ref().expect("AlttprDoorRando/MutualChoices must have official_data").cal_event.clone();
                         self.roll_crosskeys2025_seed(ctx, cal_event, lang, article).await;
+                    }
+                    Some(seed_gen_type::SeedGenType::Owr) => {
+                        let cal_event = self.official_data.as_ref().expect("Owr must have official_data").cal_event.clone();
+                        self.roll_owr_seed(ctx, cal_event, lang, article).await;
                     }
                     Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MysteryPool { .. } }) => {
                         let cal_event = self.official_data.as_ref().expect("AlttprDoorRando/MysteryPool must have official_data").cal_event.clone();
@@ -3372,6 +3415,9 @@ impl RaceHandler<GlobalState> for Handler {
                             }
                             Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MutualChoices }) => {
                                 this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await
+                            }
+                            Some(seed_gen_type::SeedGenType::Owr) => {
+                                this.roll_owr_seed(ctx, cal_event.clone(), English, "a").await
                             }
                             Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MysteryPool { .. } }) => {
                                 this.roll_mysteryd20_seed(ctx, cal_event.clone(), English, "a").await

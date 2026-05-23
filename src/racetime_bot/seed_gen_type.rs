@@ -14,6 +14,8 @@ pub(crate) enum SeedGenType {
         source: AlttprDrSource,
     },
     AlttprAvianart,
+    /// OWR (Open World Randomizer) — player choices read from `teams.custom_choices`.
+    Owr,
     OoTR,
     TWWR {
         /// Default permalink for the event (used for generic preroll; races may override via draft).
@@ -72,6 +74,7 @@ impl SeedGenType {
                 Some(Self::AlttprDoorRando { source })
             }
             "alttpr_avianart" => Some(Self::AlttprAvianart),
+            "owr" => Some(Self::Owr),
             "ootr" | "ootr_web" => Some(Self::OoTR),
             "twwr" => {
                 let permalink = seed_config
@@ -119,7 +122,7 @@ impl SeedGenType {
     /// Whether this seed gen type has per-race player-chosen settings that should
     /// be shown as a column in the race table.
     pub(crate) fn has_display_settings(&self) -> bool {
-        matches!(self, Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices })
+        matches!(self, Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices } | Self::Owr)
     }
 
     /// For `MutualChoices` events: query the DB for each team's `custom_choices`
@@ -142,12 +145,9 @@ impl SeedGenType {
     where
         E: sqlx::Executor<'e, Database = sqlx::Postgres>,
     {
-        let source = match self {
-            Self::AlttprDoorRando { source } => source,
+        match self {
+            Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices } | Self::Owr => {}
             _ => return None,
-        };
-        if !matches!(source, AlttprDrSource::MutualChoices) {
-            return None;
         }
         if labels.is_empty() {
             return None;
@@ -190,7 +190,7 @@ pub(crate) struct UnknownSeedGenType;
 
 impl std::fmt::Display for UnknownSeedGenType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "unknown seed_gen_type slug; valid values: ootr_rsl, ootr_tfb, alttpr_avianart, ootr, mmr")
+        write!(f, "unknown seed_gen_type slug; valid values: owr, ootr_rsl, ootr_tfb, alttpr_avianart, ootr, mmr")
     }
 }
 
