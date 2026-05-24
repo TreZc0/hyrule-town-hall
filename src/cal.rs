@@ -3186,8 +3186,15 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
     loop {
         lock!(new_room_lock = new_room_lock; {
             let mut transaction = db_pool.begin().await?;
-            for row in sqlx::query!(r#"SELECT series AS "series: Series", event FROM events WHERE end_time IS NULL OR end_time > NOW()"#).fetch_all(&mut *transaction).await? {
-                let event = event::Data::new(&mut transaction, row.series, row.event).await?.expect("event deleted during transaction");
+            for row in sqlx::query!(r#"SELECT series, event FROM events WHERE end_time IS NULL OR end_time > NOW()"#).fetch_all(&mut *transaction).await? {
+                let series = match row.series.parse::<Series>() {
+                    Ok(s) => s,
+                    Err(()) => {
+                        log::warn!("skipping event with unknown series {:?}: {}", row.series, row.event);
+                        continue
+                    }
+                };
+                let event = event::Data::new(&mut transaction, series, row.event).await?.expect("event deleted during transaction");
                 if event.auto_import {
                     match event.match_source() {
                         MatchSource::Manual => {}
