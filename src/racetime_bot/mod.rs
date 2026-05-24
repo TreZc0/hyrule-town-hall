@@ -284,6 +284,7 @@ pub(crate) enum Goal {
     AlttprDe9SwissB,
     AlttprDeRivalsCupBrackets,
     AlttprDeRivalsCupGroups,
+    Cabookey2026,
     Cc7,
     CoOpS3,
     CopaDoBrasil,
@@ -340,6 +341,7 @@ impl Goal {
             Self::AlttprDe9SwissB => series == Series::AlttprDe && event == "9swissb",
             Self::AlttprDeRivalsCupBrackets => series == Series::AlttprDe && event == "rival26br",
             Self::AlttprDeRivalsCupGroups => series == Series::AlttprDe && event == "rival26gr",
+            Self::Cabookey2026 => series == Series::Cabookey && event == "2026",
             Self::Cc7 => series == Series::Standard && event == "7cc",
             Self::CoOpS3 => series == Series::CoOp && event == "3",
             Self::CopaDoBrasil => series == Series::CopaDoBrasil && event == "1",
@@ -387,6 +389,7 @@ impl Goal {
             | Self::AlttprDe9SwissB
             | Self::AlttprDeRivalsCupBrackets
             | Self::AlttprDeRivalsCupGroups
+            | Self::Cabookey2026
             | Self::Cc7
             | Self::CoOpS3
             | Self::CopaDoBrasil
@@ -422,6 +425,7 @@ impl Goal {
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => "9. Deutsches ALTTPR Turnier",
             Self::AlttprDeRivalsCupBrackets => "ALTTPRDE Rival Cup Brackets",
             Self::AlttprDeRivalsCupGroups => "ALTTPRDE Rival Cup Groups",
+            Self::Cabookey2026 => "Cabookey Tournament 2026",
             Self::Cc7 => "Standard Tournament Season 7 Challenge Cup",
             Self::CoOpS3 => "Co-op Tournament Season 3",
             Self::CopaDoBrasil => "Copa do Brasil",
@@ -463,6 +467,7 @@ impl Goal {
             | Self::AlttprDe9SwissB
             | Self::AlttprDeRivalsCupBrackets
             | Self::AlttprDeRivalsCupGroups
+            | Self::Cabookey2026
             | Self::Cc7
             | Self::CoOpS3
             | Self::Crosskeys2025
@@ -528,6 +533,7 @@ impl Goal {
             Self::TournoiFrancoS3 => Some(draft::Kind::TournoiFrancoS3),
             Self::TournoiFrancoS4 => Some(draft::Kind::TournoiFrancoS4),
             Self::TournoiFrancoS5 => Some(draft::Kind::TournoiFrancoS5),
+            | Self::Cabookey2026
             | Self::CoOpS3
             | Self::CopaDoBrasil
             | Self::Crosskeys2025
@@ -563,6 +569,7 @@ impl Goal {
             | Self::AlttprDe9SwissB
             | Self::AlttprDeRivalsCupBrackets
             | Self::AlttprDeRivalsCupGroups
+            | Self::Cabookey2026
             | Self::Crosskeys2025
             | Self::Sgl2023
             | Self::Sgl2024
@@ -658,6 +665,7 @@ impl Goal {
                 | Self::AlttprDe9SwissB
                 | Self::AlttprDeRivalsCupBrackets
                 | Self::AlttprDeRivalsCupGroups
+                | Self::Cabookey2026
                 | Self::Crosskeys2025
                 | Self::MysteryD20
                 | Self::TwwrMainWeekly
@@ -708,6 +716,7 @@ impl Goal {
             Self::WeTryToBeBetterS2 => VersionedBranch::Pinned { version: rando::Version::from_dev(8, 2, 0) },
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => panic!("randomizer version for this goal is unused"),
             Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups => panic!("randomizer version for this goal is unused"),
+            Self::Cabookey2026 => panic!("randomizer version for this goal is unused"),
             Self::Crosskeys2025 => panic!("randomizer version for this goal is unused"),
             Self::MysteryD20 => panic!("randomizer version for this goal is unused"),
             Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => if_chain! {
@@ -734,6 +743,7 @@ impl Goal {
         match self {
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => None, // per-race settings
             Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups => None, // per-race settings
+            Self::Cabookey2026 => None, // per-race settings
             Self::Cc7 => None, // settings draft
             Self::CoOpS3 => Some(coop::s3_settings()),
             Self::CopaDoBrasil => Some(br::s1_settings()),
@@ -799,6 +809,7 @@ impl Goal {
             | Self::AlttprDe9SwissB
             | Self::AlttprDeRivalsCupBrackets
             | Self::AlttprDeRivalsCupGroups
+            | Self::Cabookey2026
             | Self::Crosskeys2025
                 => ctx.say("!seed base: The tournament's base settings.").await?,
             | Self::MysteryD20
@@ -1050,7 +1061,7 @@ impl Goal {
                 };
                 SeedCommandParseResult::Regular { settings: s::resolve_s7_draft_settings(&settings), unlock_spoiler_log, language: English, article: "a", description: format!("seed with {}", s::display_s7_draft_picks(&settings)) }
             }
-            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB | Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups | Self::Crosskeys2025 | Self::MysteryD20 => match args {
+            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB | Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups | Self::Cabookey2026 | Self::Crosskeys2025 | Self::MysteryD20 => match args {
                 [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
                 [arg] if arg == "base" => SeedCommandParseResult::Alttpr,
                 [_] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I don't recognize that preset" }),
@@ -1817,11 +1828,13 @@ impl GlobalState {
                 mapshuffle: 1,
                 mirrorscroll: mirrorscroll,
                 mode: world_state,
+                ow_mixed: None,
                 pottery: pottery_mode,
                 pseudoboots: pseudoboots,
                 shuffle: "crossed",
                 shuffletavern: 0,
                 skullwoods: skullwoods,
+                swords: None,
             };
 
             if !crosskeys_options.zw_ok {
@@ -1888,6 +1901,109 @@ impl GlobalState {
             }
             
             // This swallows the hash error and just makes it empty--maybe we should surface this somehow?
+            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await.ok();
+            update_tx.send(SeedRollUpdate::Done {
+                seed: seed::Data {
+                    file_hash: file_hash,
+                    files: Some(seed::Files::AlttprDoorRando {
+                        uuid: uuid
+                    }),
+                    progression_spoiler: false,
+                    password: None,
+                },
+                rsl_preset: None,
+                version: None,
+                unlock_spoiler_log: UnlockSpoilerLog::Never
+            }).await.allow_unreceived();
+            Ok(())
+        }.then(|res| async move {
+            match res {
+                Ok(()) => {}
+                Err(e) => update_tx2.send(SeedRollUpdate::Error(e)).await.allow_unreceived(),
+            }
+        }));
+        update_rx
+    }
+
+    pub(crate) fn roll_owr_seed(self: Arc<Self>, choices: HashMap<String, String>, config: OwrSeedConfig) -> mpsc::Receiver<SeedRollUpdate> {
+        let (update_tx, update_rx) = mpsc::channel(128);
+        let update_tx2 = update_tx.clone();
+        tokio::spawn(async move {
+            let uuid = Uuid::new_v4();
+
+            let mut settings = config.base_settings;
+            for patch in config.choice_patches {
+                if choices.get(patch.key).is_some_and(|v| v == "yes") {
+                    (patch.apply)(&mut settings);
+                }
+            }
+
+            let mut yaml = AlttprDoorRandoYaml {
+                placements: HashMap::default(),
+                settings: HashMap::default(),
+                start_inventory: HashMap::default(),
+                meta: AlttprDoorRandoMeta {
+                    bps: true,
+                    name: uuid.to_string(),
+                    race: true,
+                    skip_playthrough: true,
+                    spoiler: "full",
+                    suppress_rom: true,
+                },
+            };
+
+            yaml.settings.insert(1, settings);
+
+            if !config.start_inventory.is_empty() {
+                yaml.start_inventory.insert(1, config.start_inventory);
+            }
+
+            let yaml_file = tempfile::Builder::new().prefix("alttpr_").suffix(".yml").tempfile().at_unknown()?;
+            let yaml_path = yaml_file.path();
+            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(serde_yml::to_string(&yaml)?.as_bytes()).await.at(&yaml_file)?;
+
+            const MAX_RETRIES: u8 = 4;
+
+            for attempt in 0..=MAX_RETRIES {
+                let output = Command::new(PYTHON)
+                    .current_dir("/opt/owr")
+                    .arg("DungeonRandomizer.py")
+                    .arg("--customizer")
+                    .arg(yaml_path)
+                    .arg("--outputpath")
+                    .arg("/var/www/midos.house/seed")
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .at_command("DungeonRandomizer.py")?
+                    .wait_with_output()
+                    .await
+                    .at_command("DungeonRandomizer.py")?;
+
+                match output.status.code() {
+                    Some(0) => {
+                        break;
+                    }
+                    Some(1) => {
+                        let last_error = Some(String::from_utf8_lossy(&output.stderr).into_owned());
+                        if attempt < MAX_RETRIES {
+                            sleep(Duration::from_secs(10 + 2u64.pow(attempt as u32))).await;
+                            continue;
+                        }
+                        return Err(RollError::Retries {
+                            num_retries: MAX_RETRIES + 1,
+                            last_error,
+                        });
+                    }
+                    _ => {
+                        return Err(RollError::Wheel(wheel::Error::CommandExit {
+                            name: Cow::Borrowed("DungeonRandomizer.py"),
+                            output
+                        }));
+                    }
+                }
+            }
+
             let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await.ok();
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
@@ -3179,6 +3295,41 @@ struct Breaks {
     interval: Duration,
 }
 
+pub(crate) async fn owr_choices_for_race(db_pool: &PgPool, race: &Race) -> HashMap<String, String> {
+    let team_ids = race.teams().map(|t| t.id).collect_vec();
+    let rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", team_ids as _)
+        .fetch_all(db_pool)
+        .await
+        .expect("failed to read team choices for OWR race");
+
+    let mut merged: HashMap<String, String> = HashMap::default();
+    if let Some(first) = rows.first() {
+        if let Some(obj) = first.custom_choices.as_object() {
+            for (k, v) in obj {
+                if v.as_str() == Some("yes") {
+                    merged.insert(k.clone(), "yes".to_string());
+                }
+            }
+        }
+        for row in &rows[1..] {
+            merged.retain(|k, _| row.custom_choices.get(k.as_str()).is_some_and(|v| v == "yes"));
+        }
+    }
+    merged
+}
+
+pub(crate) fn owr_choices_description(choices: &HashMap<String, String>) -> String {
+    let active: Vec<&str> = choices.iter()
+        .filter(|(_, v)| v.as_str() == "yes")
+        .map(|(k, _)| k.as_str())
+        .collect();
+    if active.is_empty() {
+        "base settings".to_string()
+    } else {
+        active.join(", ")
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct CrosskeysRaceOptions {
     all_dungeons_ok: bool,
@@ -3459,28 +3610,44 @@ pub(crate) struct AlttprDoorRandoPlacements {
     pinball_room: &'static str,
 }
 
-#[derive(Clone, Serialize)]
+pub(crate) struct OwrChoicePatch {
+    pub(crate) key: &'static str,
+    pub(crate) apply: fn(&mut AlttprDoorRandoSetting),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct OwrSeedConfig {
+    pub(crate) base_settings: AlttprDoorRandoSetting,
+    pub(crate) start_inventory: &'static [&'static str],
+    pub(crate) choice_patches: &'static [OwrChoicePatch],
+}
+
+#[derive(Clone, Copy, Serialize)]
 pub(crate) struct AlttprDoorRandoSetting {
-    accessibility: &'static str,
-    bigkeyshuffle: u8,
-    compassshuffle: u8,
-    crystals_ganon: &'static str,
-    crystals_gt: &'static str,
-    dropshuffle: &'static str,
-    flute_mode: &'static str,
-    goal: &'static str,
-    item_functionality: &'static str,
-    key_logic_algorithm: &'static str,
-    keyshuffle: &'static str,
-    linked_drops: &'static str,
-    mapshuffle: u8,
-    mirrorscroll: u8,
-    mode: &'static str,
-    pottery: &'static str,
-    pseudoboots: u8,
-    shuffle: &'static str,
-    shuffletavern: u8,
-    skullwoods: &'static str,
+    pub(crate) accessibility: &'static str,
+    pub(crate) bigkeyshuffle: u8,
+    pub(crate) compassshuffle: u8,
+    pub(crate) crystals_ganon: &'static str,
+    pub(crate) crystals_gt: &'static str,
+    pub(crate) dropshuffle: &'static str,
+    pub(crate) flute_mode: &'static str,
+    pub(crate) goal: &'static str,
+    pub(crate) item_functionality: &'static str,
+    pub(crate) key_logic_algorithm: &'static str,
+    pub(crate) keyshuffle: &'static str,
+    pub(crate) linked_drops: &'static str,
+    pub(crate) mapshuffle: u8,
+    pub(crate) mirrorscroll: u8,
+    pub(crate) mode: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) ow_mixed: Option<u8>,
+    pub(crate) pottery: &'static str,
+    pub(crate) pseudoboots: u8,
+    pub(crate) shuffle: &'static str,
+    pub(crate) shuffletavern: u8,
+    pub(crate) skullwoods: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) swords: Option<&'static str>,
 }
 
 #[derive(Clone, Serialize)]
@@ -3701,6 +3868,10 @@ impl Handler {
                             .to_owned();
                         self.roll_rivals_cup_seed(ctx, cal_event, preset, goal.language(), article).await;
                     }
+                    Goal::Cabookey2026 => {
+                        let cal_event = self.official_data.as_ref().expect("Cabookey2026 goal must have official_data").cal_event.clone();
+                        self.roll_owr_seed(ctx, cal_event, goal.language(), article).await;
+                    }
                     Goal::Crosskeys2025 => {
                         let cal_event = self.official_data.as_ref().expect("Crosskeys2025 goal must have official_data").cal_event.clone();
                         self.roll_crosskeys2025_seed(ctx, cal_event, goal.language(), article).await;
@@ -3896,6 +4067,15 @@ impl Handler {
         ctx.send_message(format!("@entrants Remember: this race will be played with {}!",
                                     crosskeys_options.as_race_options_str()
                                 ), true, Vec::default()).await.expect("failed to send race options");
+    }
+
+    async fn roll_owr_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
+        let official_start = cal_event.start().expect("handling room for official race without start time");
+        let delay_until = official_start - TimeDelta::minutes(10);
+
+        let choices = owr_choices_for_race(&ctx.global_state.db_pool, &cal_event.race).await;
+        let description = owr_choices_description(&choices);
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_owr_seed(choices, cabookey::OWR_CONFIG), language, article, format!("seed with {description}"), false).await;
     }
 
     async fn roll_mysteryd20_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
@@ -4104,7 +4284,7 @@ impl RaceHandler<GlobalState> for Handler {
                             )
                         }
                     }
-                }, !matches!(goal, Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Crosskeys2025), Vec::default()).await?;
+                }, !matches!(goal, Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Cabookey2026 | Goal::Crosskeys2025), Vec::default()).await?;
                 // Announce mode for events with round_modes set
                 match goal {
                     Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB => {
@@ -4354,6 +4534,7 @@ impl RaceHandler<GlobalState> for Handler {
                             ).await?,
                             Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB => unreachable!("attempted to handle a user-opened AlttprDe9 room"),
                             Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups => unreachable!("attempted to handle a user-opened RivalsCup room"),
+                            Goal::Cabookey2026 => unreachable!("attempted to handle a user-opened Cabookey2026 room"),
                             Goal::Crosskeys2025 => unreachable!("attempted to handle a user-opened Crosskeys2025 room"),
                             Goal::MysteryD20 => unreachable!("attempted to handle a user-opened MysteryD20 room"),
                             Goal::LeagueS8 => ctx.send_message(
@@ -5153,6 +5334,8 @@ impl RaceHandler<GlobalState> for Handler {
                             Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups => {
                                 ctx.say("@entrants WARNING: The preset draft for this match is not complete! Please complete the draft in the scheduling Discord thread before the race.").await.to_racetime()?;
                             }
+                            | Goal::Cabookey2026
+                                => this.roll_owr_seed(ctx, cal_event.clone(), English, "a").await,
                             | Goal::Crosskeys2025
                                 => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await,
                             Goal::TwwrMainWeekly
@@ -5964,6 +6147,7 @@ impl RaceHandler<GlobalState> for Handler {
                     | Goal::AlttprDe9SwissB
                     | Goal::AlttprDeRivalsCupBrackets
                     | Goal::AlttprDeRivalsCupGroups
+                    | Goal::Cabookey2026
                     | Goal::Cc7
                     | Goal::CoOpS3
                     | Goal::CopaDoBrasil

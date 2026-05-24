@@ -4444,6 +4444,10 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
                     .as_ref().to_owned();
                 global_state.clone().roll_avianart_seed(preset)
             }
+            racetime_bot::Goal::Cabookey2026 => {
+                let choices = racetime_bot::owr_choices_for_race(&global_state.db_pool, &cal_event.race).await;
+                global_state.clone().roll_owr_seed(choices, cabookey::OWR_CONFIG)
+            }
             racetime_bot::Goal::Crosskeys2025 => {
                 let crosskeys_options = CrosskeysRaceOptions::for_race(&global_state.db_pool, &cal_event.race).await;
                 global_state.clone().roll_crosskeys2025_seed(crosskeys_options)

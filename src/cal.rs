@@ -731,6 +731,7 @@ impl Race {
                 _ => {} // other TWWR events are scheduled via Mido's House
             },
             | Series::AlttprDe
+            | Series::Cabookey
             | Series::CoOp //TODO add archives of seasons 1 and 2?
             | Series::CopaDoBrasil
             | Series::Crosskeys
@@ -2636,7 +2637,6 @@ pub(crate) async fn race_table(
                         }
                         @if !has_seeds && has_settings {
                             td {
-                                // Check for Crosskeys2025 races
                                 @if let Some(racetime_bot::Goal::Crosskeys2025) = racetime_bot::Goal::for_event(race.series, &race.event) {
                                     @if let Ok(crosskeys_options) = racetime_bot::CrosskeysRaceOptions::for_race_with_transaction(&mut *transaction, race).await {
                                         span(class = "settings-link", data_tooltip = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str_no_delay())) {
