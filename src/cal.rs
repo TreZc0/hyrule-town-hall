@@ -3314,7 +3314,12 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                     transaction.commit().await?;
                                     transaction = db_pool.begin().await?;
                                 }
-                                Err(e) => return Err(e.into()),
+                                Err(e) => {
+                                    let e = AutoImportError::from(e);
+                                    if e.is_network_error() { return Err(e) }
+                                    log::warn!("skipping start.gg import for {}/{} ({}): {e}", event.series.slug(), &event.event, event_slug);
+                                    break
+                                }
                             }
                         }
                     }
