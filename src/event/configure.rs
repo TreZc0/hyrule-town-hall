@@ -64,6 +64,29 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
             false
         };
         if is_organizer_or_global {
+            let startgg_bulk_add: Option<(String, String)> = if let MatchSource::StartGG(event_slug) = event.match_source() {
+                let tournament_slug = event_slug.split('/').nth(1).map(str::to_string).unwrap_or_default();
+                let names: Vec<String> = sqlx::query_scalar!(r#"
+                    SELECT CASE WHEN u.display_source = 'racetime' THEN u.racetime_display_name
+                                WHEN u.display_source = 'discord' THEN u.discord_display_name
+                           END AS "name"
+                    FROM teams t
+                    JOIN team_members tm ON tm.team = t.id
+                    JOIN users u ON u.id = tm.member
+                    WHERE t.series = $1 AND t.event = $2 AND NOT t.resigned
+                    ORDER BY name NULLS LAST
+                "#, event.series as _, &*event.event)
+                    .fetch_all(&mut *transaction)
+                    .await?
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                let names_json = serde_json::to_string(&names)
+                    .unwrap_or_else(|_| "[]".to_string());
+                Some((tournament_slug, names_json))
+            } else {
+                None
+            };
             let mut errors = ctx.errors().collect_vec();
             html! {
                 @if event.series == Series::Standard && event.event == "w" {
@@ -115,6 +138,15 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                                 button(type = "submit", name = "sync_startgg_ids", value = "sync") : "Sync StartGG Participant IDs";
                                 label(class = "help") : "(This will attempt to match teams with solo players to their StartGG entrant IDs.)";
                             });
+                            @if let Some((ref slug, ref names_json)) = startgg_bulk_add {
+                                : form_field("startgg_bulk_add", &mut errors, html! {
+                                    a(href = format!("https://www.start.gg/admin/tournament/{}/bulk-add", slug), target = "_blank", rel = "noopener noreferrer", class = "button") : "Open start.gg Bulk Add";
+                                    : " ";
+                                    button(type = "button", id = "startgg-bulk-add-copy", data_names = names_json) : "Copy player names to clipboard";
+                                    label(class = "help") : "(Opens the start.gg bulk-add page in a new tab. Copy player names and paste them into the search field on that page.)";
+                                    script(src = static_url!("startgg-bulk-add.js")) {}
+                                });
+                            }
                         }
                         : form_field("min_schedule_notice", &mut errors, html! {
                             label(for = "min_schedule_notice") : "Minimum scheduling notice:";
