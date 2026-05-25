@@ -1435,7 +1435,6 @@ impl GlobalState {
 fn build_crosskeys_yaml(opts: &CrosskeysRaceOptions, uuid: Uuid) -> Result<String, serde_yml::Error> {
     let agreed = &opts.agreed;
     let meta = AlttprDoorRandoMeta { bps: true, name: uuid.to_string(), race: true, skip_playthrough: true, spoiler: "full", suppress_rom: true };
-    let mut yaml = AlttprDoorRandoYaml { placements: HashMap::default(), settings: HashMap::default(), start_inventory: HashMap::default(), meta };
     let keydrop_mode = if agreed.contains("keydrop") { "keys" } else { "none" };
     let flute_mode = if agreed.contains("flute") { "active" } else { "normal" };
     let goal = if agreed.contains("all_dungeons") { "dungeons" } else { "crystals" };
@@ -1467,14 +1466,23 @@ fn build_crosskeys_yaml(opts: &CrosskeysRaceOptions, uuid: Uuid) -> Result<Strin
         skullwoods,
         swords: None,
     };
+    let player_key = serde_yml::Value::from(1_i64);
+    let mut yaml_map = serde_yml::Mapping::new();
     if !agreed.contains("zw") {
-        yaml.placements.insert(1, AlttprDoorRandoPlacements { pinball_room: "Small Key (Skull Woods)" });
+        let mut placements_map = serde_yml::Mapping::new();
+        placements_map.insert(player_key.clone(), serde_yml::to_value(&AlttprDoorRandoPlacements { pinball_room: "Small Key (Skull Woods)" })?);
+        yaml_map.insert(serde_yml::Value::String("placements".to_string()), serde_yml::Value::Mapping(placements_map));
     }
+    let mut settings_map = serde_yml::Mapping::new();
+    settings_map.insert(player_key.clone(), serde_yml::to_value(&settings)?);
+    yaml_map.insert(serde_yml::Value::String("settings".to_string()), serde_yml::Value::Mapping(settings_map));
     if agreed.contains("flute") {
-        yaml.start_inventory.insert(1, &["Ocarina (Activated)"]);
+        let mut inv_map = serde_yml::Mapping::new();
+        inv_map.insert(player_key, serde_yml::to_value(&["Ocarina (Activated)"] as &[&str])?);
+        yaml_map.insert(serde_yml::Value::String("start_inventory".to_string()), serde_yml::Value::Mapping(inv_map));
     }
-    yaml.settings.insert(1, settings);
-    serde_yml::to_string(&yaml)
+    yaml_map.insert(serde_yml::Value::String("meta".to_string()), serde_yml::to_value(&meta)?);
+    serde_yml::to_string(&serde_yml::Value::Mapping(yaml_map))
 }
 
 fn inject_alttpr_dr_meta(yaml_content: &str, uuid: Uuid) -> Result<String, serde_yml::Error> {

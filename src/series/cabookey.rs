@@ -11,8 +11,9 @@ pub(crate) fn owr_config() -> OwrEventConfig {
     OwrEventConfig {
         base_settings: serde_json::json!({
             "accessibility": "locations",
-            "bigkeyshuffle": 1,
-            "compassshuffle": 1,
+            "aga_randomness": 0,
+            "bigkeyshuffle": "wild",
+            "compassshuffle": "wild",
             "crystals_ganon": "7",
             "crystals_gt": "7",
             "dropshuffle": "none",
@@ -22,7 +23,7 @@ pub(crate) fn owr_config() -> OwrEventConfig {
             "key_logic_algorithm": "partial",
             "keyshuffle": "wild",
             "linked_drops": "unset",
-            "mapshuffle": 1,
+            "mapshuffle": "wild",
             "mirrorscroll": 0,
             "mode": "standard",
             "ow_mixed": 0,
