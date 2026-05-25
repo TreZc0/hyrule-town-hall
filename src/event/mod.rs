@@ -486,6 +486,7 @@ impl<'a> Data<'a> {
             Series::TriforceBlitz => false,
             Series::WeTryToBeBetter => false,
             Series::TwwrMain => false,
+            Series::BotwAny => false,
             Series::Wolfdash => false,
         }
     }
@@ -1128,6 +1129,7 @@ pub(crate) async fn info(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
         Series::TriforceBlitz => tfb::info(&mut transaction, &data).await?,
         Series::TwwrMain => twwrmain::info(&mut transaction, &data).await?,
         Series::WeTryToBeBetter => wttbb::info(&mut transaction, &data).await?,
+        Series::BotwAny => botwany::info(&mut transaction, &data).await?,
         Series::Wolfdash => wolfdash::info(&mut transaction, &data).await?,
     };
     let content = if let Some(custom_html) = custom_description {
@@ -1828,6 +1830,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             | Series::TournoiFrancophone
                             | Series::WeTryToBeBetter
                             | Series::TwwrMain
+                            | Series::BotwAny
                             | Series::Wolfdash
                                 => @if let French = data.language {
                                     p : "Planifiez vos matches dans les fils du canal dédié.";
