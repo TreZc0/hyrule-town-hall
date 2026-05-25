@@ -44,9 +44,12 @@ pub(crate) mod tfb;
 pub(crate) mod wttbb;
 pub(crate) mod xkeys;
 pub(crate) mod twwrmain;
+pub(crate) mod wolfdash;
+pub(crate) mod botwany;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Sequence)]
 pub(crate) enum Series {
+    BotwAny,
     AlttprDe,
     BattleRoyale,
     Cabookey,
@@ -75,6 +78,7 @@ pub(crate) enum Series {
 impl Series {
     pub(crate) fn slug(&self) -> &'static str {
         match self {
+            Self::BotwAny => "botwany",
             Self::AlttprDe => "alttprde",
             Self::BattleRoyale => "ohko",
             Self::Cabookey => "cabookey",
@@ -103,6 +107,7 @@ impl Series {
 
     pub(crate) fn display_name(&self) -> &'static str {
         match self {
+            Self::BotwAny => "Any%",
             Self::AlttprDe => "Deutsche ALTTPR Turniere",
             Self::BattleRoyale => "Battle Royale",
             Self::Cabookey => "Cabookey Tournaments",
@@ -136,7 +141,7 @@ impl Series {
             Self::CoOp | Self::MixedPools | Self::Scrubs | Self::SpeedGaming | Self::WeTryToBeBetter => TimeDelta::hours(3),
             Self::CopaDoBrasil | Self::League | Self::NineDaysOfSaws | Self::SongsOfHope | Self::Standard | Self::TournoiFrancophone => TimeDelta::hours(3) + TimeDelta::minutes(30),
             Self::Mq | Self::Multiworld | Self::Pictionary => TimeDelta::hours(4),
-            Self::Wolfdash => TimeDelta::hours(3) + TimeDelta::minutes(15),
+            Self::BotwAny | Self::Wolfdash => TimeDelta::hours(3) + TimeDelta::minutes(15),
             Self::Rsl => TimeDelta::hours(4) + TimeDelta::minutes(30),
         }
     }
