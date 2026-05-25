@@ -1958,9 +1958,13 @@ impl GlobalState {
                 yaml.start_inventory.insert(1, config.start_inventory);
             }
 
+            let yaml_str = serde_yml::to_string(&yaml)?;
+            eprintln!("[OWR] generated YAML for {uuid}:\n{yaml_str}");
+            let _ = std::fs::write(format!("/tmp/owr_debug_{uuid}.yml"), &yaml_str);
+
             let yaml_file = tempfile::Builder::new().prefix("alttpr_").suffix(".yml").tempfile().at_unknown()?;
             let yaml_path = yaml_file.path();
-            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(serde_yml::to_string(&yaml)?.as_bytes()).await.at(&yaml_file)?;
+            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(yaml_str.as_bytes()).await.at(&yaml_file)?;
 
             const MAX_RETRIES: u8 = 4;
 
