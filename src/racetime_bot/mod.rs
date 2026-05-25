@@ -366,7 +366,7 @@ impl seed_gen_type::SeedGenType {
             Self::OoTR | Self::Mmr => {
                 ctx.say("!seed: The settings used for this event.").await?;
             }
-            Self::Owr => {
+            Self::Owr { .. } => {
                 ctx.say("!seed: Rolls this race's seed.").await?;
             }
         }
@@ -513,7 +513,7 @@ impl seed_gen_type::SeedGenType {
                 [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn’t quite understand that" },
             },
             Self::OoTR | Self::Mmr => return Ok(SeedCommandParseResult::Error { language: English, msg: "This seed type rolls settings from the event config; use the bot’s !seed command in the race room instead.".into() }),
-            Self::Owr => match args {
+            Self::Owr { .. } => match args {
                 [] => SeedCommandParseResult::Alttpr,
                 [arg] if arg == "base" => SeedCommandParseResult::Alttpr,
                 [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn’t quite understand that" },
