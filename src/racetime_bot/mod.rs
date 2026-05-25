@@ -1003,14 +1003,18 @@ impl GlobalState {
             }
         }
         let meta = AlttprDoorRandoMeta { bps: true, name: uuid.to_string(), race: true, skip_playthrough: true, spoiler: "full", suppress_rom: true };
-        let mut yaml_obj = serde_json::json!({
-            "settings": { "1": serde_json::Value::Object(settings) },
-            "meta": serde_json::to_value(&meta).expect("meta serialization cannot fail"),
-        });
+        let player_key = serde_yml::Value::from(1_i64);
+        let mut settings_map = serde_yml::Mapping::new();
+        settings_map.insert(player_key.clone(), serde_yml::to_value(serde_json::Value::Object(settings)).expect("settings serialization cannot fail"));
+        let mut yaml_map = serde_yml::Mapping::new();
+        yaml_map.insert(serde_yml::Value::String("settings".to_string()), serde_yml::Value::Mapping(settings_map));
+        yaml_map.insert(serde_yml::Value::String("meta".to_string()), serde_yml::to_value(&meta).expect("meta serialization cannot fail"));
         if !config.start_inventory.is_empty() {
-            yaml_obj["start_inventory"] = serde_json::json!({ "1": config.start_inventory });
+            let mut inv_map = serde_yml::Mapping::new();
+            inv_map.insert(player_key, serde_yml::to_value(&config.start_inventory).expect("start_inventory serialization cannot fail"));
+            yaml_map.insert(serde_yml::Value::String("start_inventory".to_string()), serde_yml::Value::Mapping(inv_map));
         }
-        match serde_yml::to_string(&yaml_obj) {
+        match serde_yml::to_string(&serde_yml::Value::Mapping(yaml_map)) {
             Ok(yaml_content) => {
                 eprintln!("[OWR] generated YAML for {uuid}:\n{yaml_content}");
                 let _ = std::fs::write(format!("/tmp/owr_debug_{uuid}.yml"), &yaml_content);
