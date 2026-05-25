@@ -1015,11 +1015,7 @@ impl GlobalState {
             yaml_map.insert(serde_yml::Value::String("start_inventory".to_string()), serde_yml::Value::Mapping(inv_map));
         }
         match serde_yml::to_string(&serde_yml::Value::Mapping(yaml_map)) {
-            Ok(yaml_content) => {
-                eprintln!("[OWR] generated YAML for {uuid}:\n{yaml_content}");
-                let _ = std::fs::write(format!("/tmp/owr_debug_{uuid}.yml"), &yaml_content);
-                self.roll_alttpr_dr_seed(yaml_content, uuid, "../alttpr", false)
-            }
+            Ok(yaml_content) => self.roll_alttpr_dr_seed(yaml_content, uuid, "/opt/owr", false),
             Err(e) => alttpr_dr_error_receiver(e.into()),
         }
     }
