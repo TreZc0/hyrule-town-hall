@@ -432,6 +432,7 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                                 @for (val, label) in &[
                                     ("alttpr_dr", "ALTTPR Door Rando"),
                                     ("alttpr_avianart", "ALTTPR Avianart"),
+                                    ("owr", "ALTTPR OWR"),
                                     ("ootr", "OoTR"),
                                     ("ootr_tfb", "OoTR Triforce Blitz"),
                                     ("ootr_rsl", "OoTR RSL"),
@@ -1554,6 +1555,7 @@ fn create_form_content(me: &Option<User>, _uri: &Origin<'_>, csrf: Option<&CsrfT
                                 @for (val, label) in &[
                                     ("alttpr_dr", "ALTTPR Door Rando"),
                                     ("alttpr_avianart", "ALTTPR Avianart"),
+                                    ("owr", "ALTTPR OWR"),
                                     ("ootr", "OoTR"),
                                     ("ootr_tfb", "OoTR Triforce Blitz"),
                                     ("ootr_rsl", "OoTR RSL"),

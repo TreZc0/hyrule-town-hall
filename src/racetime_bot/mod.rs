@@ -989,22 +989,28 @@ impl GlobalState {
         update_rx
     }
 
-    /// Roll an OWR (Open World Randomizer) seed by applying player choices to the base config.
-    pub(crate) fn roll_owr_seed(self: Arc<Self>, choices: HashMap<String, String>, config: OwrSeedConfig) -> mpsc::Receiver<SeedRollUpdate> {
+    /// Roll an OWR (Open World Randomizer) seed by applying player choices to the event config.
+    pub(crate) fn roll_owr_seed(self: Arc<Self>, choices: HashMap<String, String>, config: seed_gen_type::OwrEventConfig) -> mpsc::Receiver<SeedRollUpdate> {
         let uuid = Uuid::new_v4();
-        let mut settings = config.base_settings;
-        for patch in config.choice_patches {
-            if choices.get(patch.key).is_some_and(|v| v == "yes") {
-                (patch.apply)(&mut settings);
+        let mut settings = config.base_settings.as_object().cloned().unwrap_or_default();
+        if let Some(patches) = config.choice_patches.as_object() {
+            for (key, patch) in patches {
+                if choices.get(key).is_some_and(|v| v == "yes") {
+                    if let Some(fields) = patch.as_object() {
+                        settings.extend(fields.clone());
+                    }
+                }
             }
         }
         let meta = AlttprDoorRandoMeta { bps: true, name: uuid.to_string(), race: true, skip_playthrough: true, spoiler: "full", suppress_rom: true };
-        let mut yaml = AlttprDoorRandoYaml { placements: HashMap::default(), settings: HashMap::default(), start_inventory: HashMap::default(), meta };
-        yaml.settings.insert(1, settings);
+        let mut yaml_obj = serde_json::json!({
+            "settings": { "1": serde_json::Value::Object(settings) },
+            "meta": serde_json::to_value(&meta).expect("meta serialization cannot fail"),
+        });
         if !config.start_inventory.is_empty() {
-            yaml.start_inventory.insert(1, config.start_inventory);
+            yaml_obj["start_inventory"] = serde_json::json!({ "1": config.start_inventory });
         }
-        match serde_yml::to_string(&yaml) {
+        match serde_yml::to_string(&yaml_obj) {
             Ok(yaml_content) => self.roll_alttpr_dr_seed(yaml_content, uuid, "../alttpr", false),
             Err(e) => alttpr_dr_error_receiver(e.into()),
         }
@@ -1065,9 +1071,9 @@ impl GlobalState {
                     .to_owned();
                 self.roll_avianart_seed(preset)
             }
-            SeedGenType::Owr => {
+            SeedGenType::Owr { config } => {
                 let choices = owr_choices_for_race(&self.db_pool, &cal_event.race).await;
-                self.roll_owr_seed(choices, cabookey::OWR_CONFIG)
+                self.roll_owr_seed(choices, config.clone().unwrap_or_else(cabookey::owr_config))
             }
             SeedGenType::TWWR { permalink } => {
                 let version = event.rando_version.clone();
@@ -2442,18 +2448,6 @@ pub(crate) struct AlttprDoorRandoPlacements {
     pinball_room: &'static str,
 }
 
-pub(crate) struct OwrChoicePatch {
-    pub(crate) key: &'static str,
-    pub(crate) apply: fn(&mut AlttprDoorRandoSetting),
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct OwrSeedConfig {
-    pub(crate) base_settings: AlttprDoorRandoSetting,
-    pub(crate) start_inventory: &'static [&'static str],
-    pub(crate) choice_patches: &'static [OwrChoicePatch],
-}
-
 #[derive(Clone, Copy, Serialize)]
 pub(crate) struct AlttprDoorRandoSetting {
     pub(crate) accessibility: &'static str,
@@ -2718,7 +2712,7 @@ impl Handler {
                         let cal_event = self.official_data.as_ref().expect("AlttprDoorRando/MutualChoices must have official_data").cal_event.clone();
                         self.roll_crosskeys2025_seed(ctx, cal_event, lang, article).await;
                     }
-                    Some(seed_gen_type::SeedGenType::Owr) => {
+                    Some(seed_gen_type::SeedGenType::Owr { .. }) => {
                         let cal_event = self.official_data.as_ref().expect("Owr must have official_data").cal_event.clone();
                         self.roll_owr_seed(ctx, cal_event, lang, article).await;
                     }
@@ -2948,10 +2942,13 @@ impl Handler {
     async fn roll_owr_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(10);
-
+        let config = self.official_data.as_ref()
+            .and_then(|d| d.event.seed_gen_type.as_ref())
+            .and_then(|sgt| if let seed_gen_type::SeedGenType::Owr { config } = sgt { config.clone() } else { None })
+            .unwrap_or_else(cabookey::owr_config);
         let choices = owr_choices_for_race(&ctx.global_state.db_pool, &cal_event.race).await;
         let description = owr_choices_description(&choices);
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_owr_seed(choices, cabookey::OWR_CONFIG), language, article, format!("seed with {description}"), false).await;
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_owr_seed(choices, config), language, article, format!("seed with {description}"), false).await;
     }
 
     async fn roll_mysteryd20_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
@@ -3447,7 +3444,7 @@ impl RaceHandler<GlobalState> for Handler {
                             Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MutualChoices }) => {
                                 this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await
                             }
-                            Some(seed_gen_type::SeedGenType::Owr) => {
+                            Some(seed_gen_type::SeedGenType::Owr { .. }) => {
                                 this.roll_owr_seed(ctx, cal_event.clone(), English, "a").await
                             }
                             Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MysteryPool { .. } }) => {

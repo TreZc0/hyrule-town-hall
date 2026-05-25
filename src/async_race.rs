@@ -246,7 +246,7 @@ impl AsyncRaceManager {
         content.push(display_order.to_string());
         content.push(" of this round.");
 
-        if let Some(racetime_bot::seed_gen_type::SeedGenType::Owr) = event.seed_gen_type.as_ref() {
+        if let Some(racetime_bot::seed_gen_type::SeedGenType::Owr { .. }) = event.seed_gen_type.as_ref() {
             let choices = racetime_bot::owr_choices_for_race(db_pool, race).await;
             let description = racetime_bot::owr_choices_description(&choices);
 

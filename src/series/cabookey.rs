@@ -4,54 +4,43 @@ use crate::{
         InfoError,
     },
     prelude::*,
-    racetime_bot::{
-        AlttprDoorRandoSetting,
-        OwrChoicePatch,
-        OwrSeedConfig,
-    },
+    racetime_bot::seed_gen_type::OwrEventConfig,
 };
 
-pub(crate) static OWR_CONFIG: OwrSeedConfig = OwrSeedConfig {
-    base_settings: AlttprDoorRandoSetting {
-        accessibility: "locations",
-        bigkeyshuffle: 1,
-        compassshuffle: 1,
-        crystals_ganon: "7",
-        crystals_gt: "7",
-        dropshuffle: "none",
-        flute_mode: "normal",
-        goal: "dungeons",
-        item_functionality: "normal",
-        key_logic_algorithm: "partial",
-        keyshuffle: "wild",
-        linked_drops: "unset",
-        mapshuffle: 1,
-        mirrorscroll: 0,
-        mode: "standard",
-        ow_mixed: Some(0),
-        pottery: "none",
-        pseudoboots: 0,
-        shuffle: "vanilla",
-        shuffletavern: 1,
-        skullwoods: "original",
-        swords: Some("assured"),
-    },
-    start_inventory: &["Pegasus Boots"],
-    choice_patches: &[
-        OwrChoicePatch {
-            key: "keydrop",
-            apply: |s| { s.dropshuffle = "keys"; s.pottery = "keys"; },
-        },
-        OwrChoicePatch {
-            key: "100pct",
-            apply: |s| { s.goal = "completionist"; },
-        },
-        OwrChoicePatch {
-            key: "tileswap",
-            apply: |s| { s.ow_mixed = Some(1); },
-        },
-    ],
-};
+pub(crate) fn owr_config() -> OwrEventConfig {
+    OwrEventConfig {
+        base_settings: serde_json::json!({
+            "accessibility": "locations",
+            "bigkeyshuffle": 1,
+            "compassshuffle": 1,
+            "crystals_ganon": "7",
+            "crystals_gt": "7",
+            "dropshuffle": "none",
+            "flute_mode": "normal",
+            "goal": "dungeons",
+            "item_functionality": "normal",
+            "key_logic_algorithm": "partial",
+            "keyshuffle": "wild",
+            "linked_drops": "unset",
+            "mapshuffle": 1,
+            "mirrorscroll": 0,
+            "mode": "standard",
+            "ow_mixed": 0,
+            "pottery": "none",
+            "pseudoboots": 0,
+            "shuffle": "vanilla",
+            "shuffletavern": 1,
+            "skullwoods": "original",
+            "swords": "assured"
+        }),
+        start_inventory: vec!["Pegasus Boots".to_owned()],
+        choice_patches: serde_json::json!({
+            "keydrop": { "dropshuffle": "keys", "pottery": "keys" },
+            "100pct":  { "goal": "completionist" },
+            "tileswap": { "ow_mixed": 1 }
+        }),
+    }
+}
 
 pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Data<'_>) -> Result<Option<RawHtml<String>>, InfoError> {
     Ok(match &*data.event {

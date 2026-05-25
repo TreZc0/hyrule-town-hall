@@ -1,10 +1,23 @@
 use {
     std::collections::HashMap,
     itertools::Itertools as _,
+    serde::{Deserialize, Serialize},
     sqlx::PgPool,
     crate::cal::Race,
 };
 #[cfg(unix)] use async_proto::Protocol;
+
+/// Fully owned, JSON-configurable OWR event configuration stored in `events.seed_config`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(unix, derive(Protocol))]
+pub(crate) struct OwrEventConfig {
+    pub(crate) base_settings: serde_json::Value,
+    #[serde(default)]
+    pub(crate) start_inventory: Vec<String>,
+    /// Object: choice key → partial settings merged when player picks "yes".
+    #[serde(default)]
+    pub(crate) choice_patches: serde_json::Value,
+}
 
 /// Which seed generator an event uses, stored in `events.seed_gen_type`.
 #[derive(Debug, Clone)]
@@ -15,7 +28,11 @@ pub(crate) enum SeedGenType {
     },
     AlttprAvianart,
     /// OWR (Open World Randomizer) — player choices read from `teams.custom_choices`.
-    Owr,
+    Owr {
+        /// Full event config from `events.seed_config`; `None` falls back to the
+        /// hardcoded `cabookey::owr_config()`.
+        config: Option<OwrEventConfig>,
+    },
     OoTR,
     TWWR {
         /// Default permalink for the event (used for generic preroll; races may override via draft).
@@ -74,7 +91,9 @@ impl SeedGenType {
                 Some(Self::AlttprDoorRando { source })
             }
             "alttpr_avianart" => Some(Self::AlttprAvianart),
-            "owr" => Some(Self::Owr),
+            "owr" => Some(Self::Owr {
+                config: seed_config.and_then(|c| serde_json::from_value(c.clone()).ok()),
+            }),
             "ootr" | "ootr_web" => Some(Self::OoTR),
             "twwr" => {
                 let permalink = seed_config
@@ -122,7 +141,7 @@ impl SeedGenType {
     /// Whether this seed gen type has per-race player-chosen settings that should
     /// be shown as a column in the race table.
     pub(crate) fn has_display_settings(&self) -> bool {
-        matches!(self, Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices } | Self::Owr)
+        matches!(self, Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices } | Self::Owr { .. })
     }
 
     /// For `MutualChoices` events: query the DB for each team's `custom_choices`
@@ -146,7 +165,7 @@ impl SeedGenType {
         E: sqlx::Executor<'e, Database = sqlx::Postgres>,
     {
         match self {
-            Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices } | Self::Owr => {}
+            Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices } | Self::Owr { .. } => {}
             _ => return None,
         }
         if labels.is_empty() {
