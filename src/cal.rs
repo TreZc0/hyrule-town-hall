@@ -3357,7 +3357,15 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                     }
                 }
                 if let Some(ref speedgaming_slug) = event.speedgaming_slug {
-                    let schedule = sgl::schedule(&http_client, speedgaming_slug).await?;
+                    let schedule = match sgl::schedule(&http_client, speedgaming_slug).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let e = AutoImportError::from(e);
+                            if e.is_network_error() { return Err(e) }
+                            log::warn!("skipping speedgaming import for {}/{} ({}): {e}", event.series.slug(), &event.event, speedgaming_slug);
+                            continue;
+                        }
+                    };
                     let races = Race::for_event(&mut transaction, &http_client, &event).await?;
                     let (mut existing_races, mut unassigned_races) = races.into_iter().partition::<Vec<_>, _>(|race| matches!(race.source, Source::SpeedGaming { .. }));
                     existing_races.sort_unstable_by_key(|race| {
