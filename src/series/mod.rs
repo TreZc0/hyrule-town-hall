@@ -107,7 +107,7 @@ impl Series {
 
     pub(crate) fn display_name(&self) -> &'static str {
         match self {
-            Self::BotwAny => "Any%",
+            Self::BotwAny => "BoTW Any% Tournaments",
             Self::AlttprDe => "Deutsche ALTTPR Turniere",
             Self::BattleRoyale => "Battle Royale",
             Self::Cabookey => "Cabookey Tournaments",
