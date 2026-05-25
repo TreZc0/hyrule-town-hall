@@ -1011,7 +1011,11 @@ impl GlobalState {
             yaml_obj["start_inventory"] = serde_json::json!({ "1": config.start_inventory });
         }
         match serde_yml::to_string(&yaml_obj) {
-            Ok(yaml_content) => self.roll_alttpr_dr_seed(yaml_content, uuid, "../alttpr", false),
+            Ok(yaml_content) => {
+                eprintln!("[OWR] generated YAML for {uuid}:\n{yaml_content}");
+                let _ = std::fs::write(format!("/tmp/owr_debug_{uuid}.yml"), &yaml_content);
+                self.roll_alttpr_dr_seed(yaml_content, uuid, "../alttpr", false)
+            }
             Err(e) => alttpr_dr_error_receiver(e.into()),
         }
     }
