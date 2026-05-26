@@ -514,9 +514,10 @@ impl AsyncRaceManager {
 
     fn get_seed_url(race: &Race) -> Result<String, Error> {
         match race.seed.files() {
-            Some(seed::Files::AlttprDoorRando { uuid }) => {
+            Some(seed::Files::AlttprDoorRando { uuid, is_owr }) => {
+                let prefix = if is_owr { "OR_" } else { "DR_" };
                 let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html")?;
-                patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{uuid}.bps", base_uri()));
+                patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/{prefix}{uuid}.bps", base_uri()));
                 Ok(patcher_url.to_string())
             }
             Some(seed::Files::TwwrPermalink { permalink, .. }) => {

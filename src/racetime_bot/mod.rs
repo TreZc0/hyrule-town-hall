@@ -925,7 +925,7 @@ impl GlobalState {
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
                     file_hash,
-                    seed_data: Some(seed::Files::AlttprDoorRando { uuid }.to_seed_data_base()),
+                    seed_data: Some(seed::Files::AlttprDoorRando { uuid, is_owr: false }.to_seed_data_base()),
                     progression_spoiler: false,
                     password: None,
                 },
@@ -971,7 +971,7 @@ impl GlobalState {
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
                     file_hash,
-                    seed_data: Some(seed::Files::AlttprDoorRando { uuid }.to_seed_data_base()),
+                    seed_data: Some(seed::Files::AlttprDoorRando { uuid, is_owr: seed_prefix == "OR_" }.to_seed_data_base()),
                     progression_spoiler: false,
                     password: None,
                 },
@@ -1828,9 +1828,10 @@ impl SeedRollUpdate {
                     }
                 }
                 let seed_url = match seed.files().expect("received seed with no files") {
-                    seed::Files::AlttprDoorRando { uuid } => {
+                    seed::Files::AlttprDoorRando { uuid, is_owr } => {
+                        let prefix = if is_owr { "OR_" } else { "DR_" };
                         let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
-                        patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{uuid}.bps", base_uri()));
+                        patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/{prefix}{uuid}.bps", base_uri()));
                         patcher_url.to_string()
                     }
                     seed::Files::MidosHouse { file_stem, .. } => format!("{}/seed/{file_stem}", base_uri()),
@@ -2148,9 +2149,10 @@ async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl
         password = extra.password.filter(|_| show_password).map(|password| format_password(password).to_string()).unwrap_or_default(),
         newline = if (!is_twwr && extra.file_hash.is_some()) || extra.password.is_some() && show_password { "\n" } else { "" },
         seed_url = match seed.files().expect("received seed with no files") {
-            seed::Files::AlttprDoorRando { uuid } => {
+            seed::Files::AlttprDoorRando { uuid, is_owr } => {
+                let prefix = if is_owr { "OR_" } else { "DR_" };
                 let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
-                patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{uuid}.bps", base_uri()));
+                patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/{prefix}{uuid}.bps", base_uri()));
                 patcher_url.to_string()
             }
             seed::Files::MidosHouse { file_stem, .. } => format!("{}/seed/{file_stem}", base_uri()),

@@ -50,6 +50,7 @@ pub(crate) struct Data {
 pub(crate) enum Files {
     AlttprDoorRando {
         uuid: Uuid,
+        is_owr: bool,
     },
     MidosHouse {
         file_stem: Cow<'static, str>,
@@ -85,8 +86,8 @@ impl Files {
     /// merged in via `Data::to_seed_data()` — this method omits them.
     pub(crate) fn to_seed_data_base(&self) -> serde_json::Value {
         match self {
-            Self::AlttprDoorRando { uuid } => serde_json::json!({
-                "type": "alttpr_dr",
+            Self::AlttprDoorRando { uuid, is_owr } => serde_json::json!({
+                "type": if *is_owr { "alttpr_owr" } else { "alttpr_dr" },
                 "uuid": uuid.to_string(),
             }),
             Self::AvianartSeed { hash, seed_hash } => {
@@ -142,7 +143,13 @@ impl Files {
                 let uuid = value.get("uuid")
                     .and_then(|v| v.as_str())
                     .and_then(|s| s.parse().ok())?;
-                Some(Self::AlttprDoorRando { uuid })
+                Some(Self::AlttprDoorRando { uuid, is_owr: false })
+            }
+            "alttpr_owr" => {
+                let uuid = value.get("uuid")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok())?;
+                Some(Self::AlttprDoorRando { uuid, is_owr: true })
             }
             "alttpr_avianart" => {
                 let hash = value.get("hash").and_then(|v| v.as_str())?.to_owned();
@@ -210,7 +217,7 @@ impl Data {
     pub(crate) fn to_seed_data(&self) -> Option<serde_json::Value> {
         let mut obj = self.seed_data.clone()?;
         // Merge hash icons into alttpr_dr entries so they're preserved after column drop
-        if obj.get("type").and_then(|v| v.as_str()) == Some("alttpr_dr") {
+        if matches!(obj.get("type").and_then(|v| v.as_str()), Some("alttpr_dr" | "alttpr_owr")) {
             if let Some([h1, h2, h3, h4, h5]) = &self.file_hash {
                 obj["hash1"] = h1.as_str().into();
                 obj["hash2"] = h2.as_str().into();
@@ -233,7 +240,7 @@ impl Data {
     ) -> Self {
         // For AlttprDR: hash icons are stored inline in seed_data; extract them for the field.
         let file_hash = if let Some(ref data) = seed_data {
-            if data.get("type").and_then(|v| v.as_str()) == Some("alttpr_dr") {
+            if matches!(data.get("type").and_then(|v| v.as_str()), Some("alttpr_dr" | "alttpr_owr")) {
                 let h1 = data.get("hash1").and_then(|v| v.as_str()).map(str::to_owned);
                 let h2 = data.get("hash2").and_then(|v| v.as_str()).map(str::to_owned);
                 let h3 = data.get("hash3").and_then(|v| v.as_str()).map(str::to_owned);
@@ -301,7 +308,7 @@ impl Data {
                     Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }.to_seed_data_base()
                 }),
                 (Some(file_stem), locked_spoiler_log_path, None, _, None, None, None) => Some(Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }.to_seed_data_base()),
-                (_, _, _, _, _, Some(uuid), None) => Some(Files::AlttprDoorRando { uuid }.to_seed_data_base()),
+                (_, _, _, _, _, Some(uuid), None) => Some(Files::AlttprDoorRando { uuid, is_owr: false }.to_seed_data_base()),
                 (_, _, _, _, _, _, Some(ref old_data)) => (|| {
                     if let Some(hash) = old_data.get("avianart_hash").and_then(|v| v.as_str()) {
                         let seed_hash = old_data.get("avianart_seed_hash")
@@ -435,9 +442,10 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
     //TODO show seed password when appropriate
     let extra = seed.extra(now).await?;
     let mut seed_links = match seed.files() {
-        Some(Files::AlttprDoorRando { uuid }) => {
+        Some(Files::AlttprDoorRando { uuid, is_owr }) => {
+            let prefix = if is_owr { "OR_" } else { "DR_" };
             let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
-            patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{uuid}.bps", base_uri()));
+            patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/{prefix}{uuid}.bps", base_uri()));
             Some(html! {
                 a(href = patcher_url.to_string(), target = "_blank") : "View";
             })
