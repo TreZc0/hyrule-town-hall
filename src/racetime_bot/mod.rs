@@ -921,7 +921,7 @@ impl GlobalState {
             }
             
             // This swallows the hash error and just makes it empty--maybe we should surface this somehow?
-            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await.ok();
+            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid, "DR_").await.ok();
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
                     file_hash,
@@ -948,7 +948,7 @@ impl GlobalState {
     /// Shared implementation for both Boothisman (AlttprDe9) and MutualChoices (Crosskeys) sources.
     /// `working_dir` is `"../ALttPDoorRandomizer"` for Boothisman or `"../alttpr"` for MutualChoices.
     /// `with_output_name` enables `--outputname uuid` and patch-file verification (AlttprDe9 only).
-    pub(crate) fn roll_alttpr_dr_seed(self: Arc<Self>, yaml_content: String, uuid: Uuid, working_dir: &'static str, with_output_name: bool) -> mpsc::Receiver<SeedRollUpdate> {
+    pub(crate) fn roll_alttpr_dr_seed(self: Arc<Self>, yaml_content: String, uuid: Uuid, working_dir: &'static str, with_output_name: bool, seed_prefix: &'static str) -> mpsc::Receiver<SeedRollUpdate> {
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
         tokio::spawn(async move {
@@ -958,15 +958,15 @@ impl GlobalState {
             let output_name_str = with_output_name.then(|| uuid.to_string());
             run_dungeon_randomizer(yaml_path, working_dir, output_name_str.as_deref()).await?;
             if with_output_name {
-                let patch_path = format!("/var/www/midos.house/seed/DR_{uuid}.bps");
+                let patch_path = format!("/var/www/midos.house/seed/{seed_prefix}{uuid}.bps");
                 if !tokio::fs::try_exists(&patch_path).await.at(&patch_path)? {
                     return Err(RollError::AlttprDe(format!("DungeonRandomizer.py exited successfully but patch file was not found at {}", patch_path)));
                 }
             }
             let file_hash = if with_output_name {
-                Some(Self::retrieve_hash_and_clean_up_spoiler(uuid).await?)
+                Some(Self::retrieve_hash_and_clean_up_spoiler(uuid, seed_prefix).await?)
             } else {
-                Self::retrieve_hash_and_clean_up_spoiler(uuid).await.ok()
+                Self::retrieve_hash_and_clean_up_spoiler(uuid, seed_prefix).await.ok()
             };
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
@@ -1015,7 +1015,7 @@ impl GlobalState {
             yaml_map.insert(serde_yml::Value::String("start_inventory".to_string()), serde_yml::Value::Mapping(inv_map));
         }
         match serde_yml::to_string(&serde_yml::Value::Mapping(yaml_map)) {
-            Ok(yaml_content) => self.roll_alttpr_dr_seed(yaml_content, uuid, "/opt/owr", false),
+            Ok(yaml_content) => self.roll_alttpr_dr_seed(yaml_content, uuid, "/opt/owr", false, "OR_"),
             Err(e) => alttpr_dr_error_receiver(e.into()),
         }
     }
@@ -1051,7 +1051,7 @@ impl GlobalState {
                     Err(e) => return alttpr_dr_error_receiver(e.into()),
                 };
                 match inject_alttpr_dr_meta(&yaml_content, uuid) {
-                    Ok(yaml) => self.roll_alttpr_dr_seed(yaml, uuid, "../ALttPDoorRandomizer", true),
+                    Ok(yaml) => self.roll_alttpr_dr_seed(yaml, uuid, "../ALttPDoorRandomizer", true, "DR_"),
                     Err(e) => alttpr_dr_error_receiver(e.into()),
                 }
             }
@@ -1059,7 +1059,7 @@ impl GlobalState {
                 let crosskeys_options = CrosskeysRaceOptions::for_race(&self.db_pool, &cal_event.race).await;
                 let uuid = Uuid::new_v4();
                 match build_crosskeys_yaml(&crosskeys_options, uuid) {
-                    Ok(yaml_content) => self.roll_alttpr_dr_seed(yaml_content, uuid, "../alttpr", false),
+                    Ok(yaml_content) => self.roll_alttpr_dr_seed(yaml_content, uuid, "../alttpr", false, "DR_"),
                     Err(e) => alttpr_dr_error_receiver(e.into()),
                 }
             }
@@ -1087,9 +1087,9 @@ impl GlobalState {
         }
     }
 
-    async fn retrieve_hash_and_clean_up_spoiler(uuid: Uuid) -> Result<[String; 5], RollError> {
-        let spoiler_path = format!("/var/www/midos.house/seed/DR_{uuid}_Spoiler.txt");
-        let destination_path = format!("/var/www/midos.house/spoilers/DR_{uuid}_Spoiler.txt");
+    async fn retrieve_hash_and_clean_up_spoiler(uuid: Uuid, seed_prefix: &str) -> Result<[String; 5], RollError> {
+        let spoiler_path = format!("/var/www/midos.house/seed/{seed_prefix}{uuid}_Spoiler.txt");
+        let destination_path = format!("/var/www/midos.house/spoilers/{seed_prefix}{uuid}_Spoiler.txt");
         let mut file = BufReader::new(File::open(spoiler_path.clone()).await?);
         let mut line = String::default();
         let hash = loop {
@@ -2898,7 +2898,7 @@ impl Handler {
                 .ok_or_else(|| RollError::AlttprDe("Mode not yet drafted - cannot roll seed".to_owned()))?;
             let yaml = ctx.global_state.http_client.get(&url).send().await?.text().await?;
             let yaml = inject_alttpr_dr_meta(&yaml, uuid)?;
-            Ok::<_, RollError>(ctx.global_state.clone().roll_alttpr_dr_seed(yaml, uuid, "../ALttPDoorRandomizer", true))
+            Ok::<_, RollError>(ctx.global_state.clone().roll_alttpr_dr_seed(yaml, uuid, "../ALttPDoorRandomizer", true, "DR_"))
         }.await;
         let receiver = match receiver {
             Ok(rx) => rx,
@@ -2934,7 +2934,7 @@ impl Handler {
         let race_options_str = crosskeys_options.as_race_options_str();
         let uuid = Uuid::new_v4();
         let receiver = match build_crosskeys_yaml(&crosskeys_options, uuid) {
-            Ok(yaml_content) => ctx.global_state.clone().roll_alttpr_dr_seed(yaml_content, uuid, "../alttpr", false),
+            Ok(yaml_content) => ctx.global_state.clone().roll_alttpr_dr_seed(yaml_content, uuid, "../alttpr", false, "DR_"),
             Err(e) => alttpr_dr_error_receiver(e.into()),
         };
         self.roll_seed_inner(ctx, Some(delay_until), receiver, language, article, format!("seed with {}", seed_options_str), false).await;
