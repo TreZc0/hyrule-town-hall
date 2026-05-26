@@ -1892,21 +1892,22 @@ impl GlobalState {
                     }
                     _ => {
                         // Other error codes - fail immediately
-                        return Err(RollError::Wheel(wheel::Error::CommandExit { 
-                            name: Cow::Borrowed("DungeonRandomizer.py"), 
-                            output 
+                        return Err(RollError::Wheel(wheel::Error::CommandExit {
+                            name: Cow::Borrowed("DungeonRandomizer.py"),
+                            output
                         }));
                     }
                 }
             }
-            
+
             // This swallows the hash error and just makes it empty--maybe we should surface this somehow?
-            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await.ok();
+            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid, "DR_").await.ok();
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
                     file_hash: file_hash,
                     files: Some(seed::Files::AlttprDoorRando {
-                        uuid: uuid
+                        uuid: uuid,
+                        is_owr: false,
                     }),
                     progression_spoiler: false,
                     password: None,
@@ -2008,12 +2009,13 @@ impl GlobalState {
                 }
             }
 
-            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await.ok();
+            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid, "OR_").await.ok();
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
                     file_hash: file_hash,
                     files: Some(seed::Files::AlttprDoorRando {
-                        uuid: uuid
+                        uuid: uuid,
+                        is_owr: true,
                     }),
                     progression_spoiler: false,
                     password: None,
@@ -2113,17 +2115,17 @@ impl GlobalState {
                 }
             }
 
-            // Verify the patch file was created
+            // Verify the patch file was created (AlttprDe9 only, always uses DR_ prefix)
             let patch_path = format!("/var/www/midos.house/seed/DR_{uuid}.bps");
             if !tokio::fs::try_exists(&patch_path).await.at(&patch_path)? {
                 return Err(RollError::AlttprDe(format!("DungeonRandomizer.py exited successfully but patch file was not found at {}", patch_path)));
             }
 
-            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await?;
+            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid, "DR_").await?;
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
                     file_hash: Some(file_hash),
-                    files: Some(seed::Files::AlttprDoorRando { uuid }),
+                    files: Some(seed::Files::AlttprDoorRando { uuid, is_owr: false }),
                     progression_spoiler: false,
                     password: None,
                 },
@@ -2258,21 +2260,22 @@ impl GlobalState {
                     }
                     _ => {
                         // Other error codes - fail immediately
-                        return Err(RollError::Wheel(wheel::Error::CommandExit { 
-                            name: Cow::Borrowed("Mystery.py"), 
-                            output 
+                        return Err(RollError::Wheel(wheel::Error::CommandExit {
+                            name: Cow::Borrowed("Mystery.py"),
+                            output
                         }));
                     }
                 }
             }
-            
+
             // This swallows the hash error and just makes it empty--maybe we should surface this somehow?
-            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid).await.ok();
+            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid, "DR_").await.ok();
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
                     file_hash: file_hash,
                     files: Some(seed::Files::AlttprDoorRando {
-                        uuid: uuid
+                        uuid: uuid,
+                        is_owr: false,
                     }),
                     progression_spoiler: false,
                     password: None,
@@ -2291,9 +2294,9 @@ impl GlobalState {
         update_rx
     }
 
-    async fn retrieve_hash_and_clean_up_spoiler(uuid: Uuid) -> Result<[String; 5], RollError> {
-        let spoiler_path = format!("/var/www/midos.house/seed/DR_{uuid}_Spoiler.txt");
-        let destination_path = format!("/var/www/midos.house/spoilers/DR_{uuid}_Spoiler.txt");
+    async fn retrieve_hash_and_clean_up_spoiler(uuid: Uuid, seed_prefix: &str) -> Result<[String; 5], RollError> {
+        let spoiler_path = format!("/var/www/midos.house/seed/{seed_prefix}{uuid}_Spoiler.txt");
+        let destination_path = format!("/var/www/midos.house/spoilers/{seed_prefix}{uuid}_Spoiler.txt");
         let mut file = BufReader::new(File::open(spoiler_path.clone()).await?);
         let mut line = String::default();
         let hash = loop {
@@ -2907,11 +2910,18 @@ impl SeedRollUpdate {
                                 is_dev, uuid, cal_event.race.id as _,
                             ).execute(db_pool).await.to_racetime()?;
                         }
-                        seed::Files::AlttprDoorRando { uuid } => {
-                            sqlx::query!(
-                                "UPDATE races SET xkeys_uuid = $1 WHERE id = $2",
-                                uuid, cal_event.race.id as _,
-                            ).execute(db_pool).await.to_racetime()?;
+                        seed::Files::AlttprDoorRando { uuid, is_owr } => {
+                            if *is_owr {
+                                sqlx::query!(
+                                    "UPDATE races SET seed_data = $1 WHERE id = $2",
+                                    serde_json::json!({"type": "alttpr_owr", "uuid": uuid.to_string()}), cal_event.race.id as _,
+                                ).execute(db_pool).await.to_racetime()?;
+                            } else {
+                                sqlx::query!(
+                                    "UPDATE races SET xkeys_uuid = $1 WHERE id = $2",
+                                    uuid, cal_event.race.id as _,
+                                ).execute(db_pool).await.to_racetime()?;
+                            }
                         }
                         seed::Files::TfbSotd { .. } => unimplemented!("Triforce Blitz seed of the day not supported for official races"),
                         seed::Files::TwwrPermalink { permalink, seed_hash } => {
@@ -2959,11 +2969,12 @@ impl SeedRollUpdate {
                     }
                 }
                 let seed_url = match seed.files.as_ref().expect("received seed with no files") {
-                    seed::Files::AlttprDoorRando { uuid } => {
+                    seed::Files::AlttprDoorRando { uuid, is_owr } => {
+                        let prefix = if *is_owr { "OR_" } else { "DR_" };
                         let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
-                        patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{uuid}.bps", base_uri()));
+                        patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/{prefix}{uuid}.bps", base_uri()));
                         patcher_url.to_string()
-                    }  
+                    }
                     seed::Files::MidosHouse { file_stem, .. } => format!("{}/seed/{file_stem}", base_uri()),
                     seed::Files::OotrWeb { id, .. } => format!("https://ootrandomizer.com/seed/get?id={id}"),
                     seed::Files::TriforceBlitz { is_dev: false, uuid } => format!("https://www.triforceblitz.com/seed/{uuid}"),
@@ -3275,9 +3286,10 @@ async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl
         password = extra.password.filter(|_| show_password).map(|password| format_password(password).to_string()).unwrap_or_default(),
         newline = if (!is_twwr && extra.file_hash.is_some()) || extra.password.is_some() && show_password { "\n" } else { "" },
         seed_url = match seed.files.as_ref().expect("received seed with no files") {
-                seed::Files::AlttprDoorRando { uuid } => {
+                seed::Files::AlttprDoorRando { uuid, is_owr } => {
+                let prefix = if *is_owr { "OR_" } else { "DR_" };
                 let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
-                patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{uuid}.bps", base_uri()));
+                patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/{prefix}{uuid}.bps", base_uri()));
                 patcher_url.to_string()
             }
             seed::Files::MidosHouse { file_stem, .. } => format!("{}/seed/{file_stem}", base_uri()),

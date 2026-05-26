@@ -51,6 +51,7 @@ pub(crate) struct Data {
 pub(crate) enum Files {
     AlttprDoorRando {
         uuid: Uuid,
+        is_owr: bool,
     },
     MidosHouse {
         file_stem: Cow<'static, str>,
@@ -117,8 +118,12 @@ impl Data {
                     Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }
                 }),
                 (Some(file_stem), locked_spoiler_log_path, None, _, None, None, None) => Some(Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }),
-                (_, _, _, _, _, Some(uuid), None) => Some(Files::AlttprDoorRando { uuid }),
+                (_, _, _, _, _, Some(uuid), None) => Some(Files::AlttprDoorRando { uuid, is_owr: false }),
                 (_, _, _, _, _, _, Some(ref seed_data)) => (|| {
+                    if seed_data.get("type").and_then(|v| v.as_str()) == Some("alttpr_owr") {
+                        let uuid = seed_data.get("uuid").and_then(|v| v.as_str()).and_then(|s| s.parse().ok())?;
+                        return Some(Files::AlttprDoorRando { uuid, is_owr: true });
+                    }
                     if let Some(hash) = seed_data.get("avianart_hash").and_then(|v| v.as_str()) {
                         let seed_hash = seed_data.get("avianart_seed_hash")
                             .and_then(|v| v.as_str())
@@ -251,9 +256,10 @@ pub(crate) async fn table_cell(now: DateTime<Utc>, seed: &Data, spoiler_logs: bo
     //TODO show seed password when appropriate
     let extra = seed.extra(now).await?;
     let mut seed_links = match seed.files {
-        Some(Files::AlttprDoorRando { uuid }) => {
+        Some(Files::AlttprDoorRando { uuid, is_owr }) => {
+            let prefix = if is_owr { "OR_" } else { "DR_" };
             let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").expect("wrong hardcoded URL");
-            patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/DR_{uuid}.bps", base_uri()));
+            patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/{prefix}{uuid}.bps", base_uri()));
             Some(html! {
                 a(href = patcher_url.to_string(), target = "_blank") : "View";
             })

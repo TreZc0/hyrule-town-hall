@@ -4474,12 +4474,16 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         };
 
         match seed.files {
-            Some(seed::Files::AlttprDoorRando { ref uuid }) => {
+            Some(seed::Files::AlttprDoorRando { ref uuid, is_owr, .. }) => {
                 let (hash1, hash2, hash3, hash4, hash5) = match seed.file_hash {
                     Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) => (Some(hash1), Some(hash2), Some(hash3), Some(hash4), Some(hash5)),
                     None => (None, None, None, None, None)
                 };
-                sqlx::query!("UPDATE races SET xkeys_uuid = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7", uuid, hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,).execute(&mut *transaction).await?;
+                if is_owr {
+                    sqlx::query!("UPDATE races SET seed_data = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7", serde_json::json!({"type": "alttpr_owr", "uuid": uuid.to_string()}), hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,).execute(&mut *transaction).await?;
+                } else {
+                    sqlx::query!("UPDATE races SET xkeys_uuid = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7", uuid, hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,).execute(&mut *transaction).await?;
+                }
             }
             Some(seed::Files::TwwrPermalink { ref permalink, ref seed_hash }) => {
                 sqlx::query!("UPDATE races SET seed_data = $1 WHERE id = $2", serde_json::json!({ "permalink": permalink, "seed_hash": seed_hash }), cal_event.race.id as _,).execute(&mut *transaction).await?;

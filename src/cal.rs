@@ -1297,7 +1297,7 @@ impl Race {
             RaceSchedule::Async { start1, start2, start3, end1, end2, end3, ref room1, ref room2, ref room3 } => (None, [start1, start2, start3], None, [end1, end2, end3], None, [room1.as_ref(), room2.as_ref(), room3.as_ref()]),
         };
         let (web_id, web_gen_time, file_stem, locked_spoiler_log_path, is_tfb_dev, tfb_uuid, xkeys_uuid) = match self.seed.files {
-            Some(seed::Files::AlttprDoorRando { uuid}) => (None, None, None, None, false, None, Some(uuid)),
+            Some(seed::Files::AlttprDoorRando { uuid, .. }) => (None, None, None, None, false, None, Some(uuid)),
             Some(seed::Files::MidosHouse { ref file_stem, ref locked_spoiler_log_path }) => (None, None, Some(file_stem), locked_spoiler_log_path.as_ref(), false, None, None),
             Some(seed::Files::OotrWeb { id, gen_time, ref file_stem }) => (Some(id), Some(gen_time), Some(file_stem), None, false, None, None),
             Some(seed::Files::TriforceBlitz { is_dev, uuid }) => (None, None, None, None, is_dev, Some(uuid), None),
