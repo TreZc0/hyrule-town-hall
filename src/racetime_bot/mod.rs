@@ -2447,14 +2447,6 @@ impl AlttprDeRaceOptions {
 }
 
 #[derive(Clone, Serialize)]
-pub(crate) struct AlttprDoorRandoYaml {
-    placements: HashMap<u8, AlttprDoorRandoPlacements>,
-    settings: HashMap<u8, AlttprDoorRandoSetting>,
-    start_inventory: HashMap<u8, &'static [&'static str]>,
-    meta: AlttprDoorRandoMeta
-}
-
-#[derive(Clone, Serialize)]
 pub(crate) struct AlttprDoorRandoPlacements {
     #[serde(rename = "Skull Woods - Pinball Room")]
     pinball_room: &'static str,
