@@ -50,6 +50,10 @@ pub(crate) static OWR_CONFIG: OwrSeedConfig = OwrSeedConfig {
             key: "tileswap",
             apply: |s| { s.ow_mixed = Some(1); },
         },
+        OwrChoicePatch {
+            key: "mirror_scroll",
+            apply: |s| { s.mirrorscroll = 1; },
+        },
     ],
 };
 
