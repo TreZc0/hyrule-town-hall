@@ -1813,12 +1813,15 @@ impl GlobalState {
             let skullwoods = if crosskeys_options.zw_ok { "followlinked" } else { "original" };
 
             let crosskeys_settings = AlttprDoorRandoSetting {
+                aga_randomness: None,
                 accessibility: "locations",
                 bigkeyshuffle: 1,
+                boss_shuffle: None,
                 compassshuffle: 1,
                 crystals_ganon: "7",
                 crystals_gt: "7",
                 dropshuffle: keydrop_mode,
+                enemy_shuffle: None,
                 flute_mode: flute_mode,
                 goal: goal,
                 item_functionality: "normal",
@@ -3640,12 +3643,18 @@ pub(crate) struct OwrSeedConfig {
 
 #[derive(Clone, Copy, Serialize)]
 pub(crate) struct AlttprDoorRandoSetting {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) aga_randomness: Option<bool>,
     pub(crate) accessibility: &'static str,
     pub(crate) bigkeyshuffle: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) boss_shuffle: Option<&'static str>,
     pub(crate) compassshuffle: u8,
     pub(crate) crystals_ganon: &'static str,
     pub(crate) crystals_gt: &'static str,
     pub(crate) dropshuffle: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) enemy_shuffle: Option<&'static str>,
     pub(crate) flute_mode: &'static str,
     pub(crate) goal: &'static str,
     pub(crate) item_functionality: &'static str,

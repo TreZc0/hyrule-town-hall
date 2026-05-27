@@ -13,19 +13,22 @@ use crate::{
 
 pub(crate) static OWR_CONFIG: OwrSeedConfig = OwrSeedConfig {
     base_settings: AlttprDoorRandoSetting {
+        aga_randomness: Some(false),
         accessibility: "locations",
-        bigkeyshuffle: 1,
-        compassshuffle: 1,
+        bigkeyshuffle: 3,
+        boss_shuffle: Some("none"),
+        compassshuffle: 3,
         crystals_ganon: "7",
         crystals_gt: "7",
         dropshuffle: "none",
+        enemy_shuffle: Some("none"),
         flute_mode: "normal",
         goal: "dungeons",
         item_functionality: "normal",
         key_logic_algorithm: "partial",
         keyshuffle: "wild",
         linked_drops: "unset",
-        mapshuffle: 1,
+        mapshuffle: 3,
         mirrorscroll: 0,
         mode: "standard",
         ow_mixed: Some(0),
@@ -53,6 +56,10 @@ pub(crate) static OWR_CONFIG: OwrSeedConfig = OwrSeedConfig {
         OwrChoicePatch {
             key: "mirror_scroll",
             apply: |s| { s.mirrorscroll = 1; },
+        },
+        OwrChoicePatch {
+            key: "enemizer",
+            apply: |s| { s.enemy_shuffle = Some("shuffled"); s.boss_shuffle = Some("random"); },
         },
     ],
 };
