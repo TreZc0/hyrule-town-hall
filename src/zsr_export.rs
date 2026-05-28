@@ -635,6 +635,10 @@ pub(crate) async fn build_race_title(
     // Use export title if set, otherwise event display name
     let event_name = export.title.as_deref().unwrap_or(event_display_name);
 
+    if let Some(label) = race.seeding_race_label(transaction).await.unwrap_or(None) {
+        return format!("{}: {}", event_name, label);
+    }
+
     // Qualifier races get a simplified title without matchup
     if race.phase.as_deref() == Some("Qualifier") {
         let round = race.round.as_deref().unwrap_or("1");
