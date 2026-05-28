@@ -397,6 +397,41 @@ pub(crate) struct Race {
 }
 
 impl Race {
+    pub(crate) async fn seeding_race_label(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+    ) -> sqlx::Result<Option<String>> {
+        if self.phase.as_deref() != Some("Seeding") {
+            return Ok(None);
+        }
+
+        let numbered_race = sqlx::query_as::<_, (i64, i64)>(r#"
+            SELECT position, total
+            FROM (
+                SELECT
+                    id,
+                    ROW_NUMBER() OVER (ORDER BY start NULLS LAST, id) AS position,
+                    COUNT(*) OVER () AS total
+                FROM races
+                WHERE series = $1
+                  AND event = $2
+                  AND phase = 'Seeding'
+                  AND ignored = false
+            ) seeding_races
+            WHERE id = $3
+        "#)
+        .bind(self.series)
+        .bind(&self.event)
+        .bind(self.id)
+        .fetch_optional(&mut **transaction)
+        .await?;
+
+        Ok(Some(match numbered_race {
+            Some((position, total)) if total > 1 => format!("Seeding Race {position}"),
+            _ => "Seeding Race".to_owned(),
+        }))
+    }
+
     pub(crate) async fn from_id(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, id: Id<Races>) -> Result<Self, Error> {
         let row = sqlx::query!(r#"SELECT
             r.series AS "series: Series",
