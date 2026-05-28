@@ -1,11 +1,18 @@
-use crate::{
-    event::{Data, Tab, enter},
-    prelude::*,
-    user::DisplaySource
+use {
+    serenity::model::id::RoleId,
+    crate::{
+        event::{Data, Tab, enter},
+        prelude::*,
+        user::DisplaySource,
+    },
 };
 use rocket::response::content::RawText;
 
 async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
+    let participant_role_id: Option<i64> = sqlx::query_scalar!(
+        "SELECT id FROM discord_roles WHERE series = $1 AND event = $2 AND role IS NULL AND racetime_team IS NULL",
+        event.series as _, &*event.event
+    ).fetch_optional(&mut *transaction).await?;
     let header = event.header(&mut transaction, me.as_ref(), Tab::Setup, false).await?;
 
     // Load enter_flow and rando_version as raw JSON for display in form
@@ -131,6 +138,14 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             input(type = "text", id = "discord_async_channel", name = "discord_async_channel", value = ctx.field_value("discord_async_channel").unwrap_or(
                                 &event.discord_async_channel.map(|c| c.get().to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
+                        });
+
+                        : form_field("discord_participant_role", &mut errors, html! {
+                            label(for = "discord_participant_role") : "Discord Participant Role ID";
+                            input(type = "text", id = "discord_participant_role", name = "discord_participant_role", value = ctx.field_value("discord_participant_role").unwrap_or(
+                                &participant_role_id.map(|id| id.to_string()).unwrap_or_default()
+                            ), style = "width: 100%; max-width: 600px;");
+                            label(class = "help") : "(Role assigned to players when they enter this event)";
                         });
 
                         : form_field("speedgaming_slug", &mut errors, html! {
@@ -514,6 +529,7 @@ pub(crate) struct SetupForm {
     discord_organizer_channel: Option<String>,
     discord_scheduling_channel: Option<String>,
     discord_async_channel: Option<String>,
+    discord_participant_role: Option<String>,
     speedgaming_slug: Option<String>,
     listed: bool,
     emulator_settings_reminder: bool,
@@ -753,6 +769,22 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 None
             };
 
+            let discord_participant_role = if let Some(role_str) = &value.discord_participant_role {
+                if !role_str.is_empty() {
+                    match role_str.parse::<u64>() {
+                        Ok(id) => Some(RoleId::new(id)),
+                        Err(_) => {
+                            form.context.push_error(form::Error::validation("Invalid Discord participant role ID"));
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
             // Handle optional string fields (empty string -> None)
             let short_name = value.short_name.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
             let speedgaming_slug = value.speedgaming_slug.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
@@ -904,7 +936,21 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                 event_data.series as _,
                 &event_data.event,
             ).execute(&mut *transaction).await?;
-            
+
+            sqlx::query!(
+                "DELETE FROM discord_roles WHERE series = $1 AND event = $2 AND role IS NULL AND racetime_team IS NULL",
+                event_data.series as _, &event_data.event
+            ).execute(&mut *transaction).await?;
+            if let (Some(role_id), Some(guild)) = (discord_participant_role, discord_guild) {
+                sqlx::query!(
+                    "INSERT INTO discord_roles (id, guild, series, event) VALUES ($1, $2, $3, $4)",
+                    role_id.get() as i64,
+                    guild.get() as i64,
+                    event_data.series as _,
+                    &event_data.event
+                ).execute(&mut *transaction).await?;
+            }
+
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
         }
