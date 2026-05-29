@@ -101,10 +101,14 @@ async fn resolve_event_location(
 /// Generate Discord event title from race data
 async fn generate_event_title(
     race: &Race,
-    _event_config: &EventData<'_>,
+    event_config: &EventData<'_>,
     transaction: &mut Transaction<'_, Postgres>,
     ctx: &DiscordCtx,
 ) -> Result<String, Error> {
+    if let Some(custom_title) = &race.custom_title {
+        return Ok(format!("{}: {}", event_config.display_name, custom_title));
+    }
+
     let mut title = String::new();
 
     // Add phase and round info if available

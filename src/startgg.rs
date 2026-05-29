@@ -450,6 +450,8 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
             },
             phase,
             round,
+            custom_title: None,
+            custom_create_room: true,
         });
         Ok(None)
     }

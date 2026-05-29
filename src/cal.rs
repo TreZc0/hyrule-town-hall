@@ -395,9 +395,19 @@ pub(crate) struct Race {
     pub(crate) racetime_goal_slug: Option<String>,
     pub(crate) scheduling_deadline: Option<DateTime<Utc>>,
     pub(crate) restream_consent_required: bool,
+    pub(crate) custom_title: Option<String>,
+    pub(crate) custom_create_room: bool,
 }
 
 impl Race {
+    pub(crate) fn is_custom(&self) -> bool {
+        self.custom_title.is_some()
+    }
+
+    pub(crate) fn custom_title_with_event(&self, event_display_name: &str) -> Option<String> {
+        self.custom_title.as_ref().map(|custom_title| format!("{event_display_name}: {custom_title}"))
+    }
+
     pub(crate) async fn seeding_race_label(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
@@ -505,7 +515,9 @@ impl Race {
             volunteer_request_message_id AS "volunteer_request_message_id: PgSnowflake<MessageId>",
             e.racetime_goal_slug,
             r.scheduling_deadline,
-            COALESCE(erc.restream_consent_required, false) AS "restream_consent_required!"
+            COALESCE(erc.restream_consent_required, false) AS "restream_consent_required!",
+            custom_title,
+            custom_create_room
         FROM races r
         LEFT JOIN events e ON r.series = e.series AND r.event = e.event
         LEFT JOIN event_round_configs erc
@@ -655,6 +667,8 @@ impl Race {
             racetime_goal_slug: row.racetime_goal_slug,
             scheduling_deadline: row.scheduling_deadline,
             restream_consent_required: row.restream_consent_required,
+            custom_title: row.custom_title,
+            custom_create_room: row.custom_create_room,
             id, source, entrants,
         })
     }
@@ -729,6 +743,8 @@ impl Race {
                     racetime_goal_slug: None,
                     scheduling_deadline: None,
                     restream_consent_required: false,
+                    custom_title: None,
+                    custom_create_room: true,
                 });
                 races.last_mut().expect("just pushed")
             }.save(&mut *transaction).await?,
@@ -1389,6 +1405,9 @@ impl Race {
             seed_data.map(Json) as _,
             self.scheduling_deadline
         ).execute(&mut **transaction).await?;
+        sqlx::query!("UPDATE races SET custom_title = $1, custom_create_room = $2 WHERE id = $3", self.custom_title.as_deref(), self.custom_create_room, self.id as _)
+            .execute(&mut **transaction)
+            .await?;
         Ok(())
     }
 
@@ -1396,6 +1415,9 @@ impl Race {
         &self,
         transaction: &mut Transaction<'_, Postgres>,
     ) -> sqlx::Result<String> {
+        if let Some(custom_title) = &self.custom_title {
+            return Ok(custom_title.clone())
+        }
         if self.phase.as_ref().is_some_and(|p| p == "Qualifier" || p == "Seeding") {
             return Ok(match (&self.round, &self.phase) {
                 (Some(round), _) => round.clone(),
@@ -1503,7 +1525,7 @@ impl Event {
     pub(crate) async fn rooms_to_open(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client) -> Result<Vec<Self>, Error> {
         let mut events = Vec::default();
         // Query with a generous window (60 minutes) to accommodate custom room_open_minutes_before
-        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND room IS NULL AND start IS NOT NULL AND start > NOW() AND (start <= NOW() + TIME '01:00:00' OR (team1 IS NULL AND p1_discord IS NULL AND p1 IS NULL AND (series != 's' OR event != 'w') AND start <= NOW() + TIME '01:00:00'))"#).fetch_all(&mut **transaction).await? {
+        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND room IS NULL AND start IS NOT NULL AND start > NOW() AND (custom_title IS NULL OR custom_create_room) AND (start <= NOW() + TIME '01:00:00' OR (team1 IS NULL AND p1_discord IS NULL AND p1 IS NULL AND (series != 's' OR event != 'w') AND start <= NOW() + TIME '01:00:00'))"#).fetch_all(&mut **transaction).await? {
             let race = Race::from_id(&mut *transaction, http_client, id).await?;
 
             // Check if this is a weekly race with custom room opening timing
@@ -1680,6 +1702,9 @@ impl Event {
     }
 
     pub(crate) async fn should_create_room(&self, transaction: &mut Transaction<'_, Postgres>, event: &event::Data<'_>) -> Result<RaceHandleMode, event::DataError> {
+        if self.race.is_custom() && !self.race.custom_create_room {
+            return Ok(RaceHandleMode::None)
+        }
         Ok(if event.racetime_goal_slug.is_some() {
             if_chain! {
                 if event.is_live_event;
@@ -1823,11 +1848,15 @@ async fn add_event_races(transaction: &mut Transaction<'_, Postgres>, discord_ct
                         EventKind::Async3 => "-3",
                     },
                 ), dtstamp(now));
-                let summary_prefix = match (&race.phase, &race.round) {
+                let summary_prefix = if let Some(custom_title) = race.custom_title_with_event(&event.display_name) {
+                    custom_title
+                } else {
+                    match (&race.phase, &race.round) {
                     (Some(phase), Some(round)) => format!("{} {phase} {round}", event.short_name()),
                     (Some(phase), None) => format!("{} {phase}", event.short_name()),
                     (None, Some(round)) => format!("{} {round}", event.short_name()),
                     (None, None) => event.display_name.clone(),
+                    }
                 };
                 let summary_prefix = match race.entrants {
                     Entrants::Open | Entrants::Count { .. } => summary_prefix,
@@ -2029,6 +2058,25 @@ pub(crate) async fn create_race_form(mut transaction: Transaction<'_, Postgres>,
         let phase_round_options = sqlx::query!("SELECT phase, round FROM phase_round_options WHERE series = $1 AND event = $2", event.series as _, &event.event).fetch_all(&mut *transaction).await?;
         let mut errors = ctx.errors().collect_vec();
         full_form(uri!(create_race_post(event.series, &*event.event)), csrf, html! {
+            @if let MatchSource::Manual = event.match_source() {
+                fieldset {
+                    legend : "Custom race";
+                    : form_field("custom_title", &mut errors, html! {
+                        label(for = "custom_title") : "Custom title:";
+                        input(type = "text", name = "custom_title", value? = ctx.field_value("custom_title"));
+                        label(class = "help") : "If set, this creates an open custom race and ignores the team fields below.";
+                    });
+                    : form_field("start_date", &mut errors, html! {
+                        label(for = "start_date") : "Start date (YYYY-MM-DD HH:MM in your timezone):";
+                        input(type = "text", name = "start_date", value? = ctx.field_value("start_date"));
+                    });
+                    input(type = "hidden", name = "timezone", id = "timezone-field");
+                    : form_field("custom_create_room", &mut errors, html! {
+                        input(type = "checkbox", id = "custom_create_room", name = "custom_create_room", checked? = ctx.field_value("custom_create_room").map_or(ctx.field_value("custom_title").is_none(), |value| value == "on"));
+                        label(for = "custom_create_room") : "Create racetime.gg room automatically";
+                    });
+                }
+            }
             : form_field("team1", &mut errors, html! {
                 label(for = "team1") {
                     @if let TeamConfig::Solo = event.team_config {
@@ -2038,6 +2086,7 @@ pub(crate) async fn create_race_form(mut transaction: Transaction<'_, Postgres>,
                     }
                 }
                 select(name = "team1") {
+                    option(value = "", selected? = ctx.field_value("team1").is_none()) : "";
                     @for (id, name) in &team_data {
                         option(value = id, selected? = ctx.field_value("team1") == Some(id)) : name;
                     }
@@ -2052,6 +2101,7 @@ pub(crate) async fn create_race_form(mut transaction: Transaction<'_, Postgres>,
                     }
                 }
                 select(name = "team2") {
+                    option(value = "", selected? = ctx.field_value("team2").is_none()) : "";
                     @for (id, name) in &team_data {
                         option(value = id, selected? = ctx.field_value("team2") == Some(id)) : name;
                     }
@@ -2136,8 +2186,8 @@ pub(crate) async fn create_race(pool: &State<PgPool>, me: Option<User>, uri: Ori
 pub(crate) struct CreateRaceForm {
     #[field(default = String::new())]
     csrf: String,
-    team1: Id<Teams>,
-    team2: Id<Teams>,
+    team1: Option<Id<Teams>>,
+    team2: Option<Id<Teams>>,
     team3: Option<Id<Teams>>,
     #[field(default = String::new())]
     phase: String,
@@ -2146,6 +2196,14 @@ pub(crate) struct CreateRaceForm {
     #[field(default = String::new())]
     phase_round: String,
     game_count: i16,
+    #[field(default = String::new())]
+    custom_title: String,
+    #[field(default = String::new())]
+    start_date: String,
+    #[field(default = String::new())]
+    timezone: String,
+    #[field(default = false)]
+    custom_create_room: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/races/new", data = "<form>")]
@@ -2158,7 +2216,91 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
         form.context.push_error(form::Error::validation("You must be an organizer of this event to add a race."));
     }
     Ok(if let Some(ref value) = form.value {
-        let team1 = Team::from_id(&mut transaction, value.team1).await?;
+        let custom_title = value.custom_title.trim();
+        if !custom_title.is_empty() {
+            if event.match_source() != MatchSource::Manual {
+                form.context.push_error(form::Error::validation("Custom races can only be created for manually managed events.").with_name("custom_title"));
+            }
+            let start = if value.start_date.is_empty() {
+                form.context.push_error(form::Error::validation("Custom races need a start date.").with_name("start_date"));
+                None
+            } else {
+                match NaiveDateTime::parse_from_str(&value.start_date, "%Y-%m-%d %H:%M") {
+                    Ok(naive_datetime) => if value.timezone.is_empty() {
+                        Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_datetime, Utc))
+                    } else {
+                        match value.timezone.parse::<Tz>() {
+                            Ok(tz) => match tz.from_local_datetime(&naive_datetime) {
+                                LocalResult::Single(dt) => Some(dt.with_timezone(&Utc)),
+                                LocalResult::Ambiguous(dt1, _) => Some(dt1.with_timezone(&Utc)),
+                                LocalResult::None => {
+                                    form.context.push_error(form::Error::validation(format!("Invalid datetime for timezone {}: {}", value.timezone, value.start_date)).with_name("start_date"));
+                                    None
+                                }
+                            },
+                            Err(_) => {
+                                form.context.push_error(form::Error::validation(format!("Invalid timezone: {}. Use format like America/New_York or Europe/London", value.timezone)).with_name("timezone"));
+                                None
+                            }
+                        }
+                    },
+                    Err(_) => {
+                        form.context.push_error(form::Error::validation("Start date must be in format YYYY-MM-DD HH:MM").with_name("start_date"));
+                        None
+                    }
+                }
+            };
+            if form.context.errors().next().is_some() {
+                return Ok(RedirectOrContent::Content(create_race_form(transaction, Some(me), uri, csrf.as_ref(), event, form.context, value.team3.is_some()).await?))
+            }
+            let race = Race {
+                id: Id::<Races>::new(&mut transaction).await?,
+                series: event.series,
+                event: event.event.to_string(),
+                source: Source::Manual,
+                entrants: Entrants::Open,
+                phase: None,
+                round: None,
+                game: None,
+                scheduling_thread: None,
+                schedule: RaceSchedule::Live {
+                    start: start.expect("validated"),
+                    end: None,
+                    room: None,
+                },
+                schedule_updated_at: Some(Utc::now()),
+                fpa_invoked: false,
+                breaks_used: false,
+                draft: None,
+                seed: seed::Data::default(),
+                video_urls: HashMap::default(),
+                restreamers: HashMap::default(),
+                last_edited_by: Some(me.id),
+                last_edited_at: Some(Utc::now()),
+                ignored: false,
+                schedule_locked: false,
+                notified: false,
+                async_notified_1: false,
+                async_notified_2: false,
+                async_notified_3: false,
+                discord_scheduled_event_id: None,
+                volunteer_request_sent: false,
+                volunteer_request_message_id: None,
+                scheduling_deadline: None,
+                restream_consent_required: false,
+                custom_title: Some(custom_title.to_owned()),
+                custom_create_room: value.custom_create_room,
+            };
+            race.save(&mut transaction).await?;
+            transaction.commit().await?;
+            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(event::races(event.series, &*event.event)))))
+        }
+        let team1 = if let Some(team1) = value.team1 {
+            Team::from_id(&mut transaction, team1).await?
+        } else {
+            form.context.push_error(form::Error::validation("Please choose a team.").with_name("team1"));
+            None
+        };
         if let Some(team1) = &team1 {
             if team1.series != event.series || team1.event != event.event {
                 form.context.push_error(form::Error::validation("This team is for a different event.").with_name("team1"));
@@ -2166,7 +2308,12 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
         } else {
             form.context.push_error(form::Error::validation("There is no team with this ID.").with_name("team1"));
         }
-        let team2 = Team::from_id(&mut transaction, value.team2).await?;
+        let team2 = if let Some(team2) = value.team2 {
+            Team::from_id(&mut transaction, team2).await?
+        } else {
+            form.context.push_error(form::Error::validation("Please choose a team.").with_name("team2"));
+            None
+        };
         if let Some(team2) = &team2 {
             if team2.series != event.series || team2.event != event.event {
                 form.context.push_error(form::Error::validation("This team is for a different event.").with_name("team2"));
@@ -2268,6 +2415,8 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
                     racetime_goal_slug: None,
                     scheduling_deadline: phase_deadline,
                     restream_consent_required: false,
+                    custom_title: None,
+                    custom_create_room: true,
                     scheduling_thread,
                 };
                 if game == 1 {
@@ -2474,7 +2623,13 @@ pub(crate) async fn race_table(
                             }
                         }
                         @match race.entrants {
-                            Entrants::Open => td(colspan = "6") : "(open)";
+                            Entrants::Open => td(colspan = "6") {
+                                @if let Some(custom_title) = race.custom_title_with_event(&event.display_name) {
+                                    : custom_title;
+                                } else {
+                                    : "(open)";
+                                }
+                            }
                             Entrants::Count { total, finished } => td(colspan = "6") {
                                 : total;
                                 : " (";
@@ -3305,6 +3460,8 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                     racetime_goal_slug: None,
                                     scheduling_deadline: None,
                                     restream_consent_required: false,
+                                    custom_title: None,
+                                    custom_create_room: true,
                                 };
                                 if let Some(race) = races.iter_mut().find(|race| if let Source::League { id } = race.source { id == match_data.id } else { false }) {
                                     if !race.schedule_locked {
@@ -3563,6 +3720,8 @@ pub(crate) async fn ensure_weekly_races(
                     racetime_goal_slug: None,
                     scheduling_deadline: None,
                     restream_consent_required: false,
+                    custom_title: None,
+                    custom_create_room: true,
                     schedule,
                 };
                 race.save(&mut *transaction).await?;
@@ -3662,6 +3821,27 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
     let mut errors = ctx.as_ref().map(|ctx| ctx.errors().collect()).unwrap_or_default();
     let form = if me.is_some() {
         full_form(uri!(edit_race_post(event.series, &*event.event, race.id, redirect_to)), csrf, html! {
+            @if is_organizer && race.is_custom() {
+                fieldset {
+                    legend : "Custom race";
+                    : form_field("custom_title", &mut errors, html! {
+                        label(for = "custom_title") : "Custom title:";
+                        input(type = "text", name = "custom_title", value = if let Some(ref ctx) = ctx {
+                            ctx.field_value("custom_title").unwrap_or_default()
+                        } else {
+                            race.custom_title.as_deref().unwrap_or_default()
+                        });
+                    });
+                    : form_field("custom_create_room", &mut errors, html! {
+                        input(type = "checkbox", id = "custom_create_room", name = "custom_create_room", checked? = if let Some(ref ctx) = ctx {
+                            ctx.field_value("custom_create_room").map_or(false, |value| value == "on")
+                        } else {
+                            race.custom_create_room
+                        });
+                        label(for = "custom_create_room") : "Create racetime.gg room automatically";
+                    });
+                }
+            }
             @match race.schedule {
                 RaceSchedule::Unscheduled => {}
                 RaceSchedule::Live { ref room, .. } => : form_field("room", &mut errors, html! {
@@ -3800,6 +3980,16 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
     let content = html! {
         : header;
         h2 : "Edit race";
+        @if let Some(custom_title) = race.custom_title_with_event(&event.display_name) {
+            p {
+                : "Custom race: ";
+                : custom_title;
+            }
+            p {
+                : "Automatic racetime.gg room creation: ";
+                : if race.custom_create_room { "enabled" } else { "disabled" };
+            }
+        }
         @match race.source {
             Source::Manual => p : "Source: Manually added";
             Source::Challonge { id } => p {
@@ -4136,6 +4326,10 @@ pub(crate) struct EditRaceForm {
     async_start3_date: String,
     #[field(default = String::new())]
     timezone: String,
+    #[field(default = String::new())]
+    custom_title: String,
+    #[field(default = false)]
+    custom_create_room: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/races/<id>/edit?<redirect_to>", data = "<form>")]
@@ -4154,6 +4348,10 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
     Ok(if let Some(ref value) = form.value {
         // Check if user is an organizer for start date editing
         let is_organizer = event.organizers(&mut transaction).await?.contains(&me);
+
+        if is_organizer && race.is_custom() && value.custom_title.trim().is_empty() {
+            form.context.push_error(form::Error::validation("Custom races need a title.").with_name("custom_title"));
+        }
         
         // Parse and validate start dates if user is an organizer
         let mut new_start_date = None;
@@ -4576,6 +4774,10 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
             race.last_edited_at = Some(Utc::now());
             let was_ignored = race.ignored;
             race.ignored = value.is_canceled;
+            if is_organizer && race.is_custom() {
+                race.custom_title = Some(value.custom_title.trim().to_owned());
+                race.custom_create_room = value.custom_create_room;
+            }
             
             // Save original video URLs to check if they changed
             let original_video_urls = race.video_urls.clone();

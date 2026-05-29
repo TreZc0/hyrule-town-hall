@@ -3205,7 +3205,9 @@ pub(crate) async fn manage_roster(
 
                     // Format race description with round info
                     // For qualifier races, use the round name directly
-                    let race_description = if race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
+                    let race_description = if let Some(custom_title) = &race.custom_title {
+                        custom_title.clone()
+                    } else if race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
                         race.round.clone().unwrap_or_else(|| "Qualifier".to_string())
                     } else {
                         match &race.entrants {
@@ -3400,54 +3402,58 @@ async fn match_signup_page(
             }
 
             h3 {
-                // For qualifier races without fixed entrants, show only the round name or "Qualifier"
-                // For other races, show phase/round prefix and team matchup
-                @if matches!(race.entrants, Entrants::Two(_) | Entrants::Three(_)) {
-                    // Show phase and round prefix for team-based races
-                    @if let Some(ref phase) = race.phase {
-                        : phase;
-                        : " ";
+                @if let Some(custom_title) = race.custom_title_with_event(&data.display_name) {
+                    : custom_title;
+                } else {
+                    // For qualifier races without fixed entrants, show only the round name or "Qualifier"
+                    // For other races, show phase/round prefix and team matchup
+                    @if matches!(race.entrants, Entrants::Two(_) | Entrants::Three(_)) {
+                        // Show phase and round prefix for team-based races
+                        @if let Some(ref phase) = race.phase {
+                            : phase;
+                            : " ";
+                        }
+                        @if let Some(ref round) = race.round {
+                            : round;
+                            : " ";
+                        }
                     }
-                    @if let Some(ref round) = race.round {
-                        : round;
-                        : " ";
-                    }
+                    : match &race.entrants {
+                        Entrants::Two([team1, team2]) => format!("{} vs {}",
+                            match team1 {
+                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                Entrant::Named { name, .. } => name.clone(),
+                                Entrant::Discord { .. } => "Discord User".to_string(),
+                            },
+                            match team2 {
+                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                Entrant::Named { name, .. } => name.clone(),
+                                Entrant::Discord { .. } => "Discord User".to_string(),
+                            }
+                        ),
+                        Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
+                            match team1 {
+                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                Entrant::Named { name, .. } => name.clone(),
+                                Entrant::Discord { .. } => "Discord User".to_string(),
+                            },
+                            match team2 {
+                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                Entrant::Named { name, .. } => name.clone(),
+                                Entrant::Discord { .. } => "Discord User".to_string(),
+                            },
+                            match team3 {
+                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
+                                Entrant::Named { name, .. } => name.clone(),
+                                Entrant::Discord { .. } => "Discord User".to_string(),
+                            }
+                        ),
+                        _ => {
+                            // For qualifier races without fixed entrants, show "Qualification Race <round>" or "Qualifier"
+                            race.round.as_ref().map(|r| format!("Qualification Race {}", r)).unwrap_or_else(|| "Qualifier".to_string())
+                        }
+                    };
                 }
-                : match &race.entrants {
-                    Entrants::Two([team1, team2]) => format!("{} vs {}",
-                        match team1 {
-                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                            Entrant::Named { name, .. } => name.clone(),
-                            Entrant::Discord { .. } => "Discord User".to_string(),
-                        },
-                        match team2 {
-                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                            Entrant::Named { name, .. } => name.clone(),
-                            Entrant::Discord { .. } => "Discord User".to_string(),
-                        }
-                    ),
-                    Entrants::Three([team1, team2, team3]) => format!("{} vs {} vs {}",
-                        match team1 {
-                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                            Entrant::Named { name, .. } => name.clone(),
-                            Entrant::Discord { .. } => "Discord User".to_string(),
-                        },
-                        match team2 {
-                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                            Entrant::Named { name, .. } => name.clone(),
-                            Entrant::Discord { .. } => "Discord User".to_string(),
-                        },
-                        match team3 {
-                            Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                            Entrant::Named { name, .. } => name.clone(),
-                            Entrant::Discord { .. } => "Discord User".to_string(),
-                        }
-                    ),
-                    _ => {
-                        // For qualifier races without fixed entrants, show "Qualification Race <round>" or "Qualifier"
-                        race.round.as_ref().map(|r| format!("Qualification Race {}", r)).unwrap_or_else(|| "Qualifier".to_string())
-                    }
-                };
             }
             p {
                 @match race.schedule {

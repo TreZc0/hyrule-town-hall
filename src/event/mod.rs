@@ -1294,6 +1294,8 @@ pub(crate) async fn races(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
                 racetime_goal_slug: data.racetime_goal_slug.clone(),
                 scheduling_deadline: None,
                 restream_consent_required: false,
+                custom_title: None,
+                custom_create_room: true,
             });
         }
     }

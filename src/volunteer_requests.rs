@@ -504,6 +504,10 @@ async fn get_matchup_description(
     transaction: &mut Transaction<'_, Postgres>,
     race: &Race,
 ) -> Result<String, Error> {
+    if let Some(custom_title) = &race.custom_title {
+        return Ok(custom_title.clone())
+    }
+
     if let Some(label) = race.seeding_race_label(transaction).await? {
         return Ok(label);
     }
