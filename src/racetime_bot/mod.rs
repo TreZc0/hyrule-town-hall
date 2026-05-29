@@ -2650,7 +2650,7 @@ impl GlobalState {
     }
 }
 
-pub(crate) fn start_practice_seed_roll(seeds: event::PracticeSeeds, job_id: Uuid, mut updates: mpsc::Receiver<SeedRollUpdate>) {
+pub(crate) fn start_practice_seed_roll(seeds: event::PracticeSeeds, job_id: Uuid, mut updates: mpsc::Receiver<SeedRollUpdate>, selected_choices: Vec<String>) {
     tokio::spawn(async move {
         let status = loop {
             match updates.recv().await {
@@ -2666,6 +2666,7 @@ pub(crate) fn start_practice_seed_roll(seeds: event::PracticeSeeds, job_id: Uuid
                         event::PracticeSeedStatus::Done(event::PracticeSeedResult::PatcherLink {
                             url: url.to_string(),
                             seed_hash: seed.file_hash,
+                            selected_choices: selected_choices.clone(),
                         })
                     },
                     Some(seed::Files::TwwrPermalink { permalink, seed_hash }) =>
