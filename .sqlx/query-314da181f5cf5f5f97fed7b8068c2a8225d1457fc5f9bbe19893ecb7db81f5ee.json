@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT u.discord_id AS \"discord_id!: PgSnowflake<UserId>\"\n                    FROM teams t\n                    JOIN team_members tm ON tm.team = t.id\n                    JOIN users u ON u.id = tm.member\n                    WHERE t.series = $1 AND t.event = $2\n                    AND tm.status IN ('created', 'confirmed')\n                    AND u.discord_id IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "discord_id!: PgSnowflake<UserId>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "314da181f5cf5f5f97fed7b8068c2a8225d1457fc5f9bbe19893ecb7db81f5ee"
+}

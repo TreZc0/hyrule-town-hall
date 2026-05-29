@@ -556,7 +556,7 @@ pub(crate) struct SetupForm {
 }
 
 #[rocket::post("/event/<series>/<event>/setup", data = "<form>")]
-pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, SetupForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, SetupForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let event_data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
@@ -949,6 +949,22 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                     event_data.series as _,
                     &event_data.event
                 ).execute(&mut *transaction).await?;
+                let discord_ctx = discord_ctx.read().await;
+                let entrant_discord_ids = sqlx::query_scalar!(
+                    r#"SELECT DISTINCT u.discord_id AS "discord_id!: PgSnowflake<UserId>"
+                    FROM teams t
+                    JOIN team_members tm ON tm.team = t.id
+                    JOIN users u ON u.id = tm.member
+                    WHERE t.series = $1 AND t.event = $2
+                    AND tm.status IN ('created', 'confirmed')
+                    AND u.discord_id IS NOT NULL"#,
+                    event_data.series as _, &event_data.event
+                ).fetch_all(&mut *transaction).await?;
+                for PgSnowflake(discord_id) in entrant_discord_ids {
+                    if let Ok(member) = guild.member(&*discord_ctx, discord_id).await {
+                        let _ = member.add_role(&*discord_ctx, role_id).await;
+                    }
+                }
             }
 
             transaction.commit().await?;
