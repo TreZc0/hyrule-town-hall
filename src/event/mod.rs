@@ -22,6 +22,19 @@ use {
 
 pub(crate) mod async_results;
 pub(crate) mod configure;
+
+pub(crate) type PracticeSeeds = Arc<tokio::sync::RwLock<HashMap<Uuid, PracticeSeedStatus>>>;
+
+pub(crate) enum PracticeSeedResult {
+    Redirect(String),
+    Permalink { permalink: String, seed_hash: String },
+}
+
+pub(crate) enum PracticeSeedStatus {
+    Generating,
+    Done(PracticeSeedResult),
+    Error(String),
+}
 pub(crate) mod enter;
 pub(crate) mod setup;
 pub(crate) mod teams;
@@ -852,7 +865,16 @@ impl<'a> Data<'a> {
                     }
                 }
                 @let is_ootr = self.game(&mut *transaction).await?.map(|g| g.name == "ootr").unwrap_or(false);
-                @let practice_seed_url = (is_ootr && self.single_settings.is_some()).then(|| uri!(practice_seed(self.series, &*self.event)));
+                @let practice_seed_url = {
+                    let has_practice = match racetime_bot::Goal::for_event(self.series, &self.event) {
+                        Some(racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB) => true,
+                        Some(racetime_bot::Goal::AlttprDeRivalsCupBrackets | racetime_bot::Goal::AlttprDeRivalsCupGroups) => true,
+                        Some(racetime_bot::Goal::Cabookey2026) => true,
+                        Some(racetime_bot::Goal::TwwrMainWeekly | racetime_bot::Goal::TwwrMainMiniblins26) => self.settings_string.is_some(),
+                        _ => is_ootr && self.single_settings.is_some(),
+                    };
+                    has_practice.then(|| uri!(practice_seed(self.series, &*self.event)))
+                };
                 @let practice_race_url = if_chain! {
                     if is_ootr;
                     if let Some(ref slug) = self.racetime_goal_slug;
@@ -869,9 +891,12 @@ impl<'a> Data<'a> {
                         None
                     }
                 };
+                @let practice_seed_is_ootr = is_ootr && self.single_settings.is_some();
                 @let practice_seed_button = practice_seed_url.map(|url| html! {
-                    a(class = "button", href = url, target = "_blank") {
-                        : favicon(&Url::parse("https://ootrandomizer.com/").unwrap()); //TODO adjust based on seed host
+                    a(class = "button", href = url, target? = practice_seed_is_ootr.then_some("_blank")) {
+                        @if practice_seed_is_ootr {
+                            : favicon(&Url::parse("https://ootrandomizer.com/").unwrap());
+                        }
                         @if practice_race_url.is_some() {
                             : "Roll Seed";
                         } else {
@@ -3331,17 +3356,288 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, http_client: &State<reqwe
     })
 }
 
+const DE9_PRACTICE_CHOICES: &[(&str, &str)] = &[
+    ("pool_hard", "Hard Item Pool"),
+    ("pool_expert", "Expert Item Pool"),
+    ("pots", "Pottery Shuffle"),
+    ("all_dungeons", "All Dungeons"),
+    ("flute", "Flute"),
+    ("hovering", "Hovering"),
+    ("inverted", "Inverted"),
+    ("keydrop", "Keydrop Shuffle"),
+    ("mirror_scroll", "Mirror Scroll"),
+    ("no_delay", "No Delay"),
+    ("pseudoboots", "Pseudoboots"),
+    ("boots", "Boots"),
+    ("zw", "ZW"),
+    ("boss", "Boss Shuffle"),
+    ("retro", "Retro"),
+    ("bones", "Bonk Rocks"),
+    ("shop", "Shop Shuffle"),
+    ("keys", "Key Shuffle"),
+    ("dmg", "Damage Shuffle"),
+    ("bag", "Progressive Bag"),
+    ("door", "Door Shuffle"),
+];
+
+fn label_for_owr_choice(key: &str) -> &'static str {
+    match key {
+        "keydrop" => "Key Drop Shuffle",
+        "100pct" => "100% Completionist",
+        "tileswap" => "Tile Swap (OW Mixed)",
+        "mirror_scroll" => "Mirror Scroll",
+        "enemizer" => "Enemizer + Boss Shuffle",
+        _ => "Unknown option",
+    }
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct PracticeSeedForm {
+    #[field(default = String::new())]
+    csrf: String,
+    mode: Option<String>,
+    preset: Option<String>,
+    #[field(default = Vec::new())]
+    choices: Vec<String>,
+}
+
 #[rocket::get("/event/<series>/<event>/practice")]
-pub(crate) async fn practice_seed(pool: &State<PgPool>, ootr_api_client: &State<Arc<ootr_web::ApiClient>>, series: Series, event: &str) -> Result<Redirect, StatusOrError<Error>> {
+pub(crate) async fn practice_seed(pool: &State<PgPool>, global_state: &State<Arc<racetime_bot::GlobalState>>, ootr_api_client: &State<Arc<ootr_web::ApiClient>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str) -> Result<RedirectOrContent, StatusOrError<Error>> {
+    let _ = global_state; // only needed by practice_seed_post; included to keep signature symmetric
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    transaction.commit().await?;
-    let version = data.rando_version.ok_or(StatusOrError::Status(Status::NotFound))?;
-    let settings = data.single_settings.ok_or(StatusOrError::Status(Status::NotFound))?;
-    let world_count = settings.get("world_count").map_or(1, |world_count| world_count.as_u64().expect("world_count setting wasn't valid u64").try_into().expect("too many worlds"));
-    let web_version = ootr_api_client.can_roll_on_web(None, &version, world_count, UnlockSpoilerLog::Now).await.ok_or(StatusOrError::Status(Status::NotFound))?;
-    let id = Arc::clone(ootr_api_client).roll_practice_seed(web_version, false, settings).await?;
-    Ok(Redirect::to(format!("https://ootrandomizer.com/seed/get?id={id}")))
+    let goal = racetime_bot::Goal::for_event(series, event);
+    let is_ootr = goal.is_none() && data.game(&mut transaction).await?.map(|g| g.name == "ootr").unwrap_or(false);
+
+    if is_ootr {
+        transaction.commit().await?;
+        let version = data.rando_version.ok_or(StatusOrError::Status(Status::NotFound))?;
+        let settings = data.single_settings.ok_or(StatusOrError::Status(Status::NotFound))?;
+        let world_count = settings.get("world_count").map_or(1, |world_count| world_count.as_u64().expect("world_count setting wasn't valid u64").try_into().expect("too many worlds"));
+        let web_version = ootr_api_client.can_roll_on_web(None, &version, world_count, UnlockSpoilerLog::Now).await.ok_or(StatusOrError::Status(Status::NotFound))?;
+        let id = Arc::clone(ootr_api_client).roll_practice_seed(web_version, false, settings).await?;
+        return Ok(RedirectOrContent::Redirect(Redirect::to(format!("https://ootrandomizer.com/seed/get?id={id}"))));
+    }
+
+    let me_opt = Some(me);
+    let header = data.header(&mut transaction, me_opt.as_ref(), Tab::MyStatus, false).await?;
+    let form_uri = uri!(practice_seed_post(series, event));
+    let title = format!("Practice Seed — {}", data.display_name);
+    let chests = data.chests().await?;
+
+    let form_content = match goal {
+        Some(racetime_bot::Goal::TwwrMainWeekly | racetime_bot::Goal::TwwrMainMiniblins26) if data.settings_string.is_some() => {
+            full_form(form_uri, csrf.as_ref(), html! {
+                p : "Generate a practice seed with this event's standard settings.";
+            }, vec![], "Generate Practice Seed")
+        },
+        Some(racetime_bot::Goal::Cabookey2026) => {
+            full_form(form_uri, csrf.as_ref(), html! {
+                p : "Check any optional rules to include in your practice seed. Leave all unchecked for base settings.";
+                fieldset {
+                    legend : "Options";
+                    @for patch in cabookey::OWR_CONFIG.choice_patches {
+                        div {
+                            input(type="checkbox", id=patch.key, name="choices", value=patch.key);
+                            label(for=patch.key) : label_for_owr_choice(patch.key);
+                        }
+                    }
+                }
+            }, vec![], "Generate Practice Seed")
+        },
+        Some(racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB) => {
+            full_form(form_uri, csrf.as_ref(), html! {
+                fieldset {
+                    legend : "Mode";
+                    select(name="mode", required) {
+                        option(value="") : "Select a mode…";
+                        @for m in &alttprde::MODES {
+                            option(value=m.name) : m.display;
+                        }
+                    }
+                }
+                fieldset {
+                    legend : "Options";
+                    @for (key, label) in DE9_PRACTICE_CHOICES {
+                        div {
+                            input(type="checkbox", id=key, name="choices", value=key);
+                            label(for=key) : label;
+                        }
+                    }
+                }
+            }, vec![], "Generate Practice Seed")
+        },
+        Some(racetime_bot::Goal::AlttprDeRivalsCupBrackets | racetime_bot::Goal::AlttprDeRivalsCupGroups) => {
+            full_form(form_uri, csrf.as_ref(), html! {
+                fieldset {
+                    legend : "Preset";
+                    select(name="preset", required) {
+                        option(value="") : "Select a preset…";
+                        @for preset_opt in alttprde::RIVALS_CUP_PRESETS {
+                            option(value=preset_opt.preset) : preset_opt.display_name;
+                        }
+                    }
+                }
+            }, vec![], "Generate Practice Seed")
+        },
+        _ => {
+            transaction.rollback().await?;
+            return Err(StatusOrError::Status(Status::NotFound));
+        },
+    };
+
+    let content = html! {
+        : header;
+        article {
+            h2 : "Practice Seed";
+            : form_content;
+        }
+    };
+    Ok(RedirectOrContent::Content(page(transaction, &me_opt, &uri, PageStyle { chests, ..PageStyle::default() }, &title, content).await?))
+}
+
+#[rocket::post("/event/<series>/<event>/practice", data = "<form>")]
+pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &State<Arc<racetime_bot::GlobalState>>, practice_seeds: &State<PracticeSeeds>, me: User, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, PracticeSeedForm>>) -> Result<Redirect, StatusOrError<Error>> {
+    let _ = (pool, me);
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    let form = form.value.ok_or(StatusOrError::Status(Status::UnprocessableEntity))?;
+
+    let goal = racetime_bot::Goal::for_event(series, event).ok_or(StatusOrError::Status(Status::NotFound))?;
+    let job_id = Uuid::new_v4();
+    let seeds = Arc::clone(practice_seeds.inner());
+    seeds.write().await.insert(job_id, PracticeSeedStatus::Generating);
+
+    match goal {
+        racetime_bot::Goal::TwwrMainWeekly | racetime_bot::Goal::TwwrMainMiniblins26 => {
+            let mut transaction = pool.begin().await?;
+            let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+            let settings_string = data.settings_string.ok_or(StatusOrError::Status(Status::NotFound))?;
+            let version = data.rando_version;
+            transaction.commit().await?;
+            let rx = Arc::clone(&*global_state).roll_twwr_seed(version, settings_string, UnlockSpoilerLog::Now);
+            racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx);
+        },
+        racetime_bot::Goal::Cabookey2026 => {
+            let choices: HashMap<String, String> = form.choices.iter()
+                .map(|k| (k.clone(), "yes".to_string()))
+                .collect();
+            let rx = Arc::clone(&*global_state).roll_owr_seed(choices, cabookey::OWR_CONFIG);
+            racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx);
+        },
+        racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB => {
+            let mode = form.mode.filter(|m| !m.is_empty());
+            let choices_set: HashSet<&str> = form.choices.iter().map(|s| s.as_str()).collect();
+            let mut custom_choices = HashMap::new();
+            if choices_set.contains("pool_expert") {
+                custom_choices.insert("pool".to_string(), "2".to_string());
+            } else if choices_set.contains("pool_hard") {
+                custom_choices.insert("pool".to_string(), "1".to_string());
+            }
+            for key in &form.choices {
+                let url_value = match key.as_str() {
+                    "pots" => "lottery".to_string(),
+                    "pool_hard" | "pool_expert" => continue,
+                    _ => "1".to_string(),
+                };
+                custom_choices.insert(key.clone(), url_value);
+            }
+            let options = racetime_bot::AlttprDeRaceOptions { mode, custom_choices, display_only_choices: Vec::new() };
+            let rx = Arc::clone(&*global_state).roll_alttprde9_seed(options);
+            racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx);
+        },
+        racetime_bot::Goal::AlttprDeRivalsCupBrackets | racetime_bot::Goal::AlttprDeRivalsCupGroups => {
+            let preset = form.preset.filter(|p| !p.is_empty()).ok_or(StatusOrError::Status(Status::UnprocessableEntity))?;
+            let result = Arc::clone(&*global_state).practice_avianart_seed(preset).await;
+            let status = match result {
+                Ok(hash) => PracticeSeedStatus::Done(PracticeSeedResult::Redirect(format!("https://avianart.games/perm/{hash}"))),
+                Err(e) => PracticeSeedStatus::Error(e.to_string()),
+            };
+            seeds.write().await.insert(job_id, status);
+        },
+        _ => return Err(StatusOrError::Status(Status::NotFound)),
+    }
+
+    let job_id_str = job_id.to_string();
+    Ok(Redirect::to(uri!(practice_seed_status(series, event, job_id_str.as_str()))))
+}
+
+#[rocket::get("/event/<series>/<event>/practice/<job_id>")]
+pub(crate) async fn practice_seed_status(pool: &State<PgPool>, practice_seeds: &State<PracticeSeeds>, me: Option<User>, uri: Origin<'_>, series: Series, event: &str, job_id: &str) -> Result<RedirectOrContent, StatusOrError<Error>> {
+    let job_id = Uuid::parse_str(job_id).map_err(|_| StatusOrError::Status(Status::NotFound))?;
+    let seeds = Arc::clone(practice_seeds.inner());
+    let status = seeds.read().await.get(&job_id).map(|s| match s {
+        PracticeSeedStatus::Generating => 0u8,
+        PracticeSeedStatus::Done(_) => 1,
+        PracticeSeedStatus::Error(_) => 2,
+    });
+    let status_tag = status.ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    if status_tag == 1 {
+        // Done — redirect or show permalink
+        let done = seeds.write().await.remove(&job_id);
+        return Ok(match done {
+            Some(PracticeSeedStatus::Done(PracticeSeedResult::Redirect(url))) =>
+                RedirectOrContent::Redirect(Redirect::to(url)),
+            Some(PracticeSeedStatus::Done(PracticeSeedResult::Permalink { permalink, seed_hash })) => {
+                let mut transaction = pool.begin().await?;
+                let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+                let header = data.header(&mut transaction, me.as_ref(), Tab::MyStatus, false).await?;
+                let chests = data.chests().await?;
+                let content = html! {
+                    : header;
+                    article {
+                        h2 : "Practice Seed Ready";
+                        p {
+                            strong : "Permalink: ";
+                            code : &permalink;
+                        }
+                        @if !seed_hash.is_empty() {
+                            p {
+                                strong : "Seed Hash: ";
+                                code : &seed_hash;
+                            }
+                        }
+                    }
+                };
+                RedirectOrContent::Content(page(transaction, &me, &uri, PageStyle { chests, ..PageStyle::default() }, "Practice Seed Ready", content).await?)
+            },
+            _ => return Err(StatusOrError::Status(Status::InternalServerError)),
+        });
+    }
+
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let header = data.header(&mut transaction, me.as_ref(), Tab::MyStatus, false).await?;
+    let chests = data.chests().await?;
+
+    let content = if status_tag == 2 {
+        let error_msg = seeds.read().await.get(&job_id).and_then(|s| match s {
+            PracticeSeedStatus::Error(e) => Some(e.clone()),
+            _ => None,
+        }).unwrap_or_else(|| "Unknown error".to_string());
+        html! {
+            : header;
+            article {
+                h2 : "Practice Seed Failed";
+                p : &error_msg;
+                a(href = uri!(practice_seed(series, event)).to_string()) : "Try again";
+            }
+        }
+    } else {
+        html! {
+            : header;
+            script {
+                : "setTimeout(function(){ location.reload(); }, 2000);";
+            }
+            article {
+                h2 : "Generating Practice Seed…";
+                p : "Your practice seed is being generated. This page will refresh automatically.";
+            }
+        }
+    };
+
+    Ok(RedirectOrContent::Content(page(transaction, &me, &uri, PageStyle { chests, ..PageStyle::default() }, "Practice Seed", content).await?))
 }
 
 #[derive(Debug, thiserror::Error)]

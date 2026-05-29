@@ -669,7 +669,7 @@ async fn fallback_catcher(status: Status, request: &Request<'_>) -> PageResult {
     }).await
 }
 
-pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http_client: reqwest::Client, config: Config, port: u16, seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>, ootr_api_client: Arc<ootr_web::ApiClient>) -> Result<Rocket<rocket::Ignite>, crate::Error> {
+pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http_client: reqwest::Client, config: Config, port: u16, seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>, ootr_api_client: Arc<ootr_web::ApiClient>) -> Result<Rocket<rocket::Build>, crate::Error> {
     Ok(rocket::custom(rocket::Config::figment().merge(rocket::Config {
         secret_key: SecretKey::from(&BASE64.decode(&config.secret_key)?),
         log_level: Some(rocket::config::Level::ERROR),
@@ -737,6 +737,8 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::request_async,
         event::submit_async,
         event::practice_seed,
+        event::practice_seed_post,
+        event::practice_seed_status,
         event::swiss_standings,
         event::enter::get,
         event::enter::post,
@@ -926,5 +928,5 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
     .manage(api::schema(pool, discord_ctx))
     .manage(seed_metadata)
     .manage(ootr_api_client)
-    .ignite().await?)
+    )
 }
