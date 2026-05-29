@@ -1207,7 +1207,7 @@ pub(crate) async fn races(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
     let any_races_ongoing_or_upcoming = !ongoing_and_upcoming_races.is_empty();
     let (can_create, show_restream_consent, can_edit) = if let Some(ref me) = me {
         let is_organizer = data.organizers(&mut transaction).await?.contains(me);
-        let can_create = is_organizer && match data.match_source() {
+        let can_create = (is_organizer || me.is_global_admin()) && match data.match_source() {
             MatchSource::League => false,
             MatchSource::Manual | MatchSource::Challonge { .. } | MatchSource::StartGG(_) => true,
         };

@@ -2244,7 +2244,7 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
     let event = event::Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    if !event.organizers(&mut transaction).await?.contains(&me) {
+    if !event.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
         form.context.push_error(form::Error::validation("You must be an organizer of this event to add a race."));
     }
     Ok(if let Some(ref value) = form.value {
@@ -3280,7 +3280,7 @@ pub(crate) async fn import_races_post(discord_ctx: &State<RwFuture<DiscordCtx>>,
     let event = event::Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    if !event.organizers(&mut transaction).await?.contains(&me) {
+    if !event.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
         form.context.push_error(form::Error::validation("You must be an organizer to import races."));
     }
     Ok(if let Some(ref value) = form.value {
@@ -4121,10 +4121,10 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                             }
                             : form_field("start_date", &mut errors, html! {
                                 label(for = "start_date") : "New start date (YYYY-MM-DD HH:MM in your timezone):";
-                                input(type = "text", name = "start_date", value? = if let Some(ref ctx) = ctx {
+                                input(type = "text", name = "start_date", data_utc_ms = start.timestamp_millis().to_string(), value? = if let Some(ref ctx) = ctx {
                                     ctx.field_value("start_date").map(|date| date.to_string())
                                 } else {
-                                    Some(start.format("%Y-%m-%d %H:%M").to_string())
+                                    None::<String>
                                 });
                                 small : "Leave empty to keep current time";
                             });
@@ -4142,10 +4142,10 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                             }
                             : form_field("async_start1_date", &mut errors, html! {
                                 label(for = "async_start1_date") : "New start (team A) (YYYY-MM-DD HH:MM in your timezone):";
-                                input(type = "text", name = "async_start1_date", value? = if let Some(ref ctx) = ctx {
+                                input(type = "text", name = "async_start1_date", data_utc_ms? = start1.map(|s| s.timestamp_millis().to_string()), value? = if let Some(ref ctx) = ctx {
                                     ctx.field_value("async_start1_date").map(|date| date.to_string())
                                 } else {
-                                    Some(start1.map(|s| s.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default())
+                                    None::<String>
                                 });
                                 small : "input in your local time (name of timezone)";
                             });
@@ -4159,10 +4159,10 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                             }
                             : form_field("async_start2_date", &mut errors, html! {
                                 label(for = "async_start2_date") : "New start (team B) (YYYY-MM-DD HH:MM in your timezone):";
-                                input(type = "text", name = "async_start2_date", value? = if let Some(ref ctx) = ctx {
+                                input(type = "text", name = "async_start2_date", data_utc_ms? = start2.map(|s| s.timestamp_millis().to_string()), value? = if let Some(ref ctx) = ctx {
                                     ctx.field_value("async_start2_date").map(|date| date.to_string())
                                 } else {
-                                    Some(start2.map(|s| s.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default())
+                                    None::<String>
                                 });
                                 small : "input in your local time (name of timezone)";
                             });
@@ -4177,10 +4177,10 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                                 }
                                 : form_field("async_start3_date", &mut errors, html! {
                                     label(for = "async_start3_date") : "New start (team C) (YYYY-MM-DD HH:MM in your timezone):";
-                                    input(type = "text", name = "async_start3_date", value? = if let Some(ref ctx) = ctx {
+                                    input(type = "text", name = "async_start3_date", data_utc_ms? = start3.map(|s| s.timestamp_millis().to_string()), value? = if let Some(ref ctx) = ctx {
                                         ctx.field_value("async_start3_date").map(|date| date.to_string())
                                     } else {
-                                        Some(start3.map(|s| s.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default())
+                                        None::<String>
                                     });
                                     small : "input in your local time (name of timezone)";
                                 });
