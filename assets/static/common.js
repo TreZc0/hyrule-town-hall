@@ -27,6 +27,15 @@ document.querySelectorAll('.timezone-wrapper').forEach(function(timezoneWrapper)
     timezoneWrapper.classList.remove('timezone-wrapper');
 });
 
+document.querySelectorAll('input[data-utc-ms]').forEach(function(input) {
+    if (input.value) return;
+    var ms = parseInt(input.dataset.utcMs);
+    if (isNaN(ms)) return;
+    var date = new Date(ms);
+    var pad = function(n) { return String(n).padStart(2, '0'); };
+    input.value = date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes());
+});
+
 // Auto-detect timezone and set it in hidden timezone fields
 document.addEventListener('DOMContentLoaded', function() {
     const timezoneField = document.getElementById('timezone-field');
