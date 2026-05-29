@@ -29,9 +29,8 @@ pub(crate) enum SeedGenType {
     AlttprAvianart,
     /// OWR (Open World Randomizer) — player choices read from `teams.custom_choices`.
     Owr {
-        /// Full event config from `events.seed_config`; `None` falls back to the
-        /// hardcoded `cabookey::owr_config()`.
-        config: Option<OwrEventConfig>,
+        /// Full event config from `events.seed_config`.
+        config: OwrEventConfig,
     },
     OoTR,
     TWWR {
@@ -91,9 +90,15 @@ impl SeedGenType {
                 Some(Self::AlttprDoorRando { source })
             }
             "alttpr_avianart" => Some(Self::AlttprAvianart),
-            "owr" => Some(Self::Owr {
-                config: seed_config.and_then(|c| serde_json::from_value(c.clone()).ok()),
-            }),
+            "owr" => {
+                let config = seed_config.and_then(|c| serde_json::from_value(c.clone()).ok());
+                if let Some(config) = config {
+                    Some(Self::Owr { config })
+                } else {
+                    eprintln!("owr event missing or invalid seed_config — skipping");
+                    None
+                }
+            }
             "ootr" | "ootr_web" => Some(Self::OoTR),
             "twwr" => {
                 let permalink = seed_config

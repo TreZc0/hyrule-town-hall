@@ -1078,7 +1078,7 @@ impl GlobalState {
             }
             SeedGenType::Owr { config } => {
                 let choices = owr_choices_for_race(&self.db_pool, &cal_event.race).await;
-                self.roll_owr_seed(choices, config.clone().unwrap_or_else(cabookey::owr_config))
+                self.roll_owr_seed(choices, config.clone())
             }
             SeedGenType::TWWR { permalink } => {
                 let version = event.rando_version.clone();
@@ -2490,10 +2490,19 @@ pub(crate) struct AlttprDoorRandoPlacements {
 }
 
 #[derive(Clone, Copy, Serialize)]
+#[serde(untagged)]
+pub(crate) enum DungeonShuffleVal {
+    Bool(bool),
+    Named(&'static str),
+}
+
+#[derive(Clone, Copy, Serialize)]
 pub(crate) struct AlttprDoorRandoSetting {
     pub(crate) accessibility: &'static str,
-    pub(crate) bigkeyshuffle: u8,
-    pub(crate) compassshuffle: u8,
+    pub(crate) bigkeyshuffle: DungeonShuffleVal,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) boss_shuffle: Option<&'static str>,
+    pub(crate) compassshuffle: DungeonShuffleVal,
     pub(crate) crystals_ganon: &'static str,
     pub(crate) crystals_gt: &'static str,
     pub(crate) dropshuffle: &'static str,
@@ -2503,7 +2512,7 @@ pub(crate) struct AlttprDoorRandoSetting {
     pub(crate) key_logic_algorithm: &'static str,
     pub(crate) keyshuffle: &'static str,
     pub(crate) linked_drops: &'static str,
-    pub(crate) mapshuffle: u8,
+    pub(crate) mapshuffle: DungeonShuffleVal,
     pub(crate) mirrorscroll: u8,
     pub(crate) mode: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2985,8 +2994,8 @@ impl Handler {
         let delay_until = official_start - TimeDelta::minutes(10);
         let config = self.official_data.as_ref()
             .and_then(|d| d.event.seed_gen_type.as_ref())
-            .and_then(|sgt| if let seed_gen_type::SeedGenType::Owr { config } = sgt { config.clone() } else { None })
-            .unwrap_or_else(cabookey::owr_config);
+            .and_then(|sgt| if let seed_gen_type::SeedGenType::Owr { config } = sgt { Some(config.clone()) } else { None })
+            .expect("OWR seed roll triggered for event with no OWR seed config");
         let choices = owr_choices_for_race(&ctx.global_state.db_pool, &cal_event.race).await;
         let description = owr_choices_description(&choices);
         self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_owr_seed(choices, config), language, article, format!("seed with {description}"), false).await;
