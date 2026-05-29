@@ -782,6 +782,7 @@ impl Race {
                 _ => {} // other TWWR events are scheduled via Mido's House
             },
             | Series::AlttprDe
+            | Series::AlttprSpecials
             | Series::Cabookey
             | Series::CoOp //TODO add archives of seasons 1 and 2?
             | Series::CopaDoBrasil

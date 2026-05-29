@@ -52,6 +52,7 @@ pub(crate) mod botwany;
 pub(crate) enum Series {
     BotwAny,
     AlttprDe,
+    AlttprSpecials,
     BattleRoyale,
     Cabookey,
     CoOp,
@@ -81,6 +82,7 @@ impl Series {
         match self {
             Self::BotwAny => "botwany",
             Self::AlttprDe => "alttprde",
+            Self::AlttprSpecials => "alttprspecials",
             Self::BattleRoyale => "ohko",
             Self::Cabookey => "cabookey",
             Self::CoOp => "coop",
@@ -110,6 +112,7 @@ impl Series {
         match self {
             Self::BotwAny => "BotW Any% Tournaments",
             Self::AlttprDe => "Deutsche ALTTPR Turniere",
+            Self::AlttprSpecials => "ALTTPR Specials",
             Self::BattleRoyale => "Battle Royale",
             Self::Cabookey => "Cabookey Tournaments",
             Self::CoOp => "Co-op Tournaments",
@@ -138,7 +141,7 @@ impl Series {
     pub(crate) fn default_race_duration(&self) -> TimeDelta {
         match self {
             Self::TriforceBlitz => TimeDelta::hours(2),
-            Self::AlttprDe | Self::BattleRoyale | Self::Cabookey | Self::Crosskeys | Self::MysteryD | Self::TwwrMain => TimeDelta::hours(2) + TimeDelta::minutes(30),
+            Self::AlttprDe | Self::AlttprSpecials | Self::BattleRoyale | Self::Cabookey | Self::Crosskeys | Self::MysteryD | Self::TwwrMain => TimeDelta::hours(2) + TimeDelta::minutes(30),
             Self::CoOp | Self::MixedPools | Self::Scrubs | Self::SpeedGaming | Self::WeTryToBeBetter => TimeDelta::hours(3),
             Self::CopaDoBrasil | Self::League | Self::NineDaysOfSaws | Self::SongsOfHope | Self::Standard | Self::TournoiFrancophone => TimeDelta::hours(3) + TimeDelta::minutes(30),
             Self::Mq | Self::Multiworld | Self::Pictionary => TimeDelta::hours(4),
