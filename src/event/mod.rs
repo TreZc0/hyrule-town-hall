@@ -28,6 +28,7 @@ pub(crate) type PracticeSeeds = Arc<tokio::sync::RwLock<HashMap<Uuid, PracticeSe
 pub(crate) enum PracticeSeedResult {
     Redirect(String),
     Permalink { permalink: String, seed_hash: String },
+    PatcherLink { url: String, seed_hash: Option<[String; 5]> },
 }
 
 pub(crate) enum PracticeSeedStatus {
@@ -3596,6 +3597,28 @@ pub(crate) async fn practice_seed_status(pool: &State<PgPool>, practice_seeds: &
                             p {
                                 strong : "Seed Hash: ";
                                 code : &seed_hash;
+                            }
+                        }
+                    }
+                };
+                RedirectOrContent::Content(page(transaction, &me, &uri, PageStyle { chests, ..PageStyle::default() }, "Practice Seed Ready", content).await?)
+            },
+            Some(PracticeSeedStatus::Done(PracticeSeedResult::PatcherLink { url, seed_hash })) => {
+                let mut transaction = pool.begin().await?;
+                let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+                let header = data.header(&mut transaction, me.as_ref(), Tab::MyStatus, false).await?;
+                let chests = data.chests().await?;
+                let content = html! {
+                    : header;
+                    article {
+                        h2 : "Practice Seed Ready";
+                        p {
+                            a(href = &url, target = "_blank") : "Open in Patcher";
+                        }
+                        @if let Some(hash) = seed_hash {
+                            p {
+                                strong : "Seed Hash: ";
+                                code : hash.join(" ");
                             }
                         }
                     }
