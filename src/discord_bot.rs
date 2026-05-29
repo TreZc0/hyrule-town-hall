@@ -1848,6 +1848,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             volunteer_request_message_id: race.volunteer_request_message_id,
                                             scheduling_deadline: race.scheduling_deadline,
                                             restream_consent_required: race.restream_consent_required,
+                                            custom_title: race.custom_title,
+                                            custom_create_room: race.custom_create_room,
                                         };
                                         race.save(&mut transaction).await?;
 
@@ -4000,6 +4002,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             volunteer_request_message_id: race.volunteer_request_message_id,
                             scheduling_deadline: race.scheduling_deadline,
                             restream_consent_required: race.restream_consent_required,
+                            custom_title: race.custom_title,
+                            custom_create_room: race.custom_create_room,
                         };
                         race.save(&mut transaction).await
                             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;

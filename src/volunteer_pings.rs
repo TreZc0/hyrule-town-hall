@@ -790,6 +790,10 @@ pub(crate) async fn delete_stale_ping_messages(
 }
 
 fn build_matchup_label(race: &Race) -> String {
+    if let Some(custom_title) = &race.custom_title {
+        return custom_title.clone()
+    }
+
     let base = match &race.entrants {
         Entrants::Two([e1, e2]) => format!("{} vs {}", entrant_short_name(e1), entrant_short_name(e2)),
         Entrants::Three([e1, e2, e3]) => format!("{} vs {} vs {}", entrant_short_name(e1), entrant_short_name(e2), entrant_short_name(e3)),

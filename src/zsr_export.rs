@@ -635,6 +635,10 @@ pub(crate) async fn build_race_title(
     // Use export title if set, otherwise event display name
     let event_name = export.title.as_deref().unwrap_or(event_display_name);
 
+    if let Some(custom_title) = &race.custom_title {
+        return format!("{}: {}", event_name, custom_title);
+    }
+
     if let Some(label) = race.seeding_race_label(transaction).await.unwrap_or(None) {
         return format!("{}: {}", event_name, label);
     }

@@ -121,6 +121,8 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
                     volunteer_request_message_id: None,
                     scheduling_deadline: None,
                     restream_consent_required: false,
+                    custom_title: None,
+                    custom_create_room: true,
                 });
             }
         }
