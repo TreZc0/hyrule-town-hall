@@ -2663,7 +2663,10 @@ pub(crate) fn start_practice_seed_roll(seeds: event::PracticeSeeds, job_id: Uuid
                         let mut url = Url::parse("https://alttprpatch.synack.live/patcher.html").unwrap();
                         url.query_pairs_mut().append_pair("patch",
                             &format!("{}/seed/{prefix}{uuid}.bps", base_uri()));
-                        event::PracticeSeedStatus::Done(event::PracticeSeedResult::Redirect(url.to_string()))
+                        event::PracticeSeedStatus::Done(event::PracticeSeedResult::PatcherLink {
+                            url: url.to_string(),
+                            seed_hash: seed.file_hash,
+                        })
                     },
                     Some(seed::Files::TwwrPermalink { permalink, seed_hash }) =>
                         event::PracticeSeedStatus::Done(event::PracticeSeedResult::Permalink {
