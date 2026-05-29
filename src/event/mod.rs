@@ -28,7 +28,7 @@ pub(crate) type PracticeSeeds = Arc<tokio::sync::RwLock<HashMap<Uuid, PracticeSe
 pub(crate) enum PracticeSeedResult {
     Redirect(String),
     Permalink { permalink: String, seed_hash: String },
-    PatcherLink { url: String, seed_hash: Option<[String; 5]> },
+    PatcherLink { url: String, seed_hash: Option<[String; 5]>, selected_choices: Vec<String> },
 }
 
 pub(crate) enum PracticeSeedStatus {
@@ -3517,14 +3517,15 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
             let version = data.rando_version;
             transaction.commit().await?;
             let rx = Arc::clone(&*global_state).roll_twwr_seed(version, settings_string, UnlockSpoilerLog::Now);
-            racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx);
+            racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         },
         racetime_bot::Goal::Cabookey2026 => {
+            let choice_labels = form.choices.iter().map(|k| label_for_owr_choice(k).to_owned()).collect();
             let choices: HashMap<String, String> = form.choices.iter()
                 .map(|k| (k.clone(), "yes".to_string()))
                 .collect();
             let rx = Arc::clone(&*global_state).roll_owr_seed(choices, cabookey::OWR_CONFIG);
-            racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx);
+            racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, choice_labels);
         },
         racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB => {
             let mode = form.mode.filter(|m| !m.is_empty());
@@ -3545,7 +3546,7 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
             }
             let options = racetime_bot::AlttprDeRaceOptions { mode, custom_choices, display_only_choices: Vec::new() };
             let rx = Arc::clone(&*global_state).roll_alttprde9_seed(options);
-            racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx);
+            racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         },
         racetime_bot::Goal::AlttprDeRivalsCupBrackets | racetime_bot::Goal::AlttprDeRivalsCupGroups => {
             let preset = form.preset.filter(|p| !p.is_empty()).ok_or(StatusOrError::Status(Status::UnprocessableEntity))?;
@@ -3603,7 +3604,7 @@ pub(crate) async fn practice_seed_status(pool: &State<PgPool>, practice_seeds: &
                 };
                 RedirectOrContent::Content(page(transaction, &me, &uri, PageStyle { chests, ..PageStyle::default() }, "Practice Seed Ready", content).await?)
             },
-            Some(PracticeSeedStatus::Done(PracticeSeedResult::PatcherLink { url, seed_hash })) => {
+            Some(PracticeSeedStatus::Done(PracticeSeedResult::PatcherLink { url, seed_hash, selected_choices })) => {
                 let mut transaction = pool.begin().await?;
                 let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
                 let header = data.header(&mut transaction, me.as_ref(), Tab::MyStatus, false).await?;
@@ -3619,6 +3620,12 @@ pub(crate) async fn practice_seed_status(pool: &State<PgPool>, practice_seeds: &
                             p {
                                 strong : "Seed Hash: ";
                                 code : hash.join(" ");
+                            }
+                        }
+                        @if !selected_choices.is_empty() {
+                            p {
+                                strong : "Selected Options: ";
+                                : selected_choices.join(", ");
                             }
                         }
                     }
