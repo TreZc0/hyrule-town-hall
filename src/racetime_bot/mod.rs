@@ -49,6 +49,7 @@ use {
         traits::IoResultExt as _,
     },
     crate::{
+        avianart,
         cal::Entrant,
         config::{Config, ConfigRaceTime},
         discord_bot::{ADMIN_USER, PgSnowflake},
@@ -2151,7 +2152,7 @@ impl GlobalState {
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
         tokio::spawn(async move {
-            let client = crate::avianart::AvianartClient::new(
+            let client = avianart::AvianartClient::new(
                 self.avianart_api_key.clone(),
                 self.http_client.clone(),
             );
@@ -2160,7 +2161,7 @@ impl GlobalState {
             let seed_data = client.wait_for_seed(&hash).await
                 .map_err(|e| RollError::Avianart(e.to_string()))?;
             let seed_hash = if let Some(ref spoiler) = seed_data.spoiler {
-                Some(crate::avianart::parse_file_hash(&spoiler.meta.hash)
+                Some(avianart::parse_file_hash(&spoiler.meta.hash)
                     .map_err(|e| RollError::Avianart(e.to_string()))?)
             } else {
                 None
@@ -2640,6 +2641,40 @@ impl GlobalState {
         }));
         update_rx
     }
+
+    pub(crate) async fn practice_avianart_seed(self: Arc<Self>, preset: String) -> Result<String, avianart::AvianartError> {
+        let client = avianart::AvianartClient::new(self.avianart_api_key.clone(), self.http_client.clone());
+        client.generate_seed(&preset).await
+    }
+}
+
+pub(crate) fn start_practice_seed_roll(seeds: event::PracticeSeeds, job_id: Uuid, mut updates: mpsc::Receiver<SeedRollUpdate>) {
+    tokio::spawn(async move {
+        let status = loop {
+            match updates.recv().await {
+                Some(SeedRollUpdate::Done { seed, .. }) => break match seed.files {
+                    Some(seed::Files::AvianartSeed { ref hash, .. }) =>
+                        event::PracticeSeedStatus::Done(event::PracticeSeedResult::Redirect(
+                            format!("https://avianart.games/perm/{hash}"))),
+                    Some(seed::Files::AlttprDoorRando { uuid, is_owr }) => {
+                        let prefix = if is_owr { "OR_" } else { "DR_" };
+                        let mut url = Url::parse("https://alttprpatch.synack.live/patcher.html").unwrap();
+                        url.query_pairs_mut().append_pair("patch",
+                            &format!("{}/seed/{prefix}{uuid}.bps", base_uri()));
+                        event::PracticeSeedStatus::Done(event::PracticeSeedResult::Redirect(url.to_string()))
+                    },
+                    Some(seed::Files::TwwrPermalink { permalink, seed_hash }) =>
+                        event::PracticeSeedStatus::Done(event::PracticeSeedResult::Permalink {
+                            permalink, seed_hash }),
+                    _ => event::PracticeSeedStatus::Error("unexpected seed type for practice seed".to_string()),
+                },
+                Some(SeedRollUpdate::Error(e)) => break event::PracticeSeedStatus::Error(e.to_string()),
+                Some(_) => continue,
+                None => break event::PracticeSeedStatus::Error("seed roll channel closed unexpectedly".to_string()),
+            }
+        };
+        seeds.write().await.insert(job_id, status);
+    });
 }
 
 async fn roll_seed_locally(delay_until: Option<DateTime<Utc>>, version: VersionedBranch, unlock_spoiler_log: bool, mut settings: seed::Settings) -> Result<(String, Option<PathBuf>), RollError> {

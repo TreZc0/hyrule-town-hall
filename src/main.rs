@@ -268,8 +268,9 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             .connect_with(db_options)
             .await?;
         let seed_metadata = Arc::default();
+        let practice_seeds: event::PracticeSeeds = Arc::new(tokio::sync::RwLock::new(HashMap::default()));
         let ootr_api_client = Arc::new(ootr_web::ApiClient::new(http_client.clone(), config.ootr_api_key.clone(), config.ootr_api_key_encryption.clone()));
-        let rocket = http::rocket(
+        let rocket_builder = http::rocket(
             db_pool.clone(),
             discord_builder.ctx_fut.clone(),
             http_client.clone(),
@@ -301,6 +302,10 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             seed_metadata,
             config.avianart_api_key.clone(),
         ).await);
+        let rocket = rocket_builder
+            .manage(Arc::clone(&global_state))
+            .manage(Arc::clone(&practice_seeds))
+            .ignite().await?;
         let discord_builder = discord_bot::configure_builder(discord_builder, global_state.clone(), db_pool.clone(), http_client.clone(), config.clone(), Arc::clone(&new_room_lock), Arc::clone(&clean_shutdown), rocket.shutdown());
         #[cfg(unix)] let unix_listener = unix_socket::listen(rocket.shutdown(), clean_shutdown, global_state.clone());
         let racetime_task = tokio::spawn(racetime_bot::main(config.clone(), rocket.shutdown(), global_state, seed_cache_rx)).map(|res| match res {
