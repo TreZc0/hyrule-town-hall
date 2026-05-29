@@ -6,6 +6,7 @@ use crate::{
     prelude::*,
     racetime_bot::{
         AlttprDoorRandoSetting,
+        DungeonShuffleVal,
         OwrChoicePatch,
         OwrSeedConfig,
     },
@@ -15,9 +16,9 @@ pub(crate) static OWR_CONFIG: OwrSeedConfig = OwrSeedConfig {
     base_settings: AlttprDoorRandoSetting {
         aga_randomness: Some(false),
         accessibility: "locations",
-        bigkeyshuffle: 3,
+        bigkeyshuffle: DungeonShuffleVal::Named("wild"),
         boss_shuffle: Some("none"),
-        compassshuffle: 3,
+        compassshuffle: DungeonShuffleVal::Named("wild"),
         crystals_ganon: "7",
         crystals_gt: "7",
         dropshuffle: "none",
@@ -28,7 +29,7 @@ pub(crate) static OWR_CONFIG: OwrSeedConfig = OwrSeedConfig {
         key_logic_algorithm: "partial",
         keyshuffle: "wild",
         linked_drops: "unset",
-        mapshuffle: 3,
+        mapshuffle: DungeonShuffleVal::Named("wild"),
         mirrorscroll: 0,
         mode: "standard",
         ow_mixed: Some(0),

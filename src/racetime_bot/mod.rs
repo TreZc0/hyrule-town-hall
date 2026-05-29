@@ -1816,9 +1816,9 @@ impl GlobalState {
             let crosskeys_settings = AlttprDoorRandoSetting {
                 aga_randomness: None,
                 accessibility: "locations",
-                bigkeyshuffle: 1,
+                bigkeyshuffle: DungeonShuffleVal::Bool(true),
                 boss_shuffle: None,
-                compassshuffle: 1,
+                compassshuffle: DungeonShuffleVal::Bool(true),
                 crystals_ganon: "7",
                 crystals_gt: "7",
                 dropshuffle: keydrop_mode,
@@ -1829,7 +1829,7 @@ impl GlobalState {
                 key_logic_algorithm: "partial",
                 keyshuffle: "wild",
                 linked_drops: "unset",
-                mapshuffle: 1,
+                mapshuffle: DungeonShuffleVal::Bool(true),
                 mirrorscroll: mirrorscroll,
                 mode: world_state,
                 ow_mixed: None,
@@ -1994,7 +1994,9 @@ impl GlobalState {
                         break;
                     }
                     Some(1) => {
-                        let last_error = Some(String::from_utf8_lossy(&output.stderr).into_owned());
+                        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+                        eprintln!("[OWR] DungeonRandomizer.py attempt {attempt} failed:\n{stderr}");
+                        let last_error = Some(stderr);
                         if attempt < MAX_RETRIES {
                             sleep(Duration::from_secs(10 + 2u64.pow(attempt as u32))).await;
                             continue;
@@ -3677,14 +3679,21 @@ pub(crate) struct OwrSeedConfig {
 }
 
 #[derive(Clone, Copy, Serialize)]
+#[serde(untagged)]
+pub(crate) enum DungeonShuffleVal {
+    Bool(bool),
+    Named(&'static str),
+}
+
+#[derive(Clone, Copy, Serialize)]
 pub(crate) struct AlttprDoorRandoSetting {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) aga_randomness: Option<bool>,
     pub(crate) accessibility: &'static str,
-    pub(crate) bigkeyshuffle: u8,
+    pub(crate) bigkeyshuffle: DungeonShuffleVal,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) boss_shuffle: Option<&'static str>,
-    pub(crate) compassshuffle: u8,
+    pub(crate) compassshuffle: DungeonShuffleVal,
     pub(crate) crystals_ganon: &'static str,
     pub(crate) crystals_gt: &'static str,
     pub(crate) dropshuffle: &'static str,
@@ -3696,7 +3705,7 @@ pub(crate) struct AlttprDoorRandoSetting {
     pub(crate) key_logic_algorithm: &'static str,
     pub(crate) keyshuffle: &'static str,
     pub(crate) linked_drops: &'static str,
-    pub(crate) mapshuffle: u8,
+    pub(crate) mapshuffle: DungeonShuffleVal,
     pub(crate) mirrorscroll: u8,
     pub(crate) mode: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
