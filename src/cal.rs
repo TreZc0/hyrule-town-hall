@@ -4804,6 +4804,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
             race.last_edited_at = Some(Utc::now());
             let was_ignored = race.ignored;
             race.ignored = value.is_canceled;
+            let original_custom_title = race.custom_title.clone();
             if is_organizer && race.is_custom() {
                 race.custom_title = Some(value.custom_title.trim().to_owned());
                 race.custom_create_room = value.custom_create_room;
@@ -4895,8 +4896,8 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 }
             }
 
-            // Update Discord scheduled event if restream URLs changed
-            if race.video_urls != original_video_urls {
+            // Update Discord scheduled event if restream URLs or race name changed
+            if race.video_urls != original_video_urls || race.custom_title != original_custom_title {
                 if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&*discord_ctx.read().await, &mut transaction, &race, &event, http_client.inner()).await {
                     eprintln!("Failed to update Discord scheduled event for race {}: {}", race.id, e);
                 }
@@ -4963,9 +4964,9 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
 
             transaction.commit().await?;
 
-            // Update the volunteer info post to reflect restream changes
+            // Update the volunteer info post to reflect restream or race name changes
             // (Must be done after commit so the new transaction can see the changes)
-            if race.video_urls != original_video_urls {
+            if race.video_urls != original_video_urls || race.custom_title != original_custom_title {
                 if let Err(e) = crate::volunteer_requests::update_volunteer_post_for_race(
                     pool,
                     &*discord_ctx.read().await,
