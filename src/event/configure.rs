@@ -2767,6 +2767,21 @@ async fn enter_flow_form(
             let closes_str = flow.get("closes").and_then(|v| v.as_str()).unwrap_or_default();
             let closes_input = to_datetime_input(closes_str);
             let req_count = requirements.len();
+            let all_req_types = [
+                "raceTime", "raceTimeInvite", "twitch", "discord", "discordGuild",
+                "challonge", "startGG", "startGGEventSignup", "textField", "textField2",
+                "yesNo", "booleanChoice", "rules", "poll", "restreamConsent",
+                "qualifier", "tripleQualifier", "qualifierPlacement", "rslLeaderboard", "external",
+            ];
+            let add_type_guide: Vec<(&str, &str, &str)> = all_req_types.iter()
+                .map(|&t| (t, req_type_label(t), req_type_tooltip(t)))
+                .collect();
+            let js_entries: String = all_req_types.iter()
+                .map(|&t| format!("  d[{:?}] = {:?};\n", t, req_type_tooltip(t)))
+                .collect();
+            let add_type_script = format!(
+                "(function(){{\n  var d = {{}};\n{js_entries}  var sel = document.getElementById('req_type');\n  var desc = document.getElementById('req-type-desc');\n  function update(){{ desc.textContent = d[sel.value] || ''; }}\n  sel.addEventListener('change', update);\n  update();\n}})();"
+            );
             html! {
                 h2 : "Configure Enter Flow";
                 p : "Define what participants must fulfill to sign up for this event.";
@@ -2853,8 +2868,23 @@ async fn enter_flow_form(
                                 option(value = "external") : "External Verification";
                             }
                         }
+                        p(id = "req-type-desc", style = "margin: 6px 0 0; font-style: italic; color: var(--muted-text, #888); min-height: 1.4em;") {}
                     }
                 }, vec![], "Add");
+                script { : RawHtml(&add_type_script); }
+                noscript {
+                    details {
+                        summary(style = "cursor: pointer; margin-top: 12px;") : "Requirement type reference";
+                        table(style = "margin-top: 8px; border-collapse: collapse; width: 100%;") {
+                            @for (_, label, desc) in &add_type_guide {
+                                tr(style = "border-bottom: 1px solid var(--border);") {
+                                    td(style = "padding: 6px 12px 6px 0; font-weight: bold; white-space: nowrap; vertical-align: top;") : *label;
+                                    td(style = "padding: 6px 0; color: var(--muted-text, #888);") : *desc;
+                                }
+                            }
+                        }
+                    }
+                }
             }
         } else {
             html! {
