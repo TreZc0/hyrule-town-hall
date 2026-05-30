@@ -120,6 +120,9 @@ pub(crate) enum Requirement {
         key: String,
         #[serde_as(as = "DeserializeRawHtml")]
         label: RawHtml<String>,
+        /// If true, players cannot change this choice after the event has started.
+        #[serde(default)]
+        locked: bool,
     },
     /// Must agree to the event rules
     Rules {
@@ -514,7 +517,7 @@ impl Requirement {
                     }),
                 }
             }
-            Self::BooleanChoice { key, label } => {
+            Self::BooleanChoice { key, label, .. } => {
                 let key = key.clone();
                 let label = label.clone();
                 let yes_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "yes");
@@ -1393,7 +1396,21 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                         let discord_ctx = discord_ctx.read().await;
                         if let Some(PgSnowflake(participant_role)) = sqlx::query_scalar!(r#"SELECT id AS "id: PgSnowflake<RoleId>" FROM discord_roles WHERE guild = $1 AND series = $2 AND event = $3"#, PgSnowflake(discord_guild) as _, series as _, event).fetch_optional(&mut *transaction).await? {
                             if let Ok(member) = discord_guild.member(&*discord_ctx, discord_user.id).await {
-                                member.add_role(&*discord_ctx, participant_role).await?;
+                                if let Err(e) = member.add_role(&*discord_ctx, participant_role).await {
+                                    let msg = MessageBuilder::default()
+                                        .push("Failed to assign participant role ")
+                                        .mention(&participant_role)
+                                        .push(" to ")
+                                        .mention_user(&me)
+                                        .push(" when entering ")
+                                        .push_safe(&data.display_name)
+                                        .push(": ")
+                                        .push_safe(e.to_string())
+                                        .build();
+                                    if let Ok(ch) = ADMIN_USER.create_dm_channel(&*discord_ctx).await {
+                                        let _ = ch.say(&*discord_ctx, msg).await;
+                                    }
+                                }
                             }
                         }
                     }

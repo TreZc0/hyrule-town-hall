@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    SELECT CASE WHEN u.display_source = 'racetime' THEN u.racetime_display_name\n                                WHEN u.display_source = 'discord' THEN u.discord_display_name\n                           END AS \"name\"\n                    FROM teams t\n                    JOIN team_members tm ON tm.team = t.id\n                    JOIN users u ON u.id = tm.member\n                    WHERE t.series = $1 AND t.event = $2 AND NOT t.resigned\n                    ORDER BY name NULLS LAST\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a1261798f71c32d74dbce508d774d0ac14a480d6d22254c6f72008e32a6aa3d0"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE races r\n            SET scheduling_deadline         = erc.scheduling_deadline,\n                deadline_reminded_3d        = false,\n                deadline_reminded_24h       = false,\n                deadline_organizer_notified = false\n            FROM event_round_configs erc\n            WHERE r.series = $1 AND r.event = $2\n              AND erc.series = $1 AND erc.event = $2\n              AND (erc.round = r.round OR r.round ILIKE '% ' || erc.round)\n              AND erc.scheduling_deadline IS NOT NULL\n              AND r.end_time IS NULL\n              AND NOT r.ignored\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b745c50d593652ae8e1655fa6d8f45ee1ffe7446412b30f757b938a90c0e8dab"
+}

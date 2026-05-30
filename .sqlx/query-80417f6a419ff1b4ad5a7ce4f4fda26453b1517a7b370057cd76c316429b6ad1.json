@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            r.id,\n            r.series AS \"series: Series\",\n            r.event,\n            r.phase,\n            r.round,\n            e.discord_organizer_channel,\n            COALESCE(t1.name, r.p1) AS team1_name,\n            COALESCE(t2.name, r.p2) AS team2_name\n        FROM races r\n        JOIN events e ON e.series = r.series AND e.event = r.event\n        LEFT JOIN teams t1 ON t1.id = r.team1\n        LEFT JOIN teams t2 ON t2.id = r.team2\n        WHERE NOT r.ignored\n          AND r.scheduling_deadline IS NOT NULL\n          AND r.scheduling_deadline <= NOW()\n          AND NOT r.deadline_organizer_notified\n          AND NOT r.schedule_locked\n          AND r.end_time IS NULL\n          AND r.start IS NULL\n          AND r.async_start1 IS NULL\n          AND r.async_start2 IS NULL\n          AND r.async_start3 IS NULL\n    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "series: Series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "event",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "phase",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "round",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "discord_organizer_channel",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "team1_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "team2_name",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "80417f6a419ff1b4ad5a7ce4f4fda26453b1517a7b370057cd76c316429b6ad1"
+}

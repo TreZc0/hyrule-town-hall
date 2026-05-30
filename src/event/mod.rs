@@ -456,7 +456,7 @@ impl<'a> Data<'a> {
         let Some(ref flow) = self.enter_flow else { return vec![] };
         flow.requirements.iter()
             .filter_map(|req| {
-                if let enter::Requirement::BooleanChoice { key, label } = req {
+                if let enter::Requirement::BooleanChoice { key, label, .. } = req {
                     // Strip HTML tags so the label is safe for plain-text contexts (Discord).
                     let mut plain = String::new();
                     let mut in_tag = false;
@@ -1933,6 +1933,8 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                         h2 : "Options";
                         @let ctx = ctx.take_edit();
                         @let mut errors = ctx.errors().collect_vec();
+                        @let event_started = data.is_started(&mut transaction).await?;
+                        @let has_active_race = sqlx::query_scalar!(r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND (team1 = $3 OR team2 = $3 OR team3 = $3) AND scheduling_thread IS NOT NULL AND end_time IS NULL AND NOT ignored) AS "exists!""#, data.series as _, &data.event, row.id as _).fetch_one(&mut *transaction).await?;
                         : full_form(uri!(status_post(data.series, &*data.event)), csrf, html! {
                             : form_field("restream_consent", &mut errors, html! {
                                 input(type = "checkbox", id = "restream_consent", name = "restream_consent", checked? = ctx.field_value("restream_consent").map_or(row.restream_consent, |value| value == "on"));
@@ -1946,18 +1948,19 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             });
                             @if let Some(ref enter_flow) = data.enter_flow {
                                 @for requirement in &enter_flow.requirements {
-                                    @if let enter::Requirement::BooleanChoice { key, label } = requirement {
+                                    @if let enter::Requirement::BooleanChoice { key, label, locked } = requirement {
                                         @let field_name = format!("custom_choices[{key}]");
                                         @let field_id_yes = format!("custom_choices[{key}]-yes");
                                         @let field_id_no = format!("custom_choices[{key}]-no");
                                         @let yes_checked = ctx.field_value(&*field_name).map_or_else(|| row.custom_choices.get(key).is_some_and(|v| v == "yes"), |value| value == "yes");
                                         @let no_checked = ctx.field_value(&*field_name).map_or_else(|| row.custom_choices.get(key).is_some_and(|v| v == "no"), |value| value == "no");
+                                        @let is_locked = has_active_race || *locked;
                                         : form_field(&field_name, &mut errors, html! {
                                             label(for = &field_name) : label;
                                             br;
-                                            input(id = &field_id_yes, type = "radio", name = &field_name, value = "yes", checked? = yes_checked);
+                                            input(id = &field_id_yes, type = "radio", name = &field_name, value = "yes", checked? = yes_checked, disabled? = is_locked);
                                             label(for = &field_id_yes) : "Yes";
-                                            input(id = &field_id_no, type = "radio", name = &field_name, value = "no", checked? = no_checked);
+                                            input(id = &field_id_no, type = "radio", name = &field_name, value = "no", checked? = no_checked, disabled? = is_locked);
                                             label(for = &field_id_no) : "No";
                                         });
                                     }
@@ -1967,7 +1970,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                         }, errors, "Save");
                         @let (resign_errors, resign_button) = button_form_confirm(uri!(resign_post(data.series, &*data.event, row.id)), csrf, Vec::new(), "Resign", "Are you sure you want to resign? You will be removed from the standings entirely.");
                         : resign_errors;
-                        @let show_opt_out = data.show_opt_out && matches!(qualifier_kind, QualifierKind::Score(_)) && !data.is_started(&mut transaction).await?;
+                        @let show_opt_out = data.show_opt_out && matches!(qualifier_kind, QualifierKind::Score(_)) && !event_started;
                         @if show_opt_out {
                             @let is_opted_out = if let Some(racetime) = me.racetime.as_ref() {
                                 sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM opt_outs WHERE series = $1 AND event = $2 AND racetime_id = $3) AS "exists!""#, data.series as _, &data.event, racetime.id).fetch_one(&mut *transaction).await?
@@ -2051,7 +2054,7 @@ pub(crate) async fn status_post(pool: &State<PgPool>, http_client: &State<reqwes
     if data.is_ended() {
         form.context.push_error(form::Error::validation("This event has already ended."));
     }
-    let row = sqlx::query!(r#"SELECT id AS "id: Id<Teams>", restream_consent FROM teams, team_members WHERE
+    let row = sqlx::query!(r#"SELECT id AS "id: Id<Teams>", restream_consent, custom_choices AS "custom_choices: Json<HashMap<String, String>>" FROM teams, team_members WHERE
         id = team
         AND series = $1
         AND event = $2
@@ -2069,7 +2072,22 @@ pub(crate) async fn status_post(pool: &State<PgPool>, http_client: &State<reqwes
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(status_page(transaction, http_client, Some(me), uri, csrf.as_ref(), data, StatusContext::Edit(form.context)).await?)
         } else {
-            sqlx::query!("UPDATE teams SET restream_consent = $1, custom_choices = $2 WHERE id = $3", value.restream_consent, Json(&value.custom_choices) as _, row.id as _).execute(&mut *transaction).await?;
+            let has_active_race = sqlx::query_scalar!(r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND (team1 = $3 OR team2 = $3 OR team3 = $3) AND scheduling_thread IS NOT NULL AND end_time IS NULL AND NOT ignored) AS "exists!""#, data.series as _, &data.event, row.id as _).fetch_one(&mut *transaction).await?;
+            let mut merged_choices = value.custom_choices.clone();
+            if let Some(ref enter_flow) = data.enter_flow {
+                for req in &enter_flow.requirements {
+                    if let enter::Requirement::BooleanChoice { key, locked, .. } = req {
+                        if has_active_race || *locked {
+                            if let Some(existing) = row.custom_choices.0.get(key.as_str()) {
+                                merged_choices.insert(key.clone(), existing.clone());
+                            } else {
+                                merged_choices.remove(key.as_str());
+                            }
+                        }
+                    }
+                }
+            }
+            sqlx::query!("UPDATE teams SET restream_consent = $1, custom_choices = $2 WHERE id = $3", value.restream_consent, Json(&merged_choices) as _, row.id as _).execute(&mut *transaction).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(status(series, event))))
         }
