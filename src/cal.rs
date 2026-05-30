@@ -2662,7 +2662,7 @@ pub(crate) async fn race_table(
                         }
                         @match race.entrants {
                             Entrants::Open => td(colspan = "6") {
-                                @if let Some(custom_title) = race.custom_title_with_event(&event.display_name) {
+                                @if let Some(custom_title) = &race.custom_title {
                                     : custom_title;
                                 } else {
                                     : "(open)";
