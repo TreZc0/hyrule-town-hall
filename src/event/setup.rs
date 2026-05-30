@@ -944,6 +944,13 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                 &event_data.event,
             ).execute(&mut *transaction).await?;
 
+            let old_participant_role_id: Option<i64> = sqlx::query_scalar!(
+                "SELECT id FROM discord_roles WHERE series = $1 AND event = $2 AND role IS NULL AND racetime_team IS NULL",
+                event_data.series as _, &event_data.event
+            ).fetch_optional(&mut *transaction).await?;
+            let new_participant_role_id = discord_participant_role.map(|r| r.get() as i64);
+            let participant_role_changed = new_participant_role_id != old_participant_role_id;
+
             sqlx::query!(
                 "DELETE FROM discord_roles WHERE series = $1 AND event = $2 AND role IS NULL AND racetime_team IS NULL",
                 event_data.series as _, &event_data.event
@@ -956,42 +963,50 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                     event_data.series as _,
                     &event_data.event
                 ).execute(&mut *transaction).await?;
-                let discord_ctx = discord_ctx.read().await;
-                let entrant_discord_ids = sqlx::query_scalar!(
-                    r#"SELECT DISTINCT u.discord_id AS "discord_id!: PgSnowflake<UserId>"
+                if participant_role_changed {
+                    let entrant_discord_ids = sqlx::query_scalar!(
+                        r#"SELECT DISTINCT u.discord_id AS "discord_id!: PgSnowflake<UserId>"
                     FROM teams t
                     JOIN team_members tm ON tm.team = t.id
                     JOIN users u ON u.id = tm.member
                     WHERE t.series = $1 AND t.event = $2
                     AND tm.status IN ('created', 'confirmed')
                     AND u.discord_id IS NOT NULL"#,
-                    event_data.series as _, &event_data.event
-                ).fetch_all(&mut *transaction).await?;
-                let mut failed_role_assignments = Vec::new();
-                for PgSnowflake(discord_id) in entrant_discord_ids {
-                    if let Ok(member) = guild.member(&*discord_ctx, discord_id).await {
-                        if let Err(e) = member.add_role(&*discord_ctx, role_id).await {
-                            failed_role_assignments.push((discord_id, e));
+                        event_data.series as _, &event_data.event
+                    ).fetch_all(&mut *transaction).await?;
+                    let discord_ctx_for_spawn = discord_ctx.inner().clone();
+                    let display_name = event_data.display_name.clone();
+                    transaction.commit().await?;
+                    tokio::spawn(async move {
+                        let discord_ctx = discord_ctx_for_spawn.read().await;
+                        let mut failed_role_assignments = Vec::new();
+                        for PgSnowflake(discord_id) in entrant_discord_ids {
+                            if let Ok(member) = guild.member(&*discord_ctx, discord_id).await {
+                                if let Err(e) = member.add_role(&*discord_ctx, role_id).await {
+                                    failed_role_assignments.push((discord_id, e));
+                                }
+                            }
                         }
-                    }
-                }
-                if !failed_role_assignments.is_empty() {
-                    let mut msg = MessageBuilder::default();
-                    msg.push("Failed to assign participant role ");
-                    msg.mention(&role_id);
-                    msg.push(" for ");
-                    msg.push_safe(&event_data.display_name);
-                    msg.push(" to:");
-                    for (discord_id, e) in &failed_role_assignments {
-                        msg.push("\n- ");
-                        msg.mention(discord_id);
-                        msg.push(": ");
-                        msg.push_safe(e.to_string());
-                    }
-                    let msg = msg.build();
-                    if let Ok(ch) = ADMIN_USER.create_dm_channel(&*discord_ctx).await {
-                        let _ = ch.say(&*discord_ctx, msg).await;
-                    }
+                        if !failed_role_assignments.is_empty() {
+                            let mut msg = MessageBuilder::default();
+                            msg.push("Failed to assign participant role ");
+                            msg.mention(&role_id);
+                            msg.push(" for ");
+                            msg.push_safe(&display_name);
+                            msg.push(" to:");
+                            for (discord_id, e) in &failed_role_assignments {
+                                msg.push("\n- ");
+                                msg.mention(discord_id);
+                                msg.push(": ");
+                                msg.push_safe(e.to_string());
+                            }
+                            let msg = msg.build();
+                            if let Ok(ch) = ADMIN_USER.create_dm_channel(&*discord_ctx).await {
+                                let _ = ch.say(&*discord_ctx, msg).await;
+                            }
+                        }
+                    });
+                    return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event)))));
                 }
             }
 
