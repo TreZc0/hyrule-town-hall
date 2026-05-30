@@ -2655,9 +2655,12 @@ pub(crate) fn start_practice_seed_roll(seeds: event::PracticeSeeds, job_id: Uuid
         let status = loop {
             match updates.recv().await {
                 Some(SeedRollUpdate::Done { seed, .. }) => break match seed.files {
-                    Some(seed::Files::AvianartSeed { ref hash, .. }) =>
-                        event::PracticeSeedStatus::Done(event::PracticeSeedResult::Redirect(
-                            format!("https://avianart.games/perm/{hash}"))),
+                    Some(seed::Files::AvianartSeed { ref hash, ref seed_hash }) =>
+                        event::PracticeSeedStatus::Done(event::PracticeSeedResult::SeedLink {
+                            url: format!("https://avianart.games/perm/{hash}"),
+                            label: "Open Seed on Avianart".to_string(),
+                            seed_hash: seed_hash.clone(),
+                        }),
                     Some(seed::Files::AlttprDoorRando { uuid, is_owr }) => {
                         let prefix = if is_owr { "OR_" } else { "DR_" };
                         let mut url = Url::parse("https://alttprpatch.synack.live/patcher.html").unwrap();
