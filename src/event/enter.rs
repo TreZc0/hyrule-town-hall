@@ -120,6 +120,9 @@ pub(crate) enum Requirement {
         key: String,
         #[serde_as(as = "DeserializeRawHtml")]
         label: RawHtml<String>,
+        /// If true, players cannot change this choice after the event has started.
+        #[serde(default)]
+        locked: bool,
     },
     /// Must agree to the event rules
     Rules {
@@ -514,7 +517,7 @@ impl Requirement {
                     }),
                 }
             }
-            Self::BooleanChoice { key, label } => {
+            Self::BooleanChoice { key, label, .. } => {
                 let key = key.clone();
                 let label = label.clone();
                 let yes_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "yes");

@@ -2289,6 +2289,7 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
                 volunteer_request_message_id: None,
                 scheduling_deadline: None,
                 restream_consent_required: false,
+                racetime_goal_slug: None,
                 custom_title: Some(custom_title.to_owned()),
                 custom_create_room: value.custom_create_room,
             };

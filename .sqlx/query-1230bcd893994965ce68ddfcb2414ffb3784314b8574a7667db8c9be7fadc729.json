@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT seed_data->>'locked_spoiler_log_path' FROM races WHERE seed_data->>'file_stem' = $1 AND seed_data->>'type' = 'midos_house'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "?column?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "1230bcd893994965ce68ddfcb2414ffb3784314b8574a7667db8c9be7fadc729"
+}

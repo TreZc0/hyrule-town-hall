@@ -555,6 +555,12 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
       "type": "booleanChoice",
       "key": "hard_mode",
       "label": "Difficulty: Hard"
+    },
+    {
+      "type": "booleanChoice",
+      "key": "hard_mode_locked",
+      "label": "Difficulty: Hard (locked after signup)",
+      "locked": true
     }
   ]
 }"#;

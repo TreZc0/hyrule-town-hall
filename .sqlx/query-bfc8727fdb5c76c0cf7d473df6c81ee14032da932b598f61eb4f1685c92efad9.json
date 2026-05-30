@@ -1,0 +1,92 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE events\n                SET display_name = $1, start = $2, end_time = $3, url = $4, video_url = $5,\n                    discord_invite_url = $6, discord_guild = $7, discord_race_room_channel = $8,\n                    discord_race_results_channel = $9, discord_volunteer_info_channel = $10,\n                    discord_organizer_channel = $11, discord_scheduling_channel = $12,\n                    discord_async_channel = $13, short_name = $14, speedgaming_slug = $15,\n                    listed = $16, emulator_settings_reminder = $17,\n                    prevent_late_joins = $18, enter_url = $19, teams_url = $20,\n                    challonge_community = $21, team_config = $22, language = $23,\n                    default_game_count = $24, open_stream_delay = $25, invitational_stream_delay = $26,\n                    hide_teams_tab = $27, hide_races_tab = $28, show_qualifier_times = $29,\n                    automated_asyncs = $30, show_opt_out = $31, force_custom_role_binding = $32,\n                    racetime_goal_slug = $35, draft_kind = $36, draft_config = $37,\n                    qualifier_score_kind = $38, is_single_race = $39, hide_entrants = $40,\n                    start_delay = $41, start_delay_open = $42, restrict_chat_in_qualifiers = $43,\n                    async_start_delay = $44, startgg_double_rr = $45,\n                    preroll_mode = $46, spoiler_unlock = $47, is_custom_goal = $48,\n                    fpa_enabled = $49, swiss_standings = $50, rando_version = $51,\n                    is_live_event = $52, seed_gen_type = $53, seed_config = $54\n                WHERE series = $33 AND event = $34\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Text",
+        "Text",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Text",
+        "Text",
+        "Text",
+        {
+          "Custom": {
+            "name": "team_config",
+            "kind": {
+              "Enum": [
+                "solo",
+                "coop",
+                "pictionary",
+                "multiworld",
+                "tfbcoop"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        },
+        "Int2",
+        "Interval",
+        "Interval",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Text",
+        "Text",
+        "Varchar",
+        "Varchar",
+        "Jsonb",
+        "Varchar",
+        "Bool",
+        "Bool",
+        "Int4",
+        "Int4",
+        "Bool",
+        "Int4",
+        "Bool",
+        "Varchar",
+        "Varchar",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Jsonb",
+        "Bool",
+        "Varchar",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bfc8727fdb5c76c0cf7d473df6c81ee14032da932b598f61eb4f1685c92efad9"
+}

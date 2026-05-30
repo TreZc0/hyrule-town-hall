@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO prerolled_seeds\n                                            (goal_name, file_stem, locked_spoiler_log_path, hash1, hash2, hash3, hash4, hash5, seed_password, progression_spoiler)\n                                        VALUES\n                                            ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)\n                                        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Bpchar",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c3c830c15d1aa2c0cffcebd2bac8f1c6ac07e7e512025674dd47f50f9e1c4f34"
+}

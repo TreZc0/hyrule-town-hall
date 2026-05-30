@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND (team1 = $3 OR team2 = $3 OR team3 = $3) AND scheduling_thread IS NOT NULL AND end_time IS NULL AND NOT ignored) AS \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5fa54e89fa9ee2584bede4c690342cdd3c7e6d396a5d029c4d23abfe06dcfed3"
+}

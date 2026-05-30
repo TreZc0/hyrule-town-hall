@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE teams SET challonge_id = $1\n             WHERE series = $2 AND event = $3 AND challonge_id IS NULL\n             AND id IN (SELECT team FROM team_members WHERE member = $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "499253d3b2f66d9a141d97a097dc70dc288ed68d1c124f1fd90c48c3ef514f5d"
+}

@@ -15,7 +15,10 @@ use {
         prelude::*,
         racetime_bot::{
             VersionedBranch,
-            seed_gen_type::SeedGenType,
+            seed_gen_type::{
+                AlttprDrSource,
+                SeedGenType,
+            },
         },
     },
 };
@@ -505,7 +508,7 @@ impl<'a> Data<'a> {
         let Some(ref flow) = self.enter_flow else { return vec![] };
         flow.requirements.iter()
             .filter_map(|req| {
-                if let enter::Requirement::BooleanChoice { key, label } = req {
+                if let enter::Requirement::BooleanChoice { key, label, .. } = req {
                     // Strip HTML tags so the label is safe for plain-text contexts (Discord).
                     let mut plain = String::new();
                     let mut in_tag = false;
@@ -867,11 +870,11 @@ impl<'a> Data<'a> {
                 }
                 @let is_ootr = self.game(&mut *transaction).await?.map(|g| g.name == "ootr").unwrap_or(false);
                 @let practice_seed_url = {
-                    let has_practice = match racetime_bot::Goal::for_event(self.series, &self.event) {
-                        Some(racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB) => true,
-                        Some(racetime_bot::Goal::AlttprDeRivalsCupBrackets | racetime_bot::Goal::AlttprDeRivalsCupGroups) => true,
-                        Some(racetime_bot::Goal::Cabookey2026) => true,
-                        Some(racetime_bot::Goal::TwwrMainWeekly | racetime_bot::Goal::TwwrMainMiniblins26) => self.settings_string.is_some(),
+                    let has_practice = match &self.seed_gen_type {
+                        Some(SeedGenType::Owr { .. }) => true,
+                        Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman, practice_modes, .. }) => !practice_modes.is_empty(),
+                        Some(SeedGenType::AlttprAvianart { practice_presets }) => !practice_presets.is_empty(),
+                        Some(SeedGenType::TWWR { .. }) => self.settings_string.is_some(),
                         _ => is_ootr && self.single_settings.is_some(),
                     };
                     has_practice.then(|| uri!(practice_seed(self.series, &*self.event)))
@@ -1931,6 +1934,8 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                         h2 : "Options";
                         @let ctx = ctx.take_edit();
                         @let mut errors = ctx.errors().collect_vec();
+                        @let event_started = data.is_started(&mut transaction).await?;
+                        @let has_active_race = sqlx::query_scalar!(r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND (team1 = $3 OR team2 = $3 OR team3 = $3) AND scheduling_thread IS NOT NULL AND end_time IS NULL AND NOT ignored) AS "exists!""#, data.series as _, &data.event, row.id as _).fetch_one(&mut *transaction).await?;
                         : full_form(uri!(status_post(data.series, &*data.event)), csrf, html! {
                             : form_field("restream_consent", &mut errors, html! {
                                 input(type = "checkbox", id = "restream_consent", name = "restream_consent", checked? = ctx.field_value("restream_consent").map_or(row.restream_consent, |value| value == "on"));
@@ -1944,18 +1949,19 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             });
                             @if let Some(ref enter_flow) = data.enter_flow {
                                 @for requirement in &enter_flow.requirements {
-                                    @if let enter::Requirement::BooleanChoice { key, label } = requirement {
+                                    @if let enter::Requirement::BooleanChoice { key, label, locked } = requirement {
                                         @let field_name = format!("custom_choices[{key}]");
                                         @let field_id_yes = format!("custom_choices[{key}]-yes");
                                         @let field_id_no = format!("custom_choices[{key}]-no");
                                         @let yes_checked = ctx.field_value(&*field_name).map_or_else(|| row.custom_choices.get(key).is_some_and(|v| v == "yes"), |value| value == "yes");
                                         @let no_checked = ctx.field_value(&*field_name).map_or_else(|| row.custom_choices.get(key).is_some_and(|v| v == "no"), |value| value == "no");
+                                        @let is_locked = has_active_race || *locked;
                                         : form_field(&field_name, &mut errors, html! {
                                             label(for = &field_name) : label;
                                             br;
-                                            input(id = &field_id_yes, type = "radio", name = &field_name, value = "yes", checked? = yes_checked);
+                                            input(id = &field_id_yes, type = "radio", name = &field_name, value = "yes", checked? = yes_checked, disabled? = is_locked);
                                             label(for = &field_id_yes) : "Yes";
-                                            input(id = &field_id_no, type = "radio", name = &field_name, value = "no", checked? = no_checked);
+                                            input(id = &field_id_no, type = "radio", name = &field_name, value = "no", checked? = no_checked, disabled? = is_locked);
                                             label(for = &field_id_no) : "No";
                                         });
                                     }
@@ -1965,7 +1971,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                         }, errors, "Save");
                         @let (resign_errors, resign_button) = button_form_confirm(uri!(resign_post(data.series, &*data.event, row.id)), csrf, Vec::new(), "Resign", "Are you sure you want to resign? You will be removed from the standings entirely.");
                         : resign_errors;
-                        @let show_opt_out = data.show_opt_out && matches!(qualifier_kind, QualifierKind::Score(_)) && !data.is_started(&mut transaction).await?;
+                        @let show_opt_out = data.show_opt_out && matches!(qualifier_kind, QualifierKind::Score(_)) && !event_started;
                         @if show_opt_out {
                             @let is_opted_out = if let Some(racetime) = me.racetime.as_ref() {
                                 sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM opt_outs WHERE series = $1 AND event = $2 AND racetime_id = $3) AS "exists!""#, data.series as _, &data.event, racetime.id).fetch_one(&mut *transaction).await?
@@ -2049,7 +2055,7 @@ pub(crate) async fn status_post(pool: &State<PgPool>, http_client: &State<reqwes
     if data.is_ended() {
         form.context.push_error(form::Error::validation("This event has already ended."));
     }
-    let row = sqlx::query!(r#"SELECT id AS "id: Id<Teams>", restream_consent FROM teams, team_members WHERE
+    let row = sqlx::query!(r#"SELECT id AS "id: Id<Teams>", restream_consent, custom_choices AS "custom_choices: Json<HashMap<String, String>>" FROM teams, team_members WHERE
         id = team
         AND series = $1
         AND event = $2
@@ -2067,7 +2073,22 @@ pub(crate) async fn status_post(pool: &State<PgPool>, http_client: &State<reqwes
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(status_page(transaction, http_client, Some(me), uri, csrf.as_ref(), data, StatusContext::Edit(form.context)).await?)
         } else {
-            sqlx::query!("UPDATE teams SET restream_consent = $1, custom_choices = $2 WHERE id = $3", value.restream_consent, Json(&value.custom_choices) as _, row.id as _).execute(&mut *transaction).await?;
+            let has_active_race = sqlx::query_scalar!(r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND (team1 = $3 OR team2 = $3 OR team3 = $3) AND scheduling_thread IS NOT NULL AND end_time IS NULL AND NOT ignored) AS "exists!""#, data.series as _, &data.event, row.id as _).fetch_one(&mut *transaction).await?;
+            let mut merged_choices = value.custom_choices.clone();
+            if let Some(ref enter_flow) = data.enter_flow {
+                for req in &enter_flow.requirements {
+                    if let enter::Requirement::BooleanChoice { key, locked, .. } = req {
+                        if has_active_race || *locked {
+                            if let Some(existing) = row.custom_choices.0.get(key.as_str()) {
+                                merged_choices.insert(key.clone(), existing.clone());
+                            } else {
+                                merged_choices.remove(key.as_str());
+                            }
+                        }
+                    }
+                }
+            }
+            sqlx::query!("UPDATE teams SET restream_consent = $1, custom_choices = $2 WHERE id = $3", value.restream_consent, Json(&merged_choices) as _, row.id as _).execute(&mut *transaction).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(status(series, event))))
         }
@@ -3353,40 +3374,6 @@ pub(crate) async fn submit_async(pool: &State<PgPool>, http_client: &State<reqwe
     })
 }
 
-const DE9_PRACTICE_CHOICES: &[(&str, &str)] = &[
-    ("pool_hard", "Hard Item Pool"),
-    ("pool_expert", "Expert Item Pool"),
-    ("pots", "Pottery Shuffle"),
-    ("all_dungeons", "All Dungeons"),
-    ("flute", "Flute"),
-    ("hovering", "Hovering"),
-    ("inverted", "Inverted"),
-    ("keydrop", "Keydrop Shuffle"),
-    ("mirror_scroll", "Mirror Scroll"),
-    ("no_delay", "No Delay"),
-    ("pseudoboots", "Pseudoboots"),
-    ("boots", "Boots"),
-    ("zw", "ZW"),
-    ("boss", "Boss Shuffle"),
-    ("retro", "Retro"),
-    ("bones", "Bonk Rocks"),
-    ("shop", "Shop Shuffle"),
-    ("keys", "Key Shuffle"),
-    ("dmg", "Damage Shuffle"),
-    ("bag", "Progressive Bag"),
-    ("door", "Door Shuffle"),
-];
-
-fn label_for_owr_choice(key: &str) -> &'static str {
-    match key {
-        "keydrop" => "Key Drop Shuffle",
-        "100pct" => "100% Completionist",
-        "tileswap" => "Tile Swap (OW Mixed)",
-        "mirror_scroll" => "Mirror Scroll",
-        "enemizer" => "Enemizer + Boss Shuffle",
-        _ => "Unknown option",
-    }
-}
 
 #[derive(FromForm, CsrfForm)]
 pub(crate) struct PracticeSeedForm {
@@ -3403,8 +3390,7 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, global_state: &State<Arc
     let _ = global_state; // only needed by practice_seed_post; included to keep signature symmetric
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    let goal = racetime_bot::Goal::for_event(series, event);
-    let is_ootr = goal.is_none() && data.game(&mut transaction).await?.map(|g| g.name == "ootr").unwrap_or(false);
+    let is_ootr = matches!(data.seed_gen_type, Some(SeedGenType::OoTR));
 
     let me_opt = Some(me);
     let header = data.header(&mut transaction, me_opt.as_ref(), Tab::MyStatus, false).await?;
@@ -3412,45 +3398,29 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, global_state: &State<Arc
     let title = format!("Practice Seed — {}", data.display_name);
     let chests = data.chests().await?;
 
-    let form_content = match goal {
+    let form_content = match &data.seed_gen_type {
         _ if is_ootr && data.single_settings.is_some() => {
             full_form(form_uri, csrf.as_ref(), html! {
                 p : "Generate a practice seed with this event's standard settings.";
             }, vec![], "Generate Practice Seed")
         },
-        Some(racetime_bot::Goal::TwwrMainWeekly | racetime_bot::Goal::TwwrMainMiniblins26) if data.settings_string.is_some() => {
+        Some(SeedGenType::TWWR { .. }) if data.settings_string.is_some() => {
             full_form(form_uri, csrf.as_ref(), html! {
                 p : "Generate a practice seed with this event's standard settings.";
             }, vec![], "Generate Practice Seed")
         },
-        Some(racetime_bot::Goal::Cabookey2026) => {
+        Some(SeedGenType::Owr { config }) => {
+            let choices: Vec<(String, String)> = config.choice_patches.as_object()
+                .map(|obj| obj.keys().map(|k| {
+                    let label = config.choice_labels.get(k).cloned().unwrap_or_else(|| k.clone());
+                    (k.clone(), label)
+                }).collect())
+                .unwrap_or_default();
             full_form(form_uri, csrf.as_ref(), html! {
                 p : "Check any optional rules to include in your practice seed. Leave all unchecked for base settings.";
                 fieldset {
                     legend : "Options";
-                    @for patch in cabookey::OWR_CONFIG.choice_patches {
-                        div {
-                            input(type="checkbox", id=patch.key, name="choices", value=patch.key);
-                            label(for=patch.key) : label_for_owr_choice(patch.key);
-                        }
-                    }
-                }
-            }, vec![], "Generate Practice Seed")
-        },
-        Some(racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB) => {
-            full_form(form_uri, csrf.as_ref(), html! {
-                fieldset {
-                    legend : "Mode";
-                    select(name="mode", required) {
-                        option(value="") : "Select a mode…";
-                        @for m in &alttprde::MODES {
-                            option(value=m.name) : m.display;
-                        }
-                    }
-                }
-                fieldset {
-                    legend : "Options";
-                    @for (key, label) in DE9_PRACTICE_CHOICES {
+                    @for (key, label) in &choices {
                         div {
                             input(type="checkbox", id=key, name="choices", value=key);
                             label(for=key) : label;
@@ -3459,14 +3429,41 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, global_state: &State<Arc
                 }
             }, vec![], "Generate Practice Seed")
         },
-        Some(racetime_bot::Goal::AlttprDeRivalsCupBrackets | racetime_bot::Goal::AlttprDeRivalsCupGroups) => {
+        Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman, practice_modes, practice_choices }) if !practice_modes.is_empty() => {
+            let modes = practice_modes.clone();
+            let choices = practice_choices.clone();
+            full_form(form_uri, csrf.as_ref(), html! {
+                fieldset {
+                    legend : "Mode";
+                    select(name="mode", required) {
+                        option(value="") : "Select a mode…";
+                        @for m in &modes {
+                            option(value=m.value.as_str()) : m.label.as_str();
+                        }
+                    }
+                }
+                @if !choices.is_empty() {
+                    fieldset {
+                        legend : "Options";
+                        @for opt in &choices {
+                            div {
+                                input(type="checkbox", id=opt.value.as_str(), name="choices", value=opt.value.as_str());
+                                label(for=opt.value.as_str()) : opt.label.as_str();
+                            }
+                        }
+                    }
+                }
+            }, vec![], "Generate Practice Seed")
+        },
+        Some(SeedGenType::AlttprAvianart { practice_presets }) if !practice_presets.is_empty() => {
+            let presets = practice_presets.clone();
             full_form(form_uri, csrf.as_ref(), html! {
                 fieldset {
                     legend : "Preset";
                     select(name="preset", required) {
                         option(value="") : "Select a preset…";
-                        @for preset_opt in alttprde::RIVALS_CUP_PRESETS {
-                            option(value=preset_opt.preset) : preset_opt.display_name;
+                        @for p in &presets {
+                            option(value=p.value.as_str()) : p.label.as_str();
                         }
                     }
                 }
@@ -3495,20 +3492,16 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
     form.verify(&csrf);
     let form = form.value.ok_or(StatusOrError::Status(Status::UnprocessableEntity))?;
 
-    let goal = racetime_bot::Goal::for_event(series, event);
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let seed_gen_type = data.seed_gen_type.clone();
+    let is_ootr = matches!(seed_gen_type, Some(SeedGenType::OoTR));
+
     let job_id = Uuid::new_v4();
     let seeds = Arc::clone(practice_seeds.inner());
     seeds.write().await.insert(job_id, PracticeSeedStatus::Generating);
 
-    let is_ootr = {
-        let mut transaction = pool.begin().await?;
-        let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-        goal.is_none() && data.game(&mut transaction).await?.map(|g| g.name == "ootr").unwrap_or(false)
-    };
-
     if is_ootr {
-        let mut transaction = pool.begin().await?;
-        let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
         let version = data.rando_version.ok_or(StatusOrError::Status(Status::NotFound))?;
         let settings = data.single_settings.ok_or(StatusOrError::Status(Status::NotFound))?;
         let world_count = settings.get("world_count").map_or(1, |world_count| world_count.as_u64().expect("world_count setting wasn't valid u64").try_into().expect("too many worlds"));
@@ -3525,25 +3518,27 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
         return Ok(Redirect::to(uri!(practice_seed_status(series, event, job_id_str.as_str()))));
     }
 
-    match goal.ok_or(StatusOrError::Status(Status::NotFound))? {
-        racetime_bot::Goal::TwwrMainWeekly | racetime_bot::Goal::TwwrMainMiniblins26 => {
-            let mut transaction = pool.begin().await?;
-            let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    match seed_gen_type.ok_or(StatusOrError::Status(Status::NotFound))? {
+        SeedGenType::TWWR { .. } => {
             let settings_string = data.settings_string.ok_or(StatusOrError::Status(Status::NotFound))?;
             let version = data.rando_version;
             transaction.commit().await?;
             let rx = Arc::clone(&*global_state).roll_twwr_seed(version, settings_string, UnlockSpoilerLog::Now);
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         },
-        racetime_bot::Goal::Cabookey2026 => {
-            let choice_labels = form.choices.iter().map(|k| label_for_owr_choice(k).to_owned()).collect();
+        SeedGenType::Owr { config } => {
+            transaction.commit().await?;
+            let choice_labels = form.choices.iter()
+                .map(|k| config.choice_labels.get(k).cloned().unwrap_or_else(|| k.clone()))
+                .collect();
             let choices: HashMap<String, String> = form.choices.iter()
                 .map(|k| (k.clone(), "yes".to_string()))
                 .collect();
-            let rx = Arc::clone(&*global_state).roll_owr_seed(choices, cabookey::OWR_CONFIG);
+            let rx = Arc::clone(&*global_state).roll_owr_seed(choices, config);
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, choice_labels);
         },
-        racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB => {
+        SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman, .. } => {
+            transaction.commit().await?;
             let mode = form.mode.filter(|m| !m.is_empty());
             let choices_set: HashSet<&str> = form.choices.iter().map(|s| s.as_str()).collect();
             let mut custom_choices = HashMap::new();
@@ -3564,7 +3559,8 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
             let rx = Arc::clone(&*global_state).roll_alttprde9_seed(options);
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         },
-        racetime_bot::Goal::AlttprDeRivalsCupBrackets | racetime_bot::Goal::AlttprDeRivalsCupGroups => {
+        SeedGenType::AlttprAvianart { .. } => {
+            transaction.commit().await?;
             let preset = form.preset.filter(|p| !p.is_empty()).ok_or(StatusOrError::Status(Status::UnprocessableEntity))?;
             let result = Arc::clone(&*global_state).practice_avianart_seed(preset).await;
             let status = match result {

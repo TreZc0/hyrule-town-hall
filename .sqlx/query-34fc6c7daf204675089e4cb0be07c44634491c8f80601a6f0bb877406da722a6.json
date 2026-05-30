@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT racetime_goal_slug, preroll_mode AS \"preroll_mode!\", spoiler_unlock AS \"spoiler_unlock!\",\n               rando_version AS \"rando_version: sqlx::types::Json<VersionedBranch>\",\n               single_settings AS \"single_settings: sqlx::types::Json<seed::Settings>\"\n               FROM events\n               WHERE seed_gen_type IS NOT NULL AND preroll_mode = 'long'\n               AND single_settings IS NOT NULL\n               AND (end_time IS NULL OR end_time > NOW())",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "racetime_goal_slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "preroll_mode!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "spoiler_unlock!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "rando_version: sqlx::types::Json<VersionedBranch>",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "single_settings: sqlx::types::Json<seed::Settings>",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "34fc6c7daf204675089e4cb0be07c44634491c8f80601a6f0bb877406da722a6"
+}

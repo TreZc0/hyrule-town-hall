@@ -7,6 +7,14 @@ use {
 };
 #[cfg(unix)] use async_proto::Protocol;
 
+/// A (value, label) pair for a practice seed form dropdown or checkbox.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(unix, derive(Protocol))]
+pub(crate) struct PracticeOption {
+    pub(crate) value: String,
+    pub(crate) label: String,
+}
+
 /// Fully owned, JSON-configurable OWR event configuration stored in `events.seed_config`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(unix, derive(Protocol))]
@@ -17,6 +25,9 @@ pub(crate) struct OwrEventConfig {
     /// Object: choice key → partial settings merged when player picks "yes".
     #[serde(default)]
     pub(crate) choice_patches: serde_json::Value,
+    /// Optional map from choice key → human-readable label for the practice seed form.
+    #[serde(default)]
+    pub(crate) choice_labels: HashMap<String, String>,
 }
 
 /// Which seed generator an event uses, stored in `events.seed_gen_type`.
@@ -25,8 +36,15 @@ pub(crate) struct OwrEventConfig {
 pub(crate) enum SeedGenType {
     AlttprDoorRando {
         source: AlttprDrSource,
+        /// Modes to display in the practice seed mode dropdown (from seed_config).
+        practice_modes: Vec<PracticeOption>,
+        /// Optional extra choices shown as checkboxes on the practice seed form (from seed_config).
+        practice_choices: Vec<PracticeOption>,
     },
-    AlttprAvianart,
+    AlttprAvianart {
+        /// Presets to display in the practice seed preset dropdown (from seed_config).
+        practice_presets: Vec<PracticeOption>,
+    },
     /// OWR (Open World Randomizer) — player choices read from `teams.custom_choices`.
     Owr {
         /// Full event config from `events.seed_config`.
@@ -87,9 +105,23 @@ impl SeedGenType {
                         AlttprDrSource::Boothisman
                     }
                 };
-                Some(Self::AlttprDoorRando { source })
+                let practice_modes = seed_config
+                    .and_then(|c| c.get("practice_modes"))
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
+                let practice_choices = seed_config
+                    .and_then(|c| c.get("practice_choices"))
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
+                Some(Self::AlttprDoorRando { source, practice_modes, practice_choices })
             }
-            "alttpr_avianart" => Some(Self::AlttprAvianart),
+            "alttpr_avianart" => {
+                let practice_presets = seed_config
+                    .and_then(|c| c.get("practice_presets"))
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
+                Some(Self::AlttprAvianart { practice_presets })
+            }
             "owr" => {
                 let config = seed_config.and_then(|c| serde_json::from_value(c.clone()).ok());
                 if let Some(config) = config {
@@ -127,11 +159,11 @@ impl SeedGenType {
         round_modes: Option<&HashMap<String, String>>,
     ) -> Option<String> {
         match self {
-            Self::AlttprDoorRando { source: AlttprDrSource::Boothisman } => {
+            Self::AlttprDoorRando { source: AlttprDrSource::Boothisman, .. } => {
                 let opts = super::AlttprDeRaceOptions::for_race(db_pool, race, round_modes).await;
                 opts.mode_display().map(|mode| format!("This race will be played in {} mode.", mode))
             }
-            Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices } => {
+            Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices, .. } => {
                 let opts = super::CrosskeysRaceOptions::for_race(db_pool, race).await;
                 Some(format!(
                     "This race will be played with {} as settings.\n\nThis race will be played with {}.",
@@ -146,7 +178,7 @@ impl SeedGenType {
     /// Whether this seed gen type has per-race player-chosen settings that should
     /// be shown as a column in the race table.
     pub(crate) fn has_display_settings(&self) -> bool {
-        matches!(self, Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices } | Self::Owr { .. })
+        matches!(self, Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices, .. } | Self::Owr { .. })
     }
 
     /// For `MutualChoices` events: query the DB for each team's `custom_choices`
@@ -170,7 +202,7 @@ impl SeedGenType {
         E: sqlx::Executor<'e, Database = sqlx::Postgres>,
     {
         match self {
-            Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices } | Self::Owr { .. } => {}
+            Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices, .. } | Self::Owr { .. } => {}
             _ => return None,
         }
         if labels.is_empty() {
@@ -225,11 +257,11 @@ impl std::str::FromStr for SeedGenType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "ootr_rsl"       => Ok(Self::OotrRsl),
-            "ootr_tfb"       => Ok(Self::OotrTriforceBlitz),
-            "alttpr_avianart" => Ok(Self::AlttprAvianart),
-            "ootr"           => Ok(Self::OoTR),
-            "mmr"            => Ok(Self::Mmr),
+            "ootr_rsl"        => Ok(Self::OotrRsl),
+            "ootr_tfb"        => Ok(Self::OotrTriforceBlitz),
+            "alttpr_avianart" => Ok(Self::AlttprAvianart { practice_presets: vec![] }),
+            "ootr"            => Ok(Self::OoTR),
+            "mmr"             => Ok(Self::Mmr),
             _ => Err(UnknownSeedGenType),
         }
     }

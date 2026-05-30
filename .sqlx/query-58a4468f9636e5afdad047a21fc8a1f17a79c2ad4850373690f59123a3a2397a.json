@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT enter_flow AS \"enter_flow: serde_json::Value\",\n               rando_version AS \"rando_version: serde_json::Value\",\n               seed_gen_type,\n               seed_config AS \"seed_config: serde_json::Value\"\n        FROM events WHERE series = $1 AND event = $2\n    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "enter_flow: serde_json::Value",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 1,
+        "name": "rando_version: serde_json::Value",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "seed_gen_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "seed_config: serde_json::Value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "58a4468f9636e5afdad047a21fc8a1f17a79c2ad4850373690f59123a3a2397a"
+}

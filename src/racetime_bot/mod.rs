@@ -333,7 +333,7 @@ pub(crate) enum SeedCommandParseResult {
 impl seed_gen_type::SeedGenType {
     async fn send_presets(&self, ctx: &RaceContext<GlobalState>) -> Result<(), Error> {
         match self {
-            Self::AlttprDoorRando { .. } | Self::AlttprAvianart => {
+            Self::AlttprDoorRando { .. } | Self::AlttprAvianart { .. } => {
                 ctx.say("!seed: Rolls this race’s seed.").await?;
             }
             Self::OotrTriforceBlitz => {
@@ -391,7 +391,7 @@ impl seed_gen_type::SeedGenType {
             UnlockSpoilerLog::Never
         };
         Ok(match self {
-            Self::AlttprDoorRando { .. } | Self::AlttprAvianart => match args {
+            Self::AlttprDoorRando { .. } | Self::AlttprAvianart { .. } => match args {
                 [] => SeedCommandParseResult::Alttpr,
                 [arg] if arg == "base" => SeedCommandParseResult::Alttpr,
                 [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn’t quite understand that" },
@@ -1021,6 +1021,93 @@ impl GlobalState {
         }
     }
 
+    /// Roll an AlttprDe9 seed using the boothisman.de API (for practice seed use from event page).
+    pub(crate) fn roll_alttprde9_seed(self: Arc<Self>, alttprde_options: AlttprDeRaceOptions) -> mpsc::Receiver<SeedRollUpdate> {
+        let (update_tx, update_rx) = mpsc::channel(128);
+        let update_tx2 = update_tx.clone();
+        tokio::spawn(async move {
+            let api_url = alttprde_options.seed_url()
+                .ok_or_else(|| RollError::AlttprDe("Mode not yet drafted - cannot roll seed".to_owned()))?;
+            let response = reqwest::get(&api_url).await?;
+            let yaml_content = response.text().await?;
+            let uuid = Uuid::new_v4();
+            let mut yaml_value: serde_yml::Value = serde_yml::from_str(&yaml_content)?;
+            let meta = AlttprDoorRandoMeta {
+                bps: true,
+                name: uuid.to_string(),
+                race: true,
+                skip_playthrough: true,
+                spoiler: "full",
+                suppress_rom: true,
+            };
+            if let serde_yml::Value::Mapping(ref mut map) = yaml_value {
+                map.insert(serde_yml::Value::String("meta".to_string()), serde_yml::to_value(&meta)?);
+            }
+            let updated_yaml_content = serde_yml::to_string(&yaml_value)?;
+            let yaml_file = tempfile::Builder::new().prefix("alttprde_").suffix(".yml").tempfile().at_unknown()?;
+            let yaml_path = yaml_file.path();
+            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(updated_yaml_content.as_bytes()).await.at(&yaml_file)?;
+            const MAX_RETRIES: u8 = 4;
+            for attempt in 0..=MAX_RETRIES {
+                let output = Command::new(PYTHON)
+                    .current_dir("../ALttPDoorRandomizer")
+                    .arg("DungeonRandomizer.py")
+                    .arg("--customizer")
+                    .arg(yaml_path)
+                    .arg("--outputpath")
+                    .arg("/var/www/midos.house/seed")
+                    .arg("--outputname")
+                    .arg(uuid.to_string())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .at_command("DungeonRandomizer.py")?
+                    .wait_with_output()
+                    .await
+                    .at_command("DungeonRandomizer.py")?;
+                match output.status.code() {
+                    Some(0) => break,
+                    Some(1) => {
+                        let last_error = Some(String::from_utf8_lossy(&output.stderr).into_owned());
+                        if attempt < MAX_RETRIES {
+                            let backoff_secs = 10 + 2u64.pow(attempt as u32);
+                            sleep(Duration::from_secs(backoff_secs)).await;
+                            continue;
+                        }
+                        return Err(RollError::Retries { num_retries: MAX_RETRIES + 1, last_error });
+                    }
+                    _ => return Err(RollError::Wheel(wheel::Error::CommandExit {
+                        name: Cow::Borrowed("DungeonRandomizer.py"),
+                        output,
+                    })),
+                }
+            }
+            let patch_path = format!("/var/www/midos.house/seed/DR_{uuid}.bps");
+            if !tokio::fs::try_exists(&patch_path).await.at(&patch_path)? {
+                return Err(RollError::AlttprDe(format!("DungeonRandomizer.py exited successfully but patch file was not found at {patch_path}")));
+            }
+            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid, "DR_").await?;
+            update_tx.send(SeedRollUpdate::Done {
+                seed: seed::Data {
+                    file_hash: Some(file_hash),
+                    seed_data: Some(seed::Files::AlttprDoorRando { uuid, is_owr: false }.to_seed_data_base()),
+                    progression_spoiler: false,
+                    password: None,
+                },
+                rsl_preset: None,
+                version: None,
+                unlock_spoiler_log: UnlockSpoilerLog::Never,
+            }).await.allow_unreceived();
+            Ok(())
+        }.then(|res: Result<(), RollError>| async move {
+            match res {
+                Ok(()) => {}
+                Err(e) => update_tx2.send(SeedRollUpdate::Error(e)).await.allow_unreceived(),
+            }
+        }));
+        update_rx
+    }
+
     /// Unified seed rolling dispatcher: rolls a seed for an event based on its `seed_gen_type`.
     ///
     /// Replaces the `match goal { ... }` dispatch blocks in `handle_race()` and elsewhere.
@@ -1038,7 +1125,7 @@ impl GlobalState {
             _ => UnlockSpoilerLog::Never,
         };
         match seed_gen_type {
-            SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman } => {
+            SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman, .. } => {
                 let alttprde_options = AlttprDeRaceOptions::for_race(&self.db_pool, &cal_event.race, event.round_modes.as_ref()).await;
                 let api_url = match alttprde_options.seed_url() {
                     Some(url) => url,
@@ -1056,7 +1143,7 @@ impl GlobalState {
                     Err(e) => alttpr_dr_error_receiver(e.into()),
                 }
             }
-            SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices } => {
+            SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices, .. } => {
                 let crosskeys_options = CrosskeysRaceOptions::for_race(&self.db_pool, &cal_event.race).await;
                 let uuid = Uuid::new_v4();
                 match build_crosskeys_yaml(&crosskeys_options, uuid) {
@@ -1064,10 +1151,10 @@ impl GlobalState {
                     Err(e) => alttpr_dr_error_receiver(e.into()),
                 }
             }
-            SeedGenType::AlttprDoorRando { source: AlttprDrSource::MysteryPool { .. } } => {
+            SeedGenType::AlttprDoorRando { source: AlttprDrSource::MysteryPool { .. }, .. } => {
                 self.roll_mysteryd20_seed()
             }
-            SeedGenType::AlttprAvianart => {
+            SeedGenType::AlttprAvianart { .. } => {
                 let game_num = cal_event.race.game.unwrap_or(1);
                 let preset = cal_event.race.draft.as_ref()
                     .and_then(|d| d.settings.get(&*format!("game{game_num}_preset")))
@@ -1442,7 +1529,7 @@ pub(crate) fn start_practice_seed_roll(seeds: event::PracticeSeeds, job_id: Uuid
     tokio::spawn(async move {
         let status = loop {
             match updates.recv().await {
-                Some(SeedRollUpdate::Done { seed, .. }) => break match seed.files {
+                Some(SeedRollUpdate::Done { seed, .. }) => break match seed.files() {
                     Some(seed::Files::AvianartSeed { ref hash, ref seed_hash }) =>
                         event::PracticeSeedStatus::Done(event::PracticeSeedResult::SeedLink {
                             url: format!("https://avianart.games/perm/{hash}"),
@@ -1485,19 +1572,22 @@ fn build_crosskeys_yaml(opts: &CrosskeysRaceOptions, uuid: Uuid) -> Result<Strin
     let pseudoboots = if agreed.contains("pseudoboots") { 1 } else { 0 };
     let skullwoods = if agreed.contains("zw") { "followlinked" } else { "original" };
     let settings = AlttprDoorRandoSetting {
+        aga_randomness: None,
         accessibility: "locations",
-        bigkeyshuffle: 1,
-        compassshuffle: 1,
+        bigkeyshuffle: DungeonShuffleVal::Named("wild"),
+        boss_shuffle: None,
+        compassshuffle: DungeonShuffleVal::Named("wild"),
         crystals_ganon: "7",
         crystals_gt: "7",
         dropshuffle: keydrop_mode,
+        enemy_shuffle: None,
         flute_mode,
         goal,
         item_functionality: "normal",
         key_logic_algorithm: "partial",
         keyshuffle: "wild",
         linked_drops: "unset",
-        mapshuffle: 1,
+        mapshuffle: DungeonShuffleVal::Named("wild"),
         mirrorscroll,
         mode: world_state,
         ow_mixed: None,
@@ -2499,12 +2589,15 @@ pub(crate) struct AlttprDoorRandoPlacements {
 #[derive(Clone, Copy, Serialize)]
 #[serde(untagged)]
 pub(crate) enum DungeonShuffleVal {
+    #[allow(dead_code)]
     Bool(bool),
     Named(&'static str),
 }
 
 #[derive(Clone, Copy, Serialize)]
 pub(crate) struct AlttprDoorRandoSetting {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) aga_randomness: Option<bool>,
     pub(crate) accessibility: &'static str,
     pub(crate) bigkeyshuffle: DungeonShuffleVal,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2513,6 +2606,8 @@ pub(crate) struct AlttprDoorRandoSetting {
     pub(crate) crystals_ganon: &'static str,
     pub(crate) crystals_gt: &'static str,
     pub(crate) dropshuffle: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) enemy_shuffle: Option<&'static str>,
     pub(crate) flute_mode: &'static str,
     pub(crate) goal: &'static str,
     pub(crate) item_functionality: &'static str,
@@ -2761,11 +2856,11 @@ impl Handler {
                 // Dispatch seed rolling based on seed_gen_type from event DB config.
                 let event_seed_gen_type = self.official_data.as_ref().and_then(|d| d.event.seed_gen_type.as_ref());
                 match event_seed_gen_type {
-                    Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::Boothisman }) => {
+                    Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::Boothisman, .. }) => {
                         let cal_event = self.official_data.as_ref().expect("AlttprDoorRando/Boothisman must have official_data").cal_event.clone();
                         self.roll_alttprde9_seed(ctx, cal_event, lang, article).await;
                     }
-                    Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MutualChoices }) => {
+                    Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MutualChoices, .. }) => {
                         let cal_event = self.official_data.as_ref().expect("AlttprDoorRando/MutualChoices must have official_data").cal_event.clone();
                         self.roll_crosskeys2025_seed(ctx, cal_event, lang, article).await;
                     }
@@ -2773,11 +2868,11 @@ impl Handler {
                         let cal_event = self.official_data.as_ref().expect("Owr must have official_data").cal_event.clone();
                         self.roll_owr_seed(ctx, cal_event, lang, article).await;
                     }
-                    Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MysteryPool { .. } }) => {
+                    Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MysteryPool { .. }, .. }) => {
                         let cal_event = self.official_data.as_ref().expect("AlttprDoorRando/MysteryPool must have official_data").cal_event.clone();
                         self.roll_mysteryd20_seed(ctx, cal_event, lang, article).await;
                     }
-                    Some(seed_gen_type::SeedGenType::AlttprAvianart) => {
+                    Some(seed_gen_type::SeedGenType::AlttprAvianart { .. }) => {
                         let cal_event = self.official_data.as_ref().expect("AlttprAvianart must have official_data").cal_event.clone();
                         let preset = settings.get("preset")
                             .and_then(|v| v.as_str())
@@ -3212,9 +3307,9 @@ impl RaceHandler<GlobalState> for Handler {
                             )
                         }
                     }
-                }, !matches!(event.seed_gen_type, Some(seed_gen_type::SeedGenType::AlttprDoorRando { .. } | seed_gen_type::SeedGenType::AlttprAvianart)), Vec::default()).await?;
+                }, !matches!(event.seed_gen_type, Some(seed_gen_type::SeedGenType::AlttprDoorRando { .. } | seed_gen_type::SeedGenType::AlttprAvianart { .. })), Vec::default()).await?;
                 // Announce mode for events with round_modes set
-                if matches!(event.seed_gen_type, Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::Boothisman })) {
+                if matches!(event.seed_gen_type, Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::Boothisman, .. })) {
                     if event.round_modes.is_some() {
                         let alttprde_options = AlttprDeRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race, event.round_modes.as_ref()).await;
                         if let Some(mode_display) = alttprde_options.mode_display() {
@@ -3491,23 +3586,23 @@ impl RaceHandler<GlobalState> for Handler {
                     let _event_id = Some((event.series, &*event.event));
                     match *state {
                         RaceState::Init => match &event.seed_gen_type {
-                            Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::Boothisman }) => {
+                            Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::Boothisman, .. }) => {
                                 if event.draft_kind().is_none() {
                                     this.roll_alttprde9_seed(ctx, cal_event.clone(), English, "a").await
                                 }
                                 // else: ban-pick draft event with missing draft state — error already
                                 // reported at room open via the draft_kind check; do not roll
                             }
-                            Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MutualChoices }) => {
+                            Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MutualChoices, .. }) => {
                                 this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await
                             }
                             Some(seed_gen_type::SeedGenType::Owr { .. }) => {
                                 this.roll_owr_seed(ctx, cal_event.clone(), English, "a").await
                             }
-                            Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MysteryPool { .. } }) => {
+                            Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MysteryPool { .. }, .. }) => {
                                 this.roll_mysteryd20_seed(ctx, cal_event.clone(), English, "a").await
                             }
-                            Some(seed_gen_type::SeedGenType::AlttprAvianart) => {
+                            Some(seed_gen_type::SeedGenType::AlttprAvianart { .. }) => {
                                 ctx.say("@entrants WARNING: The preset draft for this match is not complete! Please complete the draft in the scheduling Discord thread before the race.").await.to_racetime()?;
                             }
                             Some(seed_gen_type::SeedGenType::TWWR { .. }) => {
@@ -3977,7 +4072,7 @@ impl RaceHandler<GlobalState> for Handler {
                             }).await?;
                         } else if let Some(sgt) = sgt.as_ref().filter(|s| matches!(s,
                             seed_gen_type::SeedGenType::AlttprDoorRando { .. }
-                            | seed_gen_type::SeedGenType::AlttprAvianart
+                            | seed_gen_type::SeedGenType::AlttprAvianart { .. }
                             | seed_gen_type::SeedGenType::OotrTriforceBlitz
                             | seed_gen_type::SeedGenType::OotrRsl
                             | seed_gen_type::SeedGenType::TWWR { .. }

@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT scheduling_deadline FROM event_round_configs WHERE series = $1 AND event = $2 AND round = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "scheduling_deadline",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "fbffa582701bfceb521b21f093653a3637cb942886f6a5226f34548a287b533e"
+}

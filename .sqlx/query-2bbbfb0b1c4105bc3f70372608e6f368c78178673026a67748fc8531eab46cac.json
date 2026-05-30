@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT e.racetime_goal_slug, e.is_custom_goal, grc.category_slug FROM events e JOIN game_series gs ON gs.series = e.series JOIN game_racetime_connection grc ON grc.game_id = gs.game_id WHERE e.racetime_goal_slug IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "racetime_goal_slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "is_custom_goal",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "category_slug",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "2bbbfb0b1c4105bc3f70372608e6f368c78178673026a67748fc8531eab46cac"
+}

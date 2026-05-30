@@ -243,6 +243,8 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
                 racetime_goal_slug: None,
                 scheduling_deadline: None,
                 restream_consent_required: false,
+                custom_title: None,
+                custom_create_room: false,
             });
         }
     }
