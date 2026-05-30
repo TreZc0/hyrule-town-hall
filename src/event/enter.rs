@@ -17,7 +17,7 @@ use {
 };
 
 #[derive(Debug, Clone, Deserialize)]
-pub(super) struct Flow {
+pub(crate) struct Flow {
     pub(crate) requirements: Vec<Requirement>,
     closes: Option<DateTime<Utc>>,
 }

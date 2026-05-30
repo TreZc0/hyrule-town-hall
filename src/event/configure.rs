@@ -6,6 +6,7 @@ use {
         event::{
             Data,
             Tab,
+            enter,
         },
         prelude::*,
         racetime_bot::VersionedBranch,
@@ -222,6 +223,9 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                     }
                     li {
                         a(href = uri!(info_page_get(event.series, &*event.event))) : "Edit info page";
+                    }
+                    li {
+                        a(href = uri!(enter_flow_get(event.series, &*event.event))) : "Configure enter flow";
                     }
                     @if let MatchSource::StartGG(_) = event.match_source() {
                         li {
@@ -2549,4 +2553,1022 @@ pub(crate) async fn rounds_apply_deadlines(pool: &State<PgPool>, me: User, _uri:
         transaction.commit().await?;
     }
     Ok(RedirectOrContent::Redirect(Redirect::to(format!("{}?saved=1", uri!(rounds_get(series, event))))))
+}
+
+// ==================== Enter Flow Configuration ====================
+
+fn req_type_label(type_str: &str) -> &'static str {
+    match type_str {
+        "raceTime" => "RaceTime Account",
+        "raceTimeInvite" => "Invite List",
+        "twitch" => "Twitch Account",
+        "discord" => "Discord Account",
+        "discordGuild" => "Discord Server Membership",
+        "challonge" => "Challonge Account",
+        "startGG" => "start.gg Account",
+        "startGGEventSignup" => "start.gg Event Signup",
+        "textField" => "Text Field",
+        "textField2" => "Text Field (2nd slot)",
+        "yesNo" => "Yes/No Question",
+        "booleanChoice" => "Boolean Choice",
+        "rules" => "Rules Agreement",
+        "poll" => "Poll",
+        "restreamConsent" => "Restream Consent",
+        "qualifier" => "Qualifier",
+        "tripleQualifier" => "Triple Qualifier",
+        "qualifierPlacement" => "Qualifier Placement",
+        "rslLeaderboard" => "RSL Leaderboard",
+        "external" => "External Verification",
+        _ => "Unknown",
+    }
+}
+
+fn req_type_tooltip(type_str: &str) -> &'static str {
+    match type_str {
+        "raceTime" => "Requires a racetime.gg account linked to the participant's profile. This is a prerequisite for all race-based events.",
+        "raceTimeInvite" => "Restricts sign-ups to a specific allowlist of racetime.gg user IDs. Use for invitational or closed events where only pre-selected players may enter.",
+        "twitch" => "Requires a Twitch account linked via the participant's racetime.gg account. Typically used for events that require streaming.",
+        "discord" => "Requires a Discord account linked to the participant's profile.",
+        "discordGuild" => "Requires membership in a specific Discord server, optionally a particular role within it. Use to limit entry to community members.",
+        "challonge" => "Requires a Challonge account linked to the participant's profile.",
+        "startGG" => "Requires a start.gg account linked to the participant's profile. Can be set to optional so participants can skip linking.",
+        "startGGEventSignup" => "Requires the participant to be registered for a specific bracket on start.gg. The event slug is the URL path (e.g. tournament/my-event/event/open).",
+        "textField" => "Shows a custom text input validated against a regular expression. Use to collect info like pronouns, team names, or handles.",
+        "textField2" => "A second independent text field, identical to Text Field but stored separately. Use when two text inputs are needed.",
+        "yesNo" => "Presents a simple yes/no question. The answer is stored but does not feed into race settings automatically.",
+        "booleanChoice" => "A yes/no question stored under a custom key in the team's choices map. The key can be referenced by race settings to conditionally apply rules. Locked prevents changes after races begin.",
+        "rules" => "Requires acknowledging the event rules. Links to the event info page or a custom document URL.",
+        "poll" => "Requires completing a specific poll. Provide the poll document URL.",
+        "restreamConsent" => "Asks whether the participant consents to being restreamed. If optional, they can opt in or out. If required, they must agree to enter.",
+        "qualifier" => "Requires participation in a qualifier race — either an async seed within the async window, or attendance at the live qualifier session.",
+        "tripleQualifier" => "Like Qualifier but with three separate race windows. Participants must complete at least one to be eligible.",
+        "qualifierPlacement" => "Requires placing within the top N on the qualifier leaderboard after a minimum number of races. Can exclude top players, e.g. for a Challenge Cup bracket.",
+        "rslLeaderboard" => "Requires at least 3 completed races on the RSL leaderboard for the current season.",
+        "external" => "A manual verification step. If blocks submit is enabled, an organizer must manually clear this requirement before the participant can complete sign-up.",
+        _ => "",
+    }
+}
+
+fn req_type_default_json(type_str: &str) -> serde_json::Value {
+    match type_str {
+        "raceTime" => json!({"type": "raceTime"}),
+        "raceTimeInvite" => json!({"type": "raceTimeInvite", "invites": []}),
+        "twitch" => json!({"type": "twitch"}),
+        "discord" => json!({"type": "discord"}),
+        "discordGuild" => json!({"type": "discordGuild", "name": ""}),
+        "challonge" => json!({"type": "challonge"}),
+        "startGG" => json!({"type": "startGG", "optional": false}),
+        "startGGEventSignup" => json!({"type": "startGGEventSignup", "eventSlug": ""}),
+        "textField" => json!({"type": "textField", "label": "Enter information here.", "long": false, "regex": "^.+$", "regexErrorMessages": {}, "fallbackErrorMessage": "This field is required."}),
+        "textField2" => json!({"type": "textField2", "label": "Enter information here.", "long": false, "regex": "^.+$", "regexErrorMessages": {}, "fallbackErrorMessage": "This field is required."}),
+        "yesNo" => json!({"type": "yesNo", "label": "Your question here"}),
+        "booleanChoice" => json!({"type": "booleanChoice", "key": "my_choice", "label": "Your question here", "locked": false}),
+        "rules" => json!({"type": "rules"}),
+        "poll" => json!({"type": "poll"}),
+        "restreamConsent" => json!({"type": "restreamConsent", "optional": false}),
+        "qualifier" => json!({"type": "qualifier", "asyncStart": "2024-01-01T00:00:00Z", "asyncEnd": "2024-01-08T00:00:00Z", "liveStart": "2024-01-06T18:00:00Z"}),
+        "tripleQualifier" => json!({"type": "tripleQualifier",
+            "asyncStarts": ["2024-01-01T00:00:00Z", "2024-01-08T00:00:00Z", "2024-01-15T00:00:00Z"],
+            "asyncEnds": ["2024-01-07T23:59:59Z", "2024-01-14T23:59:59Z", "2024-01-21T23:59:59Z"],
+            "liveStarts": ["2024-01-06T18:00:00Z", "2024-01-13T18:00:00Z", "2024-01-20T18:00:00Z"]}),
+        "qualifierPlacement" => json!({"type": "qualifierPlacement", "numPlayers": 8, "minRaces": 0, "needFinish": false, "excludePlayers": 0}),
+        "rslLeaderboard" => json!({"type": "rslLeaderboard"}),
+        "external" => json!({"type": "external", "text": "Manual verification required.", "blocksSubmit": true}),
+        _ => serde_json::Value::Null,
+    }
+}
+
+fn req_summary(req: &serde_json::Value) -> String {
+    let type_str = req.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    match type_str {
+        "raceTimeInvite" => {
+            let count = req.get("invites").and_then(|v| v.as_array()).map_or(0, |a| a.len());
+            format!("{count} invited user(s)")
+        }
+        "discordGuild" => {
+            let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("(unnamed)");
+            match req.get("roleId").and_then(|v| v.as_i64()) {
+                Some(id) => format!("Server: {name}, role ID: {id}"),
+                None => format!("Server: {name}"),
+            }
+        }
+        "startGG" => {
+            if req.get("optional").and_then(|v| v.as_bool()).unwrap_or(false) { "optional".to_owned() } else { "required".to_owned() }
+        }
+        "startGGEventSignup" => {
+            let slug = req.get("eventSlug").and_then(|v| v.as_str()).unwrap_or("(not set)");
+            format!("slug: {slug}")
+        }
+        "textField" | "textField2" => {
+            let label = req.get("label").and_then(|v| v.as_str()).unwrap_or("(no label)");
+            if label.len() > 60 { format!("{}…", &label[..60]) } else { label.to_owned() }
+        }
+        "yesNo" => {
+            let label = req.get("label").and_then(|v| v.as_str()).unwrap_or("(no label)");
+            if label.len() > 60 { format!("{}…", &label[..60]) } else { label.to_owned() }
+        }
+        "booleanChoice" => {
+            let key = req.get("key").and_then(|v| v.as_str()).unwrap_or("(no key)");
+            let label = req.get("label").and_then(|v| v.as_str()).unwrap_or("(no label)");
+            let label_short = if label.len() > 40 { format!("{}…", &label[..40]) } else { label.to_owned() };
+            if req.get("locked").and_then(|v| v.as_bool()).unwrap_or(false) {
+                format!("key={key}: {label_short} [locked]")
+            } else {
+                format!("key={key}: {label_short}")
+            }
+        }
+        "rules" => req.get("document").and_then(|v| v.as_str())
+            .map(|d| format!("Document: {d}"))
+            .unwrap_or_else(|| "Links to event info page".to_owned()),
+        "poll" => req.get("document").and_then(|v| v.as_str())
+            .map(|d| format!("Document: {d}"))
+            .unwrap_or_else(|| "(no document set)".to_owned()),
+        "restreamConsent" => {
+            if req.get("optional").and_then(|v| v.as_bool()).unwrap_or(false) { "optional (opt-in/out)".to_owned() } else { "required".to_owned() }
+        }
+        "qualifier" => {
+            let start = req.get("asyncStart").and_then(|v| v.as_str()).unwrap_or("?");
+            let end = req.get("asyncEnd").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("Async: {} – {}", to_datetime_input(start), to_datetime_input(end))
+        }
+        "tripleQualifier" => "3 qualifier windows".to_owned(),
+        "qualifierPlacement" => {
+            let n = req.get("numPlayers").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("Top {n} cutoff")
+        }
+        "external" => {
+            if req.get("blocksSubmit").and_then(|v| v.as_bool()).unwrap_or(true) { "blocks submit".to_owned() } else { "informational only".to_owned() }
+        }
+        _ => String::new(),
+    }
+}
+
+fn to_datetime_input(dt_str: &str) -> &str {
+    if dt_str.len() >= 16 { &dt_str[..16] } else { dt_str }
+}
+
+fn parse_datetime_input(s: &str) -> Option<DateTime<Utc>> {
+    NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%dT%H:%M")
+        .ok()
+        .map(|dt| dt.and_utc())
+}
+
+async fn load_flow_json(transaction: &mut Transaction<'_, Postgres>, series: Series, event: &str) -> Result<serde_json::Value, sqlx::Error> {
+    let flow: Option<serde_json::Value> = sqlx::query!(r#"
+        SELECT enter_flow AS "enter_flow: serde_json::Value",
+               rando_version AS "rando_version: serde_json::Value",
+               seed_gen_type,
+               seed_config AS "seed_config: serde_json::Value"
+        FROM events WHERE series = $1 AND event = $2
+    "#, series as _, event)
+    .fetch_one(&mut **transaction)
+    .await
+    .map(|row| row.enter_flow)?;
+    Ok(flow.unwrap_or_else(|| json!({"requirements": []})))
+}
+
+async fn save_flow_json(transaction: &mut Transaction<'_, Postgres>, flow: serde_json::Value, series: Series, event: &str) -> Result<(), sqlx::Error> {
+    let flow_json: Option<serde_json::Value> = Some(flow);
+    sqlx::query!(r#"
+                    UPDATE events
+                    SET enter_flow = $1
+                    WHERE series = $2 AND event = $3
+                "#,
+        flow_json as _,
+        series as _,
+        event,
+    )
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+async fn enter_flow_form(
+    mut transaction: Transaction<'_, Postgres>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    event: Data<'_>,
+) -> Result<RawHtml<String>, event::Error> {
+    let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, true).await?;
+    let content = if event.is_ended() {
+        html! {
+            article {
+                p : "This event has ended and can no longer be configured.";
+            }
+        }
+    } else if let Some(ref me) = me {
+        if event.organizers(&mut transaction).await?.contains(me) || me.is_global_admin() {
+            let flow = load_flow_json(&mut transaction, event.series, &event.event).await?;
+            let requirements: Vec<serde_json::Value> = flow.get("requirements")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let closes_str = flow.get("closes").and_then(|v| v.as_str()).unwrap_or_default();
+            let closes_input = to_datetime_input(closes_str);
+            let req_count = requirements.len();
+            html! {
+                h2 : "Configure Enter Flow";
+                p : "Define what participants must fulfill to sign up for this event.";
+
+                h3 : "Sign-up deadline";
+                : full_form(uri!(enter_flow_set_closes(event.series, &*event.event)), csrf, html! {
+                    fieldset {
+                        label(for = "closes") : "Closes (UTC):";
+                        input(type = "datetime-local", id = "closes", name = "closes", value = closes_input);
+                        label(class = "help") : "Leave blank to keep sign-ups open until the event ends.";
+                    }
+                }, vec![], "Save deadline");
+
+                h3 : "Requirements";
+                @if requirements.is_empty() {
+                    p : "No requirements configured — all participants may sign up freely.";
+                } else {
+                    @for (i, req) in requirements.iter().enumerate() {
+                        @let type_str = req.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        @let label = req_type_label(type_str);
+                        @let tooltip = req_type_tooltip(type_str);
+                        @let summary = req_summary(req);
+                        div(style = "border: 1px solid var(--border); border-radius: 4px; padding: 10px 14px; margin-bottom: 8px; background: var(--bg-surface); display: flex; justify-content: space-between; align-items: center; gap: 8px;") {
+                            div {
+                                strong {
+                                    : label;
+                                    : " ";
+                                    span(class = "settings-link", data_tooltip = tooltip) : "[?]";
+                                }
+                                @if !summary.is_empty() {
+                                    span(style = "margin-left: 10px; opacity: 0.7; font-size: 0.9em;") : summary;
+                                }
+                            }
+                            div(style = "display: flex; gap: 4px; flex-shrink: 0;") {
+                                a(href = uri!(enter_flow_edit_get(event.series, &*event.event, i)), class = "button") : "Edit";
+                                @if i > 0 {
+                                    @let (_, btn) = button_form(uri!(enter_flow_move_up(event.series, &*event.event, i)), csrf, vec![], "↑");
+                                    : btn;
+                                }
+                                @if i + 1 < req_count {
+                                    @let (_, btn) = button_form(uri!(enter_flow_move_down(event.series, &*event.event, i)), csrf, vec![], "↓");
+                                    : btn;
+                                }
+                                @let (_, btn) = button_form_confirm(uri!(enter_flow_remove(event.series, &*event.event, i)), csrf, vec![], "Remove", "Remove this requirement?");
+                                : btn;
+                            }
+                        }
+                    }
+                }
+
+                h3 : "Add requirement";
+                : full_form(uri!(enter_flow_add(event.series, &*event.event)), csrf, html! {
+                    fieldset {
+                        label(for = "req_type") : "Type:";
+                        select(id = "req_type", name = "req_type") {
+                            optgroup(label = "Account connections") {
+                                option(value = "raceTime") : "RaceTime Account";
+                                option(value = "raceTimeInvite") : "Invite List";
+                                option(value = "twitch") : "Twitch Account";
+                                option(value = "discord") : "Discord Account";
+                                option(value = "discordGuild") : "Discord Server Membership";
+                                option(value = "challonge") : "Challonge Account";
+                                option(value = "startGG") : "start.gg Account";
+                                option(value = "startGGEventSignup") : "start.gg Event Signup";
+                            }
+                            optgroup(label = "Questions") {
+                                option(value = "textField") : "Text Field";
+                                option(value = "textField2") : "Text Field (2nd slot)";
+                                option(value = "yesNo") : "Yes/No Question";
+                                option(value = "booleanChoice") : "Boolean Choice";
+                            }
+                            optgroup(label = "Agreements") {
+                                option(value = "rules") : "Rules Agreement";
+                                option(value = "poll") : "Poll";
+                                option(value = "restreamConsent") : "Restream Consent";
+                            }
+                            optgroup(label = "Qualifying") {
+                                option(value = "qualifier") : "Qualifier";
+                                option(value = "tripleQualifier") : "Triple Qualifier";
+                                option(value = "qualifierPlacement") : "Qualifier Placement";
+                                option(value = "rslLeaderboard") : "RSL Leaderboard";
+                            }
+                            optgroup(label = "Other") {
+                                option(value = "external") : "External Verification";
+                            }
+                        }
+                    }
+                }, vec![], "Add");
+            }
+        } else {
+            html! {
+                article { p : "This page is for organizers of this event only."; }
+            }
+        }
+    } else {
+        html! {
+            article {
+                p {
+                    a(href = uri!(auth::login(Some(uri!(enter_flow_get(event.series, &*event.event)))))) : "Sign in or create a Hyrule Town Hall account";
+                    : " to configure this event.";
+                }
+            }
+        }
+    };
+    Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Enter Flow — {}", event.display_name), html! {
+        : header;
+        : content;
+    }).await?)
+}
+
+#[rocket::get("/event/<series>/<event>/configure/enter-flow")]
+pub(crate) async fn enter_flow_get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    Ok(enter_flow_form(transaction, me, uri, csrf.as_ref(), data).await?)
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct EnterFlowClosesForm {
+    #[field(default = String::new())]
+    csrf: String,
+    #[field(default = String::new())]
+    closes: String,
+}
+
+#[rocket::post("/event/<series>/<event>/configure/enter-flow/closes", data = "<form>")]
+pub(crate) async fn enter_flow_set_closes(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, EnterFlowClosesForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if let Some(ref value) = form.value {
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))));
+        }
+        let mut flow = load_flow_json(&mut transaction, series, event).await?;
+        let closes_trimmed = value.closes.trim();
+        if closes_trimmed.is_empty() {
+            if let Some(obj) = flow.as_object_mut() { obj.remove("closes"); }
+        } else if let Some(dt) = parse_datetime_input(closes_trimmed) {
+            flow["closes"] = json!(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+        }
+        save_flow_json(&mut transaction, flow, series, event).await?;
+        transaction.commit().await?;
+    }
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))))
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct EnterFlowAddForm {
+    #[field(default = String::new())]
+    csrf: String,
+    #[field(default = String::new())]
+    req_type: String,
+}
+
+#[rocket::post("/event/<series>/<event>/configure/enter-flow/add", data = "<form>")]
+pub(crate) async fn enter_flow_add(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, EnterFlowAddForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if let Some(ref value) = form.value {
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))));
+        }
+        let new_req = req_type_default_json(&value.req_type);
+        if new_req.is_null() {
+            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))));
+        }
+        let mut flow = load_flow_json(&mut transaction, series, event).await?;
+        if let Some(reqs) = flow.get_mut("requirements").and_then(|v| v.as_array_mut()) {
+            reqs.push(new_req);
+        }
+        if serde_json::from_value::<enter::Flow>(flow.clone()).is_ok() {
+            save_flow_json(&mut transaction, flow, series, event).await?;
+            transaction.commit().await?;
+        }
+    }
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))))
+}
+
+#[rocket::post("/event/<series>/<event>/configure/enter-flow/<idx>/remove", data = "<form>")]
+pub(crate) async fn enter_flow_remove(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, idx: usize, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.value.is_some() {
+        if data.organizers(&mut transaction).await?.contains(&me) || me.is_global_admin() {
+            let mut flow = load_flow_json(&mut transaction, series, event).await?;
+            if let Some(reqs) = flow.get_mut("requirements").and_then(|v| v.as_array_mut()) {
+                if idx < reqs.len() { reqs.remove(idx); }
+            }
+            save_flow_json(&mut transaction, flow, series, event).await?;
+            transaction.commit().await?;
+        }
+    }
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))))
+}
+
+#[rocket::post("/event/<series>/<event>/configure/enter-flow/<idx>/move-up", data = "<form>")]
+pub(crate) async fn enter_flow_move_up(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, idx: usize, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.value.is_some() {
+        if data.organizers(&mut transaction).await?.contains(&me) || me.is_global_admin() {
+            let mut flow = load_flow_json(&mut transaction, series, event).await?;
+            if let Some(reqs) = flow.get_mut("requirements").and_then(|v| v.as_array_mut()) {
+                if idx > 0 && idx < reqs.len() { reqs.swap(idx - 1, idx); }
+            }
+            save_flow_json(&mut transaction, flow, series, event).await?;
+            transaction.commit().await?;
+        }
+    }
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))))
+}
+
+#[rocket::post("/event/<series>/<event>/configure/enter-flow/<idx>/move-down", data = "<form>")]
+pub(crate) async fn enter_flow_move_down(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, idx: usize, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.value.is_some() {
+        if data.organizers(&mut transaction).await?.contains(&me) || me.is_global_admin() {
+            let mut flow = load_flow_json(&mut transaction, series, event).await?;
+            if let Some(reqs) = flow.get_mut("requirements").and_then(|v| v.as_array_mut()) {
+                if idx + 1 < reqs.len() { reqs.swap(idx, idx + 1); }
+            }
+            save_flow_json(&mut transaction, flow, series, event).await?;
+            transaction.commit().await?;
+        }
+    }
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))))
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct EnterFlowEditForm {
+    #[field(default = String::new())]
+    csrf: String,
+    #[field(default = String::new())]
+    invites: String,
+    #[field(default = String::new())]
+    text: String,
+    #[field(default = String::new())]
+    error_text: String,
+    #[field(default = String::new())]
+    name: String,
+    #[field(default = String::new())]
+    role_id: String,
+    #[field(default = false)]
+    optional: bool,
+    #[field(default = String::new())]
+    event_slug: String,
+    #[field(default = String::new())]
+    label: String,
+    #[field(default = false)]
+    long: bool,
+    #[field(default = String::new())]
+    regex: String,
+    #[field(default = String::new())]
+    regex_error_messages: String,
+    #[field(default = String::new())]
+    fallback_error_message: String,
+    #[field(default = String::new())]
+    key: String,
+    #[field(default = false)]
+    locked: bool,
+    #[field(default = String::new())]
+    document: String,
+    #[field(default = String::new())]
+    note: String,
+    #[field(default = String::new())]
+    async_start: String,
+    #[field(default = String::new())]
+    async_end: String,
+    #[field(default = String::new())]
+    live_start: String,
+    #[field(default = String::new())]
+    async_start_0: String,
+    #[field(default = String::new())]
+    async_end_0: String,
+    #[field(default = String::new())]
+    live_start_0: String,
+    #[field(default = String::new())]
+    async_start_1: String,
+    #[field(default = String::new())]
+    async_end_1: String,
+    #[field(default = String::new())]
+    live_start_1: String,
+    #[field(default = String::new())]
+    async_start_2: String,
+    #[field(default = String::new())]
+    async_end_2: String,
+    #[field(default = String::new())]
+    live_start_2: String,
+    #[field(default = String::new())]
+    num_players: String,
+    #[field(default = String::new())]
+    min_races: String,
+    #[field(default = false)]
+    need_finish: bool,
+    #[field(default = String::new())]
+    qual_event: String,
+    #[field(default = String::new())]
+    exclude_players: String,
+    #[field(default = String::new())]
+    html_content: String,
+    #[field(default = false)]
+    blocks_submit: bool,
+}
+
+fn build_requirement_json(type_str: &str, v: &EnterFlowEditForm, errors: &mut Vec<(String, String)>) -> serde_json::Value {
+    match type_str {
+        "raceTime" => json!({"type": "raceTime"}),
+        "twitch" => json!({"type": "twitch"}),
+        "discord" => json!({"type": "discord"}),
+        "challonge" => json!({"type": "challonge"}),
+        "rslLeaderboard" => json!({"type": "rslLeaderboard"}),
+        "raceTimeInvite" => {
+            let invites: Vec<&str> = v.invites.lines().map(str::trim).filter(|s| !s.is_empty()).collect();
+            let mut obj = json!({"type": "raceTimeInvite", "invites": invites});
+            if !v.text.trim().is_empty() { obj["text"] = json!(v.text.trim()); }
+            if !v.error_text.trim().is_empty() { obj["errorText"] = json!(v.error_text.trim()); }
+            obj
+        }
+        "discordGuild" => {
+            let name = v.name.trim();
+            if name.is_empty() { errors.push(("name".into(), "Server name is required.".into())); }
+            let mut obj = json!({"type": "discordGuild", "name": name});
+            let role_str = v.role_id.trim();
+            if !role_str.is_empty() {
+                match role_str.parse::<i64>() {
+                    Ok(id) => { obj["roleId"] = json!(id); }
+                    Err(_) => { errors.push(("role_id".into(), "Role ID must be a valid number.".into())); }
+                }
+            }
+            obj
+        }
+        "startGG" => json!({"type": "startGG", "optional": v.optional}),
+        "startGGEventSignup" => {
+            let slug = v.event_slug.trim();
+            if slug.is_empty() { errors.push(("event_slug".into(), "Event slug is required.".into())); }
+            let mut obj = json!({"type": "startGGEventSignup", "eventSlug": slug});
+            if !v.text.trim().is_empty() { obj["text"] = json!(v.text.trim()); }
+            if !v.error_text.trim().is_empty() { obj["errorText"] = json!(v.error_text.trim()); }
+            obj
+        }
+        "textField" | "textField2" => {
+            let label = v.label.trim();
+            if label.is_empty() { errors.push(("label".into(), "Label is required.".into())); }
+            let regex_str = v.regex.trim();
+            if regex_str.is_empty() { errors.push(("regex".into(), "Regex is required.".into())); }
+            let mut rem_obj = serde_json::Map::new();
+            for line in v.regex_error_messages.lines() {
+                let line = line.trim();
+                if line.is_empty() { continue; }
+                if let Some((pat, msg)) = line.split_once('|') {
+                    rem_obj.insert(pat.trim().to_owned(), json!(msg.trim()));
+                } else {
+                    errors.push(("regex_error_messages".into(), format!("Each line must be in \"pattern|message\" format. Got: {line}")));
+                }
+            }
+            json!({"type": type_str, "label": label, "long": v.long, "regex": regex_str, "regexErrorMessages": rem_obj, "fallbackErrorMessage": v.fallback_error_message.trim()})
+        }
+        "yesNo" => {
+            let label = v.label.trim();
+            if label.is_empty() { errors.push(("label".into(), "Label is required.".into())); }
+            json!({"type": "yesNo", "label": label})
+        }
+        "booleanChoice" => {
+            let key = v.key.trim();
+            if key.is_empty() { errors.push(("key".into(), "Key is required.".into())); }
+            let label = v.label.trim();
+            if label.is_empty() { errors.push(("label".into(), "Label is required.".into())); }
+            json!({"type": "booleanChoice", "key": key, "label": label, "locked": v.locked})
+        }
+        "rules" => {
+            let mut obj = json!({"type": "rules"});
+            let doc = v.document.trim();
+            if !doc.is_empty() { obj["document"] = json!(doc); }
+            obj
+        }
+        "poll" => {
+            let mut obj = json!({"type": "poll"});
+            let doc = v.document.trim();
+            if !doc.is_empty() { obj["document"] = json!(doc); }
+            obj
+        }
+        "restreamConsent" => {
+            let mut obj = json!({"type": "restreamConsent", "optional": v.optional});
+            if !v.note.trim().is_empty() { obj["note"] = json!(v.note.trim()); }
+            obj
+        }
+        "qualifier" => {
+            let async_start = match parse_datetime_input(&v.async_start) {
+                Some(dt) => json!(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+                None => { errors.push(("async_start".into(), "Invalid datetime.".into())); serde_json::Value::Null }
+            };
+            let async_end = match parse_datetime_input(&v.async_end) {
+                Some(dt) => json!(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+                None => { errors.push(("async_end".into(), "Invalid datetime.".into())); serde_json::Value::Null }
+            };
+            let live_start = match parse_datetime_input(&v.live_start) {
+                Some(dt) => json!(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+                None => { errors.push(("live_start".into(), "Invalid datetime.".into())); serde_json::Value::Null }
+            };
+            json!({"type": "qualifier", "asyncStart": async_start, "asyncEnd": async_end, "liveStart": live_start})
+        }
+        "tripleQualifier" => {
+            let starts = [(&v.async_start_0, "async_start_0"), (&v.async_start_1, "async_start_1"), (&v.async_start_2, "async_start_2")];
+            let ends = [(&v.async_end_0, "async_end_0"), (&v.async_end_1, "async_end_1"), (&v.async_end_2, "async_end_2")];
+            let lives = [(&v.live_start_0, "live_start_0"), (&v.live_start_1, "live_start_1"), (&v.live_start_2, "live_start_2")];
+            let parse_dt_arr = |arr: [(&String, &str); 3], errors: &mut Vec<(String, String)>| -> serde_json::Value {
+                let vals: Vec<serde_json::Value> = arr.iter().map(|(s, field)| {
+                    match parse_datetime_input(s) {
+                        Some(dt) => json!(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+                        None => { errors.push((field.to_string(), "Invalid datetime.".into())); serde_json::Value::Null }
+                    }
+                }).collect();
+                json!(vals)
+            };
+            let async_starts = parse_dt_arr(starts, errors);
+            let async_ends = parse_dt_arr(ends, errors);
+            let live_starts = parse_dt_arr(lives, errors);
+            json!({"type": "tripleQualifier", "asyncStarts": async_starts, "asyncEnds": async_ends, "liveStarts": live_starts})
+        }
+        "qualifierPlacement" => {
+            let num_players = match v.num_players.trim().parse::<usize>() {
+                Ok(n) => n,
+                Err(_) => { errors.push(("num_players".into(), "Must be a positive integer.".into())); 0 }
+            };
+            let min_races = match v.min_races.trim().parse::<usize>() {
+                Ok(n) => n,
+                Err(_) => { errors.push(("min_races".into(), "Must be a non-negative integer.".into())); 0 }
+            };
+            let exclude_players = match v.exclude_players.trim().parse::<usize>() {
+                Ok(n) => n,
+                Err(_) => { errors.push(("exclude_players".into(), "Must be a non-negative integer.".into())); 0 }
+            };
+            let mut obj = json!({"type": "qualifierPlacement", "numPlayers": num_players, "minRaces": min_races, "needFinish": v.need_finish, "excludePlayers": exclude_players});
+            let qe = v.qual_event.trim();
+            if !qe.is_empty() { obj["event"] = json!(qe); }
+            obj
+        }
+        "external" => {
+            let mut obj = json!({"type": "external", "blocksSubmit": v.blocks_submit});
+            if !v.html_content.trim().is_empty() { obj["html"] = json!(v.html_content.trim()); }
+            if !v.text.trim().is_empty() { obj["text"] = json!(v.text.trim()); }
+            obj
+        }
+        _ => serde_json::Value::Null,
+    }
+}
+
+fn dt_field(field_name: &str, label_text: &str, ctx: &Context<'_>, current: &str, errors: &mut Vec<&form::Error<'_>>) -> RawHtml<String> {
+    let val = ctx.field_value(field_name).unwrap_or(to_datetime_input(current));
+    form_field(field_name, errors, html! {
+        label(for = field_name) : label_text;
+        input(type = "datetime-local", id = field_name, name = field_name, value = val);
+    })
+}
+
+async fn enter_flow_edit_form(
+    mut transaction: Transaction<'_, Postgres>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    event: Data<'_>,
+    idx: usize,
+    req: serde_json::Value,
+    ctx: Context<'_>,
+) -> Result<RawHtml<String>, event::Error> {
+    let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, true).await?;
+    let type_str = req.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let label = req_type_label(type_str);
+    let tooltip = req_type_tooltip(type_str);
+    let mut errors = ctx.errors().collect_vec();
+
+    let fields = match type_str {
+        "raceTime" | "twitch" | "discord" | "challonge" | "rslLeaderboard" => html! {
+            p : "This requirement type has no configurable fields.";
+        },
+        "raceTimeInvite" => {
+            let cur_invites = req.get("invites").and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("\n"))
+                .unwrap_or_default();
+            let cur_text = req.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_error_text = req.get("errorText").and_then(|v| v.as_str()).unwrap_or_default();
+            html! {
+                : form_field("invites", &mut errors, html! {
+                    label(for = "invites") : "Invited racetime.gg user IDs (one per line):";
+                    textarea(id = "invites", name = "invites", rows = "6", style = "font-family: monospace; width: 100%;") {
+                        : ctx.field_value("invites").unwrap_or(&cur_invites);
+                    }
+                });
+                : form_field("text", &mut errors, html! {
+                    label(for = "text") : "Display text (optional, HTML allowed):";
+                    input(type = "text", id = "text", name = "text", value = ctx.field_value("text").unwrap_or(cur_text), style = "width: 100%;");
+                });
+                : form_field("error_text", &mut errors, html! {
+                    label(for = "error_text") : "Error message (optional):";
+                    input(type = "text", id = "error_text", name = "error_text", value = ctx.field_value("error_text").unwrap_or(cur_error_text), style = "width: 100%;");
+                });
+            }
+        }
+        "discordGuild" => {
+            let cur_name = req.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_role_id = req.get("roleId").map(|v| v.to_string()).unwrap_or_default();
+            html! {
+                : form_field("name", &mut errors, html! {
+                    label(for = "name") : "Discord server name:";
+                    input(type = "text", id = "name", name = "name", value = ctx.field_value("name").unwrap_or(cur_name), style = "width: 100%;");
+                });
+                : form_field("role_id", &mut errors, html! {
+                    label(for = "role_id") : "Required role ID (optional):";
+                    input(type = "text", id = "role_id", name = "role_id", value = ctx.field_value("role_id").unwrap_or(&cur_role_id), style = "width: 100%;");
+                    label(class = "help") : "Leave blank to only require server membership.";
+                });
+            }
+        }
+        "startGG" => {
+            let cur_optional = req.get("optional").and_then(|v| v.as_bool()).unwrap_or(false);
+            let checked = ctx.field_value("optional").map_or(cur_optional, |v| v == "on");
+            html! {
+                : form_field("optional", &mut errors, html! {
+                    input(type = "checkbox", id = "optional", name = "optional", checked? = checked.then_some(""));
+                    label(for = "optional") : "Optional (participant can skip linking start.gg)";
+                });
+            }
+        }
+        "startGGEventSignup" => {
+            let cur_slug = req.get("eventSlug").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_text = req.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_error_text = req.get("errorText").and_then(|v| v.as_str()).unwrap_or_default();
+            html! {
+                : form_field("event_slug", &mut errors, html! {
+                    label(for = "event_slug") : "start.gg event slug:";
+                    input(type = "text", id = "event_slug", name = "event_slug", value = ctx.field_value("event_slug").unwrap_or(cur_slug), style = "width: 100%;");
+                    label(class = "help") : "The URL path portion, e.g. tournament/my-event/event/open-bracket";
+                });
+                : form_field("text", &mut errors, html! {
+                    label(for = "text") : "Display text (optional, HTML allowed):";
+                    input(type = "text", id = "text", name = "text", value = ctx.field_value("text").unwrap_or(cur_text), style = "width: 100%;");
+                });
+                : form_field("error_text", &mut errors, html! {
+                    label(for = "error_text") : "Error message (optional):";
+                    input(type = "text", id = "error_text", name = "error_text", value = ctx.field_value("error_text").unwrap_or(cur_error_text), style = "width: 100%;");
+                });
+            }
+        }
+        "textField" | "textField2" => {
+            let cur_label = req.get("label").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_long = req.get("long").and_then(|v| v.as_bool()).unwrap_or(false);
+            let cur_regex = req.get("regex").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_rem = req.get("regexErrorMessages").and_then(|v| v.as_object())
+                .map(|obj| obj.iter().map(|(k, v)| format!("{}|{}", k, v.as_str().unwrap_or(""))).collect::<Vec<_>>().join("\n"))
+                .unwrap_or_default();
+            let cur_fem = req.get("fallbackErrorMessage").and_then(|v| v.as_str()).unwrap_or_default();
+            let long_checked = ctx.field_value("long").map_or(cur_long, |v| v == "on");
+            html! {
+                : form_field("label", &mut errors, html! {
+                    label(for = "label") : "Label (HTML allowed):";
+                    input(type = "text", id = "label", name = "label", value = ctx.field_value("label").unwrap_or(cur_label), style = "width: 100%;");
+                });
+                : form_field("long", &mut errors, html! {
+                    input(type = "checkbox", id = "long", name = "long", checked? = long_checked.then_some(""));
+                    label(for = "long") : "Long (multi-line textarea)";
+                });
+                : form_field("regex", &mut errors, html! {
+                    label(for = "regex") : "Validation regex:";
+                    input(type = "text", id = "regex", name = "regex", value = ctx.field_value("regex").unwrap_or(cur_regex), style = "width: 100%; font-family: monospace;");
+                });
+                : form_field("regex_error_messages", &mut errors, html! {
+                    label(for = "regex_error_messages") : "Regex-specific error messages (one per line, format: pattern|message):";
+                    textarea(id = "regex_error_messages", name = "regex_error_messages", rows = "4", style = "font-family: monospace; width: 100%;") {
+                        : ctx.field_value("regex_error_messages").unwrap_or(&cur_rem);
+                    }
+                });
+                : form_field("fallback_error_message", &mut errors, html! {
+                    label(for = "fallback_error_message") : "Fallback error message:";
+                    input(type = "text", id = "fallback_error_message", name = "fallback_error_message", value = ctx.field_value("fallback_error_message").unwrap_or(cur_fem), style = "width: 100%;");
+                });
+            }
+        }
+        "yesNo" => {
+            let cur_label = req.get("label").and_then(|v| v.as_str()).unwrap_or_default();
+            html! {
+                : form_field("label", &mut errors, html! {
+                    label(for = "label") : "Question (HTML allowed):";
+                    input(type = "text", id = "label", name = "label", value = ctx.field_value("label").unwrap_or(cur_label), style = "width: 100%;");
+                });
+            }
+        }
+        "booleanChoice" => {
+            let cur_key = req.get("key").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_label = req.get("label").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_locked = req.get("locked").and_then(|v| v.as_bool()).unwrap_or(false);
+            let locked_checked = ctx.field_value("locked").map_or(cur_locked, |v| v == "on");
+            html! {
+                : form_field("key", &mut errors, html! {
+                    label(for = "key") : "Storage key:";
+                    input(type = "text", id = "key", name = "key", value = ctx.field_value("key").unwrap_or(cur_key), style = "width: 100%;");
+                    label(class = "help") : "Stored in the team's custom_choices map. Use lowercase with underscores, e.g. hard_mode";
+                });
+                : form_field("label", &mut errors, html! {
+                    label(for = "label") : "Question shown to participant (HTML allowed):";
+                    input(type = "text", id = "label", name = "label", value = ctx.field_value("label").unwrap_or(cur_label), style = "width: 100%;");
+                });
+                : form_field("locked", &mut errors, html! {
+                    input(type = "checkbox", id = "locked", name = "locked", checked? = locked_checked.then_some(""));
+                    label(for = "locked") : "Locked (prevent changes after races begin)";
+                });
+            }
+        }
+        "rules" => {
+            let cur_doc = req.get("document").and_then(|v| v.as_str()).unwrap_or_default();
+            html! {
+                : form_field("document", &mut errors, html! {
+                    label(for = "document") : "Custom rules document URL (optional):";
+                    input(type = "url", id = "document", name = "document", value = ctx.field_value("document").unwrap_or(cur_doc), style = "width: 100%;");
+                    label(class = "help") : "Leave blank to link to this event's info page.";
+                });
+            }
+        }
+        "poll" => {
+            let cur_doc = req.get("document").and_then(|v| v.as_str()).unwrap_or_default();
+            html! {
+                : form_field("document", &mut errors, html! {
+                    label(for = "document") : "Poll document URL:";
+                    input(type = "url", id = "document", name = "document", value = ctx.field_value("document").unwrap_or(cur_doc), style = "width: 100%;");
+                });
+            }
+        }
+        "restreamConsent" => {
+            let cur_optional = req.get("optional").and_then(|v| v.as_bool()).unwrap_or(false);
+            let cur_note = req.get("note").and_then(|v| v.as_str()).unwrap_or_default();
+            let opt_checked = ctx.field_value("optional").map_or(cur_optional, |v| v == "on");
+            html! {
+                : form_field("optional", &mut errors, html! {
+                    input(type = "checkbox", id = "optional", name = "optional", checked? = opt_checked.then_some(""));
+                    label(for = "optional") : "Optional (participants can opt in or out freely)";
+                    label(class = "help") : "If unchecked, consent is required to enter.";
+                });
+                : form_field("note", &mut errors, html! {
+                    label(for = "note") : "Additional note (optional, HTML allowed):";
+                    input(type = "text", id = "note", name = "note", value = ctx.field_value("note").unwrap_or(cur_note), style = "width: 100%;");
+                });
+            }
+        }
+        "qualifier" => {
+            let cur_as = req.get("asyncStart").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_ae = req.get("asyncEnd").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_ls = req.get("liveStart").and_then(|v| v.as_str()).unwrap_or_default();
+            html! {
+                : dt_field("async_start", "Async window opens (UTC):", &ctx, cur_as, &mut errors);
+                : dt_field("async_end", "Async window closes (UTC):", &ctx, cur_ae, &mut errors);
+                : dt_field("live_start", "Live qualifier start (UTC):", &ctx, cur_ls, &mut errors);
+            }
+        }
+        "tripleQualifier" => {
+            let get_start = |i: usize| req.get("asyncStarts").and_then(|v| v.get(i)).and_then(|v| v.as_str()).unwrap_or_default();
+            let get_end = |i: usize| req.get("asyncEnds").and_then(|v| v.get(i)).and_then(|v| v.as_str()).unwrap_or_default();
+            let get_live = |i: usize| req.get("liveStarts").and_then(|v| v.get(i)).and_then(|v| v.as_str()).unwrap_or_default();
+            html! {
+                h4 : "Round 1";
+                : dt_field("async_start_0", "Async opens (UTC):", &ctx, get_start(0), &mut errors);
+                : dt_field("async_end_0", "Async closes (UTC):", &ctx, get_end(0), &mut errors);
+                : dt_field("live_start_0", "Live qualifier (UTC):", &ctx, get_live(0), &mut errors);
+                h4 : "Round 2";
+                : dt_field("async_start_1", "Async opens (UTC):", &ctx, get_start(1), &mut errors);
+                : dt_field("async_end_1", "Async closes (UTC):", &ctx, get_end(1), &mut errors);
+                : dt_field("live_start_1", "Live qualifier (UTC):", &ctx, get_live(1), &mut errors);
+                h4 : "Round 3";
+                : dt_field("async_start_2", "Async opens (UTC):", &ctx, get_start(2), &mut errors);
+                : dt_field("async_end_2", "Async closes (UTC):", &ctx, get_end(2), &mut errors);
+                : dt_field("live_start_2", "Live qualifier (UTC):", &ctx, get_live(2), &mut errors);
+            }
+        }
+        "qualifierPlacement" => {
+            let cur_np = req.get("numPlayers").and_then(|v| v.as_u64()).unwrap_or(8).to_string();
+            let cur_mr = req.get("minRaces").and_then(|v| v.as_u64()).unwrap_or(0).to_string();
+            let cur_nf = req.get("needFinish").and_then(|v| v.as_bool()).unwrap_or(false);
+            let cur_ev = req.get("event").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_ep = req.get("excludePlayers").and_then(|v| v.as_u64()).unwrap_or(0).to_string();
+            let nf_checked = ctx.field_value("need_finish").map_or(cur_nf, |v| v == "on");
+            html! {
+                : form_field("num_players", &mut errors, html! {
+                    label(for = "num_players") : "Top N cutoff (number of players who qualify):";
+                    input(type = "number", id = "num_players", name = "num_players", value = ctx.field_value("num_players").unwrap_or(&cur_np), min = "1");
+                });
+                : form_field("min_races", &mut errors, html! {
+                    label(for = "min_races") : "Minimum qualifier races required (0 = no minimum):";
+                    input(type = "number", id = "min_races", name = "min_races", value = ctx.field_value("min_races").unwrap_or(&cur_mr), min = "0");
+                });
+                : form_field("need_finish", &mut errors, html! {
+                    input(type = "checkbox", id = "need_finish", name = "need_finish", checked? = nf_checked.then_some(""));
+                    label(for = "need_finish") : "Require finish (DNFs don't count toward minimum races)";
+                });
+                : form_field("qual_event", &mut errors, html! {
+                    label(for = "qual_event") : "Check a different event's qualifiers (optional — uses this event by default):";
+                    input(type = "text", id = "qual_event", name = "qual_event", value = ctx.field_value("qual_event").unwrap_or(cur_ev), style = "width: 100%;");
+                });
+                : form_field("exclude_players", &mut errors, html! {
+                    label(for = "exclude_players") : "Exclude top N players (0 = none, use for Challenge Cup brackets):";
+                    input(type = "number", id = "exclude_players", name = "exclude_players", value = ctx.field_value("exclude_players").unwrap_or(&cur_ep), min = "0");
+                });
+            }
+        }
+        "external" => {
+            let cur_html = req.get("html").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_text = req.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_bs = req.get("blocksSubmit").and_then(|v| v.as_bool()).unwrap_or(true);
+            let bs_checked = ctx.field_value("blocks_submit").map_or(cur_bs, |v| v == "on");
+            html! {
+                : form_field("html_content", &mut errors, html! {
+                    label(for = "html_content") : "HTML displayed to participant (optional, takes precedence over plain text):";
+                    textarea(id = "html_content", name = "html_content", rows = "4", style = "width: 100%;") {
+                        : ctx.field_value("html_content").unwrap_or(cur_html);
+                    }
+                });
+                : form_field("text", &mut errors, html! {
+                    label(for = "text") : "Plain text fallback (optional):";
+                    input(type = "text", id = "text", name = "text", value = ctx.field_value("text").unwrap_or(cur_text), style = "width: 100%;");
+                });
+                : form_field("blocks_submit", &mut errors, html! {
+                    input(type = "checkbox", id = "blocks_submit", name = "blocks_submit", checked? = bs_checked.then_some(""));
+                    label(for = "blocks_submit") : "Block submit until manually cleared by an organizer";
+                });
+            }
+        }
+        _ => html! { p : "Unknown requirement type."; },
+    };
+
+    let back_link = uri!(enter_flow_get(event.series, &*event.event));
+    let content = html! {
+        h2 {
+            : "Edit: ";
+            : label;
+            : " ";
+            span(class = "settings-link", data_tooltip = tooltip) : "[?]";
+        }
+        p { a(href = &back_link.to_string()) : "← Back to enter flow"; }
+        : full_form(uri!(enter_flow_edit_post(event.series, &*event.event, idx)), csrf, fields, errors, "Save");
+    };
+    Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Edit {} — {}", label, event.display_name), html! {
+        : header;
+        : content;
+    }).await?)
+}
+
+#[rocket::get("/event/<series>/<event>/configure/enter-flow/<idx>/edit")]
+pub(crate) async fn enter_flow_edit_get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String, idx: usize) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let flow = load_flow_json(&mut transaction, data.series, &data.event).await?;
+    let requirements: Vec<serde_json::Value> = flow.get("requirements").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let req = requirements.into_iter().nth(idx).ok_or(StatusOrError::Status(Status::NotFound))?;
+    Ok(enter_flow_edit_form(transaction, me, uri, csrf.as_ref(), data, idx, req, Context::default()).await?)
+}
+
+#[rocket::post("/event/<series>/<event>/configure/enter-flow/<idx>/edit", data = "<form>")]
+pub(crate) async fn enter_flow_edit_post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, idx: usize, form: Form<Contextual<'_, EnterFlowEditForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+        return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))));
+    }
+    let mut flow = load_flow_json(&mut transaction, series, event).await?;
+    let requirements = flow.get("requirements").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let req = match requirements.into_iter().nth(idx) {
+        Some(r) => r,
+        None => return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event))))),
+    };
+    let type_str = req.get("type").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+    if let Some(ref value) = form.value {
+        let mut build_errors: Vec<(String, String)> = vec![];
+        let new_req = build_requirement_json(&type_str, value, &mut build_errors);
+        for (field, msg) in build_errors {
+            form.context.push_error(form::Error::validation(msg).with_name(field));
+        }
+        if form.context.errors().next().is_none() && !new_req.is_null() {
+            let new_req_validated = new_req.clone();
+            if let Some(reqs) = flow.get_mut("requirements").and_then(|v| v.as_array_mut()) {
+                if idx < reqs.len() { reqs[idx] = new_req_validated; }
+            }
+            match serde_json::from_value::<enter::Flow>(flow.clone()) {
+                Ok(_) => {
+                    save_flow_json(&mut transaction, flow, series, event).await?;
+                    transaction.commit().await?;
+                    return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))));
+                }
+                Err(e) => {
+                    form.context.push_error(form::Error::validation(format!("Invalid configuration: {e}")));
+                }
+            }
+        }
+    }
+    Ok(RedirectOrContent::Content(enter_flow_edit_form(transaction, Some(me), uri, csrf.as_ref(), data, idx, req, form.context).await?))
 }
