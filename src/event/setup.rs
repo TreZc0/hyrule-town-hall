@@ -1,6 +1,7 @@
 use {
     serenity::model::id::RoleId,
     crate::{
+        discord_bot::ADMIN_USER,
         event::{Data, Tab, enter},
         prelude::*,
         user::DisplaySource,
@@ -960,9 +961,30 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                     AND u.discord_id IS NOT NULL"#,
                     event_data.series as _, &event_data.event
                 ).fetch_all(&mut *transaction).await?;
+                let mut failed_role_assignments = Vec::new();
                 for PgSnowflake(discord_id) in entrant_discord_ids {
                     if let Ok(member) = guild.member(&*discord_ctx, discord_id).await {
-                        let _ = member.add_role(&*discord_ctx, role_id).await;
+                        if let Err(e) = member.add_role(&*discord_ctx, role_id).await {
+                            failed_role_assignments.push((discord_id, e));
+                        }
+                    }
+                }
+                if !failed_role_assignments.is_empty() {
+                    let mut msg = MessageBuilder::default();
+                    msg.push("Failed to assign participant role ");
+                    msg.mention(&role_id);
+                    msg.push(" for ");
+                    msg.push_safe(&event_data.display_name);
+                    msg.push(" to:");
+                    for (discord_id, e) in &failed_role_assignments {
+                        msg.push("\n- ");
+                        msg.mention(discord_id);
+                        msg.push(": ");
+                        msg.push_safe(e.to_string());
+                    }
+                    let msg = msg.build();
+                    if let Ok(ch) = ADMIN_USER.create_dm_channel(&*discord_ctx).await {
+                        let _ = ch.say(&*discord_ctx, msg).await;
                     }
                 }
             }
