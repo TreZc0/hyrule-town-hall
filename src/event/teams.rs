@@ -1015,7 +1015,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
     let header = data.header(&mut transaction, me.as_ref(), Tab::Teams, false).await?;
     let mut show_status = ShowStatus::None;
     let is_organizer = if let Some(ref me) = me {
-        data.organizers(&mut transaction).await?.contains(me)
+        me.is_global_admin() || data.organizers(&mut transaction).await?.contains(me)
     } else {
         false
     };

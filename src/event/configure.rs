@@ -47,6 +47,12 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                 }
             }
         }
+    } else if let Some(failed) = sync_failed {
+        html! {
+            div(class = "error") {
+                p : failed.as_ref();
+            }
+        }
     } else {
         html! {}
     };
@@ -339,6 +345,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
                                     synced_count,
                                     failed_count: 0,
                                     failed_teams: Vec::new(),
+                                    error_message: None,
                                 }),
                                 Err(e) => Err(format!("Challonge sync error: {e}").into()),
                             }
@@ -351,18 +358,24 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             match sync_result {
                 Ok(sync_result) => {
                     transaction.commit().await?;
-                    let success_msg = format!("Sync completed: {} teams synced, {} teams could not be synced",
-                        sync_result.synced_count, sync_result.failed_count);
-                    let redirect_url = if !sync_result.failed_teams.is_empty() {
-                        let failed_list = sync_result.failed_teams.join(", ");
-                        format!("{}?sync_success={}&sync_failed={}",
+                    let redirect_url = if let Some(ref msg) = sync_result.error_message {
+                        format!("{}?sync_failed={}",
                             uri!(get(series, event)),
-                            urlencoding::encode(&success_msg),
-                            urlencoding::encode(&failed_list))
+                            urlencoding::encode(msg))
                     } else {
-                        format!("{}?sync_success={}",
-                            uri!(get(series, event)),
-                            urlencoding::encode(&success_msg))
+                        let success_msg = format!("Sync completed: {} teams synced, {} teams could not be synced",
+                            sync_result.synced_count, sync_result.failed_count);
+                        if !sync_result.failed_teams.is_empty() {
+                            let failed_list = sync_result.failed_teams.join(", ");
+                            format!("{}?sync_success={}&sync_failed={}",
+                                uri!(get(series, event)),
+                                urlencoding::encode(&success_msg),
+                                urlencoding::encode(&failed_list))
+                        } else {
+                            format!("{}?sync_success={}",
+                                uri!(get(series, event)),
+                                urlencoding::encode(&success_msg))
+                        }
                     };
                     return Ok(RedirectOrContent::Redirect(Redirect::to(redirect_url)));
                 }
@@ -630,6 +643,7 @@ struct SyncResult {
     synced_count: usize,
     failed_count: usize,
     failed_teams: Vec<String>,
+    error_message: Option<String>,
 }
 
 async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres>, event: &Data<'_>, event_slug: &str) -> Result<SyncResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -695,6 +709,15 @@ async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres
             e
         })?;
     
+    log::info!("Fetched {} entrants from StartGG for event '{}'", entrants.len(), event_slug);
+    if entrants.is_empty() {
+        return Ok(SyncResult {
+            synced_count: 0,
+            failed_count: 0,
+            failed_teams: Vec::new(),
+            error_message: Some(format!("StartGG returned 0 entrants for slug '{}' — check that the event URL is correct and entrants are registered", event_slug)),
+        });
+    }
     log::info!("Found {} teams to sync for event '{}'", teams.len(), event_slug);
     
     let mut synced_count = 0;
@@ -767,6 +790,7 @@ async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres
         synced_count,
         failed_count,
         failed_teams,
+        error_message: None,
     })
 }
 
