@@ -2439,7 +2439,6 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
 pub(crate) struct RaceTableOptions<'a> {
     pub(crate) game_count: bool,
     pub(crate) show_multistreams: bool,
-    pub(crate) can_create: bool,
     pub(crate) can_edit: bool,
     pub(crate) show_restream_consent: bool,
     pub(crate) challonge_import_ctx: Option<Context<'a>>,
@@ -2492,11 +2491,20 @@ pub(crate) async fn race_table(
         false
     };
     
-    // Check if the event uses a seed gen type that exposes per-race player-chosen settings.
-    let has_settings = event.is_some_and(|e| {
-        e.seed_gen_type.as_ref().is_some_and(|sgt| sgt.has_display_settings())
-    });
-    let has_buttons = options.can_create || options.can_edit;
+    // Check if any event uses a seed gen type that exposes per-race player-chosen settings.
+    let has_settings = 'has_settings: {
+        for race in races {
+            let event = match event_cache.entry((race.series, &race.event)) {
+                hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                hash_map::Entry::Vacant(entry) => entry.insert(race.event(&mut *transaction).await?),
+            };
+            if event.seed_gen_type.as_ref().is_some_and(|sgt| sgt.has_display_settings()) {
+                break 'has_settings true
+            }
+        }
+        false
+    };
+    let has_buttons = options.can_edit;
     let now = Utc::now();
     Ok(html! {
         table {
@@ -2529,25 +2537,7 @@ pub(crate) async fn race_table(
                         th : "Restream Consent";
                     }
                     @if has_buttons {
-                        th {
-                            @if options.can_create {
-                                @if let Some(event) = event {
-                                    @match event.match_source() {
-                                        MatchSource::Manual => a(class = "clean_button", href = uri!(create_race(races[0].series, &*races[0].event, _)), target = "_blank") : "New Race";
-                                        MatchSource::Challonge { .. } => {
-                                            a(class = "clean_button", href = uri!(create_race(races[0].series, &*races[0].event, _)), target = "_blank") : "New Race";
-                                            @if !event.auto_import {
-                                                a(class = "clean_button", href = uri!(import_races(races[0].series, &*races[0].event))) : "Import";
-                                            }
-                                        }
-                                        MatchSource::League => {}
-                                        MatchSource::StartGG(_) => @if !event.auto_import {
-                                            a(class = "clean_button", href = uri!(import_races(races[0].series, &*races[0].event))) : "Import";
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        th {}
                     }
                     th : "Volunteers";
                 }
@@ -3114,7 +3104,7 @@ pub(crate) async fn import_races_form(mut transaction: Transaction<'_, Postgres>
                     }
                 }
             } else {
-                let table = race_table(&mut transaction, discord_ctx, http_client, &uri, Some(&event), RaceTableOptions { game_count: true, show_multistreams: false, can_create: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: Some(ctx.clone()) }, &races, None, None).await?;
+                let table = race_table(&mut transaction, discord_ctx, http_client, &uri, Some(&event), RaceTableOptions { game_count: true, show_multistreams: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: Some(ctx.clone()) }, &races, None, None).await?;
                 let errors = ctx.errors().collect_vec();
                 full_form(uri!(import_races_post(event.series, &*event.event)), csrf, html! {
                     p : "The following races will be imported:";
@@ -3198,7 +3188,7 @@ pub(crate) async fn import_races_form(mut transaction: Transaction<'_, Postgres>
                     }
                 }
             } else {
-                let table = race_table(&mut transaction, discord_ctx, http_client, &uri, Some(&event), RaceTableOptions { game_count: true, show_multistreams: false, can_create: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: None }, &races, None, None).await?;
+                let table = race_table(&mut transaction, discord_ctx, http_client, &uri, Some(&event), RaceTableOptions { game_count: true, show_multistreams: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: None }, &races, None, None).await?;
                 let errors = ctx.errors().collect_vec();
                 full_form(uri!(import_races_post(event.series, &*event.event)), csrf, html! {
                     p : "The following races will be imported:";

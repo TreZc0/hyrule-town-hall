@@ -488,7 +488,7 @@ async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, 
         @if races.is_empty() {
             i : "(none currently)";
         } else {
-            : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, None, cal::RaceTableOptions { game_count: false, show_multistreams: true, can_create: false, can_edit: me.as_ref().is_some_and(|me| me.is_archivist), show_restream_consent: false, challonge_import_ctx: None }, &races, me.as_ref(), None).await?;
+            : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, None, cal::RaceTableOptions { game_count: false, show_multistreams: true, can_edit: me.as_ref().is_some_and(|me| me.is_archivist), show_restream_consent: false, challonge_import_ctx: None }, &races, me.as_ref(), None).await?;
         }
     };
     Ok(page(transaction, &me, &uri, PageStyle { kind: PageKind::Index, chests, ..PageStyle::default() }, "Hyrule Town Hall", page_content).await?)
