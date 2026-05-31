@@ -1,7 +1,33 @@
 use crate::{
     event::{AsyncKind, Data, Series, Tab},
     prelude::*,
+    racetime_bot::seed_gen_type::SeedGenType,
+    seed,
 };
+
+#[derive(Clone, Copy)]
+enum AsyncSeedFormKind {
+    Twwr,
+    TriforceBlitz,
+    AlttprDoorRando,
+    AlttprAvianart,
+    FileStemWebId,
+}
+
+fn async_seed_form_kind(event: &Data<'_>) -> AsyncSeedFormKind {
+    match event.seed_gen_type.as_ref() {
+        Some(SeedGenType::TWWR { .. }) => AsyncSeedFormKind::Twwr,
+        Some(SeedGenType::OotrTriforceBlitz) => AsyncSeedFormKind::TriforceBlitz,
+        Some(SeedGenType::Owr { .. } | SeedGenType::AlttprDoorRando { .. }) => AsyncSeedFormKind::AlttprDoorRando,
+        Some(SeedGenType::AlttprAvianart { .. }) => AsyncSeedFormKind::AlttprAvianart,
+        _ => match event.series {
+            Series::TwwrMain => AsyncSeedFormKind::Twwr,
+            Series::TriforceBlitz => AsyncSeedFormKind::TriforceBlitz,
+            Series::AlttprDe => AsyncSeedFormKind::AlttprAvianart,
+            _ => AsyncSeedFormKind::FileStemWebId,
+        },
+    }
+}
 
 fn parse_async_kind(value: &str) -> Option<AsyncKind> {
     all::<AsyncKind>().find(|kind| format!("{:?}", kind) == value)
@@ -55,8 +81,15 @@ async fn asyncs_form(
         .map(|uuid| uuid.to_string())
         .unwrap_or_default();
     let default_xkeys_uuid = editing_async
-        .and_then(|row| row.xkeys_uuid)
-        .map(|uuid| uuid.to_string())
+        .and_then(|row| {
+            row.seed_data.as_ref()
+                .and_then(seed::Files::from_seed_data)
+                .and_then(|files| match files {
+                    seed::Files::AlttprDoorRando { uuid, .. } => Some(uuid.to_string()),
+                    _ => None,
+                })
+                .or_else(|| row.xkeys_uuid.as_ref().map(ToString::to_string))
+        })
         .unwrap_or_default();
     let default_permalink = editing_async
         .and_then(|row| row.seed_data.as_ref())
@@ -72,7 +105,7 @@ async fn asyncs_form(
         .to_owned();
     let default_avianart_hash = editing_async
         .and_then(|row| row.seed_data.as_ref())
-        .and_then(|seed_data| seed_data.get("avianart_hash"))
+        .and_then(|seed_data| seed_data.get("avianart_hash").or_else(|| seed_data.get("hash")))
         .and_then(|value| value.as_str())
         .unwrap_or_default()
         .to_owned();
@@ -84,6 +117,8 @@ async fn asyncs_form(
         .and_then(|row| row.end_time)
         .map(|end_time| end_time.format("%Y-%m-%dT%H:%M").to_string())
         .unwrap_or_default();
+
+    let seed_form_kind = async_seed_form_kind(&event);
 
     Ok(
         page(
@@ -106,20 +141,20 @@ async fn asyncs_form(
                             thead {
                                 tr {
                                     th : "Kind";
-                                    @match event.series {
-                                        Series::TwwrMain => {
+                                    @match seed_form_kind {
+                                        AsyncSeedFormKind::Twwr => {
                                             th(colspan = "2") : "Seed";
                                         }
-                                        Series::TriforceBlitz => {
+                                        AsyncSeedFormKind::TriforceBlitz => {
                                             th : "TFB UUID";
                                         }
-                                        Series::Cabookey | Series::Crosskeys => {
+                                        AsyncSeedFormKind::AlttprDoorRando => {
                                             th : "ALTTPR UUID";
                                         }
-                                        Series::AlttprDe => {
+                                        AsyncSeedFormKind::AlttprAvianart => {
                                             th : "Avianart Seed";
                                         }
-                                        _ => {
+                                        AsyncSeedFormKind::FileStemWebId => {
                                             th : "File Stem";
                                             th : "Web ID";
                                         }
@@ -133,8 +168,8 @@ async fn asyncs_form(
                                 @for row in asyncs {
                                     tr {
                                         td : format!("{:?}", row.kind);
-                                        @match event.series {
-                                            Series::TwwrMain => {
+                                        @match seed_form_kind {
+                                            AsyncSeedFormKind::Twwr => {
                                                 td(colspan = "2") {
                                                     @let permalink = row.seed_data.as_ref().and_then(|d| d.get("permalink")).and_then(|v| v.as_str()).unwrap_or("");
                                                     @let seed_hash = row.seed_data.as_ref().and_then(|d| d.get("seed_hash")).and_then(|v| v.as_str()).unwrap_or("");
@@ -159,21 +194,31 @@ async fn asyncs_form(
                                                     }
                                                 }
                                             }
-                                            Series::TriforceBlitz => {
+                                            AsyncSeedFormKind::TriforceBlitz => {
                                                 td : row.tfb_uuid.map(|u| u.to_string()).unwrap_or_default();
                                             }
-                                            Series::Cabookey | Series::Crosskeys => {
-                                                td : row.xkeys_uuid.map(|u| u.to_string()).unwrap_or_default();
-                                            }
-                                            Series::AlttprDe => {
+                                            AsyncSeedFormKind::AlttprDoorRando => {
                                                 td {
-                                                    @let avianart_hash = row.seed_data.as_ref().and_then(|d| d.get("avianart_hash")).and_then(|v| v.as_str()).unwrap_or("");
+                                                    @let uuid = row.seed_data.as_ref()
+                                                        .and_then(seed::Files::from_seed_data)
+                                                        .and_then(|files| match files {
+                                                            seed::Files::AlttprDoorRando { uuid, .. } => Some(uuid.to_string()),
+                                                            _ => None,
+                                                        })
+                                                        .or_else(|| row.xkeys_uuid.map(|u| u.to_string()))
+                                                        .unwrap_or_default();
+                                                    : uuid;
+                                                }
+                                            }
+                                            AsyncSeedFormKind::AlttprAvianart => {
+                                                td {
+                                                    @let avianart_hash = row.seed_data.as_ref().and_then(|d| d.get("avianart_hash").or_else(|| d.get("hash"))).and_then(|v| v.as_str()).unwrap_or("");
                                                     @if !avianart_hash.is_empty() {
                                                         a(href = format!("https://avianart.games/perm/{}", avianart_hash), target = "_blank") : avianart_hash;
                                                     }
                                                 }
                                             }
-                                            _ => {
+                                            AsyncSeedFormKind::FileStemWebId => {
                                                 td : row.file_stem.unwrap_or_default();
                                                 td : row.web_id.map(|id| id.to_string()).unwrap_or_default();
                                             }
@@ -204,12 +249,12 @@ async fn asyncs_form(
                         }
                     }
                     h3 : if edit_kind.is_some() { "Edit Async" } else { "Add/Update Async" };
-                    @let hidden_fields = match event.series {
-                        Series::TwwrMain => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid", "avianart_hash"].as_slice(),
-                        Series::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid", "avianart_hash"].as_slice(),
-                        Series::Cabookey | Series::Crosskeys => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "avianart_hash"].as_slice(),
-                        Series::AlttprDe => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "xkeys_uuid"].as_slice(),
-                        _ => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "avianart_hash"].as_slice(),
+                    @let hidden_fields = match seed_form_kind {
+                        AsyncSeedFormKind::Twwr => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid", "avianart_hash"].as_slice(),
+                        AsyncSeedFormKind::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid", "avianart_hash"].as_slice(),
+                        AsyncSeedFormKind::AlttprDoorRando => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "avianart_hash"].as_slice(),
+                        AsyncSeedFormKind::AlttprAvianart => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "xkeys_uuid"].as_slice(),
+                        AsyncSeedFormKind::FileStemWebId => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "avianart_hash"].as_slice(),
                     };
                     @let mut errors = ctx.errors().filter(|e| !hidden_fields.iter().any(|f| e.is_for(f))).collect_vec();
                     : full_form(uri!(post(event.series, &*event.event)), csrf, html! {
@@ -227,8 +272,8 @@ async fn asyncs_form(
                                 }
                             }
                         });
-                        @match event.series {
-                            Series::TwwrMain => {
+                        @match seed_form_kind {
+                            AsyncSeedFormKind::Twwr => {
                                 : form_field("permalink", &mut errors, html! {
                                     label(for = "permalink") : "Permalink";
                                     input(type = "text", name = "permalink", id = "permalink", value = ctx.field_value("permalink").unwrap_or(&default_permalink), style = "width: 100%; max-width: 600px;");
@@ -238,26 +283,26 @@ async fn asyncs_form(
                                     input(type = "text", name = "seed_hash", id = "seed_hash", value = ctx.field_value("seed_hash").unwrap_or(&default_seed_hash));
                                 });
                             }
-                            Series::TriforceBlitz => {
+                            AsyncSeedFormKind::TriforceBlitz => {
                                 : form_field("tfb_uuid", &mut errors, html! {
                                     label(for = "tfb_uuid") : "TFB UUID";
                                     input(type = "text", name = "tfb_uuid", id = "tfb_uuid", value = ctx.field_value("tfb_uuid").unwrap_or(&default_tfb_uuid));
                                 });
                             }
-                            Series::Cabookey | Series::Crosskeys => {
+                            AsyncSeedFormKind::AlttprDoorRando => {
                                 : form_field("xkeys_uuid", &mut errors, html! {
                                     label(for = "xkeys_uuid") : "ALTTPR UUID";
                                     input(type = "text", name = "xkeys_uuid", id = "xkeys_uuid", value = ctx.field_value("xkeys_uuid").unwrap_or(&default_xkeys_uuid));
                                 });
                             }
-                            Series::AlttprDe => {
+                            AsyncSeedFormKind::AlttprAvianart => {
                                 : form_field("avianart_hash", &mut errors, html! {
                                     label(for = "avianart_hash") : "Avianart Hash";
                                     input(type = "text", name = "avianart_hash", id = "avianart_hash", value = ctx.field_value("avianart_hash").unwrap_or(&default_avianart_hash), style = "width: 100%; max-width: 600px;");
                                     label(class = "help") : " (The hash from avianart.games/perm/{hash})";
                                 });
                             }
-                            _ => {
+                            AsyncSeedFormKind::FileStemWebId => {
                                 : form_field("file_stem", &mut errors, html! {
                                     label(for = "file_stem") : "File Stem";
                                     input(type = "text", name = "file_stem", id = "file_stem", value = ctx.field_value("file_stem").unwrap_or(&default_file_stem));
@@ -367,11 +412,12 @@ pub(crate) async fn post(
     }
 
     Ok(if let Some(ref value) = form.value {
-        let hidden_fields = match event_data.series {
-            Series::TwwrMain => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid"].as_slice(),
-            Series::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid"].as_slice(),
-            Series::Cabookey | Series::Crosskeys => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid"].as_slice(),
-            _ => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid"].as_slice(),
+        let seed_form_kind = async_seed_form_kind(&event_data);
+        let hidden_fields = match seed_form_kind {
+            AsyncSeedFormKind::Twwr => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid"].as_slice(),
+            AsyncSeedFormKind::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid"].as_slice(),
+            AsyncSeedFormKind::AlttprDoorRando => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid"].as_slice(),
+            AsyncSeedFormKind::AlttprAvianart | AsyncSeedFormKind::FileStemWebId => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid"].as_slice(),
         };
         let has_relevant_errors = form
             .context
@@ -391,32 +437,7 @@ pub(crate) async fn post(
                 .await?,
             )
         } else {
-            // Build seed_data JSON
-            let seed_data = if matches!(event_data.series, Series::TwwrMain) {
-                let permalink = value.permalink.as_deref().unwrap_or("").trim();
-                let seed_hash = value.seed_hash.as_deref().unwrap_or("").trim();
-                if !permalink.is_empty() || !seed_hash.is_empty() {
-                    Some(serde_json::json!({
-                        "permalink": permalink,
-                        "seed_hash": seed_hash,
-                    }))
-                } else {
-                    None
-                }
-            } else if matches!(event_data.series, Series::AlttprDe) {
-                let avianart_hash = value.avianart_hash.as_deref().unwrap_or("").trim();
-                if !avianart_hash.is_empty() {
-                    Some(serde_json::json!({
-                        "avianart_hash": avianart_hash,
-                    }))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            // Parse UUIDs for TFB/Crosskeys
+            // Parse UUIDs for TFB/ALTTPR.
             let tfb_uuid = if let Some(ref s) = value.tfb_uuid {
                 let trimmed = s.trim();
                 if !trimmed.is_empty() {
@@ -446,7 +467,7 @@ pub(crate) async fn post(
             } else {
                 None
             };
-            let xkeys_uuid = if let Some(ref s) = value.xkeys_uuid {
+            let xkeys_uuid_parsed = if let Some(ref s) = value.xkeys_uuid {
                 let trimmed = s.trim();
                 if !trimmed.is_empty() {
                     match trimmed.parse::<Uuid>() {
@@ -474,6 +495,46 @@ pub(crate) async fn post(
                 }
             } else {
                 None
+            };
+
+            // Build seed_data JSON.
+            let (seed_data, xkeys_uuid) = match seed_form_kind {
+                AsyncSeedFormKind::Twwr => {
+                    let permalink = value.permalink.as_deref().unwrap_or("").trim();
+                    let seed_hash = value.seed_hash.as_deref().unwrap_or("").trim();
+                    let seed_data = if !permalink.is_empty() || !seed_hash.is_empty() {
+                        Some(serde_json::json!({
+                            "type": "twwr",
+                            "permalink": permalink,
+                            "seed_hash": seed_hash,
+                        }))
+                    } else {
+                        None
+                    };
+                    (seed_data, None)
+                }
+                AsyncSeedFormKind::AlttprAvianart => {
+                    let avianart_hash = value.avianart_hash.as_deref().unwrap_or("").trim();
+                    let seed_data = if !avianart_hash.is_empty() {
+                        Some(serde_json::json!({
+                            "type": "alttpr_avianart",
+                            "hash": avianart_hash,
+                        }))
+                    } else {
+                        None
+                    };
+                    (seed_data, None)
+                }
+                AsyncSeedFormKind::AlttprDoorRando => {
+                    let is_owr = matches!(event_data.seed_gen_type.as_ref(), Some(SeedGenType::Owr { .. }));
+                    (
+                        xkeys_uuid_parsed.map(|uuid| seed::Files::AlttprDoorRando { uuid, is_owr }.to_seed_data_base()),
+                        None,
+                    )
+                }
+                AsyncSeedFormKind::TriforceBlitz | AsyncSeedFormKind::FileStemWebId => {
+                    (None, xkeys_uuid_parsed)
+                }
             };
 
             let file_stem = value

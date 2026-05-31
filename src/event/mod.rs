@@ -1263,7 +1263,7 @@ pub(crate) async fn races(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
                 AsyncKind::Tiebreaker1 => "Tiebreaker Async 1".to_owned(),
                 AsyncKind::Tiebreaker2 => "Tiebreaker Async 2".to_owned(),
             });
-            let seed_files = if let Some(hash) = row.seed_data.as_ref().and_then(|d| d.get("avianart_hash")).and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            let seed_files = if let Some(hash) = row.seed_data.as_ref().and_then(|d| d.get("avianart_hash").or_else(|| d.get("hash"))).and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
                 Some(seed::Files::AvianartSeed { hash: hash.to_owned(), seed_hash: None }.to_seed_data_base())
             } else if let (Some(permalink), Some(seed_hash)) = (
                 row.seed_data.as_ref().and_then(|d| d.get("permalink")).and_then(|v| v.as_str()).filter(|s| !s.is_empty()),

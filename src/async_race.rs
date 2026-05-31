@@ -1399,7 +1399,14 @@ pub(crate) async fn handle_ready_qualifier(
     }
 
     if let Some(ref seed_data) = seed.seed_data {
-        if let Some(avianart_hash) = seed_data.get("avianart_hash").and_then(|v| v.as_str()) {
+        if let Some(seed::Files::AlttprDoorRando { uuid, is_owr }) = seed::Files::from_seed_data(seed_data) {
+            let prefix = if is_owr { "OR_" } else { "DR_" };
+            let label = if is_owr { "Open World Rando Seed" } else { "Door Rando Seed" };
+            let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").unwrap();
+            patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/{prefix}{uuid}.bps", base_uri()));
+            seed_msg.push(format!("{label}: {}\n", patcher_url));
+        }
+        if let Some(avianart_hash) = seed_data.get("avianart_hash").or_else(|| seed_data.get("hash")).and_then(|v| v.as_str()) {
             if !avianart_hash.is_empty() {
                 seed_msg.push(format!("Seed URL: https://avianart.games/perm/{}\n", avianart_hash));
             }
