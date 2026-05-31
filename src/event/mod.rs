@@ -1332,6 +1332,21 @@ pub(crate) async fn races(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
     let content = html! {
         : header;
         //TODO copiable calendar link (with link to index for explanation?)
+        @if can_create {
+            div(class = "button-row") {
+                @match data.match_source() {
+                    MatchSource::Manual | MatchSource::Challonge { .. } => a(class = "button", href = uri!(crate::cal::create_race(series, event, _))) : "New Race";
+                    //MatchSource::Challonge { .. } => a(class = "button", href = uri!(crate::cal::import_races(series, event))) : "Import"; // disabled due to Challonge pagination bug
+                    MatchSource::League => {}
+                    MatchSource::StartGG(_) => {
+                        @if !data.auto_import {
+                            a(class = "button", href = uri!(crate::cal::import_races(series, event))) : "Import";
+                        }
+                        a(class = "button", href = uri!(crate::cal::create_race(series, event, _))) : "New Race";
+                    }
+                }
+            }
+        }
         @if any_races_ongoing_or_upcoming {
             //TODO split into ongoing and upcoming, show headers for both
             @if let Some(ref me) = me {
@@ -1358,27 +1373,16 @@ pub(crate) async fn races(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
                            .unwrap_or_default()
                    }
                };
-                : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: true, can_create, can_edit, show_restream_consent, challonge_import_ctx: None }, &ongoing_and_upcoming_races, Some(me), Some(&my_approved_roles)).await?;
+                : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: true, can_edit, show_restream_consent, challonge_import_ctx: None }, &ongoing_and_upcoming_races, Some(me), Some(&my_approved_roles)).await?;
             } else {
-                : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: true, can_create, can_edit, show_restream_consent, challonge_import_ctx: None }, &ongoing_and_upcoming_races, None, None).await?;
+                : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: true, can_edit, show_restream_consent, challonge_import_ctx: None }, &ongoing_and_upcoming_races, None, None).await?;
             }
         }
         @if !past_races.is_empty() {
             @if any_races_ongoing_or_upcoming {
                 h2 : "Past races";
             }
-            : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: false, can_create: can_create && !any_races_ongoing_or_upcoming, can_edit, show_restream_consent: false, challonge_import_ctx: None }, &past_races, None, None).await?;
-        } else if can_create && !any_races_ongoing_or_upcoming {
-            div(class = "button-row") {
-                @match data.match_source() {
-                    MatchSource::Manual | MatchSource::Challonge { .. } => a(class = "button", href = uri!(crate::cal::create_race(series, event, _))) : "New Race";
-                    //MatchSource::Challonge { .. } => a(class = "button", href = uri!(crate::cal::import_races(series, event))) : "Import"; // disabled due to Challonge pagination bug
-                    MatchSource::League => {}
-                    MatchSource::StartGG(_) => @if !data.auto_import {
-                        a(class = "button", href = uri!(crate::cal::import_races(series, event))) : "Import";
-                    }
-                }
-            }
+            : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: false, can_edit, show_restream_consent: false, challonge_import_ctx: None }, &past_races, None, None).await?;
         }
     };
     Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Races — {}", data.display_name), content).await?)
