@@ -522,7 +522,7 @@ impl<'a> Data<'a> {
         }
     }
 
-    pub(crate) async fn qualifier_kind(&self, transaction: &mut Transaction<'_, Postgres>, me: Option<&User>) -> Result<QualifierKind, DataError> {
+    pub(crate) async fn qualifier_kind(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<QualifierKind, DataError> {
         Ok(match (self.series, &*self.event) {
             (Series::SongsOfHope, "1") => QualifierKind::SongsOfHope,
             (Series::SpeedGaming, "2023onl" | "2024onl" | "2025onl") | (Series::Standard, "8") | (Series::TwwrMain, "miniblins26") => {
@@ -539,10 +539,7 @@ impl<'a> Data<'a> {
                 QualifierKind::Rank
             } else if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM asyncs WHERE series = $1 AND event = $2 AND kind = 'qualifier') AS "exists!""#, self.series as _, &*self.event).fetch_one(&mut **transaction).await? {
                 QualifierKind::Single {
-                    show_times: self.show_qualifier_times && (
-                        sqlx::query_scalar!(r#"SELECT submitted IS NOT NULL AS "qualified!" FROM teams, async_teams, team_members WHERE async_teams.team = teams.id AND teams.series = $1 AND teams.event = $2 AND async_teams.team = team_members.team AND member = $3 AND kind = 'qualifier'"#, self.series as _, &*self.event, me.map(|me| PgSnowflake(me.id)) as _).fetch_optional(&mut **transaction).await?.unwrap_or(false)
-                        || self.is_started(transaction).await?
-                    ),
+                    show_times: self.show_qualifier_times,
                 }
             } else {
                 QualifierKind::None
@@ -1481,7 +1478,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                         }
                     }
                 } else {
-                    @let qualifier_kind = data.qualifier_kind(&mut transaction, Some(me)).await?;
+                    @let qualifier_kind = data.qualifier_kind(&mut transaction).await?;
                     @let qualifier_progress = {
                         if let QualifierKind::Score(score_kind) = qualifier_kind {
                             let live_qualifier_count = usize::try_from(sqlx::query_scalar!(
@@ -1781,7 +1778,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                         } else {
                             let ctx = ctx.take_request_async();
                             let mut errors = ctx.errors().collect_vec();
-                            let qualifier_kind = data.qualifier_kind(&mut transaction, Some(me)).await?;
+                            let qualifier_kind = data.qualifier_kind(&mut transaction).await?;
                             let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.clone()), None, &data, false, qualifier_kind, None, true, false).await?;
                             let (qualified, maxed_out, num_finished, required) = if let Some(teams::SignupsTeam { qualification, .. }) = signups.iter().find(|teams::SignupsTeam { team, .. }| team.as_ref().is_some_and(|team| team.id == row.id)) {
                                 match qualification {
@@ -2708,7 +2705,7 @@ async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf
     let team_obj = Team::from_id(&mut transaction, team).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let team_display = team_obj.to_html(&mut transaction, true).await?;
     let members = team_obj.members(&mut transaction).await?;
-    let qualifier_kind = data.qualifier_kind(&mut transaction, None).await?;
+    let qualifier_kind = data.qualifier_kind(&mut transaction).await?;
     let has_qualifiers = !matches!(qualifier_kind, QualifierKind::None);
     let is_global_admin = me.is_global_admin();
     let current_startgg_id = team_obj.startgg_id.as_ref().map(|id| id.0.clone());
@@ -2960,7 +2957,7 @@ async fn manage_racetime_entrant_page(pool: &PgPool, me: Option<User>, uri: Orig
     if !data.organizers(&mut transaction).await?.contains(&me) {
         return Err(StatusOrError::Status(Status::Forbidden))
     }
-    let qualifier_kind = data.qualifier_kind(&mut transaction, None).await?;
+    let qualifier_kind = data.qualifier_kind(&mut transaction).await?;
     if matches!(qualifier_kind, QualifierKind::None) {
         return Err(StatusOrError::Status(Status::NotFound))
     }
@@ -3022,7 +3019,7 @@ pub(crate) async fn manage_racetime_entrant_post(pool: &State<PgPool>, http_clie
     if !data.organizers(&mut transaction).await?.contains(&me) {
         return Err(StatusOrError::Status(Status::Forbidden))
     }
-    let qualifier_kind = data.qualifier_kind(&mut transaction, None).await?;
+    let qualifier_kind = data.qualifier_kind(&mut transaction).await?;
     if matches!(qualifier_kind, QualifierKind::None) {
         return Err(StatusOrError::Status(Status::NotFound))
     }

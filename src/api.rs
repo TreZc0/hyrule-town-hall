@@ -684,7 +684,7 @@ pub(crate) async fn entrants_csv(db_pool: &State<PgPool>, http_client: &State<re
     if !is_organizer && !event.restreamers(&mut transaction).await?.contains(&me) {
         return Err(StatusOrError::Status(Status::Forbidden))
     }
-    let qualifier_kind = event.qualifier_kind(&mut transaction, Some(&me)).await?;
+    let qualifier_kind = event.qualifier_kind(&mut transaction).await?;
     let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.inner().clone()), None, &event, is_organizer, qualifier_kind, None, true, true).await?;
     let mut csv = csv::Writer::from_writer(Vec::default());
     for (i, teams::SignupsTeam { team, .. }) in signups.into_iter().enumerate() {
@@ -737,7 +737,7 @@ pub(crate) async fn qualifier_standings(db_pool: &State<PgPool>, http_client: &S
     if !is_organizer && !event.restreamers(&mut transaction).await?.contains(&me) {
         return Err(StatusOrError::Status(Status::Forbidden))
     }
-    let qualifier_kind = event.qualifier_kind(&mut transaction, Some(&me)).await?;
+    let qualifier_kind = event.qualifier_kind(&mut transaction).await?;
     let signups = teams::signups_sorted(&mut transaction, &mut teams::Cache::new(http_client.inner().clone()), None, &event, is_organizer, qualifier_kind, None, true, true).await?;
     let mut entries = Vec::new();
     let mut rank = 0i64;
