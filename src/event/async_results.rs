@@ -31,7 +31,7 @@ pub(crate) async fn get(
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-    let qualifier_kind = data.qualifier_kind(&mut transaction, me.as_ref()).await?;
+    let qualifier_kind = data.qualifier_kind(&mut transaction).await?;
     let score_kind = match qualifier_kind {
         QualifierKind::Score(k) => k,
         _ => return Err(StatusOrError::Status(Status::NotFound)),

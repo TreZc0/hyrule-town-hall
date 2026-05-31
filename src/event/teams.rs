@@ -1019,7 +1019,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
     } else {
         false
     };
-    let qualifier_kind = data.qualifier_kind(&mut transaction, me.as_ref()).await?;
+    let qualifier_kind = data.qualifier_kind(&mut transaction).await?;
     let all_qualifiers_ended = if let QualifierKind::Score(_) = qualifier_kind {
         let all_races_ended = Race::for_event(&mut transaction, http_client, &data).await?.into_iter().all(|race| race.phase.as_ref().is_none_or(|phase| phase != "Qualifier") || race.is_ended());
         let all_asyncs_ended = sqlx::query_scalar!(r#"
@@ -1340,9 +1340,12 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                         : team.to_html(&mut transaction, false).await?;
                                     }
                                     @if let (QualifierKind::Single { show_times: true }, Qualification::Single { qualified: true } | Qualification::TriforceBlitz { qualified: true, .. }) = (qualifier_kind, &qualification) {
+                                        @let hide_time = !is_organizer && data.qualifier_score_hiding != QualifierScoreHiding::None && !all_qualifiers_ended;
                                         br;
                                         small {
-                                            @if let Some(time) = members.iter().try_fold(Duration::default(), |acc, member| Some(acc + member.qualifier_time?)) {
+                                            @if hide_time {
+                                                : "—";
+                                            } else if let Some(time) = members.iter().try_fold(Duration::default(), |acc, member| Some(acc + member.qualifier_time?)) {
                                                 : English.format_duration(time / u32::try_from(members.len()).expect("too many team members"), false);
                                             } else {
                                                 : "DNF";
@@ -1382,25 +1385,30 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                 }
                                             }
                                             @if let (QualifierKind::Single { show_times: true }, Qualification::Single { qualified: true } | Qualification::TriforceBlitz { qualified: true, .. }) = (qualifier_kind, &qualification) {
+                                                @let hide_time = !is_organizer && data.qualifier_score_hiding != QualifierScoreHiding::None && !all_qualifiers_ended;
                                                 br;
                                                 small {
-                                                    @let time = if let Some(time) = qualifier_time { English.format_duration(*time, false) } else { format!("DNF") };
-                                                    @if let Some(vod) = qualifier_vod {
-                                                        @if let Some(Ok(vod_url)) = (!vod.contains(' ')).then(|| Url::parse(vod)) {
-                                                            a(href = vod_url.to_string()) : time;
+                                                    @if hide_time {
+                                                        : "—";
+                                                    } else {
+                                                        @let time = if let Some(time) = qualifier_time { English.format_duration(*time, false) } else { format!("DNF") };
+                                                        @if let Some(vod) = qualifier_vod {
+                                                            @if let Some(Ok(vod_url)) = (!vod.contains(' ')).then(|| Url::parse(vod)) {
+                                                                a(href = vod_url.to_string()) : time;
+                                                            } else {
+                                                                : time;
+                                                                sup {
+                                                                    @let footnote_id = { footnotes.push(vod.clone()); footnotes.len() };
+                                                                    a(href = format!("#footnote{footnote_id}")) {
+                                                                        : "[";
+                                                                        : footnote_id;
+                                                                        : "]";
+                                                                    }
+                                                                };
+                                                            }
                                                         } else {
                                                             : time;
-                                                            sup {
-                                                                @let footnote_id = { footnotes.push(vod.clone()); footnotes.len() };
-                                                                a(href = format!("#footnote{footnote_id}")) {
-                                                                    : "[";
-                                                                    : footnote_id;
-                                                                    : "]";
-                                                                }
-                                                            };
                                                         }
-                                                    } else {
-                                                        : time;
                                                     }
                                                 }
                                             }
@@ -1514,7 +1522,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                             } else {
                                                                 &data
                                                             };
-                                                            let qualifier_kind = data.qualifier_kind(&mut transaction, None).await?;
+                                                            let qualifier_kind = data.qualifier_kind(&mut transaction).await?;
                                                             let teams = signups_sorted(&mut transaction, &mut cache, None, data, is_organizer, qualifier_kind, Some(&entrant.user), all_qualifiers_ended, false).await?;
                                                             if let Some((placement, team)) = teams.iter().enumerate().find(|(_, team)| team.members.iter().any(|member| member.user == entrant.user));
                                                             if let Qualification::Multiple { num_entered, num_finished, .. } = team.qualification;
