@@ -54,10 +54,19 @@ async fn asyncs_form(
         .and_then(|row| row.tfb_uuid)
         .map(|uuid| uuid.to_string())
         .unwrap_or_default();
-    let default_xkeys_uuid = editing_async
-        .and_then(|row| row.xkeys_uuid)
-        .map(|uuid| uuid.to_string())
-        .unwrap_or_default();
+    let default_xkeys_uuid = if event.series == Series::Cabookey {
+        editing_async
+            .and_then(|row| row.seed_data.as_ref())
+            .and_then(|d| d.get("uuid"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_owned()
+    } else {
+        editing_async
+            .and_then(|row| row.xkeys_uuid)
+            .map(|uuid| uuid.to_string())
+            .unwrap_or_default()
+    };
     let default_permalink = editing_async
         .and_then(|row| row.seed_data.as_ref())
         .and_then(|seed_data| seed_data.get("permalink"))
@@ -162,7 +171,10 @@ async fn asyncs_form(
                                             Series::TriforceBlitz => {
                                                 td : row.tfb_uuid.map(|u| u.to_string()).unwrap_or_default();
                                             }
-                                            Series::Cabookey | Series::Crosskeys => {
+                                            Series::Cabookey => {
+                                                td : row.seed_data.as_ref().and_then(|d| d.get("uuid")).and_then(|v| v.as_str()).unwrap_or_default();
+                                            }
+                                            Series::Crosskeys => {
                                                 td : row.xkeys_uuid.map(|u| u.to_string()).unwrap_or_default();
                                             }
                                             Series::AlttprDe => {
@@ -391,32 +403,7 @@ pub(crate) async fn post(
                 .await?,
             )
         } else {
-            // Build seed_data JSON
-            let seed_data = if matches!(event_data.series, Series::TwwrMain) {
-                let permalink = value.permalink.as_deref().unwrap_or("").trim();
-                let seed_hash = value.seed_hash.as_deref().unwrap_or("").trim();
-                if !permalink.is_empty() || !seed_hash.is_empty() {
-                    Some(serde_json::json!({
-                        "permalink": permalink,
-                        "seed_hash": seed_hash,
-                    }))
-                } else {
-                    None
-                }
-            } else if matches!(event_data.series, Series::AlttprDe) {
-                let avianart_hash = value.avianart_hash.as_deref().unwrap_or("").trim();
-                if !avianart_hash.is_empty() {
-                    Some(serde_json::json!({
-                        "avianart_hash": avianart_hash,
-                    }))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            // Parse UUIDs for TFB/Crosskeys
+            // Parse UUIDs for TFB/Crosskeys/Cabookey
             let tfb_uuid = if let Some(ref s) = value.tfb_uuid {
                 let trimmed = s.trim();
                 if !trimmed.is_empty() {
@@ -446,7 +433,7 @@ pub(crate) async fn post(
             } else {
                 None
             };
-            let xkeys_uuid = if let Some(ref s) = value.xkeys_uuid {
+            let xkeys_uuid_parsed = if let Some(ref s) = value.xkeys_uuid {
                 let trimmed = s.trim();
                 if !trimmed.is_empty() {
                     match trimmed.parse::<Uuid>() {
@@ -474,6 +461,43 @@ pub(crate) async fn post(
                 }
             } else {
                 None
+            };
+
+            // Build seed_data JSON
+            let seed_data = if matches!(event_data.series, Series::TwwrMain) {
+                let permalink = value.permalink.as_deref().unwrap_or("").trim();
+                let seed_hash = value.seed_hash.as_deref().unwrap_or("").trim();
+                if !permalink.is_empty() || !seed_hash.is_empty() {
+                    Some(serde_json::json!({
+                        "permalink": permalink,
+                        "seed_hash": seed_hash,
+                    }))
+                } else {
+                    None
+                }
+            } else if matches!(event_data.series, Series::AlttprDe) {
+                let avianart_hash = value.avianart_hash.as_deref().unwrap_or("").trim();
+                if !avianart_hash.is_empty() {
+                    Some(serde_json::json!({
+                        "avianart_hash": avianart_hash,
+                    }))
+                } else {
+                    None
+                }
+            } else if matches!(event_data.series, Series::Cabookey) {
+                xkeys_uuid_parsed.map(|uuid| serde_json::json!({
+                    "type": "alttpr_owr",
+                    "uuid": uuid.to_string(),
+                }))
+            } else {
+                None
+            };
+
+            // For Cabookey, the UUID is stored in seed_data; xkeys_uuid column stays NULL
+            let xkeys_uuid = if matches!(event_data.series, Series::Cabookey) {
+                None
+            } else {
+                xkeys_uuid_parsed
             };
 
             let file_stem = value
