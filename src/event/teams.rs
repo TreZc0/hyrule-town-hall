@@ -1019,7 +1019,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
     } else {
         false
     };
-    let qualifier_kind = data.qualifier_kind(&mut transaction).await?;
+    let qualifier_kind = data.qualifier_kind(&mut transaction, me.as_ref()).await?;
     let all_qualifiers_ended = if let QualifierKind::Score(_) = qualifier_kind {
         let all_races_ended = Race::for_event(&mut transaction, http_client, &data).await?.into_iter().all(|race| race.phase.as_ref().is_none_or(|phase| phase != "Qualifier") || race.is_ended());
         let all_asyncs_ended = sqlx::query_scalar!(r#"
@@ -1522,7 +1522,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                             } else {
                                                                 &data
                                                             };
-                                                            let qualifier_kind = data.qualifier_kind(&mut transaction).await?;
+                                                            let qualifier_kind = data.qualifier_kind(&mut transaction, None).await?;
                                                             let teams = signups_sorted(&mut transaction, &mut cache, None, data, is_organizer, qualifier_kind, Some(&entrant.user), all_qualifiers_ended, false).await?;
                                                             if let Some((placement, team)) = teams.iter().enumerate().find(|(_, team)| team.members.iter().any(|member| member.user == entrant.user));
                                                             if let Qualification::Multiple { num_entered, num_finished, .. } = team.qualification;
