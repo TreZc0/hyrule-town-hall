@@ -2059,24 +2059,22 @@ pub(crate) async fn create_race_form(mut transaction: Transaction<'_, Postgres>,
         let phase_round_options = sqlx::query!("SELECT phase, round FROM phase_round_options WHERE series = $1 AND event = $2", event.series as _, &event.event).fetch_all(&mut *transaction).await?;
         let mut errors = ctx.errors().collect_vec();
         full_form(uri!(create_race_post(event.series, &*event.event)), csrf, html! {
-            @if let MatchSource::Manual = event.match_source() {
-                fieldset {
-                    legend : "Custom race";
-                    : form_field("custom_title", &mut errors, html! {
-                        label(for = "custom_title") : "Custom title:";
-                        input(type = "text", name = "custom_title", value? = ctx.field_value("custom_title"));
-                        label(class = "help") : "If set, this creates an open custom race and ignores the team fields below.";
-                    });
-                    : form_field("start_date", &mut errors, html! {
-                        label(for = "start_date") : "Start date (YYYY-MM-DD HH:MM in your timezone):";
-                        input(type = "text", name = "start_date", value? = ctx.field_value("start_date"));
-                    });
-                    input(type = "hidden", name = "timezone", id = "timezone-field");
-                    : form_field("custom_create_room", &mut errors, html! {
-                        input(type = "checkbox", id = "custom_create_room", name = "custom_create_room", checked? = ctx.field_value("custom_create_room").map_or(ctx.field_value("custom_title").is_none(), |value| value == "on"));
-                        label(for = "custom_create_room") : "Create racetime.gg room automatically";
-                    });
-                }
+            fieldset {
+                legend : "Custom race";
+                : form_field("custom_title", &mut errors, html! {
+                    label(for = "custom_title") : "Custom title:";
+                    input(type = "text", name = "custom_title", value? = ctx.field_value("custom_title"));
+                    label(class = "help") : "If set, this creates an open custom race and ignores the team fields below.";
+                });
+                : form_field("start_date", &mut errors, html! {
+                    label(for = "start_date") : "Start date (YYYY-MM-DD HH:MM in your timezone):";
+                    input(type = "text", name = "start_date", value? = ctx.field_value("start_date"));
+                });
+                input(type = "hidden", name = "timezone", id = "timezone-field");
+                : form_field("custom_create_room", &mut errors, html! {
+                    input(type = "checkbox", id = "custom_create_room", name = "custom_create_room", checked? = ctx.field_value("custom_create_room").map_or(ctx.field_value("custom_title").is_none(), |value| value == "on"));
+                    label(for = "custom_create_room") : "Create racetime.gg room automatically";
+                });
             }
             : form_field("team1", &mut errors, html! {
                 label(for = "team1") {
@@ -2219,9 +2217,6 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
     Ok(if let Some(ref value) = form.value {
         let custom_title = value.custom_title.trim();
         if !custom_title.is_empty() {
-            if event.match_source() != MatchSource::Manual {
-                form.context.push_error(form::Error::validation("Custom races can only be created for manually managed events.").with_name("custom_title"));
-            }
             let start = if value.start_date.is_empty() {
                 form.context.push_error(form::Error::validation("Custom races need a start date.").with_name("start_date"));
                 None
