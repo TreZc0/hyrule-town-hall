@@ -4,7 +4,6 @@ use crate::{
         InfoError,
     },
     prelude::*,
-    racetime_bot::PrerollMode,
 };
 
 pub(crate) struct Setting {
@@ -151,8 +150,7 @@ pub(crate) fn resolve_s7_draft_settings(picks: &draft::Picks) -> seed::Settings 
 // WeeklyKind enum removed - weekly schedules are now stored in the database
 // and managed via the Configure tab. See src/weekly.rs for the WeeklySchedule model.
 
-// Make sure to keep the following in sync with each other and the rando_version and single_settings database entries:
-pub(crate) const WEEKLY_PREROLL_MODE: PrerollMode = PrerollMode::Medium;
+// Make sure to keep the following in sync with the rando_version and single_settings database entries:
 pub(crate) fn weekly_chest_appearances() -> ChestAppearances {
     static WEIGHTS: LazyLock<Vec<(ChestAppearances, usize)>> = LazyLock::new(|| serde_json::from_str(include_str!("../../assets/event/s/chests-w-8.3.12.json")).expect("failed to parse chest weights"));
 

@@ -96,45 +96,7 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
             };
             let mut errors = ctx.errors().collect_vec();
             html! {
-                @if event.series == Series::Standard && event.event == "w" {
-                    p {
-                        : "Preroll mode: ";
-                        : format!("{:?}", s::WEEKLY_PREROLL_MODE);
-                    }
-                    p {
-                        : "Randomizer version: ";
-                        @match event.rando_version.as_ref().expect("no randomizer version configured for weeklies") {
-                            VersionedBranch::Pinned { version } => : version.to_string();
-                            VersionedBranch::Latest { branch } => {
-                                : "latest ";
-                                : branch.to_string();
-                                : " branch (updates automatically)";
-                            }
-                            VersionedBranch::Custom { github_username, branch } => {
-                                : "custom (GitHub user/organization name: ";
-                                : github_username;
-                                : ", branch: ";
-                                : branch;
-                                : ")";
-                            }
-                            VersionedBranch::Tww { identifier, github_url, .. } => {
-                                : "The Wind Waker Randomizer (build ";
-                                : identifier;
-                                : ", download: ";
-                                : github_url;
-                                : ")";
-                            }
-                        }
-                    }
-                    p : "Settings:";
-                    pre : serde_json::to_string_pretty(event.single_settings.as_ref().expect("no settings configured for weeklies"))?;
-                    p {
-                        : "The data above is currently not editable for technical reasons. Please contact ";
-                        : User::from_id(&mut *transaction, Id::<Users>::from(16287394041462225947_u64)).await?.ok_or(PageError::AdminUserData(1))?; // TreZ
-                        : " if you've spotted an error in it.";
-                    } //TODO make editable
-                } else {
-                    : full_form(uri!(post(event.series, &*event.event)), csrf, html! {
+                : full_form(uri!(post(event.series, &*event.event)), csrf, html! {
                         @if matches!(event.match_source(), MatchSource::StartGG(_) | MatchSource::Challonge { .. }) {
                             : form_field("auto_import", &mut errors, html! {
                                 input(type = "checkbox", id = "auto_import", name = "auto_import", checked? = ctx.field_value("auto_import").map_or(event.auto_import, |value| value == "on"));
@@ -218,7 +180,6 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                             });
                         }
                     }, errors, "Save");
-                }
                 h2 : "More options";
                 ul {
                     li {

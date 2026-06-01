@@ -367,11 +367,7 @@ impl<'a> Data<'a> {
                 discord_async_channel: row.discord_async_channel.map(|PgSnowflake(id)| id),
                 rando_version: row.rando_version.map(|Json(rando_version)| rando_version),
                 settings_string: row.settings_string,
-                single_settings: if series == Series::CopaDoBrasil && event == "1" {
-                    Some(br::s1_settings()) // support for randomized starting song
-                } else {
-                    row.single_settings.map(|Json(single_settings)| single_settings)
-                },
+                single_settings: row.single_settings.map(|Json(single_settings)| single_settings),
                 team_config: row.team_config,
                 enter_flow: row.enter_flow.map(|Json(flow)| flow),
                 show_opt_out: row.show_opt_out,
