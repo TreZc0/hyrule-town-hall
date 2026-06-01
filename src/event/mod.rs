@@ -525,13 +525,13 @@ impl<'a> Data<'a> {
     pub(crate) async fn qualifier_kind(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<QualifierKind, DataError> {
         Ok(match (self.series, &*self.event) {
             (Series::SongsOfHope, "1") => QualifierKind::SongsOfHope,
-            (Series::SpeedGaming, "2023onl" | "2024onl" | "2025onl") | (Series::Standard, "8") | (Series::TwwrMain, "miniblins26") => {
+            (Series::SpeedGaming, "2023onl" | "2024onl" | "2025onl") | (Series::Standard, "8") | (Series::TwwrMain, "miniblins26" | "s9") => {
                 QualifierKind::Score(match (self.series, &*self.event) {
                     (Series::SpeedGaming, "2023onl") => teams::QualifierScoreKind::Sgl2023Online,
                     (Series::SpeedGaming, "2024onl") => teams::QualifierScoreKind::Sgl2024Online,
                     (Series::SpeedGaming, "2025onl") => teams::QualifierScoreKind::Sgl2025Online,
                     (Series::Standard, "8") => teams::QualifierScoreKind::Standard,
-                    (Series::TwwrMain, "miniblins26") => teams::QualifierScoreKind::TwwrMiniblins26,
+                    (Series::TwwrMain, "miniblins26" | "s9") => teams::QualifierScoreKind::TwwrMiniblins26,
                     _ => unreachable!("checked by outer match"),
                 })
             }

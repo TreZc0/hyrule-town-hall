@@ -314,6 +314,7 @@ pub(crate) enum Goal {
     TriforceBlitzProgressionSpoiler,
     TwwrMainWeekly,
     TwwrMainMiniblins26,
+    TwwrMainS9,
     WeTryToBeBetterS1,
     WeTryToBeBetterS2,
     WolfdashS5,
@@ -371,6 +372,7 @@ impl Goal {
             Self::TriforceBlitzProgressionSpoiler => false, // possible future tournament but no concrete plans
             Self::TwwrMainWeekly => series == Series::TwwrMain && event == "w",
             Self::TwwrMainMiniblins26 => series == Series::TwwrMain && event == "miniblins26",
+            Self::TwwrMainS9 => series == Series::TwwrMain && event == "s9",
             Self::WeTryToBeBetterS1 => series == Series::WeTryToBeBetter && event == "1",
             Self::WeTryToBeBetterS2 => series == Series::WeTryToBeBetter && event == "2",
             Self::WolfdashS5 => series == Series::Wolfdash && event == "5",
@@ -384,6 +386,7 @@ impl Goal {
             | Self::TriforceBlitz
             | Self::TwwrMainWeekly
             | Self::TwwrMainMiniblins26
+            | Self::TwwrMainS9
                 => false,
             | Self::AlttprDe9Bracket
             | Self::AlttprDe9SwissA
@@ -455,9 +458,10 @@ impl Goal {
             Self::TriforceBlitzProgressionSpoiler => "Triforce Blitz Progression Spoiler",
             Self::TwwrMainWeekly => "Miniblins",
             Self::TwwrMainMiniblins26 => "Miniblins",
+            Self::TwwrMainS9 => "Standard Race",
             Self::WeTryToBeBetterS1 => "WeTryToBeBetter",
             Self::WeTryToBeBetterS2 => "WeTryToBeBetter Season 2",
-            Self::WolfdashS5 => "Wolfdash Season 5",
+            Self::WolfdashS5 => "Any%",
         }
     }
 
@@ -493,6 +497,7 @@ impl Goal {
             | Self::TriforceBlitzProgressionSpoiler
             | Self::TwwrMainWeekly
             | Self::TwwrMainMiniblins26
+            | Self::TwwrMainS9
             | Self::WolfdashS5
                 => English,
             | Self::TournoiFrancoS4
@@ -555,6 +560,7 @@ impl Goal {
             | Self::TriforceBlitzProgressionSpoiler
             | Self::TwwrMainWeekly
             | Self::TwwrMainMiniblins26
+            | Self::TwwrMainS9
             | Self::WeTryToBeBetterS1
             | Self::WeTryToBeBetterS2
             | Self::WolfdashS5
@@ -599,6 +605,7 @@ impl Goal {
             | Self::WeTryToBeBetterS2
             | Self::TwwrMainWeekly
             | Self::TwwrMainMiniblins26
+            | Self::TwwrMainS9
             | Self::WolfdashS5
                 => PrerollMode::Medium,
             | Self::MixedPoolsS2
@@ -671,6 +678,7 @@ impl Goal {
                 | Self::MysteryD20
                 | Self::TwwrMainWeekly
                 | Self::TwwrMainMiniblins26
+                | Self::TwwrMainS9
                 | Self::WolfdashS5
                     => UnlockSpoilerLog::Never
             }
@@ -720,7 +728,7 @@ impl Goal {
             Self::Cabookey2026 => panic!("randomizer version for this goal is unused"),
             Self::Crosskeys2025 => panic!("randomizer version for this goal is unused"),
             Self::MysteryD20 => panic!("randomizer version for this goal is unused"),
-            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => if_chain! {
+            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 | Self::TwwrMainS9 => if_chain! {
                 if let Some(event) = event;
                 if let Some(ref rando_version) = event.rando_version;
                 then {
@@ -771,7 +779,7 @@ impl Goal {
             Self::TournoiFrancoS5 => None, // settings draft
             Self::TriforceBlitz => None, // per-event settings
             Self::TriforceBlitzProgressionSpoiler => Some(tfb::progression_spoiler_settings()),
-            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => None, // handled via settings_string
+            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 | Self::TwwrMainS9 => None, // handled via settings_string
             Self::WolfdashS5 => None, // no seed
             Self::WeTryToBeBetterS1 => Some(wttbb::s1_settings()),
             Self::WeTryToBeBetterS2 => Some(wttbb::s2_settings()),
@@ -884,7 +892,7 @@ impl Goal {
                 ctx.say("!seed daily: Triforce Blitz Seed of the Day").await?;
             }
             Self::TriforceBlitzProgressionSpoiler => ctx.say("!seed: The current settings for the mode").await?,
-            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => ctx.say("!seed: The permalink validation hash for the race.").await?,
+            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 | Self::TwwrMainS9 => ctx.say("!seed: The permalink validation hash for the race.").await?,
             Self::WolfdashS5 => unreachable!("WolfdashS5 does not use seeds"),
         }
         Ok(())
@@ -1431,7 +1439,7 @@ impl Goal {
                 [arg] if arg == "s4coop" => SeedCommandParseResult::TfbDev { coop: true, unlock_spoiler_log, language: English, article: "a", description: format!("Triforce Blitz S4 co-op seed") },
                 [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn't quite understand that" },
             },
-            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 => match args {
+            Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 | Self::TwwrMainS9 => match args {
                 [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the permalink is required" }),
                 [permalink] => SeedCommandParseResult::Twwr {
                     permalink: permalink.clone(),
@@ -5206,7 +5214,7 @@ impl RaceHandler<GlobalState> for Handler {
                                     }),
                                 ],
                             ).await?,
-                            Goal::TwwrMainWeekly | Goal::TwwrMainMiniblins26 => ctx.send_message(
+                            Goal::TwwrMainWeekly | Goal::TwwrMainMiniblins26 | Goal::TwwrMainS9 => ctx.send_message(
                                 "Welcome! This is a practice room for The Wind Waker Randomizer. Learn more at http://twwrando.com/",
                                 true,
                                 vec![
@@ -5416,6 +5424,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await,
                             Goal::TwwrMainWeekly
                             | Goal::TwwrMainMiniblins26
+                            | Goal::TwwrMainS9
                                 => this.roll_twwr_seed_official(ctx, cal_event.clone(), English, "a").await,
                             Goal::MysteryD20 => this.roll_mysteryd20_seed(ctx, cal_event.clone(), English, "a").await,
                             Goal::NineDaysOfSaws => unreachable!("9dos series has concluded"),
@@ -6250,6 +6259,7 @@ impl RaceHandler<GlobalState> for Handler {
                     | Goal::WeTryToBeBetterS2
                     | Goal::TwwrMainWeekly
                     | Goal::TwwrMainMiniblins26
+                    | Goal::TwwrMainS9
                     | Goal::WolfdashS5
                         => {}
                 }
