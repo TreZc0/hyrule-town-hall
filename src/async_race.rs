@@ -1394,7 +1394,7 @@ pub(crate) async fn handle_ready_qualifier(
             if let Some(uuid) = seed_data.get("uuid").and_then(|v| v.as_str()) {
                 let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").unwrap();
                 patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/OR_{uuid}.bps", base_uri()));
-                seed_msg.push(format!("Open World Rando Seed: {}\n", patcher_url));
+                seed_msg.push(format!("OWR Seed: {}\n", patcher_url));
             }
         }
         if let Some(avianart_hash) = seed_data.get("avianart_hash").and_then(|v| v.as_str()) {

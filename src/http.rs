@@ -6,6 +6,7 @@ use {
     rocket::{
         Rocket,
         config::SecretKey,
+        data::ToByteUnit as _,
         fs::FileServer,
         response::content::RawText,
     },
@@ -668,6 +669,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
     Ok(rocket::custom(rocket::Config::figment().merge(rocket::Config {
         secret_key: SecretKey::from(&BASE64.decode(&config.secret_key)?),
         log_level: Some(rocket::config::Level::ERROR),
+        limits: rocket::data::Limits::default().limit("form", 4_u64.mebibytes()),
         ..rocket::Config::default()
     }).merge(("port", port))) //TODO report issue for lack of typed interface to set port, see https://github.com/rwf2/Rocket/commit/fd294049c784cb52680a423616fadc29d57fa25b
     .mount("/", rocket::routes![
