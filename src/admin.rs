@@ -682,6 +682,14 @@ pub(crate) async fn zsr_backends(
                     input(type = "text", id = "dst_formula_dst", name = "dst_formula_dst", required,
                         value = "=IF(A{row}=\"\",\"\",A{row}-Sheet2!$A$2)", placeholder = "Use {row} for row number");
                 });
+                : form_field("api_endpoint", &mut Vec::new(), html! {
+                    label(for = "api_endpoint") : "Volunteer API Endpoint (optional)";
+                    input(type = "url", id = "api_endpoint", name = "api_endpoint", placeholder = "https://example.com/volunteers");
+                });
+                : form_field("api_secret", &mut Vec::new(), html! {
+                    label(for = "api_secret") : "Volunteer API Secret (optional)";
+                    input(type = "text", id = "api_secret", name = "api_secret", placeholder = "scheduleVolunteersSecret");
+                });
             }, Vec::new(), "Add Backend");
 
             p {
@@ -714,6 +722,8 @@ pub(crate) struct ZsrBackendForm {
     notes_col: String,
     dst_formula_standard: String,
     dst_formula_dst: String,
+    api_endpoint: Option<String>,
+    api_secret: Option<String>,
 }
 
 #[rocket::post("/admin/zsr-backends", data = "<form>")]
@@ -745,6 +755,8 @@ pub(crate) async fn add_zsr_backend(
             &value.notes_col,
             &value.dst_formula_standard,
             &value.dst_formula_dst,
+            value.api_endpoint.as_deref().filter(|s| !s.is_empty()),
+            value.api_secret.as_deref().filter(|s| !s.is_empty()),
         ).await.map_err(Error::from)?;
 
         transaction.commit().await.map_err(Error::from)?;
@@ -822,6 +834,18 @@ pub(crate) async fn edit_zsr_backend(
                     label(for = "dst_formula_dst") : "Daylight Saving Time Formula";
                     input(type = "text", id = "dst_formula_dst", name = "dst_formula_dst", required, value = &backend.dst_formula_dst);
                 });
+                : form_field("api_endpoint", &mut Vec::new(), html! {
+                    label(for = "api_endpoint") : "Volunteer API Endpoint (optional)";
+                    input(type = "url", id = "api_endpoint", name = "api_endpoint",
+                        value = backend.api_endpoint.as_deref().unwrap_or_default(),
+                        placeholder = "https://example.com/volunteers");
+                });
+                : form_field("api_secret", &mut Vec::new(), html! {
+                    label(for = "api_secret") : "Volunteer API Secret (optional)";
+                    input(type = "text", id = "api_secret", name = "api_secret",
+                        value = backend.api_secret.as_deref().unwrap_or_default(),
+                        placeholder = "scheduleVolunteersSecret");
+                });
             }, Vec::new(), "Save Changes");
 
             p {
@@ -871,6 +895,8 @@ pub(crate) async fn update_zsr_backend(
             &value.notes_col,
             &value.dst_formula_standard,
             &value.dst_formula_dst,
+            value.api_endpoint.as_deref().filter(|s| !s.is_empty()),
+            value.api_secret.as_deref().filter(|s| !s.is_empty()),
         ).await.map_err(Error::from)?;
 
         transaction.commit().await.map_err(Error::from)?;
