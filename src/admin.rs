@@ -689,11 +689,11 @@ pub(crate) async fn zsr_backends(
                 });
                 : form_field("api_endpoint", &mut Vec::new(), html! {
                     label(for = "api_endpoint") : "Volunteer API Endpoint (optional)";
-                    input(type = "url", id = "api_endpoint", name = "api_endpoint", style = "width: 100%", placeholder = "https://example.com/volunteers");
+                    input(type = "url", id = "api_endpoint", name = "api_endpoint", style = "width: 80%", placeholder = "https://example.com/volunteers");
                 });
                 : form_field("api_secret", &mut Vec::new(), html! {
                     label(for = "api_secret") : "Volunteer API Secret (optional)";
-                    input(type = "text", id = "api_secret", name = "api_secret", style = "width: 100%", placeholder = "scheduleVolunteersSecret");
+                    input(type = "text", id = "api_secret", name = "api_secret", style = "width: 80%", placeholder = "scheduleVolunteersSecret");
                 });
             }, Vec::new(), "Add Backend");
 
@@ -842,12 +842,14 @@ pub(crate) async fn edit_zsr_backend(
                 : form_field("api_endpoint", &mut Vec::new(), html! {
                     label(for = "api_endpoint") : "Volunteer API Endpoint (optional)";
                     input(type = "url", id = "api_endpoint", name = "api_endpoint",
+                        style = "width: 80%",
                         value = backend.api_endpoint.as_deref().unwrap_or_default(),
                         placeholder = "https://example.com/volunteers");
                 });
                 : form_field("api_secret", &mut Vec::new(), html! {
                     label(for = "api_secret") : "Volunteer API Secret (optional)";
                     input(type = "text", id = "api_secret", name = "api_secret",
+                        style = "width: 80%",
                         value = backend.api_secret.as_deref().unwrap_or_default(),
                         placeholder = "scheduleVolunteersSecret");
                 });
