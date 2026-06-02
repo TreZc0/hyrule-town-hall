@@ -9,7 +9,7 @@ use {
     chrono_tz::Europe::Berlin,
     crate::{
         cal::{Race, RaceSchedule, Entrant, Entrants},
-        event::{self, roles::{RoleBinding, Signup, VolunteerSignupStatus}},
+        event::{self, roles::{EffectiveRoleBinding, Signup, VolunteerSignupStatus}},
         id::Races,
         prelude::*,
         series::Series,
@@ -796,30 +796,50 @@ pub(crate) async fn ensure_description_entry(
     Ok(())
 }
 
-/// Get confirmed volunteers for a specific role type
+/// Get volunteer names for a specific role type and backend language.
+/// Returns confirmed volunteer names joined by ", ", or a pending count string if none are confirmed.
 pub(crate) async fn get_volunteers_for_role(
     transaction: &mut Transaction<'_, Postgres>,
     race: &Race,
+    backend: &RestreamingBackend,
     role_type_name: &str,
-) -> Result<Vec<String>, Error> {
-    let signups = Signup::for_race(transaction, race.id).await?;
-    let role_bindings = RoleBinding::for_event(transaction, race.series, &race.event).await?;
-    let mut names = Vec::new();
+) -> Result<String, Error> {
+    let effective_bindings = EffectiveRoleBinding::for_event(transaction, race.series, &race.event).await?;
+    let Some(binding) = effective_bindings.iter()
+        .find(|b| !b.is_disabled && b.language == backend.language && b.role_type_name == role_type_name)
+    else {
+        return Ok(String::new());
+    };
+    let binding_id = binding.id;
 
-    for signup in signups {
-        if matches!(signup.status, VolunteerSignupStatus::Confirmed) {
-            // Find the role binding for this signup
-            if let Some(binding) = role_bindings.iter().find(|b| b.id == signup.role_binding_id) {
-                if binding.role_type_name.to_lowercase().contains(&role_type_name.to_lowercase()) {
-                    if let Ok(Some(user)) = User::from_id(&mut **transaction, signup.user_id).await {
-                        names.push(user.display_name().to_owned());
-                    }
-                }
+    let signups = Signup::for_race(transaction, race.id).await?;
+    let role_signups: Vec<&Signup> = signups.iter()
+        .filter(|s| s.role_binding_id == binding_id)
+        .collect();
+
+    let confirmed: Vec<&&Signup> = role_signups.iter()
+        .filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed))
+        .collect();
+
+    if !confirmed.is_empty() {
+        let mut names = Vec::new();
+        for signup in confirmed {
+            if let Ok(Some(user)) = User::from_id(&mut **transaction, signup.user_id).await {
+                names.push(user.display_name().to_owned());
             }
         }
+        return Ok(names.join(", "));
     }
 
-    Ok(names)
+    let pending_count = role_signups.iter()
+        .filter(|s| matches!(s.status, VolunteerSignupStatus::Pending))
+        .count();
+
+    if pending_count > 0 {
+        return Ok(format!("{} pending", pending_count));
+    }
+
+    Ok(String::new())
 }
 
 fn find_row_by_export_id(id_values: &[Vec<String>], export_id: &str) -> Option<usize> {
@@ -938,10 +958,8 @@ pub(crate) async fn export_race(
         .unwrap_or_else(|| format_estimate(export.series.default_race_duration()));
 
     // Get volunteers
-    let commentators = get_volunteers_for_role(transaction, race, "comment").await.unwrap_or_default();
-    let trackers = get_volunteers_for_role(transaction, race, "track").await.unwrap_or_default();
-    let commentators_joined = commentators.join(", ");
-    let trackers_joined = trackers.join(", ");
+    let commentators_joined = get_volunteers_for_role(transaction, race, backend, "Commentary").await.unwrap_or_default();
+    let trackers_joined = get_volunteers_for_role(transaction, race, backend, "Tracking").await.unwrap_or_default();
     let runner_count = format_runner_count(race);
 
     // Get restream channel alias - only fill the field if an alias is configured
