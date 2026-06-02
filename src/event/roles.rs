@@ -2402,6 +2402,12 @@ pub(crate) async fn apply_for_role(
             ));
         }
 
+        if me.discord.is_none() {
+            form.context.push_error(form::Error::validation(
+                "You must connect your Discord account to apply for volunteer roles",
+            ));
+        }
+
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(
                 volunteer_page(
@@ -2805,21 +2811,29 @@ async fn volunteer_page(
                                         }
                                     }
                                 } else {
-                                    @let mut errors = ctx.errors().collect::<Vec<_>>();
-                                    @let button_text = if binding.auto_approve {
-                                        format!("Volunteer for {} role", binding.role_type_name)
-                                    } else {
-                                        format!("Apply for {} role", binding.role_type_name)
-                                    };
-                                    : full_form(uri!(apply_for_role(data.series, &*data.event)), csrf.as_ref(), html! {
-                                        input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
-                                        @if !binding.auto_approve {
-                                            : form_field("notes", &mut errors, html! {
-                                                label(for = "notes") : "Notes (optional):";
-                                                textarea(name = "notes", id = "notes", rows = "3") : "";
-                                            });
+                                    @if me.discord.is_none() {
+                                        p {
+                                            : "To apply for volunteer roles, please connect your Discord account via your ";
+                                            a(href = uri!(crate::user::profile(me.id))) : "profile page";
+                                            : " first.";
                                         }
-                                    }, errors, button_text.as_str());
+                                    } else {
+                                        @let mut errors = ctx.errors().collect::<Vec<_>>();
+                                        @let button_text = if binding.auto_approve {
+                                            format!("Volunteer for {} role", binding.role_type_name)
+                                        } else {
+                                            format!("Apply for {} role", binding.role_type_name)
+                                        };
+                                        : full_form(uri!(apply_for_role(data.series, &*data.event)), csrf.as_ref(), html! {
+                                            input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
+                                            @if !binding.auto_approve {
+                                                : form_field("notes", &mut errors, html! {
+                                                    label(for = "notes") : "Notes (optional):";
+                                                    textarea(name = "notes", id = "notes", rows = "3") : "";
+                                                });
+                                            }
+                                        }, errors, button_text.as_str());
+                                    }
                                 }
                             }
                         }
@@ -3030,6 +3044,12 @@ pub(crate) async fn signup_for_match(
             ));
         }
 
+        if me.discord.is_none() {
+            form.context.push_error(form::Error::validation(
+                "You must connect your Discord account to sign up as a volunteer",
+            ));
+        }
+
         if !RoleRequest::approved_for_user(&mut transaction, value.role_binding_id, me.id).await? {
             // For auto-approve bindings, atomically create/upgrade the role request on the spot
             if RoleRequest::ensure_approved_for_auto_approve(&mut transaction, value.role_binding_id, me.id).await?.is_none() {
@@ -3113,6 +3133,7 @@ pub(crate) struct ManageRosterForm {
 )]
 pub(crate) async fn manage_roster(
     pool: &State<PgPool>,
+    http_client: &State<reqwest::Client>,
     discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     series: Series,
@@ -3320,6 +3341,12 @@ pub(crate) async fn manage_roster(
                 &*discord_ctx.read().await,
                 race_id,
             ).await;
+
+            crate::zsr_export::schedule_volunteer_api_call(
+                pool.inner().clone(),
+                http_client.inner().clone(),
+                race_id,
+            );
 
             RedirectOrContent::Redirect(match value.lang {
                 Some(lang) => Redirect::to(format!("/event/{}/{}/races/{}/signups?lang={}", series.slug(), event, race_id, lang.short_code())),
@@ -3750,7 +3777,13 @@ async fn match_signup_page(
                         } else {
                             None
                         };
-                        @if disabled {
+                        @if me.discord.is_none() {
+                            p {
+                                : "To sign up as a volunteer, please connect your Discord account via your ";
+                                a(href = uri!(crate::user::profile(me.id))) : "profile page";
+                                : " first.";
+                            }
+                        } else if disabled {
                             @let (errors, signup_button) = button_form_ext_disabled(
                                 uri!(signup_for_match(data.series, &*data.event, race_id)),
                                 csrf.as_ref(),
@@ -3799,7 +3832,13 @@ async fn match_signup_page(
                             None
                         };
                         p(class = "auto-approve-note") : "This role is open to all volunteers — signing up will automatically enroll you.";
-                        @if disabled {
+                        @if me.discord.is_none() {
+                            p {
+                                : "To sign up as a volunteer, please connect your Discord account via your ";
+                                a(href = uri!(crate::user::profile(me.id))) : "profile page";
+                                : " first.";
+                            }
+                        } else if disabled {
                             @let (errors, signup_button) = button_form_ext_disabled(
                                 uri!(signup_for_match(data.series, &*data.event, race_id)),
                                 csrf.as_ref(),
@@ -3927,6 +3966,7 @@ pub(crate) struct RevokeSignupForm {
 #[rocket::post("/event/<series>/<event>/races/<race_id>/withdraw-signup", data = "<form>")]
 pub(crate) async fn withdraw_signup(
     pool: &State<PgPool>,
+    http_client: &State<reqwest::Client>,
     discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     series: Series,
@@ -4016,6 +4056,12 @@ pub(crate) async fn withdraw_signup(
                 race_id,
             ).await;
 
+            crate::zsr_export::schedule_volunteer_api_call(
+                pool.inner().clone(),
+                http_client.inner().clone(),
+                race_id,
+            );
+
             RedirectOrContent::Redirect(match value.lang {
                 Some(lang) => Redirect::to(format!("/event/{}/{}/races/{}/signups?lang={}", series.slug(), event, race_id, lang.short_code())),
                 None => Redirect::to(format!("/event/{}/{}/races/{}/signups", series.slug(), event, race_id)),
@@ -4041,6 +4087,7 @@ pub(crate) async fn withdraw_signup(
 #[rocket::post("/event/<series>/<event>/races/<race_id>/revoke-signup", data = "<form>")]
 pub(crate) async fn revoke_signup(
     pool: &State<PgPool>,
+    http_client: &State<reqwest::Client>,
     discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     series: Series,
@@ -4119,6 +4166,12 @@ pub(crate) async fn revoke_signup(
                 &*discord_ctx.read().await,
                 race_id,
             ).await;
+
+            crate::zsr_export::schedule_volunteer_api_call(
+                pool.inner().clone(),
+                http_client.inner().clone(),
+                race_id,
+            );
 
             RedirectOrContent::Redirect(match value.lang {
                 Some(lang) => Redirect::to(format!("/event/{}/{}/races/{}/signups?lang={}", series.slug(), event, race_id, lang.short_code())),

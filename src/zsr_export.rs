@@ -7,6 +7,8 @@ use {
     chrono::Utc,
     chrono_tz::US::Eastern,
     chrono_tz::Europe::Berlin,
+    std::time::Duration,
+    tokio::time::sleep,
     crate::{
         cal::{Race, RaceSchedule, Entrant, Entrants},
         event::{self, roles::{EffectiveRoleBinding, Signup, VolunteerSignupStatus}},
@@ -14,10 +16,17 @@ use {
         prelude::*,
         series::Series,
         sheets::{self, WriteError},
+        user::User,
     },
 };
 
 pub(crate) static SYNC_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// Tracks the latest debounce version per race_id. When a volunteer status changes, the version
+/// is bumped and a task is spawned to fire after 20 s. The task only fires if its version is still
+/// current, so rapid successive changes collapse into a single API call.
+static VOLUNTEER_API_DEBOUNCE: LazyLock<tokio::sync::Mutex<HashMap<u64, u64>>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(HashMap::default()));
 
 // ============================================================================
 // Error Types
@@ -88,6 +97,8 @@ pub(crate) struct RestreamingBackend {
     pub(crate) notes_col: String,
     pub(crate) dst_formula_standard: String,
     pub(crate) dst_formula_dst: String,
+    pub(crate) api_endpoint: Option<String>,
+    pub(crate) api_secret: Option<String>,
 }
 
 impl RestreamingBackend {
@@ -108,7 +119,9 @@ impl RestreamingBackend {
                 restream_channel_col,
                 notes_col,
                 dst_formula_standard,
-                dst_formula_dst
+                dst_formula_dst,
+                api_endpoint,
+                api_secret
             FROM zsr_restreaming_backends
             WHERE id = $1
         "#, id)
@@ -132,7 +145,9 @@ impl RestreamingBackend {
                 restream_channel_col,
                 notes_col,
                 dst_formula_standard,
-                dst_formula_dst
+                dst_formula_dst,
+                api_endpoint,
+                api_secret
             FROM zsr_restreaming_backends
             ORDER BY name
         "#)
@@ -153,15 +168,18 @@ impl RestreamingBackend {
         notes_col: &str,
         dst_formula_standard: &str,
         dst_formula_dst: &str,
+        api_endpoint: Option<&str>,
+        api_secret: Option<&str>,
     ) -> Result<i32, sqlx::Error> {
         let row = sqlx::query_scalar!(r#"
             INSERT INTO zsr_restreaming_backends (
                 name, google_sheet_id, language,
                 hth_export_id_col, commentators_col, trackers_col,
                 restream_channel_col, notes_col,
-                dst_formula_standard, dst_formula_dst
+                dst_formula_standard, dst_formula_dst,
+                api_endpoint, api_secret
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING id
         "#,
             name,
@@ -173,7 +191,9 @@ impl RestreamingBackend {
             restream_channel_col as _,
             notes_col,
             dst_formula_standard,
-            dst_formula_dst
+            dst_formula_dst,
+            api_endpoint as _,
+            api_secret as _,
         )
         .fetch_one(&mut **transaction)
         .await?;
@@ -194,6 +214,8 @@ impl RestreamingBackend {
         notes_col: &str,
         dst_formula_standard: &str,
         dst_formula_dst: &str,
+        api_endpoint: Option<&str>,
+        api_secret: Option<&str>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(r#"
             UPDATE zsr_restreaming_backends SET
@@ -207,6 +229,8 @@ impl RestreamingBackend {
                 notes_col = $9,
                 dst_formula_standard = $10,
                 dst_formula_dst = $11,
+                api_endpoint = $12,
+                api_secret = $13,
                 updated_at = NOW()
             WHERE id = $1
         "#,
@@ -220,7 +244,9 @@ impl RestreamingBackend {
             restream_channel_col as _,
             notes_col,
             dst_formula_standard,
-            dst_formula_dst
+            dst_formula_dst,
+            api_endpoint as _,
+            api_secret as _,
         )
         .execute(&mut **transaction)
         .await?;
@@ -1228,4 +1254,117 @@ pub(crate) async fn check_and_sync_all_exports(
 
     transaction.commit().await?;
     Ok(())
+}
+
+// ============================================================================
+// Volunteer API
+// ============================================================================
+
+#[derive(serde::Serialize)]
+struct VolunteerApiPayload {
+    secret: String,
+    title: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    commentary: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tracker: Vec<String>,
+}
+
+/// Get Discord usernames of confirmed volunteers for a role type / language pair.
+async fn get_confirmed_discord_usernames(
+    transaction: &mut Transaction<'_, Postgres>,
+    race: &Race,
+    backend: &RestreamingBackend,
+    role_type_name: &str,
+) -> Result<Vec<String>, Error> {
+    let effective_bindings = EffectiveRoleBinding::for_event(transaction, race.series, &race.event).await?;
+    let Some(binding) = effective_bindings.iter()
+        .find(|b| !b.is_disabled && b.language == backend.language && b.role_type_name == role_type_name)
+    else {
+        return Ok(Vec::new());
+    };
+
+    let signups = Signup::for_race(transaction, race.id).await?;
+    let mut usernames = Vec::new();
+    for signup in signups.iter().filter(|s| {
+        s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Confirmed)
+    }) {
+        if let Ok(Some(user)) = User::from_id(&mut **transaction, signup.user_id).await {
+            if let Some(discord) = &user.discord {
+                if let Either::Left(username) = &discord.username_or_discriminator {
+                    usernames.push(username.clone());
+                }
+            }
+        }
+    }
+    Ok(usernames)
+}
+
+/// Send the volunteer roster for a race to all configured API endpoints for its event.
+async fn send_volunteer_api(pool: &PgPool, http_client: &reqwest::Client, race_id: Id<Races>) {
+    let result: Result<(), Error> = async {
+        let mut transaction = pool.begin().await?;
+
+        let race = Race::from_id(&mut transaction, http_client, race_id).await?;
+        let event_data = event::Data::new(&mut transaction, race.series, &race.event).await?
+            .ok_or(Error::EventNotFound)?;
+        let exports = ExportConfig::for_event(&mut transaction, race.series, &race.event).await?;
+
+        for export in &exports {
+            if !export.enabled { continue; }
+
+            let backend = match RestreamingBackend::from_id(&mut transaction, export.backend_id).await? {
+                Some(b) => b,
+                None => continue,
+            };
+
+            let (api_endpoint, api_secret) = match (&backend.api_endpoint, &backend.api_secret) {
+                (Some(ep), Some(sec)) => (ep.clone(), sec.clone()),
+                _ => continue,
+            };
+
+            let title = build_race_title(&mut transaction, &race, export, &event_data.display_name).await;
+            let commentary = get_confirmed_discord_usernames(&mut transaction, &race, &backend, "Commentary").await?;
+            let tracker = get_confirmed_discord_usernames(&mut transaction, &race, &backend, "Tracking").await?;
+
+            let payload = VolunteerApiPayload { secret: api_secret, title, commentary, tracker };
+
+            if let Err(e) = http_client.post(&api_endpoint).json(&payload).send().await {
+                eprintln!("Volunteer API call to {} for race {}: {}", api_endpoint, u64::from(race_id), e);
+            }
+        }
+
+        Ok(())
+    }.await;
+
+    if let Err(e) = result {
+        eprintln!("Volunteer API for race {}: {}", u64::from(race_id), e);
+    }
+}
+
+/// Schedule a debounced volunteer API call for `race_id`. Calls within 20 s of each other
+/// are collapsed into a single outgoing request.
+pub(crate) fn schedule_volunteer_api_call(pool: PgPool, http_client: reqwest::Client, race_id: Id<Races>) {
+    tokio::spawn(async move {
+        let version = {
+            let mut map = VOLUNTEER_API_DEBOUNCE.lock().await;
+            let v = map.entry(u64::from(race_id)).or_insert(0);
+            *v += 1;
+            *v
+        };
+
+        sleep(Duration::from_secs(20)).await;
+
+        let should_fire = {
+            let mut map = VOLUNTEER_API_DEBOUNCE.lock().await;
+            match map.get(&u64::from(race_id)) {
+                Some(&v) if v == version => { map.remove(&u64::from(race_id)); true }
+                _ => false,
+            }
+        };
+
+        if should_fire {
+            send_volunteer_api(&pool, &http_client, race_id).await;
+        }
+    });
 }
