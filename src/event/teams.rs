@@ -1031,6 +1031,15 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
             ) AS "all_ended!"
         "#, data.series as _, &data.event).fetch_one(&mut *transaction).await?;
         all_races_ended && all_asyncs_ended
+    } else if let QualifierKind::Single { .. } = qualifier_kind {
+        sqlx::query_scalar!(r#"
+            SELECT NOT EXISTS(
+                SELECT 1 FROM asyncs
+                WHERE series = $1 AND event = $2
+                AND kind = 'qualifier'
+                AND (end_time IS NULL OR end_time > NOW())
+            ) AS "all_ended!"
+        "#, data.series as _, &data.event).fetch_one(&mut *transaction).await?
     } else {
         true
     };
@@ -1121,10 +1130,17 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
         QualifierKind::Single { show_times: false } | QualifierKind::SongsOfHope => column_headers.push(html! {
             th : "Qualified";
         }),
-        QualifierKind::Single { show_times: true } => if data.qualifier_score_kind_str.as_deref() == Some("triforce_blitz") {
-            column_headers.push(html! {
-                th : "Pieces Found";
-            });
+        QualifierKind::Single { show_times: true } => {
+            if is_organizer || !matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) {
+                column_headers.push(html! {
+                    th : "Qualified";
+                });
+            }
+            if series == Series::TriforceBlitz {
+                column_headers.push(html! {
+                    th : "Pieces Found";
+                });
+            }
         }
         QualifierKind::Score(QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online | QualifierScoreKind::TwwrMiniblins26) => { //TODO determine based on enter flow
             column_headers.push(html! {
@@ -1339,19 +1355,6 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                     @if let Some(ref team) = team {
                                         : team.to_html(&mut transaction, false).await?;
                                     }
-                                    @if let (QualifierKind::Single { show_times: true }, Qualification::Single { qualified: true } | Qualification::TriforceBlitz { qualified: true, .. }) = (qualifier_kind, &qualification) {
-                                        @let hide_time = !is_organizer && data.qualifier_score_hiding != QualifierScoreHiding::None && !all_qualifiers_ended;
-                                        br;
-                                        small {
-                                            @if hide_time {
-                                                : "—";
-                                            } else if let Some(time) = members.iter().try_fold(Duration::default(), |acc, member| Some(acc + member.qualifier_time?)) {
-                                                : English.format_duration(time / u32::try_from(members.len()).expect("too many team members"), false);
-                                            } else {
-                                                : "DNF";
-                                            }
-                                        }
-                                    }
                                 }
                             }
                             @for SignupsMember { role, user, is_confirmed, qualifier_time, qualifier_vod } in &members {
@@ -1384,34 +1387,6 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                     }
                                                 }
                                             }
-                                            @if let (QualifierKind::Single { show_times: true }, Qualification::Single { qualified: true } | Qualification::TriforceBlitz { qualified: true, .. }) = (qualifier_kind, &qualification) {
-                                                @let hide_time = !is_organizer && data.qualifier_score_hiding != QualifierScoreHiding::None && !all_qualifiers_ended;
-                                                br;
-                                                small {
-                                                    @if hide_time {
-                                                        : "—";
-                                                    } else {
-                                                        @let time = if let Some(time) = qualifier_time { English.format_duration(*time, false) } else { format!("DNF") };
-                                                        @if let Some(vod) = qualifier_vod {
-                                                            @if let Some(Ok(vod_url)) = (!vod.contains(' ')).then(|| Url::parse(vod)) {
-                                                                a(href = vod_url.to_string()) : time;
-                                                            } else {
-                                                                : time;
-                                                                sup {
-                                                                    @let footnote_id = { footnotes.push(vod.clone()); footnotes.len() };
-                                                                    a(href = format!("#footnote{footnote_id}")) {
-                                                                        : "[";
-                                                                        : footnote_id;
-                                                                        : "]";
-                                                                    }
-                                                                };
-                                                            }
-                                                        } else {
-                                                            : time;
-                                                        }
-                                                    }
-                                                }
-                                            }
                                         }
                                         MemberUser::RaceTime { url, name, .. } => em { a(href = format!("https://{}{url}", racetime_host())) : name; : "**"; }
                                         MemberUser::Newcomer => @unreachable // only returned if signups_sorted is called with worst_case_extrapolation = true, which it isn't above
@@ -1420,13 +1395,72 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                 }
                             }
                             @match (qualifier_kind, qualification) {
-                                (QualifierKind::None, _) | (QualifierKind::Rank, _) | (QualifierKind::Single { show_times: true }, Qualification::Single { .. }) => {}
+                                (QualifierKind::None, _) | (QualifierKind::Rank, _) => {}
                                 (QualifierKind::Single { show_times: false } | QualifierKind::SongsOfHope, Qualification::Single { qualified } | Qualification::TriforceBlitz { qualified, .. }) => td {
                                     @if qualified {
                                         : "✓";
                                     }
                                 }
-                                (QualifierKind::Single { show_times: true }, Qualification::TriforceBlitz { pieces, .. }) => td : pieces;
+                                (QualifierKind::Single { show_times: true }, Qualification::Single { qualified }) => {
+                                    @if is_organizer || !matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) {
+                                        @let hide_time = !is_organizer && match data.qualifier_score_hiding {
+                                            QualifierScoreHiding::None => false,
+                                            QualifierScoreHiding::AsyncOnly => !all_qualifiers_ended,
+                                            QualifierScoreHiding::FullPoints | QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete => true,
+                                        };
+                                        td {
+                                            @if !qualified {
+                                            } else if hide_time {
+                                                : "—";
+                                            } else if matches!(data.team_config, TeamConfig::Solo) {
+                                                @if let Some(SignupsMember { qualifier_time, qualifier_vod, .. }) = members.first() {
+                                                    @let time = if let Some(time) = qualifier_time { English.format_duration(*time, false) } else { format!("DNF") };
+                                                    @if let Some(vod) = qualifier_vod {
+                                                        @if let Some(Ok(vod_url)) = (!vod.contains(' ')).then(|| Url::parse(vod)) {
+                                                            a(href = vod_url.to_string()) : time;
+                                                        } else {
+                                                            : time;
+                                                            sup {
+                                                                @let footnote_id = { footnotes.push(vod.clone()); footnotes.len() };
+                                                                a(href = format!("#footnote{footnote_id}")) {
+                                                                    : "[";
+                                                                    : footnote_id;
+                                                                    : "]";
+                                                                }
+                                                            };
+                                                        }
+                                                    } else {
+                                                        : time;
+                                                    }
+                                                }
+                                            } else if let Some(time) = members.iter().try_fold(Duration::default(), |acc, member| Some(acc + member.qualifier_time?)) {
+                                                : English.format_duration(time / u32::try_from(members.len()).expect("too many team members"), false);
+                                            } else {
+                                                : "DNF";
+                                            }
+                                        }
+                                    }
+                                }
+                                (QualifierKind::Single { show_times: true }, Qualification::TriforceBlitz { qualified, pieces, .. }) => {
+                                    @if is_organizer || !matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) {
+                                        @let hide_time = !is_organizer && match data.qualifier_score_hiding {
+                                            QualifierScoreHiding::None => false,
+                                            QualifierScoreHiding::AsyncOnly => !all_qualifiers_ended,
+                                            QualifierScoreHiding::FullPoints | QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete => true,
+                                        };
+                                        td {
+                                            @if !qualified {
+                                            } else if hide_time {
+                                                : "—";
+                                            } else if let Some(time) = members.iter().try_fold(Duration::default(), |acc, member| Some(acc + member.qualifier_time?)) {
+                                                : English.format_duration(time / u32::try_from(members.len()).expect("too many team members"), false);
+                                            } else {
+                                                : "DNF";
+                                            }
+                                        }
+                                    }
+                                    td : pieces;
+                                }
                                 (QualifierKind::Score(QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online), Qualification::Multiple { num_entered, num_finished, num_forfeited, score, .. }) => { //TODO determine based on enter flow
                                     td(style = "text-align: right;") : num_entered;
                                     td(style = "text-align: right;") {
