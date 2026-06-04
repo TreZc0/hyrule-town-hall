@@ -4911,6 +4911,18 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                                         continue;
                                     }
 
+                                    let discord_invite = {
+                                        let pattern = crate::admin::normalize_restream_url_pattern(&video_url.to_string());
+                                        sqlx::query_scalar!(
+                                            "SELECT discord_invite_url FROM restream_channels WHERE url_pattern = $1",
+                                            pattern
+                                        )
+                                        .fetch_optional(&mut *transaction)
+                                        .await
+                                        .ok()
+                                        .flatten()
+                                    };
+
                                     if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
                                         if let Some(discord) = user.discord {
                                             let discord_user_id = UserId::new(discord.id.get());
@@ -4934,6 +4946,11 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                                             msg.push("):** <");
                                             msg.push(&video_url.to_string());
                                             msg.push(">\n");
+                                            if let Some(ref invite) = discord_invite {
+                                                msg.push("**Restream Discord:** <");
+                                                msg.push(invite);
+                                                msg.push(">\nPlease make sure to join the Discord server before the race!\n");
+                                            }
                                             msg.push("**When:** ");
                                             msg.push_timestamp(race_start_time, serenity_utils::message::TimestampStyle::LongDateTime);
 

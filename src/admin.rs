@@ -150,6 +150,11 @@ pub(crate) async fn index(
                 a(href = uri!(zsr_backends)) : "Manage ZSR Backends";
             }
 
+            h2 : "Restream Channels";
+            p {
+                a(href = uri!(list_restream_channels)) : "Manage Restream Channels";
+            }
+
             script(src = static_url!("game-edit.js")) {}
         }
     };
@@ -935,6 +940,286 @@ pub(crate) async fn delete_zsr_backend(
     }
 
     Ok(Redirect::to(uri!(zsr_backends)))
+}
+
+// ─── Restream Channels CRUD ──────────────────────────────────────────────────
+
+pub(crate) fn normalize_restream_url_pattern(s: &str) -> String {
+    let s = s.trim();
+    let without_scheme = s
+        .strip_prefix("https://")
+        .or_else(|| s.strip_prefix("http://"))
+        .unwrap_or(s);
+    let without_www = without_scheme.strip_prefix("www.").unwrap_or(without_scheme);
+    without_www.trim_end_matches('/').to_lowercase()
+}
+
+struct RestreamChannel {
+    id: i32,
+    url_pattern: String,
+    discord_invite_url: String,
+    display_name: Option<String>,
+}
+
+#[rocket::get("/admin/restream-channels")]
+pub(crate) async fn list_restream_channels(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    let me = me.ok_or(Error::Unauthorized)?;
+    if !me.is_global_admin() {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let channels = sqlx::query_as!(
+        RestreamChannel,
+        "SELECT id, url_pattern, discord_invite_url, display_name FROM restream_channels ORDER BY url_pattern"
+    )
+    .fetch_all(pool.inner())
+    .await
+    .map_err(Error::from)?;
+
+    let content = html! {
+        article {
+            h1 : "Restream Channels";
+
+            @if channels.is_empty() {
+                p : "No restream channels configured.";
+            } else {
+                table {
+                    thead {
+                        tr {
+                            th : "URL Pattern";
+                            th : "Display Name";
+                            th : "Discord Invite";
+                            th : "Actions";
+                        }
+                    }
+                    tbody {
+                        @for ch in &channels {
+                            tr {
+                                td : &ch.url_pattern;
+                                td : ch.display_name.as_deref().unwrap_or("—");
+                                td {
+                                    a(href = &ch.discord_invite_url, target = "_blank") : &ch.discord_invite_url;
+                                }
+                                td {
+                                    a(href = uri!(edit_restream_channel_form(ch.id))) : "Edit";
+                                    : " | ";
+                                    form(method = "post", action = uri!(delete_restream_channel(ch.id)), style = "display: inline;") {
+                                        input(type = "hidden", name = "csrf", value = csrf.as_ref().map(|t| t.authenticity_token().to_string()).unwrap_or_default());
+                                        button(type = "submit", onclick = "return confirm('Delete this restream channel entry?')") : "Delete";
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            h2 : "Add New Channel";
+            : full_form(uri!(create_restream_channel), csrf.as_ref(), html! {
+                : form_field("url_pattern", &mut Vec::new(), html! {
+                    label(for = "url_pattern") : "URL Pattern";
+                    input(type = "text", id = "url_pattern", name = "url_pattern", required,
+                        placeholder = "e.g. twitch.tv/zeldaspeedruns or https://www.twitch.tv/zeldaspeedruns");
+                    small : "Will be normalized automatically (scheme, www., and trailing slashes are stripped).";
+                });
+                : form_field("discord_invite_url", &mut Vec::new(), html! {
+                    label(for = "discord_invite_url") : "Discord Invite URL";
+                    input(type = "url", id = "discord_invite_url", name = "discord_invite_url", required,
+                        style = "width: 80%;", placeholder = "https://discord.gg/...");
+                });
+                : form_field("display_name", &mut Vec::new(), html! {
+                    label(for = "display_name") : "Display Name (optional)";
+                    input(type = "text", id = "display_name", name = "display_name",
+                        placeholder = "e.g. Zelda Speedruns");
+                });
+            }, Vec::new(), "Add Channel");
+
+            p {
+                a(href = uri!(index)) : "Back to Admin Panel";
+            }
+        }
+    };
+
+    Ok(page(
+        pool.begin().await.map_err(Error::from)?,
+        &Some(me),
+        &uri,
+        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        "Restream Channels — Hyrule Town Hall",
+        content,
+    ).await.map_err(Error::from)?)
+}
+
+#[derive(Debug, FromForm, CsrfForm)]
+pub(crate) struct RestreamChannelForm {
+    #[field(default = String::new())]
+    csrf: String,
+    url_pattern: String,
+    discord_invite_url: String,
+    #[field(default = String::new())]
+    display_name: String,
+}
+
+#[rocket::post("/admin/restream-channels", data = "<form>")]
+pub(crate) async fn create_restream_channel(
+    pool: &State<PgPool>,
+    me: User,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, RestreamChannelForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    if !me.is_global_admin() {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if let Some(ref value) = form.value {
+        let pattern = normalize_restream_url_pattern(&value.url_pattern);
+        let display_name = value.display_name.trim();
+        sqlx::query!(
+            "INSERT INTO restream_channels (url_pattern, discord_invite_url, display_name) VALUES ($1, $2, $3)",
+            pattern,
+            value.discord_invite_url.trim(),
+            if display_name.is_empty() { None } else { Some(display_name) },
+        )
+        .execute(pool.inner())
+        .await
+        .map_err(Error::from)?;
+    }
+
+    Ok(Redirect::to(uri!(list_restream_channels)))
+}
+
+#[rocket::get("/admin/restream-channels/<id>/edit")]
+pub(crate) async fn edit_restream_channel_form(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    id: i32,
+) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    let me = me.ok_or(Error::Unauthorized)?;
+    if !me.is_global_admin() {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let ch = sqlx::query_as!(
+        RestreamChannel,
+        "SELECT id, url_pattern, discord_invite_url, display_name FROM restream_channels WHERE id = $1",
+        id
+    )
+    .fetch_optional(pool.inner())
+    .await
+    .map_err(Error::from)?
+    .ok_or(StatusOrError::Status(rocket::http::Status::NotFound))?;
+
+    let content = html! {
+        article {
+            h1 : format!("Edit — {}", ch.url_pattern);
+
+            : full_form(uri!(update_restream_channel(id)), csrf.as_ref(), html! {
+                : form_field("url_pattern", &mut Vec::new(), html! {
+                    label(for = "url_pattern") : "URL Pattern";
+                    input(type = "text", id = "url_pattern", name = "url_pattern", required,
+                        value = &ch.url_pattern);
+                    small : "Will be normalized automatically.";
+                });
+                : form_field("discord_invite_url", &mut Vec::new(), html! {
+                    label(for = "discord_invite_url") : "Discord Invite URL";
+                    input(type = "url", id = "discord_invite_url", name = "discord_invite_url", required,
+                        style = "width: 80%;", value = &ch.discord_invite_url);
+                });
+                : form_field("display_name", &mut Vec::new(), html! {
+                    label(for = "display_name") : "Display Name (optional)";
+                    input(type = "text", id = "display_name", name = "display_name",
+                        value = ch.display_name.as_deref().unwrap_or_default());
+                });
+            }, Vec::new(), "Save Changes");
+
+            p {
+                a(href = uri!(list_restream_channels)) : "Back to Restream Channels";
+            }
+        }
+    };
+
+    Ok(page(
+        pool.begin().await.map_err(Error::from)?,
+        &Some(me),
+        &uri,
+        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        &format!("Edit Restream Channel — {}", ch.url_pattern),
+        content,
+    ).await.map_err(Error::from)?)
+}
+
+#[rocket::post("/admin/restream-channels/<id>/edit", data = "<form>")]
+pub(crate) async fn update_restream_channel(
+    pool: &State<PgPool>,
+    me: User,
+    csrf: Option<CsrfToken>,
+    id: i32,
+    form: Form<Contextual<'_, RestreamChannelForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    if !me.is_global_admin() {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if let Some(ref value) = form.value {
+        let pattern = normalize_restream_url_pattern(&value.url_pattern);
+        let display_name = value.display_name.trim();
+        sqlx::query!(
+            "UPDATE restream_channels SET url_pattern = $1, discord_invite_url = $2, display_name = $3, updated_at = NOW() WHERE id = $4",
+            pattern,
+            value.discord_invite_url.trim(),
+            if display_name.is_empty() { None } else { Some(display_name) },
+            id,
+        )
+        .execute(pool.inner())
+        .await
+        .map_err(Error::from)?;
+    }
+
+    Ok(Redirect::to(uri!(list_restream_channels)))
+}
+
+#[derive(Debug, FromForm, CsrfForm)]
+pub(crate) struct DeleteRestreamChannelForm {
+    #[field(default = String::new())]
+    csrf: String,
+}
+
+#[rocket::post("/admin/restream-channels/<id>/delete", data = "<form>")]
+pub(crate) async fn delete_restream_channel(
+    pool: &State<PgPool>,
+    me: User,
+    csrf: Option<CsrfToken>,
+    id: i32,
+    form: Form<Contextual<'_, DeleteRestreamChannelForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    if !me.is_global_admin() {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if form.value.is_some() {
+        sqlx::query!("DELETE FROM restream_channels WHERE id = $1", id)
+            .execute(pool.inner())
+            .await
+            .map_err(Error::from)?;
+    }
+
+    Ok(Redirect::to(uri!(list_restream_channels)))
 }
 
 // ─── Game Ping Workflow CRUD ─────────────────────────────────────────────────

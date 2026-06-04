@@ -984,11 +984,16 @@ pub(crate) async fn restreamer_search(
 pub(crate) async fn video_url_suggestions(
     pool: &State<PgPool>,
 ) -> Result<RawText<String>, StatusOrError<event::Error>> {
-    let mut transaction = pool.begin().await?;
+    // Lookup table entries take priority; stored as normalized patterns without scheme
+    let lookup_patterns = sqlx::query_scalar!(
+        "SELECT url_pattern FROM restream_channels ORDER BY url_pattern"
+    )
+    .fetch_all(pool.inner())
+    .await?;
 
-    let video_urls = sqlx::query_scalar!(
-        r#"
-        SELECT DISTINCT video_url::TEXT FROM (
+    // Cache of URLs used in past races
+    let cached_urls = sqlx::query_scalar!(
+        r#"SELECT DISTINCT video_url::TEXT FROM (
             SELECT video_url FROM races WHERE video_url IS NOT NULL
             UNION
             SELECT video_url_fr FROM races WHERE video_url_fr IS NOT NULL
@@ -997,14 +1002,33 @@ pub(crate) async fn video_url_suggestions(
             UNION
             SELECT video_url_pt FROM races WHERE video_url_pt IS NOT NULL
         ) AS all_video_urls
-        ORDER BY video_url::TEXT
-        LIMIT 20
-        "#
+        ORDER BY video_url::TEXT"#
     )
-    .fetch_all(&mut *transaction)
+    .fetch_all(pool.inner())
     .await?;
 
-    Ok(RawText(serde_json::to_string(&video_urls)?))
+    const MAX: usize = 20;
+    let mut seen_normalized = HashSet::new();
+    let mut result: Vec<String> = Vec::new();
+
+    for pattern in lookup_patterns {
+        if result.len() >= MAX { break; }
+        let normalized = crate::admin::normalize_restream_url_pattern(&pattern);
+        if seen_normalized.insert(normalized) {
+            result.push(format!("https://{}", pattern));
+        }
+    }
+
+    for url in cached_urls.into_iter().flatten() {
+        if result.len() >= MAX { break; }
+        let normalized = crate::admin::normalize_restream_url_pattern(&url);
+        if seen_normalized.insert(normalized) {
+            result.push(url);
+        }
+    }
+
+    result.sort();
+    Ok(RawText(serde_json::to_string(&result)?))
 }
 
 // Weekly Schedules Management
