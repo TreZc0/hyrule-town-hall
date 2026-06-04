@@ -4155,6 +4155,123 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 ).await?;
                             }
                         }
+                    } else if let Some(params) = interaction.data.custom_id.strip_prefix("async_result_modal_") {
+                        // Extract modal fields before any async work
+                        let mut time_str = None;
+                        let mut link_str: Option<String> = None;
+                        for row in &interaction.data.components {
+                            for component in &row.components {
+                                if let ActionRowComponent::InputText(input) = component {
+                                    match input.custom_id.as_str() {
+                                        "time" => time_str = input.value.clone(),
+                                        "link" => link_str = input.value.clone().filter(|s| !s.is_empty()),
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                        let Some(time_str) = time_str else {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new().ephemeral(true).content("Error: missing time input.")
+                            )).await?;
+                            return Ok(());
+                        };
+                        let Some((_, pg_interval)) = parse_hms(&time_str) else {
+                            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new().ephemeral(true)
+                                    .content(format!("Invalid time format: \"{time_str}\". Use H:MM:SS or HH:MM:SS."))
+                            )).await?;
+                            return Ok(());
+                        };
+                        interaction.create_response(ctx, CreateInteractionResponse::Defer(
+                            CreateInteractionResponseMessage::new()
+                        )).await?;
+
+                        if let Some(qual_params) = params.strip_prefix("qual_") {
+                            let mut parts = qual_params.rsplitn(2, '_');
+                            let kind_int: i32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(-1);
+                            let team_id: i64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(-1);
+                            let Some(async_kind) = AsyncKind::from_i32(kind_int) else {
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Error: invalid async kind in modal ID.")
+                                ).await?;
+                                return Ok(());
+                            };
+
+                            let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
+                                let pool = ctx.data.read().await.get::<DbPool>().expect("db pool missing").clone();
+                                let mut transaction = pool.begin().await?;
+
+                                let is_organizer = sqlx::query!(
+                                    r#"SELECT EXISTS(SELECT 1 FROM organizers eo JOIN users u ON eo.organizer = u.id WHERE u.discord_id = $1) AS "exists!""#,
+                                    interaction.user.id.get() as i64
+                                ).fetch_one(&mut *transaction).await?.exists;
+
+                                if !is_organizer {
+                                    transaction.rollback().await?;
+                                    return Err("You must be an event organizer to use this.".into());
+                                }
+
+                                let team = Team::from_id(&mut transaction, Id::from(team_id)).await?
+                                    .ok_or("Team not found.")?;
+                                let team_name = team.name(&mut transaction).await?
+                                    .unwrap_or_else(|| "Unknown Team".to_string().into());
+
+                                let already_submitted = sqlx::query_scalar!(
+                                    "SELECT submitted FROM async_teams WHERE team = $1 AND kind = $2",
+                                    team_id as _,
+                                    async_kind as _,
+                                ).fetch_optional(&mut *transaction).await?
+                                    .flatten()
+                                    .is_some();
+
+                                if already_submitted {
+                                    transaction.rollback().await?;
+                                    return Err(format!(
+                                        "A result already exists for **{}**. Use `/result-async` with race_id/async_part to override.",
+                                        team_name
+                                    ).into());
+                                }
+
+                                sqlx::query!(
+                                    "UPDATE async_teams SET submitted = NOW(), finish_time = $1 WHERE team = $2 AND kind = $3",
+                                    pg_interval,
+                                    team_id as _,
+                                    async_kind as _
+                                ).execute(&mut *transaction).await?;
+
+                                let members = team.members(&mut transaction).await?;
+                                for member in members {
+                                    sqlx::query!(
+                                        "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
+                                        team.series as _,
+                                        team.event,
+                                        member.id as _,
+                                        async_kind as _,
+                                        pg_interval,
+                                        link_str.as_deref()
+                                    ).execute(&mut *transaction).await?;
+                                }
+
+                                transaction.commit().await?;
+                                Ok(())
+                            }.await;
+
+                            match result {
+                                Ok(()) => {
+                                    let run = async_race::AsyncRun::Qualifier { team_id, async_kind };
+                                    async_race::clear_message_with_button(ctx, interaction.channel_id, &run.button_id("org_result")).await;
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
+                                        .content(format!("Time recorded: {}", time_str))
+                                    ).await?;
+                                }
+                                Err(e) => {
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
+                                        .content(format!("Error: {e}"))
+                                    ).await?;
+                                }
+                            }
+                        }
                     }
                 },
                 _ => {}
