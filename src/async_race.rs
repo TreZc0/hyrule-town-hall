@@ -3,10 +3,11 @@ use {
     serenity::all::{
         ChannelId, CreateThread, MessageBuilder, CreateMessage,
         ChannelType, AutoArchiveDuration, CreateActionRow, CreateButton, ButtonStyle,
-        Http, ComponentInteraction,
+        Http, ComponentInteraction, CacheHttp,
         CreateInteractionResponse, CreateInteractionResponseMessage,
-        EditInteractionResponse,
+        EditInteractionResponse, EditMessage,
         ActionRowComponent, ButtonKind,
+        CreateModal, CreateInputText, InputTextStyle,
     },
     sqlx::{PgPool, Transaction, Postgres},
     tokio::time::{sleep, Duration},
@@ -1159,6 +1160,21 @@ impl AsyncRun {
 
 }
 
+pub(crate) async fn clear_message_with_button(http: impl CacheHttp, channel_id: ChannelId, button_id: &str) {
+    if let Ok(messages) = channel_id.messages(&http, serenity::all::GetMessages::new().limit(20)).await {
+        for message in messages {
+            let has_button = message.components.iter().any(|row| row.components.iter().any(|c| {
+                matches!(c, ActionRowComponent::Button(b)
+                    if matches!(&b.data, ButtonKind::NonLink { custom_id, .. } if custom_id == button_id))
+            }));
+            if has_button {
+                let _ = channel_id.edit_message(&http, message.id, EditMessage::new().components(vec![])).await;
+                break;
+            }
+        }
+    }
+}
+
 pub(crate) fn create_finish_forfeit_buttons(run: &AsyncRun) -> CreateActionRow {
     CreateActionRow::Buttons(vec![
         CreateButton::new(run.button_id("finish"))
@@ -1234,22 +1250,38 @@ pub(crate) async fn send_completion_message(
     } else {
         msg.push("• A screenshot of your final time and indication of seed completion\n\n");
     }
-    msg.push("Staff will verify and record your official time using `/result-async`.");
 
-    channel_id.say(http, msg.build()).await?;
+    match run {
+        AsyncRun::Qualifier { .. } => {
+            msg.push("Staff: click the **Confirm Result** button below to record the official time.");
+            let confirm_button = CreateActionRow::Buttons(vec![
+                CreateButton::new(run.button_id("org_result"))
+                    .label("Confirm Result")
+                    .style(ButtonStyle::Primary),
+            ]);
+            channel_id.send_message(http, CreateMessage::new()
+                .content(msg.build())
+                .components(vec![confirm_button])
+            ).await?;
+        }
+        AsyncRun::BracketRace { .. } => {
+            msg.push("Staff will verify and record your official time using `/result-async`.");
+            channel_id.say(http, msg.build()).await?;
+        }
+    }
     Ok(())
 }
 
 async fn remove_start_button(http: &Http, channel_id: ChannelId, run: &AsyncRun) {
     let button_id = run.button_id("start_countdown");
-    if let Ok(messages) = channel_id.messages(http, serenity::all::GetMessages::new().limit(50)).await {
+    if let Ok(messages) = channel_id.messages(http, serenity::all::GetMessages::new().limit(20)).await {
         for message in messages {
             let has_button = message.components.iter().any(|row| row.components.iter().any(|c| {
                 matches!(c, ActionRowComponent::Button(b)
                     if matches!(&b.data, ButtonKind::NonLink { custom_id, .. } if custom_id == &button_id))
             }));
             if has_button {
-                let _ = channel_id.edit_message(http, message.id, serenity::all::EditMessage::new().components(vec![])).await;
+                let _ = channel_id.edit_message(&http, message.id, EditMessage::new().components(vec![])).await;
                 break;
             }
         }
@@ -1532,7 +1564,7 @@ pub(crate) async fn handle_finish(
                 }));
 
             if has_revert {
-                let _ = channel_id.edit_message(&ctx_clone, message_id, serenity::all::EditMessage::new()
+                let _ = channel_id.edit_message(&ctx_clone, message_id, EditMessage::new()
                     .components(vec![])
                 ).await;
 
@@ -1597,17 +1629,20 @@ pub(crate) async fn handle_forfeit_confirm(
     msg.push("@here - ");
     msg.mention(&interaction.user);
     msg.push(" has indicated they want to **forfeit** this async.\n\n");
-    msg.push("**Organizers:** To confirm this forfeit, use the `/forfeit-async` command in this thread.");
+    msg.push("**Organizers:** Click the button below to confirm this forfeit.");
 
-    interaction.channel_id.say(ctx, msg.build()).await?;
+    let confirm_button = CreateActionRow::Buttons(vec![
+        CreateButton::new(run.button_id("org_forfeit"))
+            .label("Confirm Forfeit")
+            .style(ButtonStyle::Danger),
+    ]);
 
-    let messages = interaction.channel_id.messages(ctx, serenity::all::GetMessages::new().limit(50)).await?;
-    for mut message in messages {
-        if !message.components.is_empty() && message.content.contains("Good luck!") {
-            let _ = message.edit(ctx, serenity::all::EditMessage::new().components(vec![])).await;
-            break;
-        }
-    }
+    interaction.channel_id.send_message(ctx, CreateMessage::new()
+        .content(msg.build())
+        .components(vec![confirm_button])
+    ).await?;
+
+    clear_message_with_button(ctx, interaction.channel_id, &run.button_id("finish")).await;
 
     interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
         CreateInteractionResponseMessage::new()
@@ -1624,6 +1659,165 @@ pub(crate) async fn handle_forfeit_cancel(
     interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
         CreateInteractionResponseMessage::new()
             .content("Forfeit cancelled.")
+            .components(vec![])
+    )).await?;
+    Ok(())
+}
+
+pub(crate) async fn handle_org_result(
+    ctx: &DiscordCtx,
+    interaction: &ComponentInteraction,
+    pool: &PgPool,
+    run: &AsyncRun,
+) -> Result<(), Error> {
+    let is_organizer = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM organizers eo JOIN users u ON eo.organizer = u.id WHERE u.discord_id = $1) AS "exists!""#,
+        interaction.user.id.get() as i64
+    ).fetch_one(pool).await?;
+
+    if !is_organizer {
+        interaction.create_response(ctx, CreateInteractionResponse::Message(
+            CreateInteractionResponseMessage::new().ephemeral(true)
+                .content("You must be an event organizer to use this.")
+        )).await?;
+        return Ok(());
+    }
+
+    let modal_id = match run {
+        AsyncRun::Qualifier { team_id, async_kind } => {
+            format!("async_result_modal_qual_{}_{}", team_id, *async_kind as i32)
+        }
+        AsyncRun::BracketRace { race_id, async_part } => {
+            format!("async_result_modal_bracket_{}_{}", race_id, async_part)
+        }
+    };
+
+    interaction.create_response(ctx, CreateInteractionResponse::Modal(
+        CreateModal::new(modal_id, "Confirm Result")
+            .components(vec![
+                CreateActionRow::InputText(
+                    CreateInputText::new(InputTextStyle::Short, "Finish time", "time")
+                        .placeholder("H:MM:SS or HH:MM:SS")
+                        .required(true)
+                ),
+                CreateActionRow::InputText(
+                    CreateInputText::new(InputTextStyle::Short, "VOD link (optional)", "link")
+                        .placeholder("https://...")
+                        .required(false)
+                ),
+            ])
+    )).await?;
+    Ok(())
+}
+
+pub(crate) async fn handle_org_forfeit(
+    ctx: &DiscordCtx,
+    interaction: &ComponentInteraction,
+    pool: &PgPool,
+    run: &AsyncRun,
+) -> Result<(), Error> {
+    let is_organizer = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM organizers eo JOIN users u ON eo.organizer = u.id WHERE u.discord_id = $1) AS "exists!""#,
+        interaction.user.id.get() as i64
+    ).fetch_one(pool).await?;
+
+    if !is_organizer {
+        interaction.create_response(ctx, CreateInteractionResponse::Message(
+            CreateInteractionResponseMessage::new().ephemeral(true)
+                .content("You must be an event organizer to use this.")
+        )).await?;
+        return Ok(());
+    }
+
+    let confirm_row = CreateActionRow::Buttons(vec![
+        CreateButton::new(run.button_id("org_forfeit_yes"))
+            .label("Yes, confirm forfeit")
+            .style(ButtonStyle::Danger),
+        CreateButton::new(run.button_id("org_forfeit_cancel"))
+            .label("Cancel")
+            .style(ButtonStyle::Secondary),
+    ]);
+
+    interaction.create_response(ctx, CreateInteractionResponse::Message(
+        CreateInteractionResponseMessage::new()
+            .ephemeral(true)
+            .content("\u{26A0}\u{FE0F} Are you sure you want to confirm this forfeit?")
+            .components(vec![confirm_row])
+    )).await?;
+    Ok(())
+}
+
+pub(crate) async fn handle_org_forfeit_yes(
+    ctx: &DiscordCtx,
+    interaction: &ComponentInteraction,
+    pool: &PgPool,
+    run: &AsyncRun,
+) -> Result<(), Error> {
+    let is_organizer = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM organizers eo JOIN users u ON eo.organizer = u.id WHERE u.discord_id = $1) AS "exists!""#,
+        interaction.user.id.get() as i64
+    ).fetch_one(pool).await?;
+
+    if !is_organizer {
+        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+            CreateInteractionResponseMessage::new()
+                .content("You must be an event organizer.")
+                .components(vec![])
+        )).await?;
+        return Ok(());
+    }
+
+    interaction.defer(&ctx.http).await?;
+
+    match run {
+        AsyncRun::Qualifier { team_id, async_kind } => {
+            let mut transaction = pool.begin().await?;
+            let team = Team::from_id(&mut transaction, Id::from(*team_id)).await?.ok_or(sqlx::Error::RowNotFound)?;
+            let team_name = team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into());
+
+            sqlx::query!(
+                "UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND kind = $2",
+                *team_id as _,
+                *async_kind as _
+            ).execute(&mut *transaction).await?;
+
+            let members = team.members(&mut transaction).await?;
+            for member in members {
+                sqlx::query!(
+                    "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, NULL, NULL) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
+                    team.series as _,
+                    team.event,
+                    member.id as _,
+                    *async_kind as _
+                ).execute(&mut *transaction).await?;
+            }
+
+            transaction.commit().await?;
+
+            clear_message_with_button(ctx, interaction.channel_id, &run.button_id("org_forfeit")).await;
+
+            interaction.edit_response(ctx, EditInteractionResponse::new()
+                .content(format!("Forfeit confirmed for {}.", team_name))
+                .components(vec![])
+            ).await?;
+        }
+        AsyncRun::BracketRace { .. } => {
+            interaction.edit_response(ctx, EditInteractionResponse::new()
+                .content("Bracket race forfeits must be confirmed via the `/forfeit-async` command.")
+                .components(vec![])
+            ).await?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn handle_org_forfeit_cancel(
+    ctx: &DiscordCtx,
+    interaction: &ComponentInteraction,
+) -> Result<(), Error> {
+    interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+        CreateInteractionResponseMessage::new()
+            .content("Cancelled.")
             .components(vec![])
     )).await?;
     Ok(())
@@ -1663,6 +1857,18 @@ pub(crate) async fn dispatch_button(
         }
         "forfeit_cancel" => {
             handle_forfeit_cancel(ctx, interaction).await?;
+        }
+        "org_result" => {
+            handle_org_result(ctx, interaction, pool, &run).await?;
+        }
+        "org_forfeit" => {
+            handle_org_forfeit(ctx, interaction, pool, &run).await?;
+        }
+        "org_forfeit_yes" => {
+            handle_org_forfeit_yes(ctx, interaction, pool, &run).await?;
+        }
+        "org_forfeit_cancel" => {
+            handle_org_forfeit_cancel(ctx, interaction).await?;
         }
         _ => return Ok(false),
     }
