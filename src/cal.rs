@@ -4757,54 +4757,62 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 }
             }
 
-            // Send DM notifications to confirmed volunteers when restream URLs are newly assigned
+            // Send DM notifications to confirmed volunteers when restream URLs are newly assigned or changed
             if !race.video_urls.is_empty() && race.video_urls != original_video_urls {
-                // Find newly added languages
                 let new_languages: Vec<_> = race.video_urls.keys()
                     .filter(|lang| !original_video_urls.contains_key(*lang))
                     .collect();
+                let changed_languages: Vec<_> = race.video_urls.keys()
+                    .filter(|lang| original_video_urls.get(*lang).is_some_and(|old| old != race.video_urls.get(*lang).unwrap()))
+                    .collect();
 
-                if !new_languages.is_empty() {
-                    // Build race description
+                if !new_languages.is_empty() || !changed_languages.is_empty() {
                     let race_description = race.notification_description(&mut transaction).await?;
 
-                    // Get race start time for timestamp
                     if let RaceSchedule::Live { start: race_start_time, .. } = race.schedule {
-                        // Get confirmed volunteers and their role bindings
                         let signups = Signup::for_race(&mut transaction, race.id).await?;
                         let role_bindings = event::roles::EffectiveRoleBinding::for_event(&mut transaction, event.series, &event.event).await?;
 
                         let discord_ctx = discord_ctx.read().await;
 
                         for signup in signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)) {
-                            // Get the language for this signup's role binding
                             if let Some(binding) = role_bindings.iter().find(|b| b.id == signup.role_binding_id) {
-                                // Check if the restream for this language was newly added
-                                if new_languages.contains(&&binding.language) {
-                                    if let Some(video_url) = race.video_urls.get(&binding.language) {
-                                        // Get user and send DM
-                                        if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
-                                            if let Some(discord) = user.discord {
-                                                let discord_user_id = UserId::new(discord.id.get());
+                                if let Some(video_url) = race.video_urls.get(&binding.language) {
+                                    let is_new = new_languages.contains(&&binding.language);
+                                    let is_changed = changed_languages.contains(&&binding.language);
+                                    if !is_new && !is_changed {
+                                        continue;
+                                    }
 
-                                                let mut msg = MessageBuilder::default();
+                                    if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
+                                        if let Some(discord) = user.discord {
+                                            let discord_user_id = UserId::new(discord.id.get());
+
+                                            let mut msg = MessageBuilder::default();
+                                            if is_new {
                                                 msg.push("A restream channel has been assigned for ");
-                                                msg.push_mono(&race_description);
-                                                msg.push(" in ");
-                                                msg.push(&event.display_name);
+                                            } else {
+                                                msg.push("The restream channel for ");
+                                            }
+                                            msg.push_mono(&race_description);
+                                            msg.push(" in ");
+                                            msg.push(&event.display_name);
+                                            if is_new {
                                                 msg.push("!\n\n");
-                                                msg.push("**Restream (");
-                                                msg.push(&binding.language.to_string());
-                                                msg.push("):** <");
-                                                msg.push(&video_url.to_string());
-                                                msg.push(">\n");
-                                                msg.push("**When:** ");
-                                                msg.push_timestamp(race_start_time, serenity_utils::message::TimestampStyle::LongDateTime);
+                                            } else {
+                                                msg.push(" has been updated.\n\n");
+                                            }
+                                            msg.push("**Restream (");
+                                            msg.push(&binding.language.to_string());
+                                            msg.push("):** <");
+                                            msg.push(&video_url.to_string());
+                                            msg.push(">\n");
+                                            msg.push("**When:** ");
+                                            msg.push_timestamp(race_start_time, serenity_utils::message::TimestampStyle::LongDateTime);
 
-                                                if let Ok(dm_channel) = discord_user_id.create_dm_channel(&*discord_ctx).await {
-                                                    if let Err(e) = dm_channel.say(&*discord_ctx, msg.build()).await {
-                                                        eprintln!("Failed to send restream notification DM: {}", e);
-                                                    }
+                                            if let Ok(dm_channel) = discord_user_id.create_dm_channel(&*discord_ctx).await {
+                                                if let Err(e) = dm_channel.say(&*discord_ctx, msg.build()).await {
+                                                    eprintln!("Failed to send restream notification DM: {}", e);
                                                 }
                                             }
                                         }
