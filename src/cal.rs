@@ -4854,6 +4854,18 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                     eprintln!("Failed to update volunteer info post for race {} after restream URL change: {}", race.id, e);
                 }
             }
+
+            // Trigger ZSR volunteer API when a restream URL changes to or within a zeldaspeedruns channel
+            if race.video_urls.iter().any(|(lang, url)| {
+                url.as_str().contains("zeldaspeedruns")
+                    && original_video_urls.get(lang).map_or(true, |old| old != url)
+            }) {
+                crate::zsr_export::schedule_volunteer_api_call(
+                    pool.inner().clone(),
+                    http_client.inner().clone(),
+                    race.id,
+                );
+            }
             RedirectOrContent::Redirect(Redirect::to(redirect_to.map(|Origin(uri)| uri.into_owned()).unwrap_or_else(|| uri!(event::races(event.series, &*event.event)))))
         }
     } else {

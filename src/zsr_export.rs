@@ -1323,6 +1323,10 @@ async fn send_volunteer_api(pool: &PgPool, http_client: &reqwest::Client, race_i
                 _ => continue,
             };
 
+            if !race.video_urls.get(&backend.language).is_some_and(|url| url.as_str().contains("zeldaspeedruns")) {
+                continue;
+            }
+
             let title = build_race_title(&mut transaction, &race, export, &event_data.display_name).await;
             let commentary = get_confirmed_discord_usernames(&mut transaction, &race, &backend, "Commentary").await?;
             let tracker = get_confirmed_discord_usernames(&mut transaction, &race, &backend, "Tracking").await?;
