@@ -282,6 +282,17 @@ pub(crate) struct Mutation;
                 }
             }
 
+            // Trigger ZSR volunteer API when the restream URL is set to a zeldaspeedruns channel
+            if restream_url.contains("zeldaspeedruns") {
+                if let Some(pool) = ctx.data_opt::<sqlx::PgPool>() {
+                    crate::zsr_export::schedule_volunteer_api_call(
+                        pool.clone(),
+                        ctx.data_unchecked::<reqwest::Client>().clone(),
+                        race.id,
+                    );
+                }
+            }
+
             Ok(Race(race))
         })
     }
