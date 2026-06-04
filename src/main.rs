@@ -462,6 +462,19 @@ async fn weekly_race_manager(
                         continue;
                     }
                 };
+                match db_pool.begin().await {
+                    Ok(mut transaction) => {
+                        match cal::auto_ignore_past_custom_races(&mut transaction, now).await {
+                            Ok(()) => {
+                                if let Err(e) = transaction.commit().await {
+                                    eprintln!("Error committing auto-ignore for custom races: {e}");
+                                }
+                            }
+                            Err(e) => eprintln!("Error auto-ignoring past custom races: {e}"),
+                        }
+                    }
+                    Err(e) => eprintln!("Error starting transaction for auto-ignore custom races: {e}"),
+                }
                 for row in rows {
                     let series: Series = match row.series.parse() {
                         Ok(s) => s,

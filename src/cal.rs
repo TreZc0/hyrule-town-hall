@@ -3643,6 +3643,25 @@ pub(crate) async fn auto_ignore_past_weekly_races(
     Ok(())
 }
 
+/// Auto-ignores past custom title races that don't open a room, since they have no racetime.gg
+/// bot lifecycle to trigger cleanup. Uses an 8-hour cutoff after start to cover the longest races.
+pub(crate) async fn auto_ignore_past_custom_races(
+    transaction: &mut Transaction<'_, Postgres>,
+    now: DateTime<Utc>,
+) -> Result<(), Error> {
+    let cutoff = now - TimeDelta::hours(8);
+    sqlx::query!(
+        "UPDATE races SET ignored = true \
+         WHERE custom_title IS NOT NULL AND NOT custom_create_room \
+         AND start IS NOT NULL AND start < $1 \
+         AND end_time IS NULL AND NOT ignored",
+        cutoff,
+    )
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
 pub(crate) async fn auto_import_races(db_pool: PgPool, http_client: reqwest::Client, config: Config, shutdown: rocket::Shutdown, discord_ctx: RwFuture<DiscordCtx>, new_room_lock: Arc<Mutex<()>>) -> Result<(), AutoImportError> {
     let mut last_crash = Instant::now();
     let mut wait_time = Duration::from_secs(1);
