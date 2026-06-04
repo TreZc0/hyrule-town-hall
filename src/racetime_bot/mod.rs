@@ -5341,7 +5341,7 @@ impl RaceHandler<GlobalState> for Handler {
                                     let _ = ctx_clone.add_monitor(restreamer).await;
                                 }
                             }
-                        } else {
+                        } else if matches!(data.status.value, RaceStatusValue::Open | RaceStatusValue::Invitational) {
                             let _ = ctx_clone.invite_user(restreamer).await;
                             let _ = ctx_clone.add_monitor(restreamer).await;
                             let _ = ctx_clone.remove_entrant(restreamer).await;
@@ -6459,6 +6459,7 @@ impl RaceHandler<GlobalState> for Handler {
         errors.retain(|error|
             !error.ends_with(" is not allowed to join this race.") // failing to invite a user should not crash the race handler
             && !error.ends_with(" is already an entrant.") // failing to invite a user should not crash the race handler
+            && error != "User is not eligible to join this race." // restreamer setup may run on a race that's already in progress
             && error != "This user has not requested to join this race. Refresh to continue." // a join request may be accepted multiple times if multiple race data changes happen in quick succession
             && error != "Specified user is not a race entrant." // failing to remove a user as entrant should not crash the race handler
         );
