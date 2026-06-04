@@ -200,6 +200,7 @@ async fn post_volunteer_requests_for_event(
 
     let now = Utc::now();
     let cutoff = now + lead_time;
+    let grace_cutoff = now - Duration::minutes(15);
     let mut transaction = pool.begin().await?;
 
     // Find races needing volunteer announcements
@@ -229,7 +230,7 @@ async fn post_volunteer_requests_for_event(
         ORDER BY MIN(start) ASC"#,
         event_data.series as _,
         &*event_data.event,
-        now
+        grace_cutoff
     )
     .fetch_all(&mut *transaction)
     .await?;
@@ -274,8 +275,10 @@ async fn post_volunteer_requests_for_event(
             FROM races
             WHERE volunteer_request_message_id = $1
               AND ignored = false
+              AND (start IS NULL OR start > $2)
             ORDER BY start ASC NULLS LAST"#,
-            PgSnowflake(existing_id) as _
+            PgSnowflake(existing_id) as _,
+            grace_cutoff,
         )
         .fetch_all(&mut *transaction)
         .await?;
@@ -901,11 +904,12 @@ pub(crate) async fn update_volunteer_post_for_race(
 
     // Calculate current time
     let now = Utc::now();
+    let grace_cutoff = now - Duration::minutes(15);
 
-    // Filter out races that have already started
+    // Filter out races that started more than 15 minutes ago
     needs.retain(|need| {
         match need.race.schedule {
-            RaceSchedule::Live { start, .. } => start > now,
+            RaceSchedule::Live { start, .. } => start > grace_cutoff,
             _ => false,
         }
     });
@@ -1091,7 +1095,8 @@ pub(crate) async fn update_volunteer_post_by_message_id(
     ).await?;
 
     let now = Utc::now();
-    needs.retain(|need| matches!(need.race.schedule, RaceSchedule::Live { start, .. } if start > now));
+    let grace_cutoff = now - Duration::minutes(15);
+    needs.retain(|need| matches!(need.race.schedule, RaceSchedule::Live { start, .. } if start > grace_cutoff));
 
     if needs.is_empty() {
         transaction.commit().await?;
