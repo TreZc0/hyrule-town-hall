@@ -3195,6 +3195,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         .content(format!("Override confirmed. Time recorded for {} half: {:02}:{:02}:{:02}", ordinal, h, m, s))
                                         .components(vec![])
                                     ).await?;
+                                    async_race::clear_message_with_button(ctx, interaction.channel_id, &format!("async_override_result_{}_{}_{}", race_id, async_part, total_seconds)).await;
                                 }
                             }
                         }
@@ -3232,6 +3233,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     .content(format!("Override confirmed. Forfeit recorded for {} half.", ordinal))
                                     .components(vec![])
                                 ).await?;
+                                async_race::clear_message_with_button(ctx, interaction.channel_id, &format!("async_override_forfeit_{}_{}", race_id, async_part)).await;
                             }
                         }
                     } else if let Some(params) = custom_id.strip_prefix("async_override_qualifier_result_") {
@@ -3285,6 +3287,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             .content(format!("Override confirmed. Time recorded for {}: {:02}:{:02}:{:02}", team_name, h, m, s))
                                             .components(vec![])
                                         ).await?;
+                                        async_race::clear_message_with_button(ctx, interaction.channel_id, &format!("async_override_qualifier_result_{}_{}_{}", team_id, kind_int, total_seconds)).await;
                                     }
                                 }
                             }
@@ -3330,6 +3333,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         .content(format!("Override confirmed. Forfeit recorded for {}.", team_name))
                                         .components(vec![])
                                     ).await?;
+                                    async_race::clear_message_with_button(ctx, interaction.channel_id, &format!("async_override_qualifier_forfeit_{}_{}", team_id, kind_int)).await;
                                 }
                             }
                         }
@@ -4885,6 +4889,10 @@ async fn handle_async_command(
                             format!("async_override_qualifier_result_{}_{}_{}", team_id, async_kind as i32, qual_total_seconds.unwrap())
                         };
 
+                        // Clean up any stale override buttons from previous command invocations
+                        async_race::clear_messages_with_button_prefix(ctx, interaction.channel_id, &format!("async_override_qualifier_forfeit_{}_{}", team_id, async_kind as i32)).await;
+                        async_race::clear_messages_with_button_prefix(ctx, interaction.channel_id, &format!("async_override_qualifier_result_{}_{}_{}", team_id, async_kind as i32, "")).await;
+
                         interaction.edit_response(ctx, EditInteractionResponse::new()
                             .content(format!(
                                 "A result already exists for **{}**. Override with **{}**?",
@@ -4897,6 +4905,7 @@ async fn handle_async_command(
                     }
 
                     // No existing result — proceed with write
+                    let qual_run = async_race::AsyncRun::Qualifier { team_id: i64::from(team_id), async_kind };
                     if is_forfeit {
                         sqlx::query!("UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND kind = $2", team_id as _, async_kind as _).execute(&mut *transaction).await?;
 
@@ -4914,6 +4923,8 @@ async fn handle_async_command(
                         interaction.edit_response(ctx, EditInteractionResponse::new()
                             .content(format!("Forfeit recorded for {}.", team_name))
                         ).await?;
+                        async_race::clear_message_with_button(ctx, interaction.channel_id, &qual_run.button_id("org_forfeit")).await;
+                        async_race::clear_message_with_button(ctx, interaction.channel_id, &qual_run.button_id("org_result")).await;
                     } else {
                         let pg_interval = qual_pg_interval.unwrap();
                         sqlx::query!("UPDATE async_teams SET submitted = NOW(), finish_time = $1 WHERE team = $2 AND kind = $3", pg_interval, team_id as _, async_kind as _).execute(&mut *transaction).await?;
@@ -4934,6 +4945,8 @@ async fn handle_async_command(
                         interaction.edit_response(ctx, EditInteractionResponse::new()
                             .content(format!("Time recorded for {}: {}", team_name, qual_time_str.unwrap()))
                         ).await?;
+                        async_race::clear_message_with_button(ctx, interaction.channel_id, &qual_run.button_id("org_result")).await;
+                        async_race::clear_message_with_button(ctx, interaction.channel_id, &qual_run.button_id("org_forfeit")).await;
                     }
 
                     transaction.commit().await?;
@@ -5008,6 +5021,10 @@ async fn handle_async_command(
             format!("async_override_result_{}_{}_{}", race_id, async_part, total_seconds.unwrap())
         };
 
+        // Clean up any stale override buttons from previous command invocations
+        async_race::clear_messages_with_button_prefix(ctx, interaction.channel_id, &format!("async_override_forfeit_{}_{}", race_id, async_part)).await;
+        async_race::clear_messages_with_button_prefix(ctx, interaction.channel_id, &format!("async_override_result_{}_{}_{}", race_id, async_part, "")).await;
+
         interaction.edit_response(ctx, EditInteractionResponse::new()
             .content(format!(
                 "A result already exists for the {} half of this async: **{}**. Override with **{}**?",
@@ -5020,6 +5037,7 @@ async fn handle_async_command(
     }
 
     // No existing result — proceed with write
+    let bracket_run = async_race::AsyncRun::BracketRace { race_id, async_part: async_part as u8 };
     if is_forfeit {
         sqlx::query!(
             r#"
@@ -5042,6 +5060,8 @@ async fn handle_async_command(
         interaction.edit_response(ctx, EditInteractionResponse::new()
             .content(format!("Forfeit recorded for {} half of this async.", ordinal))
         ).await?;
+        async_race::clear_message_with_button(ctx, interaction.channel_id, &bracket_run.button_id("org_forfeit")).await;
+        async_race::clear_message_with_button(ctx, interaction.channel_id, &bracket_run.button_id("org_result")).await;
     } else {
         sqlx::query!(
             r#"
@@ -5065,6 +5085,8 @@ async fn handle_async_command(
         interaction.edit_response(ctx, EditInteractionResponse::new()
             .content(format!("Time recorded for {} half of this async: {}", ordinal, time_str.unwrap()))
         ).await?;
+        async_race::clear_message_with_button(ctx, interaction.channel_id, &bracket_run.button_id("org_result")).await;
+        async_race::clear_message_with_button(ctx, interaction.channel_id, &bracket_run.button_id("org_forfeit")).await;
     }
 
     finalize_async_if_complete(ctx, &mut transaction, race_id, &race).await?;
