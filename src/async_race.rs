@@ -1175,6 +1175,20 @@ pub(crate) async fn clear_message_with_button(http: impl CacheHttp, channel_id: 
     }
 }
 
+pub(crate) async fn clear_messages_with_button_prefix(http: impl CacheHttp, channel_id: ChannelId, prefix: &str) {
+    if let Ok(messages) = channel_id.messages(&http, serenity::all::GetMessages::new().limit(20)).await {
+        for message in messages {
+            let has_button = message.components.iter().any(|row| row.components.iter().any(|c| {
+                matches!(c, ActionRowComponent::Button(b)
+                    if matches!(&b.data, ButtonKind::NonLink { custom_id, .. } if custom_id.starts_with(prefix)))
+            }));
+            if has_button {
+                let _ = channel_id.edit_message(&http, message.id, EditMessage::new().components(vec![])).await;
+            }
+        }
+    }
+}
+
 pub(crate) fn create_finish_forfeit_buttons(run: &AsyncRun) -> CreateActionRow {
     CreateActionRow::Buttons(vec![
         CreateButton::new(run.button_id("finish"))
@@ -1767,10 +1781,14 @@ pub(crate) async fn handle_org_forfeit_yes(
         return Ok(());
     }
 
-    interaction.defer(&ctx.http).await?;
-
     match run {
         AsyncRun::Qualifier { team_id, async_kind } => {
+            interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                CreateInteractionResponseMessage::new()
+                    .content("Recording forfeit...")
+                    .components(vec![])
+            )).await?;
+
             let mut transaction = pool.begin().await?;
             let team = Team::from_id(&mut transaction, Id::from(*team_id)).await?.ok_or(sqlx::Error::RowNotFound)?;
             let team_name = team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into());
@@ -1795,17 +1813,15 @@ pub(crate) async fn handle_org_forfeit_yes(
             transaction.commit().await?;
 
             clear_message_with_button(ctx, interaction.channel_id, &run.button_id("org_forfeit")).await;
-
-            interaction.edit_response(ctx, EditInteractionResponse::new()
-                .content(format!("Forfeit confirmed for {}.", team_name))
-                .components(vec![])
-            ).await?;
+            interaction.channel_id.say(ctx, format!("Forfeit confirmed for {}.", team_name)).await?;
         }
         AsyncRun::BracketRace { .. } => {
-            interaction.edit_response(ctx, EditInteractionResponse::new()
-                .content("Bracket race forfeits must be confirmed via the `/forfeit-async` command.")
-                .components(vec![])
-            ).await?;
+            interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                CreateInteractionResponseMessage::new()
+                    .content("Please use `/forfeit-async` in this thread to record this forfeit.")
+                    .components(vec![])
+            )).await?;
+            clear_message_with_button(ctx, interaction.channel_id, &run.button_id("org_forfeit")).await;
         }
     }
     Ok(())
