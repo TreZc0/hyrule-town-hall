@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                id,\n                name,\n                google_sheet_id,\n                language AS \"language: Language\",\n                hth_export_id_col,\n                commentators_col,\n                trackers_col,\n                restream_channel_col,\n                notes_col,\n                dst_formula_standard,\n                dst_formula_dst\n            FROM zsr_restreaming_backends\n            WHERE id = $1\n        ",
+  "query": "\n            SELECT\n                id,\n                name,\n                google_sheet_id,\n                language AS \"language: Language\",\n                hth_export_id_col,\n                commentators_col,\n                trackers_col,\n                restream_channel_col,\n                notes_col,\n                dst_formula_standard,\n                dst_formula_dst,\n                api_endpoint,\n                api_secret\n            FROM zsr_restreaming_backends\n            WHERE id = $1\n        ",
   "describe": {
     "columns": [
       {
@@ -69,6 +69,16 @@
         "ordinal": 10,
         "name": "dst_formula_dst",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "api_endpoint",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "api_secret",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -87,8 +97,10 @@
       true,
       false,
       false,
-      false
+      false,
+      true,
+      true
     ]
   },
-  "hash": "c7bac49e57c905f6f18515eb0bd6a8e9162583b24384cc8d0403eaeee6f5215d"
+  "hash": "33a5b37e22d8d9e09d29cfe2b2f07456d30d704fb612059a34c37c98e28a142a"
 }

@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO asyncs (series, event, kind, file_stem, web_id, tfb_uuid, xkeys_uuid, seed_data, hash1, hash2, hash3, hash4, hash5, start, end_time)\n                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)\n                   ON CONFLICT (series, event, kind) DO UPDATE SET\n                       file_stem = EXCLUDED.file_stem,\n                       web_id = EXCLUDED.web_id,\n                       tfb_uuid = EXCLUDED.tfb_uuid,\n                       xkeys_uuid = EXCLUDED.xkeys_uuid,\n                       seed_data = EXCLUDED.seed_data,\n                       hash1 = EXCLUDED.hash1,\n                       hash2 = EXCLUDED.hash2,\n                       hash3 = EXCLUDED.hash3,\n                       hash4 = EXCLUDED.hash4,\n                       hash5 = EXCLUDED.hash5,\n                       start = EXCLUDED.start,\n                       end_time = EXCLUDED.end_time",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        {
+          "Custom": {
+            "name": "async_kind",
+            "kind": {
+              "Enum": [
+                "qualifier",
+                "qualifier2",
+                "qualifier3",
+                "tiebreaker1",
+                "tiebreaker2"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Int8",
+        "Uuid",
+        "Uuid",
+        "Jsonb",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9aadb7f88c57b239dc55cb74c333e5a3b27577883c831b55f3e6ba7b2c91fc74"
+}

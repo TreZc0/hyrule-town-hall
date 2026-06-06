@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT url_pattern FROM restream_channels ORDER BY url_pattern",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "url_pattern",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f5b1c64848318452165d0d30831d6e4c330f47065d3ab2cb8637e379881d88b0"
+}

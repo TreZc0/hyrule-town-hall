@@ -1,5 +1,6 @@
 use crate::{
     event::{AsyncKind, Data, Series, Tab},
+    hash_icon_db::HashIconData,
     prelude::*,
     racetime_bot::seed_gen_type::SeedGenType,
     seed,
@@ -33,6 +34,23 @@ fn parse_async_kind(value: &str) -> Option<AsyncKind> {
     all::<AsyncKind>().find(|kind| format!("{:?}", kind) == value)
 }
 
+fn avianart_seed_fields(seed_data: &serde_json::Value) -> (String, String) {
+    let parsed = seed::Files::from_seed_data(seed_data);
+    let hash = match parsed.as_ref() {
+        Some(seed::Files::AvianartSeed { hash, .. }) => Some(hash.clone()),
+        _ => None,
+    }
+    .or_else(|| seed_data.get("avianart_hash").and_then(|value| value.as_str()).map(str::to_owned))
+    .unwrap_or_default();
+    let seed_hash = match parsed.as_ref() {
+        Some(seed::Files::AvianartSeed { seed_hash: Some(seed_hash), .. }) => Some(seed_hash.join(", ")),
+        _ => None,
+    }
+    .or_else(|| seed_data.get("avianart_seed_hash").and_then(|value| value.as_str()).map(str::to_owned))
+    .unwrap_or_default();
+    (hash, seed_hash)
+}
+
 async fn asyncs_form(
     mut transaction: Transaction<'_, Postgres>,
     me: User,
@@ -51,13 +69,20 @@ async fn asyncs_form(
         tfb_uuid: Option<Uuid>,
         xkeys_uuid: Option<Uuid>,
         seed_data: Option<serde_json::Value>,
+        hash1: Option<String>,
+        hash2: Option<String>,
+        hash3: Option<String>,
+        hash4: Option<String>,
+        hash5: Option<String>,
         start: Option<DateTime<Utc>>,
         end_time: Option<DateTime<Utc>>,
     }
 
     let asyncs = sqlx::query_as!(
         AsyncRow,
-        r#"SELECT kind AS "kind: AsyncKind", file_stem, web_id, tfb_uuid, xkeys_uuid, seed_data, start, end_time FROM asyncs WHERE series = $1 AND event = $2 ORDER BY kind"#,
+        r#"SELECT kind AS "kind: AsyncKind", file_stem, web_id, tfb_uuid, xkeys_uuid, seed_data,
+               hash1::text as hash1, hash2::text as hash2, hash3::text as hash3, hash4::text as hash4, hash5::text as hash5,
+               start, end_time FROM asyncs WHERE series = $1 AND event = $2 ORDER BY kind"#,
         event.series as _,
         &event.event
     )
@@ -103,12 +128,22 @@ async fn asyncs_form(
         .and_then(|value| value.as_str())
         .unwrap_or_default()
         .to_owned();
-    let default_avianart_hash = editing_async
+    let (default_avianart_hash, default_avianart_seed_hash) = editing_async
         .and_then(|row| row.seed_data.as_ref())
-        .and_then(|seed_data| seed_data.get("avianart_hash").or_else(|| seed_data.get("hash")))
-        .and_then(|value| value.as_str())
-        .unwrap_or_default()
-        .to_owned();
+        .map(avianart_seed_fields)
+        .unwrap_or_default();
+    let default_hash: [String; 5] = std::array::from_fn(|i| {
+        editing_async
+            .and_then(|row| match i {
+                0 => row.hash1.as_deref(),
+                1 => row.hash2.as_deref(),
+                2 => row.hash3.as_deref(),
+                3 => row.hash4.as_deref(),
+                _ => row.hash5.as_deref(),
+            })
+            .unwrap_or_default()
+            .to_owned()
+    });
     let default_start = editing_async
         .and_then(|row| row.start)
         .map(|start| start.format("%Y-%m-%dT%H:%M").to_string())
@@ -119,6 +154,15 @@ async fn asyncs_form(
         .unwrap_or_default();
 
     let seed_form_kind = async_seed_form_kind(&event);
+    let hash_icons = if matches!(seed_form_kind, AsyncSeedFormKind::AlttprDoorRando) {
+        if let Some(game) = event.game(&mut transaction).await? {
+            HashIconData::all_for_game(&mut transaction, game.id).await?
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
 
     Ok(
         page(
@@ -208,13 +252,29 @@ async fn asyncs_form(
                                                         .or_else(|| row.xkeys_uuid.map(|u| u.to_string()))
                                                         .unwrap_or_default();
                                                     : uuid;
+                                                    @if let (Some(hash1), Some(hash2), Some(hash3), Some(hash4), Some(hash5)) = (
+                                                        row.hash1.as_deref(),
+                                                        row.hash2.as_deref(),
+                                                        row.hash3.as_deref(),
+                                                        row.hash4.as_deref(),
+                                                        row.hash5.as_deref(),
+                                                    ) {
+                                                        br;
+                                                        span(class = "hash-text") {
+                                                            : format!("Hash: {hash1}, {hash2}, {hash3}, {hash4}, {hash5}");
+                                                        }
+                                                    }
                                                 }
                                             }
                                             AsyncSeedFormKind::AlttprAvianart => {
                                                 td {
-                                                    @let avianart_hash = row.seed_data.as_ref().and_then(|d| d.get("avianart_hash").or_else(|| d.get("hash"))).and_then(|v| v.as_str()).unwrap_or("");
+                                                    @let (avianart_hash, avianart_seed_hash) = row.seed_data.as_ref().map(avianart_seed_fields).unwrap_or_default();
                                                     @if !avianart_hash.is_empty() {
                                                         a(href = format!("https://avianart.games/perm/{}", avianart_hash), target = "_blank") : avianart_hash;
+                                                    }
+                                                    @if !avianart_seed_hash.is_empty() {
+                                                        br;
+                                                        : format!("Hash: {}", avianart_seed_hash);
                                                     }
                                                 }
                                             }
@@ -250,11 +310,11 @@ async fn asyncs_form(
                     }
                     h3 : if edit_kind.is_some() { "Edit Async" } else { "Add/Update Async" };
                     @let hidden_fields = match seed_form_kind {
-                        AsyncSeedFormKind::Twwr => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid", "avianart_hash"].as_slice(),
-                        AsyncSeedFormKind::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid", "avianart_hash"].as_slice(),
-                        AsyncSeedFormKind::AlttprDoorRando => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "avianart_hash"].as_slice(),
-                        AsyncSeedFormKind::AlttprAvianart => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "xkeys_uuid"].as_slice(),
-                        AsyncSeedFormKind::FileStemWebId => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "avianart_hash"].as_slice(),
+                        AsyncSeedFormKind::Twwr => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
+                        AsyncSeedFormKind::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
+                        AsyncSeedFormKind::AlttprDoorRando => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "avianart_hash", "avianart_seed_hash"].as_slice(),
+                        AsyncSeedFormKind::AlttprAvianart => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
+                        AsyncSeedFormKind::FileStemWebId => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
                     };
                     @let mut errors = ctx.errors().filter(|e| !hidden_fields.iter().any(|f| e.is_for(f))).collect_vec();
                     : full_form(uri!(post(event.series, &*event.event)), csrf, html! {
@@ -294,12 +354,37 @@ async fn asyncs_form(
                                     label(for = "xkeys_uuid") : "ALTTPR UUID";
                                     input(type = "text", name = "xkeys_uuid", id = "xkeys_uuid", value = ctx.field_value("xkeys_uuid").unwrap_or(&default_xkeys_uuid));
                                 });
+                                p : "Seed Hash (optional — select all 5 icons or leave all blank):";
+                                @for (field_name, label, default_val) in [
+                                    ("hash1", "Icon 1", &default_hash[0]),
+                                    ("hash2", "Icon 2", &default_hash[1]),
+                                    ("hash3", "Icon 3", &default_hash[2]),
+                                    ("hash4", "Icon 4", &default_hash[3]),
+                                    ("hash5", "Icon 5", &default_hash[4]),
+                                ] {
+                                    : form_field(field_name, &mut errors, html! {
+                                        label(for = field_name) : label;
+                                        select(name = field_name, id = field_name) {
+                                            option(value = "", selected? = ctx.field_value(field_name).unwrap_or(default_val).is_empty()) : "—";
+                                            @for hash_icon_data in &hash_icons {
+                                                @let icon_name = hash_icon_data.name.as_str();
+                                                @let selected = ctx.field_value(field_name).unwrap_or(default_val) == icon_name;
+                                                option(value = icon_name, selected? = selected) : icon_name;
+                                            }
+                                        }
+                                    });
+                                }
                             }
                             AsyncSeedFormKind::AlttprAvianart => {
                                 : form_field("avianart_hash", &mut errors, html! {
                                     label(for = "avianart_hash") : "Avianart Hash";
                                     input(type = "text", name = "avianart_hash", id = "avianart_hash", value = ctx.field_value("avianart_hash").unwrap_or(&default_avianart_hash), style = "width: 100%; max-width: 600px;");
                                     label(class = "help") : " (The hash from avianart.games/perm/{hash})";
+                                });
+                                : form_field("avianart_seed_hash", &mut errors, html! {
+                                    label(for = "avianart_seed_hash") : "Seed Hash (optional)";
+                                    input(type = "text", name = "avianart_seed_hash", id = "avianart_seed_hash", value = ctx.field_value("avianart_seed_hash").unwrap_or(&default_avianart_seed_hash), style = "width: 100%; max-width: 600px;");
+                                    label(class = "help") : " (e.g. \"Bug Net, Bow, Lamp, Flippers, Boomerang\")";
                                 });
                             }
                             AsyncSeedFormKind::FileStemWebId => {
@@ -382,6 +467,18 @@ pub(crate) struct AsyncForm {
     #[field(default = None)]
     avianart_hash: Option<String>,
     #[field(default = None)]
+    avianart_seed_hash: Option<String>,
+    #[field(default = None)]
+    hash1: Option<String>,
+    #[field(default = None)]
+    hash2: Option<String>,
+    #[field(default = None)]
+    hash3: Option<String>,
+    #[field(default = None)]
+    hash4: Option<String>,
+    #[field(default = None)]
+    hash5: Option<String>,
+    #[field(default = None)]
     start: Option<String>,
     #[field(default = None)]
     end_time: Option<String>,
@@ -414,10 +511,11 @@ pub(crate) async fn post(
     Ok(if let Some(ref value) = form.value {
         let seed_form_kind = async_seed_form_kind(&event_data);
         let hidden_fields = match seed_form_kind {
-            AsyncSeedFormKind::Twwr => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid"].as_slice(),
-            AsyncSeedFormKind::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid"].as_slice(),
-            AsyncSeedFormKind::AlttprDoorRando => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid"].as_slice(),
-            AsyncSeedFormKind::AlttprAvianart | AsyncSeedFormKind::FileStemWebId => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid"].as_slice(),
+            AsyncSeedFormKind::Twwr => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
+            AsyncSeedFormKind::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
+            AsyncSeedFormKind::AlttprDoorRando => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "avianart_hash", "avianart_seed_hash"].as_slice(),
+            AsyncSeedFormKind::AlttprAvianart => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
+            AsyncSeedFormKind::FileStemWebId => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
         };
         let has_relevant_errors = form
             .context
@@ -497,6 +595,31 @@ pub(crate) async fn post(
                 None
             };
 
+            let alttpr_hash = if matches!(seed_form_kind, AsyncSeedFormKind::AlttprDoorRando) {
+                let h = [
+                    value.hash1.as_deref().unwrap_or("").trim(),
+                    value.hash2.as_deref().unwrap_or("").trim(),
+                    value.hash3.as_deref().unwrap_or("").trim(),
+                    value.hash4.as_deref().unwrap_or("").trim(),
+                    value.hash5.as_deref().unwrap_or("").trim(),
+                ];
+                let filled = h.iter().filter(|s| !s.is_empty()).count();
+                if filled == 5 {
+                    Some(h.map(str::to_owned))
+                } else if filled > 0 {
+                    form.context.push_error(
+                        form::Error::validation("All 5 hash icons must be selected, or leave all blank").with_name("hash1"),
+                    );
+                    return Ok(RedirectOrContent::Content(
+                        asyncs_form(transaction, me, uri, csrf.as_ref(), event_data, Some(value.kind), form.context).await?,
+                    ));
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
             // Build seed_data JSON.
             let (seed_data, xkeys_uuid) = match seed_form_kind {
                 AsyncSeedFormKind::Twwr => {
@@ -515,11 +638,27 @@ pub(crate) async fn post(
                 }
                 AsyncSeedFormKind::AlttprAvianart => {
                     let avianart_hash = value.avianart_hash.as_deref().unwrap_or("").trim();
+                    let avianart_seed_hash = value.avianart_seed_hash.as_deref().unwrap_or("").trim();
+                    let seed_hash = if avianart_seed_hash.is_empty() {
+                        None
+                    } else {
+                        match crate::avianart::parse_file_hash(avianart_seed_hash) {
+                            Ok(seed_hash) => Some(seed_hash),
+                            Err(_) => {
+                                form.context.push_error(
+                                    form::Error::validation("Expected 5 hash icons separated by comma and space").with_name("avianart_seed_hash"),
+                                );
+                                return Ok(RedirectOrContent::Content(
+                                    asyncs_form(transaction, me, uri, csrf.as_ref(), event_data, Some(value.kind), form.context).await?,
+                                ));
+                            }
+                        }
+                    };
                     let seed_data = if !avianart_hash.is_empty() {
-                        Some(serde_json::json!({
-                            "type": "alttpr_avianart",
-                            "hash": avianart_hash,
-                        }))
+                        Some(seed::Files::AvianartSeed {
+                            hash: avianart_hash.to_owned(),
+                            seed_hash,
+                        }.to_seed_data_base())
                     } else {
                         None
                     };
@@ -604,15 +743,24 @@ pub(crate) async fn post(
                 None
             };
 
+            let (hash1, hash2, hash3, hash4, hash5): (Option<String>, Option<String>, Option<String>, Option<String>, Option<String>) = match alttpr_hash {
+                Some([h1, h2, h3, h4, h5]) => (Some(h1), Some(h2), Some(h3), Some(h4), Some(h5)),
+                None => (None, None, None, None, None),
+            };
             sqlx::query!(
-                r#"INSERT INTO asyncs (series, event, kind, file_stem, web_id, tfb_uuid, xkeys_uuid, seed_data, start, end_time)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                r#"INSERT INTO asyncs (series, event, kind, file_stem, web_id, tfb_uuid, xkeys_uuid, seed_data, hash1, hash2, hash3, hash4, hash5, start, end_time)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                    ON CONFLICT (series, event, kind) DO UPDATE SET
                        file_stem = EXCLUDED.file_stem,
                        web_id = EXCLUDED.web_id,
                        tfb_uuid = EXCLUDED.tfb_uuid,
                        xkeys_uuid = EXCLUDED.xkeys_uuid,
                        seed_data = EXCLUDED.seed_data,
+                       hash1 = EXCLUDED.hash1,
+                       hash2 = EXCLUDED.hash2,
+                       hash3 = EXCLUDED.hash3,
+                       hash4 = EXCLUDED.hash4,
+                       hash5 = EXCLUDED.hash5,
                        start = EXCLUDED.start,
                        end_time = EXCLUDED.end_time"#,
                 event_data.series as _,
@@ -623,6 +771,11 @@ pub(crate) async fn post(
                 tfb_uuid,
                 xkeys_uuid,
                 seed_data,
+                hash1 as _,
+                hash2 as _,
+                hash3 as _,
+                hash4 as _,
+                hash5 as _,
                 start,
                 end_time
             )

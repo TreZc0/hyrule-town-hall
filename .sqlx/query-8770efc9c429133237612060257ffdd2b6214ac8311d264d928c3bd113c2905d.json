@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT kind AS \"kind: AsyncKind\", file_stem, web_id, tfb_uuid, xkeys_uuid, seed_data, start, end_time FROM asyncs WHERE series = $1 AND event = $2 ORDER BY kind",
+  "query": "SELECT kind AS \"kind: AsyncKind\", file_stem, web_id, tfb_uuid, xkeys_uuid, seed_data,\n               hash1::text as hash1, hash2::text as hash2, hash3::text as hash3, hash4::text as hash4, hash5::text as hash5,\n               start, end_time FROM asyncs WHERE series = $1 AND event = $2 ORDER BY kind",
   "describe": {
     "columns": [
       {
@@ -48,11 +48,36 @@
       },
       {
         "ordinal": 6,
+        "name": "hash1",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "hash2",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "hash3",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "hash4",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "hash5",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
         "name": "start",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 7,
+        "ordinal": 12,
         "name": "end_time",
         "type_info": "Timestamptz"
       }
@@ -71,8 +96,13 @@
       true,
       true,
       true,
+      true,
+      true,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "f58813cbfedafc58cd457912e339070e5043ddc844f5a1820f5ec4b599af3f2d"
+  "hash": "8770efc9c429133237612060257ffdd2b6214ac8311d264d928c3bd113c2905d"
 }
