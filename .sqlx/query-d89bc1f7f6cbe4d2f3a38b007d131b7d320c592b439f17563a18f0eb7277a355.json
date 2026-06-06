@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO opt_outs (series, event, racetime_id, opted_out_by, is_organizer_action) VALUES ($1, $2, $3, $4, TRUE)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d89bc1f7f6cbe4d2f3a38b007d131b7d320c592b439f17563a18f0eb7277a355"
+}

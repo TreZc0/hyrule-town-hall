@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE events SET auto_import = $1 WHERE series = $2 AND event = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d764f57cb486135f9cea70a2c719f346cf5bfe1f8f62336f3c9af85a980a9adf"
+}

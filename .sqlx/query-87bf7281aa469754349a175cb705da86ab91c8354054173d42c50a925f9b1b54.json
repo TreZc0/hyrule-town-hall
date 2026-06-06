@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM races WHERE series = $1 AND event = $2 AND round = $3 AND start > NOW() AND NOT ignored",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "87bf7281aa469754349a175cb705da86ab91c8354054173d42c50a925f9b1b54"
+}

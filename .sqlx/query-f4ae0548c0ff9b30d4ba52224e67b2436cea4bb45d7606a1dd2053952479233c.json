@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT member AS \"member: Id<Users>\" FROM team_members WHERE team = $1 ORDER BY role ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "member: Id<Users>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f4ae0548c0ff9b30d4ba52224e67b2436cea4bb45d7606a1dd2053952479233c"
+}

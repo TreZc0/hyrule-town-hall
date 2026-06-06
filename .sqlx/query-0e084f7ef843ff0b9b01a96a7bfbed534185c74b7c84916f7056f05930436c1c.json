@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT series AS \"series: Series\" \n               FROM game_series WHERE game_id = $1 ORDER BY series",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "series: Series",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0e084f7ef843ff0b9b01a96a7bfbed534185c74b7c84916f7056f05930436c1c"
+}

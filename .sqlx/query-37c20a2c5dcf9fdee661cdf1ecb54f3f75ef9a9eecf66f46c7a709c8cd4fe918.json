@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE races SET discord_scheduled_event_id = NULL WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "37c20a2c5dcf9fdee661cdf1ecb54f3f75ef9a9eecf66f46c7a709c8cd4fe918"
+}

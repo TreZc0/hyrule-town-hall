@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM async_teams WHERE team = $1 AND kind = $2 AND (player_finished_at IS NOT NULL OR submitted IS NOT NULL)) AS \"finished!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "finished!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        {
+          "Custom": {
+            "name": "async_kind",
+            "kind": {
+              "Enum": [
+                "qualifier",
+                "qualifier2",
+                "qualifier3",
+                "tiebreaker1",
+                "tiebreaker2"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "877478675891aa427ce80bcd97046e465f77ee369b7e1e3e2ab966cd4b879d9c"
+}

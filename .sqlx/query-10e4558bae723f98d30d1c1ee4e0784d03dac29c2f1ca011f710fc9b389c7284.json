@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id: Id<Races>\" FROM races WHERE NOT ignored AND scheduling_thread = $1 AND game = $2 AND (start IS NULL OR start > NOW()) AND end_time IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Races>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int2"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "10e4558bae723f98d30d1c1ee4e0784d03dac29c2f1ca011f710fc9b389c7284"
+}

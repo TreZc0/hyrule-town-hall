@@ -1,0 +1,97 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n            w.id,\n            w.language AS \"language: Language\",\n            w.discord_ping_channel,\n            w.delete_after_race,\n            w.workflow_type AS \"workflow_type: PingWorkflowTypeDb\",\n            w.ping_interval AS \"ping_interval: PingInterval\",\n            w.schedule_time,\n            w.schedule_day_of_week\n        FROM volunteer_ping_workflows w\n        WHERE w.series = $1 AND w.event = $2\n        ORDER BY w.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "language: Language",
+        "type_info": {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "discord_ping_channel",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "delete_after_race",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "workflow_type: PingWorkflowTypeDb",
+        "type_info": {
+          "Custom": {
+            "name": "ping_workflow_type",
+            "kind": {
+              "Enum": [
+                "scheduled",
+                "per_race"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "ping_interval: PingInterval",
+        "type_info": {
+          "Custom": {
+            "name": "ping_interval",
+            "kind": {
+              "Enum": [
+                "daily",
+                "weekly"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "schedule_time",
+        "type_info": "Time"
+      },
+      {
+        "ordinal": 7,
+        "name": "schedule_day_of_week",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "e6d54c5de4de1b4570c0726abdaaa8734188628e24a9a6d4a853d85371f5cfb5"
+}

@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT requested IS NOT NULL AS \"requested!\", submitted IS NOT NULL AS \"submitted!\" FROM async_teams WHERE team = $1 AND kind = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "requested!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "submitted!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        {
+          "Custom": {
+            "name": "async_kind",
+            "kind": {
+              "Enum": [
+                "qualifier",
+                "qualifier2",
+                "qualifier3",
+                "tiebreaker1",
+                "tiebreaker2"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "d6ad13965d3bae6d02fcdae3a3cc9f059229a92c4bab725430a767cad21216ac"
+}

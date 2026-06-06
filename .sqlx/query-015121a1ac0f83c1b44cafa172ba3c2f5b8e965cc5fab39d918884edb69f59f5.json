@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT player AS \"player: Id<Users>\", video FROM race_player_videos WHERE race = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "player: Id<Users>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "video",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "015121a1ac0f83c1b44cafa172ba3c2f5b8e965cc5fab39d918884edb69f59f5"
+}

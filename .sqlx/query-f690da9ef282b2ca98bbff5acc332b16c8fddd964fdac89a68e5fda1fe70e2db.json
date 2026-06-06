@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE events SET manual_reporting_with_breaks = $1 WHERE series = $2 AND event = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f690da9ef282b2ca98bbff5acc332b16c8fddd964fdac89a68e5fda1fe70e2db"
+}

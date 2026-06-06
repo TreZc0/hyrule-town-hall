@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT grc.category_slug\n        FROM game_series gs\n        JOIN game_racetime_connection grc ON gs.game_id = grc.game_id\n        WHERE gs.series = $1\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "category_slug",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "087af280762825b3a50261db9d25cdcea71c14344bf87f941a6409c968dfaee0"
+}

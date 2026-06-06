@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM teams, team_members WHERE\n                            id = team\n                            AND series = $1\n                            AND event = $2\n                            AND member = $3\n                            AND NOT resigned\n                            AND EXISTS (SELECT 1 FROM team_members WHERE team = id AND member = $4)\n                        ) AS \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8802936388fea09a323dda588514158f8cc2de9213e34d63e8b45d259e97a5a4"
+}

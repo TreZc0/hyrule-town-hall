@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'created', $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        {
+          "Custom": {
+            "name": "team_role",
+            "kind": {
+              "Enum": [
+                "sheikah",
+                "gerudo",
+                "power",
+                "wisdom",
+                "courage",
+                "none"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d5408de4fd29d5c8836391b95669541a62c5d10748c562f8588d73b702e350bf"
+}

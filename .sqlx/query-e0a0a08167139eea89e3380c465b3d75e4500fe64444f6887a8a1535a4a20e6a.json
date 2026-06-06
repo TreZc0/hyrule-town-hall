@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO users (id, display_source, racetime_id, racetime_display_name, racetime_discriminator, racetime_pronouns) VALUES ($1, 'racetime', $2, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Varchar",
+        "Int2",
+        {
+          "Custom": {
+            "name": "racetime_pronouns",
+            "kind": {
+              "Enum": [
+                "she",
+                "he",
+                "they",
+                "she_they",
+                "he_they",
+                "other",
+                "any_all",
+                "other_ask"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e0a0a08167139eea89e3380c465b3d75e4500fe64444f6887a8a1535a4a20e6a"
+}

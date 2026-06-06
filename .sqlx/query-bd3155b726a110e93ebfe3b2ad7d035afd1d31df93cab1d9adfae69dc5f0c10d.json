@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT speedgaming_id FROM speedgaming_disambiguation_messages WHERE speedgaming_id = ANY($1) ORDER BY speedgaming_id ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "speedgaming_id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bd3155b726a110e93ebfe3b2ad7d035afd1d31df93cab1d9adfae69dc5f0c10d"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO role_requests (role_binding_id, user_id, notes, status)\n                   VALUES ($1, $2, '', 'approved') RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "94f80f6be5da2d6de01906fbf9e810a1275fb4e6ffc70a2f0b31a3dd9dad47c3"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM volunteer_ping_workflows WHERE id = $1 AND game_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fbed5741cf835399d89392db4e919d0044fb0f8895827262d291a3dda2a6708f"
+}

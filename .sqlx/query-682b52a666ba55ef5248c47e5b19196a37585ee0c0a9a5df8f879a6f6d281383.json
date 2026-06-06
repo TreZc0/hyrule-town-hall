@@ -1,0 +1,74 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id: Id<Teams>\", name, racetime_slug, role AS \"role: Role\", resigned, restream_consent, custom_choices AS \"custom_choices: Json<HashMap<String, String>>\" FROM teams, team_members WHERE\n            id = team\n            AND series = $1\n            AND event = $2\n            AND member = $3\n            AND NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Teams>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "racetime_slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "role: Role",
+        "type_info": {
+          "Custom": {
+            "name": "team_role",
+            "kind": {
+              "Enum": [
+                "sheikah",
+                "gerudo",
+                "power",
+                "wisdom",
+                "courage",
+                "none"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "resigned",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "restream_consent",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "custom_choices: Json<HashMap<String, String>>",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "682b52a666ba55ef5248c47e5b19196a37585ee0c0a9a5df8f879a6f6d281383"
+}

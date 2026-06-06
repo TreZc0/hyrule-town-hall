@@ -1,0 +1,94 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT rb.id as \"id: Id<RoleBindings>\", rb.series as \"series: Series\", rb.event, rb.game_id, rb.role_type_id as \"role_type_id: Id<RoleTypes>\", rb.min_count, rb.max_count, rt.name as role_type_name, rb.discord_role_id, rb.auto_approve, rb.language AS \"language: Language\" FROM role_bindings rb JOIN role_types rt ON rb.role_type_id = rt.id WHERE rb.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<RoleBindings>",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "series: Series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "event",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "role_type_id: Id<RoleTypes>",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "min_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "max_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "role_type_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "discord_role_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "auto_approve",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "language: Language",
+        "type_info": {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "a98d11298d6e34b6c0a50b9d7e57ad5a1257dd47dd9fe8cbfcd9cbcba5b706f1"
+}

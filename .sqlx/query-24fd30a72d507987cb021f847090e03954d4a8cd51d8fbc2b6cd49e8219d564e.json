@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id FROM discord_roles WHERE series = $1 AND event = $2 AND role IS NULL AND racetime_team IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "24fd30a72d507987cb021f847090e03954d4a8cd51d8fbc2b6cd49e8219d564e"
+}

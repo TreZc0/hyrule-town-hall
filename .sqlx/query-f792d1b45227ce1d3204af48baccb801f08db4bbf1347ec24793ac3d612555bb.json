@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO startgg_pool_name_mappings (series, event, original_identifier, mapped_name) VALUES ($1, $2, $3, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f792d1b45227ce1d3204af48baccb801f08db4bbf1347ec24793ac3d612555bb"
+}

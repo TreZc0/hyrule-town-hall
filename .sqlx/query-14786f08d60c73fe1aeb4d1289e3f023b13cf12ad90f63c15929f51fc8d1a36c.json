@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, original_phase, original_round, mapped_phase, mapped_round FROM startgg_phase_round_mappings WHERE series = $1 AND event = $2 ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "original_phase",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "original_round",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "mapped_phase",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "mapped_round",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "14786f08d60c73fe1aeb4d1289e3f023b13cf12ad90f63c15929f51fc8d1a36c"
+}

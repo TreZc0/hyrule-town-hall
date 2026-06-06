@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                r.volunteer_request_message_id,\n                e.discord_volunteer_info_channel\n            FROM races r\n            JOIN events e ON r.series = e.series AND r.event = e.event\n            WHERE r.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "volunteer_request_message_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "discord_volunteer_info_channel",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "2f109a2641528656465a5f68a529d4d15174dd9f8910b4f66ce549a9aeef7edb"
+}

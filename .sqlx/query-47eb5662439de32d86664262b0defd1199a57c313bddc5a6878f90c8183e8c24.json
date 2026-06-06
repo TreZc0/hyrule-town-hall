@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM prerolled_seeds WHERE ctid IN (SELECT ctid FROM prerolled_seeds WHERE goal_name = $1 AND (seed_password IS NULL OR NOT $2) ORDER BY timestamp ASC NULLS FIRST LIMIT 1) RETURNING\n                        goal_name,\n                        file_stem,\n                        locked_spoiler_log_path,\n                        hash1,\n                        hash2,\n                        hash3,\n                        hash4,\n                        hash5,\n                        seed_password,\n                        progression_spoiler,\n                        seed_data\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "goal_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "file_stem",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "locked_spoiler_log_path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "hash1",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "hash2",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "hash3",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "hash4",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "hash5",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "seed_password",
+        "type_info": "Bpchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "progression_spoiler",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "seed_data",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "47eb5662439de32d86664262b0defd1199a57c313bddc5a6878f90c8183e8c24"
+}

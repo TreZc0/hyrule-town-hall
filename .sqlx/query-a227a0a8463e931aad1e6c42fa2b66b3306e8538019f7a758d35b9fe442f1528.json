@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id: PgSnowflake<RoleId>\" FROM discord_roles WHERE guild = $1 AND series = $2 AND event = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: PgSnowflake<RoleId>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a227a0a8463e931aad1e6c42fa2b66b3306e8538019f7a758d35b9fe442f1528"
+}

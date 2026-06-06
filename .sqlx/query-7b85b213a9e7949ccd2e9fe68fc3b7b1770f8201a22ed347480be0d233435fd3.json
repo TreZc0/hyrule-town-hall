@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM pending_discord_invites \n               WHERE role_request_id = $1 AND discord_role_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7b85b213a9e7949ccd2e9fe68fc3b7b1770f8201a22ed347480be0d233435fd3"
+}

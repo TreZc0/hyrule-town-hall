@@ -1,0 +1,68 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                        SELECT member AS \"id: Id<Users>\", status AS \"status: SignupStatus\", time, vod\n                        FROM team_members LEFT OUTER JOIN async_players ON (member = player AND series = $1 AND event = $2 AND kind = 'qualifier')\n                        WHERE team = $3 AND role = $4\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Users>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "status: SignupStatus",
+        "type_info": {
+          "Custom": {
+            "name": "signup_status",
+            "kind": {
+              "Enum": [
+                "created",
+                "confirmed",
+                "unconfirmed"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "time",
+        "type_info": "Interval"
+      },
+      {
+        "ordinal": 3,
+        "name": "vod",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8",
+        {
+          "Custom": {
+            "name": "team_role",
+            "kind": {
+              "Enum": [
+                "sheikah",
+                "gerudo",
+                "power",
+                "wisdom",
+                "courage",
+                "none"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "23324c0097f86cbfd04be0c955a45063d8ed7abfcdefc15553e20bb8196bae7d"
+}

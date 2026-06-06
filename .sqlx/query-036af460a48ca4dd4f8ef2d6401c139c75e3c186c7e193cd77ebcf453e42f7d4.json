@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT \n            id as \"id: Id<Users>\",\n            display_source as \"display_source: DisplaySource\",\n            racetime_id,\n            racetime_display_name,\n            discord_display_name,\n            discord_username\n        FROM users \n        WHERE \n            racetime_display_name ILIKE $1 \n            OR discord_display_name ILIKE $1 \n            OR discord_username ILIKE $1\n            OR racetime_id ILIKE $1\n        ORDER BY \n            CASE \n                WHEN racetime_display_name ILIKE $1 THEN 1\n                WHEN discord_display_name ILIKE $1 THEN 2\n                WHEN discord_username ILIKE $1 THEN 3\n                WHEN racetime_id ILIKE $1 THEN 4\n                ELSE 5\n            END,\n            racetime_display_name,\n            discord_display_name\n        LIMIT 20\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Users>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "display_source: DisplaySource",
+        "type_info": {
+          "Custom": {
+            "name": "user_display_source",
+            "kind": {
+              "Enum": [
+                "discord",
+                "racetime"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "racetime_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "racetime_display_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "discord_display_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "discord_username",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "036af460a48ca4dd4f8ef2d6401c139c75e3c186c7e193cd77ebcf453e42f7d4"
+}

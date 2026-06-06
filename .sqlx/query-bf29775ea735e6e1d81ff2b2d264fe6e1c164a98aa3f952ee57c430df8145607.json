@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT kind AS \"kind: SimpleNotificationKind\" FROM notifications WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kind: SimpleNotificationKind",
+        "type_info": {
+          "Custom": {
+            "name": "notification_kind",
+            "kind": {
+              "Enum": [
+                "decline",
+                "resign",
+                "accept"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bf29775ea735e6e1d81ff2b2d264fe6e1c164a98aa3f952ee57c430df8145607"
+}

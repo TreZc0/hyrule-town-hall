@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pm.id, pm.message_id, pm.channel_id\n        FROM volunteer_ping_messages pm\n        JOIN volunteer_ping_workflows w ON pm.workflow_id = w.id\n        LEFT JOIN races r ON pm.race_id = r.id\n        WHERE w.delete_after_race = true\n          AND pm.deleted_at IS NULL\n          AND (\n              -- per-race pings: delete when the specific race has started\n              (pm.race_id IS NOT NULL AND r.start IS NOT NULL AND r.start <= $1)\n              OR\n              -- scheduled pings: delete if older than 24h (cleanup)\n              (pm.race_id IS NULL AND pm.sent_at <= $1 - interval '24 hours')\n          )",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "message_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "channel_id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "30c8db4f552507a3616fbfe908f1ad899f1477351a4069ffd15bcfcc3ddd5b83"
+}

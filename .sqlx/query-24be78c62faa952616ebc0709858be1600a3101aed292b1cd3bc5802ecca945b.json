@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id FROM races\n        WHERE series = $1\n          AND event = $2\n          AND ignored = false\n          AND start IS NOT NULL\n          AND start > $3\n          AND start <= $4\n          AND async_start1 IS NULL\n        ORDER BY start ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "24be78c62faa952616ebc0709858be1600a3101aed292b1cd3bc5802ecca945b"
+}

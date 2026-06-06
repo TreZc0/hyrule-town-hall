@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT organizer AS \"organizer: Id<Users>\" FROM organizers WHERE series = $1 AND event = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "organizer: Id<Users>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bae97a3a37232d095a87e8a9d6160932311d8375373e7b98ac29b7522ef06996"
+}

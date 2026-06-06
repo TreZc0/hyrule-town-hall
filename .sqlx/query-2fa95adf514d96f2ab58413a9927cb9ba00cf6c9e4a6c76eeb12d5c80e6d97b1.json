@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id: Id<Teams>\", name, racetime_slug, challonge_id, startgg_id AS \"startgg_id: startgg::ID\", plural_name, custom_choices AS \"custom_choices: Json<HashMap<String, String>>\", restream_consent, mw_impl AS \"mw_impl: mw::Impl\", qualifier_rank FROM teams WHERE\n                    series = $1\n                    AND event = $2\n                    AND NOT resigned\n                    AND (\n                        EXISTS (SELECT 1 FROM team_members WHERE team = id AND member = $3)\n                        OR NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')\n                    )\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Teams>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "racetime_slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "challonge_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "startgg_id: startgg::ID",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "plural_name",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "custom_choices: Json<HashMap<String, String>>",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "restream_consent",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "mw_impl: mw::Impl",
+        "type_info": {
+          "Custom": {
+            "name": "mw_impl",
+            "kind": {
+              "Enum": [
+                "bizhawk_co_op",
+                "midos_house"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "qualifier_rank",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "2fa95adf514d96f2ab58413a9927cb9ba00cf6c9e4a6c76eeb12d5c80e6d97b1"
+}

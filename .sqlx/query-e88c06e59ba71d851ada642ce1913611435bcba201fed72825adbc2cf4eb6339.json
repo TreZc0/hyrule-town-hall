@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM event_descriptions WHERE series = $1 AND event = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e88c06e59ba71d851ada642ce1913611435bcba201fed72825adbc2cf4eb6339"
+}

@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT display_fr FROM phase_round_options WHERE series = $1 AND event = $2 AND phase = $3 AND round = $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "display_fr",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "9e16fcc5f3f3111f0541f658014ba90bb516d3163f50d783d63b72fcd88c62b3"
+}

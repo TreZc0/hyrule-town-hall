@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT team AS \"team: Id<Teams>\" FROM teams, team_members WHERE series = $1 AND event = $2 AND member = $3 AND status = 'unconfirmed'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team: Id<Teams>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a1ce42d8c36a677c6bb7bee8270fd19aed500f8b1880295fec88c5cd55125b39"
+}

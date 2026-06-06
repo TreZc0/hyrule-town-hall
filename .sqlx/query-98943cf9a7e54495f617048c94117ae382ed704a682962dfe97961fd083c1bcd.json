@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT game AS \"game!\" FROM races WHERE NOT ignored AND scheduling_thread = $1 AND start IS NULL AND game IS NOT NULL ORDER BY game",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game!",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "98943cf9a7e54495f617048c94117ae382ed704a682962dfe97961fd083c1bcd"
+}

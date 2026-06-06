@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE races SET start = $1, room = $2, last_edited_by = $3, last_edited_at = $4 WHERE id = $5 AND series = $6 AND event = $7 AND phase = 'Seeding'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text",
+        "Int8",
+        "Timestamptz",
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "81a58b21e8899a88e6c03ba29ed40c88457f6064eabeb678a8ce5ddba0231ab8"
+}

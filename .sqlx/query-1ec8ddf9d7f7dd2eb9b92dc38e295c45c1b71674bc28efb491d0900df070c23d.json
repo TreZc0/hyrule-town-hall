@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'created', 'none')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1ec8ddf9d7f7dd2eb9b92dc38e295c45c1b71674bc28efb491d0900df070c23d"
+}

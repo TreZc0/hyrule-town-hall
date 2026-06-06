@@ -1,0 +1,95 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT\n                    rb.id AS \"id: Id<RoleBindings>\",\n                    rb.role_type_id AS \"role_type_id: Id<RoleTypes>\",\n                    rb.min_count,\n                    rb.max_count,\n                    rt.name AS \"role_type_name\",\n                    rb.discord_role_id,\n                    rb.auto_approve,\n                    rb.language AS \"language: Language\",\n                    false AS \"is_game_binding!: bool\",\n                    false AS \"has_event_override!: bool\",\n                    false AS \"is_disabled!: bool\"\n                FROM role_bindings rb\n                JOIN role_types rt ON rb.role_type_id = rt.id\n                WHERE rb.series = $1 AND rb.event = $2\n                ORDER BY rb.language, rt.name\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<RoleBindings>",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "role_type_id: Id<RoleTypes>",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "min_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "max_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "role_type_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "discord_role_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "auto_approve",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "language: Language",
+        "type_info": {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "is_game_binding!: bool",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "has_event_override!: bool",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "is_disabled!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "0fc8fb7b883b3e0045d2229ab4db53cf18947b1f34a7d2ecfaca2cb798ad48be"
+}

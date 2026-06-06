@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT max_delay FROM asyncs WHERE series = $1 AND event = $2 AND kind = 'qualifier'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "max_delay",
+        "type_info": "Interval"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "67f0041e5a9e636c97c97a71869b1dd146a0002a30ac3366d3509927f152345f"
+}

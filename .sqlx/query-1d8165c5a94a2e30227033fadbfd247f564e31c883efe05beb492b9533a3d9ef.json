@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT member AS \"id: Id<Users>\" FROM team_members WHERE team = $1 AND (status = 'created' OR status = 'confirmed')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Users>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1d8165c5a94a2e30227033fadbfd247f564e31c883efe05beb492b9533a3d9ef"
+}

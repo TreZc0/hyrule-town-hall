@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE role_bindings\n           SET min_count = $1, max_count = $2, discord_role_id = $3, auto_approve = $4\n           WHERE id = $5 AND game_id = $6",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int8",
+        "Bool",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "de33775588c147c39c62906b27eb20909987a63f2a59bf4117d24242ac20941b"
+}

@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE events SET qualifier_score_hiding = $1, automated_asyncs = $2 WHERE series = $3 AND event = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "qualifier_score_hiding",
+            "kind": {
+              "Enum": [
+                "none",
+                "async_only",
+                "full_points",
+                "full_points_counts",
+                "full_complete"
+              ]
+            }
+          }
+        },
+        "Bool",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "97889762bb2840594ed97ed4bb013dcf3e6fc30b556290ab364232d31645b44e"
+}

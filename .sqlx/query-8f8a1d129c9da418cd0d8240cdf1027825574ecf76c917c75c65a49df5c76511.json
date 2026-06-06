@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT draft_state AS \"draft_state: sqlx::types::Json<Draft>\" FROM races WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "draft_state: sqlx::types::Json<Draft>",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "8f8a1d129c9da418cd0d8240cdf1027825574ecf76c917c75c65a49df5c76511"
+}

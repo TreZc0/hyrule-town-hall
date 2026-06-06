@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT restreamer, language AS \"language: Language\" FROM game_restreamers WHERE game_id = $1 ORDER BY restreamer",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "restreamer",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "language: Language",
+        "type_info": {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "2ce3e70e4667ebc808c091bd24429e4db69d2792a87ae90585b664144fd01a2e"
+}

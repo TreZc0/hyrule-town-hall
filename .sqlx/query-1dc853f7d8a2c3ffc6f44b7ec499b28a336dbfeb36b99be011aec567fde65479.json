@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM volunteer_ping_lead_times WHERE workflow_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1dc853f7d8a2c3ffc6f44b7ec499b28a336dbfeb36b99be011aec567fde65479"
+}

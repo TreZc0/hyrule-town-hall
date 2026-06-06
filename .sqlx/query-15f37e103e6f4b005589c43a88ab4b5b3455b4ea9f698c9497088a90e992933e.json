@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO users (id, display_source, discord_id, discord_display_name, discord_discriminator, discord_username) VALUES ($1, 'discord', $2, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Varchar",
+        "Int2",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "15f37e103e6f4b005589c43a88ab4b5b3455b4ea9f698c9497088a90e992933e"
+}

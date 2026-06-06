@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT member AS \"member: Id<Users>\", role AS \"role: Role\" FROM team_members WHERE team = $1 ORDER BY role ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "member: Id<Users>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "role: Role",
+        "type_info": {
+          "Custom": {
+            "name": "team_role",
+            "kind": {
+              "Enum": [
+                "sheikah",
+                "gerudo",
+                "power",
+                "wisdom",
+                "courage",
+                "none"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "435dde2ddea3481f8e9b80969a61a6af57ea0decc2b54ae523e6a46d35e25236"
+}

@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                                            SELECT rt.name AS role_type_name, rb.language AS \"language: Language\"\n                                            FROM role_bindings rb\n                                            JOIN role_types rt ON rb.role_type_id = rt.id\n                                            WHERE rb.id = $1\n                                        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "role_type_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "language: Language",
+        "type_info": {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "f9b89da2f9b3d5b2d8e9d0bc9add537cc3352ca6aa7b74af7842f269cfb1a3a2"
+}

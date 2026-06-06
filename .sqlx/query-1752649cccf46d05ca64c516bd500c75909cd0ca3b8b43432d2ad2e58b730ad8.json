@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET discord_id = $1, discord_display_name = $2, discord_discriminator = $3, discord_username = $4 WHERE id = $5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Varchar",
+        "Int2",
+        "Varchar",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1752649cccf46d05ca64c516bd500c75909cd0ca3b8b43432d2ad2e58b730ad8"
+}

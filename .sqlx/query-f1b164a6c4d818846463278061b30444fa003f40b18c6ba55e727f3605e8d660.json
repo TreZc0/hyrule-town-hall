@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT phase, round FROM phase_round_options WHERE series = $1 AND event = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "phase",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "round",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "f1b164a6c4d818846463278061b30444fa003f40b18c6ba55e727f3605e8d660"
+}

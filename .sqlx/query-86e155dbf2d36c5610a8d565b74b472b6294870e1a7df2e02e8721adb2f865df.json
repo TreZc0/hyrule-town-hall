@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE races SET is_tfb_dev = $1, tfb_uuid = $2 WHERE id = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "86e155dbf2d36c5610a8d565b74b472b6294870e1a7df2e02e8721adb2f865df"
+}

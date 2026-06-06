@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO async_teams (team, kind, requested) VALUES ($1, $2, NOW()) ON CONFLICT (team, kind) DO UPDATE SET requested = EXCLUDED.requested",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        {
+          "Custom": {
+            "name": "async_kind",
+            "kind": {
+              "Enum": [
+                "qualifier",
+                "qualifier2",
+                "qualifier3",
+                "tiebreaker1",
+                "tiebreaker2"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "64a3f1263949108f2d3aea9688363e2eeedc4e130f17a8e1ab8662d45feaf223"
+}

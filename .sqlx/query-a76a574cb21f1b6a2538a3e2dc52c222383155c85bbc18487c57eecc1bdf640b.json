@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO notifications (id, rcpt, kind, series, event, sender) VALUES ($1, $2, $3, $4, $5, $6)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        {
+          "Custom": {
+            "name": "notification_kind",
+            "kind": {
+              "Enum": [
+                "decline",
+                "resign",
+                "accept"
+              ]
+            }
+          }
+        },
+        "Varchar",
+        "Varchar",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a76a574cb21f1b6a2538a3e2dc52c222383155c85bbc18487c57eecc1bdf640b"
+}

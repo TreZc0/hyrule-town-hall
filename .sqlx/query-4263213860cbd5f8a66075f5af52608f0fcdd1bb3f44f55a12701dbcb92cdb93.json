@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE team_members SET status = 'confirmed' WHERE team = $1 AND member = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4263213860cbd5f8a66075f5af52608f0fcdd1bb3f44f55a12701dbcb92cdb93"
+}

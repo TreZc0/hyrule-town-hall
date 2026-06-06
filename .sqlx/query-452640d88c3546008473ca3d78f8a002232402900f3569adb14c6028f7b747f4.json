@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO event_descriptions (series, event, content) VALUES ($1, $2, $3)\n                 ON CONFLICT (series, event) DO UPDATE SET content = EXCLUDED.content",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "452640d88c3546008473ca3d78f8a002232402900f3569adb14c6028f7b747f4"
+}

@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT discord_id AS \"discord_id!: PgSnowflake<UserId>\", role AS \"role: Role\" FROM users, team_members WHERE id = member AND discord_id IS NOT NULL AND team = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "discord_id!: PgSnowflake<UserId>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "role: Role",
+        "type_info": {
+          "Custom": {
+            "name": "team_role",
+            "kind": {
+              "Enum": [
+                "sheikah",
+                "gerudo",
+                "power",
+                "wisdom",
+                "courage",
+                "none"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "0d1cf8b3ef00344bb82d0202225098d8de55caad9cc9836ee564eda68574f6d7"
+}

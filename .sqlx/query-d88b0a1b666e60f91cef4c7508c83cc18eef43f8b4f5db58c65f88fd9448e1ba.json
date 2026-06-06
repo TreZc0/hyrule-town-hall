@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n                        SELECT 1 FROM races r\n                        JOIN game_series gs ON gs.series = r.series\n                        JOIN games g ON g.id = gs.game_id\n                        WHERE r.id = $1 AND g.name = $2\n                    ) AS \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d88b0a1b666e60f91cef4c7508c83cc18eef43f8b4f5db58c65f88fd9448e1ba"
+}

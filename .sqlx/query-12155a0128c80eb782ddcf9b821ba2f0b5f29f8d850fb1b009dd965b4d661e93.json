@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE races SET seed_password = $1 WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bpchar",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "12155a0128c80eb782ddcf9b821ba2f0b5f29f8d850fb1b009dd965b4d661e93"
+}

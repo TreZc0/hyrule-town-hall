@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT start, room FROM races WHERE id = $1 AND series = $2 AND event = $3 AND phase = 'Seeding'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "room",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "91b5d1b35f638b744109544c232b3d0c63874e0d6c52330fcb35b261cec2f0ed"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET racetime_id = NULL, racetime_display_name = NULL, racetime_discriminator = NULL, racetime_pronouns = NULL, display_source = 'discord' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4ac97cb3e338ca39dc9f564d4cf9b5eed5fcc0942c0ba9da79af1bd1cfde78d6"
+}

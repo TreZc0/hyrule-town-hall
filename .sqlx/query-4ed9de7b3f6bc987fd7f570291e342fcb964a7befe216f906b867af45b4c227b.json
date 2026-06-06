@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id: Id<Races>\" FROM races WHERE\n                NOT ignored\n                AND series = $1\n                AND event = $2\n                AND phase IS NOT DISTINCT FROM $3\n                AND round IS NOT DISTINCT FROM $4\n                AND game = $5\n                AND team1 IS NOT DISTINCT FROM $6\n                AND team2 IS NOT DISTINCT FROM $7\n                AND team3 IS NOT DISTINCT FROM $8\n                AND p1 IS NOT DISTINCT FROM $9\n                AND p2 IS NOT DISTINCT FROM $10\n                AND p3 IS NOT DISTINCT FROM $11\n                AND p1_discord IS NOT DISTINCT FROM $12\n                AND p2_discord IS NOT DISTINCT FROM $13\n                AND p1_racetime IS NOT DISTINCT FROM $14\n                AND p2_racetime IS NOT DISTINCT FROM $15\n                AND p1_twitch IS NOT DISTINCT FROM $16\n                AND p2_twitch IS NOT DISTINCT FROM $17\n                AND total IS NOT DISTINCT FROM $18\n                AND finished IS NOT DISTINCT FROM $19\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Races>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int2",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4ed9de7b3f6bc987fd7f570291e342fcb964a7befe216f906b867af45b4c227b"
+}

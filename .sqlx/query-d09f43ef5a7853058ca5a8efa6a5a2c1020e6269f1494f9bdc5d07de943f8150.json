@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM notifications WHERE id = $1 AND rcpt = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d09f43ef5a7853058ca5a8efa6a5a2c1020e6269f1494f9bdc5d07de943f8150"
+}

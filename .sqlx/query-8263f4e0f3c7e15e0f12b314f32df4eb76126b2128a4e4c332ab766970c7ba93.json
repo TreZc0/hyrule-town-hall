@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT sent_at FROM volunteer_ping_messages\n        WHERE workflow_id = $1 AND race_id IS NULL\n        ORDER BY sent_at DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sent_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8263f4e0f3c7e15e0f12b314f32df4eb76126b2128a4e4c332ab766970c7ba93"
+}

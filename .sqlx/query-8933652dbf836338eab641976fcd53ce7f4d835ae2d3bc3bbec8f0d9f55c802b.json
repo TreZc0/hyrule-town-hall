@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id AS \"id: Id<Races>\"\n        FROM races\n        WHERE series = $1 AND event = $2 AND ignored = false\n        ORDER BY start NULLS LAST\n    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Races>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8933652dbf836338eab641976fcd53ce7f4d835ae2d3bc3bbec8f0d9f55c802b"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT racetime_id FROM opt_outs WHERE series = $1 AND event = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "racetime_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ad6f2a3becddfc6994f77de366cf6e764e723463bb5f42dd394b944855a3f67e"
+}

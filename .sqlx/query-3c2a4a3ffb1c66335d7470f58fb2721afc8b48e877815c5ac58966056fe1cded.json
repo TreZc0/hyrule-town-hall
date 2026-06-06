@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT locked_spoiler_log_path FROM races WHERE file_stem = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "locked_spoiler_log_path",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "3c2a4a3ffb1c66335d7470f58fb2721afc8b48e877815c5ac58966056fe1cded"
+}

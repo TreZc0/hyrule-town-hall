@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO event_blocks (series, event, racetime_id, user_id, blocked_by, reason) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Int8",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "386d3e67e02e6093bfef825f65b26b7e42b0e9a3452967061bf6994e6acbb437"
+}

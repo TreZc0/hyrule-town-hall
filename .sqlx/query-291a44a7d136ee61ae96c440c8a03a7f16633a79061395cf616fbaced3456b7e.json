@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO volunteer_ping_messages (workflow_id, race_id, lead_time_hours, message_id, channel_id) VALUES ($1, NULL, NULL, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "291a44a7d136ee61ae96c440c8a03a7f16633a79061395cf616fbaced3456b7e"
+}

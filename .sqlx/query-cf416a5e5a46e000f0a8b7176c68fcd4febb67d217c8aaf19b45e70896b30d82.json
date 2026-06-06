@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM startgg_phase_round_mappings WHERE id = $1 AND series = $2 AND event = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cf416a5e5a46e000f0a8b7176c68fcd4febb67d217c8aaf19b45e70896b30d82"
+}

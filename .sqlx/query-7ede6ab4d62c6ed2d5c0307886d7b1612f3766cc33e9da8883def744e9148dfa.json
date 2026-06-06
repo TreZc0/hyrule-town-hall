@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT game_id FROM role_bindings WHERE id = $1 AND series IS NULL AND event IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "7ede6ab4d62c6ed2d5c0307886d7b1612f3766cc33e9da8883def744e9148dfa"
+}

@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT role_request_id, discord_role_id, invite_url \n           FROM pending_discord_invites \n           WHERE user_id = (SELECT id FROM users WHERE discord_id = $1) \n           AND discord_guild_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "role_request_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "discord_role_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "invite_url",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "05a04eb979ff390064fe11cccf3aab4b9da1886f4312fccb5600c797f4f5238b"
+}

@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT sender AS \"sender!: Id<Users>\", series AS \"series!: Series\", event AS \"event!\" FROM notifications WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sender!: Id<Users>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "series!: Series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "event!",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "e94cc5ad15b75dcc5506ab2056ae4ad4f3e1fc2a3926137f6c9963f88a5474a9"
+}

@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT rb.game_id, rb.series, rb.event\n               FROM role_bindings rb\n               WHERE rb.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "event",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "e0da59cac91fee7ff38baa0cb4dfc9a9e23261df7cc2ff5e78ab755d39ac1ab0"
+}

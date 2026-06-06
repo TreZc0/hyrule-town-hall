@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT restreamer AS \"restreamer: Id<Users>\" FROM restreamers WHERE series = $1 AND event = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "restreamer: Id<Users>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e005c96d066d277699df5c1ac46a88c538f16cc4ab37f8147888a33246b78773"
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE events SET\n                    volunteer_requests_enabled = $1,\n                    volunteer_request_lead_time_hours = $2\n                WHERE series = $3 AND event = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3eab48d4e1ba59b452381916853d4a8e8c5119e40d2ebbc75b29c708ad749bc7"
+}

@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT member AS \"id: Id<Users>\", status AS \"status: SignupStatus\", role AS \"role: Role\" FROM team_members WHERE team = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Users>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "status: SignupStatus",
+        "type_info": {
+          "Custom": {
+            "name": "signup_status",
+            "kind": {
+              "Enum": [
+                "created",
+                "confirmed",
+                "unconfirmed"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "role: Role",
+        "type_info": {
+          "Custom": {
+            "name": "team_role",
+            "kind": {
+              "Enum": [
+                "sheikah",
+                "gerudo",
+                "power",
+                "wisdom",
+                "courage",
+                "none"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "bef6193d37ecb11c04bb49dbadc2a358e88a9c7229590407d5e8fd494247452b"
+}

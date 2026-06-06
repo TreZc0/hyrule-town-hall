@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                file_stem,\n                web_id,\n                web_gen_time,\n                hash1,\n                hash2,\n                hash3,\n                hash4,\n                hash5\n            FROM rsl_seeds WHERE room = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "file_stem",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "web_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "web_gen_time",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "hash1",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "hash2",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "hash3",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "hash4",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "hash5",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "238a78842dd39c233ae5a27280231e17fa9f68e388ff3ce9e57b0253117fd868"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE events SET qualifier_notification_role_id = $1 WHERE series = $2 AND event = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ec0dcbff82169b3dc1d9ad656223e0a47dc7021f3393f29e112dc68250c2aeeb"
+}

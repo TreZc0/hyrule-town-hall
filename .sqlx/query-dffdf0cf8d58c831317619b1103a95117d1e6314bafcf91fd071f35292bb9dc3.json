@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM restreamers WHERE series = $1 AND event = $2 AND restreamer = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dffdf0cf8d58c831317619b1103a95117d1e6314bafcf91fd071f35292bb9dc3"
+}

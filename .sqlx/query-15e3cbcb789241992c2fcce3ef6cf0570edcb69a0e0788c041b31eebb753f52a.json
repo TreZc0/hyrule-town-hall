@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT round, restream_consent_required, scheduling_deadline FROM event_round_configs WHERE series = $1 AND event = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "round",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "restream_consent_required",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "scheduling_deadline",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "15e3cbcb789241992c2fcce3ef6cf0570edcb69a0e0788c041b31eebb753f52a"
+}

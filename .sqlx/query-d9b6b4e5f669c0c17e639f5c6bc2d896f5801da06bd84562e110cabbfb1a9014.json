@@ -1,0 +1,92 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id: Id<Teams>\", series AS \"series: Series\", event, name, racetime_slug, startgg_id AS \"startgg_id: startgg::ID\", challonge_id, plural_name, restream_consent, mw_impl AS \"mw_impl: mw::Impl\", qualifier_rank FROM teams WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Teams>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "series: Series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "event",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "racetime_slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "startgg_id: startgg::ID",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "challonge_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "plural_name",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "restream_consent",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "mw_impl: mw::Impl",
+        "type_info": {
+          "Custom": {
+            "name": "mw_impl",
+            "kind": {
+              "Enum": [
+                "bizhawk_co_op",
+                "midos_house"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "qualifier_rank",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "d9b6b4e5f669c0c17e639f5c6bc2d896f5801da06bd84562e110cabbfb1a9014"
+}

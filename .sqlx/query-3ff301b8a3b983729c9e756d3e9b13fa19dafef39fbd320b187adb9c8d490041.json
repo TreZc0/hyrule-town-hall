@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT start, end_time AS \"end\" FROM racetime_maintenance WHERE start < $1 AND end_time > $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "end",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "3ff301b8a3b983729c9e756d3e9b13fa19dafef39fbd320b187adb9c8d490041"
+}

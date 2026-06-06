@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                            INSERT INTO role_requests (role_binding_id, user_id, status, notes)\n                            VALUES ($1, $2, 'approved', $3)\n                            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "234256d9d986b4df7b2dc08d12c9b0415bc8ba4976b85a84c8140673c497905d"
+}

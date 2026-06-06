@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM races WHERE scheduling_thread = $1 AND NOT ignored AND GAME > $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f3425b2ce62c9b79b4b8e2ccdd65f2eab645dd8fa4977c3047fdb4608da80431"
+}

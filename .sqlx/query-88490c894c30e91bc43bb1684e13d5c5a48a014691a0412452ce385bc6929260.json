@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT video_url::TEXT FROM (\n            SELECT video_url FROM races WHERE video_url IS NOT NULL\n            UNION\n            SELECT video_url_fr FROM races WHERE video_url_fr IS NOT NULL\n            UNION\n            SELECT video_url_de FROM races WHERE video_url_de IS NOT NULL\n            UNION\n            SELECT video_url_pt FROM races WHERE video_url_pt IS NOT NULL\n        ) AS all_video_urls\n        ORDER BY video_url::TEXT",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "video_url",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "88490c894c30e91bc43bb1684e13d5c5a48a014691a0412452ce385bc6929260"
+}

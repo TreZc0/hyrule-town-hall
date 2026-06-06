@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT hard_settings_ok, mq_ok FROM teams WHERE id = $1 OR id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "hard_settings_ok",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "mq_ok",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "8bac459f505d9583c1ab0e98f568d5b7d7b625b165a2ab9615a31676f7edcf29"
+}

@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET racetime_id = $1, racetime_display_name = $2, racetime_discriminator = $3, racetime_pronouns = $4 WHERE id = $5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Varchar",
+        "Int2",
+        {
+          "Custom": {
+            "name": "racetime_pronouns",
+            "kind": {
+              "Enum": [
+                "she",
+                "he",
+                "they",
+                "she_they",
+                "he_they",
+                "other",
+                "any_all",
+                "other_ask"
+              ]
+            }
+          }
+        },
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "48f512b2d2354533525b1950b7ac611a1346591f4175fde69409732666c08456"
+}

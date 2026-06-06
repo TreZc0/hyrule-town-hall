@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM startgg_pool_name_mappings WHERE series = $1 AND event = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8cd9feb13feec0e8362435b3b4dda1b6024672aff5f523527d21ab88427aa3b5"
+}

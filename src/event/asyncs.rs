@@ -3,6 +3,13 @@ use crate::{
     prelude::*,
 };
 
+const ALTTPR_HASH_ICONS: &[&str] = &[
+    "Bomb", "Bombos", "Boomerang", "Bow", "Hookshot", "Mushroom", "Pendant", "Powder",
+    "Rod", "Ether", "Quake", "Lamp", "Hammer", "Shovel", "Ocarina", "Bug Net", "Book",
+    "Bottle", "Potion", "Cane", "Cape", "Mirror", "Boots", "Gloves", "Flippers", "Pearl",
+    "Shield", "Tunic", "Heart", "Map", "Compass", "Key",
+];
+
 fn parse_async_kind(value: &str) -> Option<AsyncKind> {
     all::<AsyncKind>().find(|kind| format!("{:?}", kind) == value)
 }
@@ -25,13 +32,20 @@ async fn asyncs_form(
         tfb_uuid: Option<Uuid>,
         xkeys_uuid: Option<Uuid>,
         seed_data: Option<serde_json::Value>,
+        hash1: Option<String>,
+        hash2: Option<String>,
+        hash3: Option<String>,
+        hash4: Option<String>,
+        hash5: Option<String>,
         start: Option<DateTime<Utc>>,
         end_time: Option<DateTime<Utc>>,
     }
 
     let asyncs = sqlx::query_as!(
         AsyncRow,
-        r#"SELECT kind AS "kind: AsyncKind", file_stem, web_id, tfb_uuid, xkeys_uuid, seed_data, start, end_time FROM asyncs WHERE series = $1 AND event = $2 ORDER BY kind"#,
+        r#"SELECT kind AS "kind: AsyncKind", file_stem, web_id, tfb_uuid, xkeys_uuid, seed_data,
+               hash1::text as hash1, hash2::text as hash2, hash3::text as hash3, hash4::text as hash4, hash5::text as hash5,
+               start, end_time FROM asyncs WHERE series = $1 AND event = $2 ORDER BY kind"#,
         event.series as _,
         &event.event
     )
@@ -85,6 +99,24 @@ async fn asyncs_form(
         .and_then(|value| value.as_str())
         .unwrap_or_default()
         .to_owned();
+    let default_avianart_seed_hash = editing_async
+        .and_then(|row| row.seed_data.as_ref())
+        .and_then(|seed_data| seed_data.get("avianart_seed_hash"))
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_owned();
+    let default_hash: [String; 5] = std::array::from_fn(|i| {
+        editing_async
+            .and_then(|row| match i {
+                0 => row.hash1.as_deref(),
+                1 => row.hash2.as_deref(),
+                2 => row.hash3.as_deref(),
+                3 => row.hash4.as_deref(),
+                _ => row.hash5.as_deref(),
+            })
+            .unwrap_or_default()
+            .to_owned()
+    });
     let default_start = editing_async
         .and_then(|row| row.start)
         .map(|start| start.format("%Y-%m-%dT%H:%M").to_string())
@@ -172,16 +204,47 @@ async fn asyncs_form(
                                                 td : row.tfb_uuid.map(|u| u.to_string()).unwrap_or_default();
                                             }
                                             Series::Cabookey => {
-                                                td : row.seed_data.as_ref().and_then(|d| d.get("uuid")).and_then(|v| v.as_str()).unwrap_or_default();
+                                                td {
+                                                    : row.seed_data.as_ref().and_then(|d| d.get("uuid")).and_then(|v| v.as_str()).unwrap_or_default();
+                                                    @if row.hash1.is_some() {
+                                                        br;
+                                                        span(class = "hash-text") {
+                                                            : format!("Hash: {}, {}, {}, {}, {}",
+                                                                row.hash1.as_deref().unwrap_or(""),
+                                                                row.hash2.as_deref().unwrap_or(""),
+                                                                row.hash3.as_deref().unwrap_or(""),
+                                                                row.hash4.as_deref().unwrap_or(""),
+                                                                row.hash5.as_deref().unwrap_or(""));
+                                                        }
+                                                    }
+                                                }
                                             }
                                             Series::Crosskeys => {
-                                                td : row.xkeys_uuid.map(|u| u.to_string()).unwrap_or_default();
+                                                td {
+                                                    : row.xkeys_uuid.map(|u| u.to_string()).unwrap_or_default();
+                                                    @if row.hash1.is_some() {
+                                                        br;
+                                                        span(class = "hash-text") {
+                                                            : format!("Hash: {}, {}, {}, {}, {}",
+                                                                row.hash1.as_deref().unwrap_or(""),
+                                                                row.hash2.as_deref().unwrap_or(""),
+                                                                row.hash3.as_deref().unwrap_or(""),
+                                                                row.hash4.as_deref().unwrap_or(""),
+                                                                row.hash5.as_deref().unwrap_or(""));
+                                                        }
+                                                    }
+                                                }
                                             }
                                             Series::AlttprDe => {
                                                 td {
                                                     @let avianart_hash = row.seed_data.as_ref().and_then(|d| d.get("avianart_hash")).and_then(|v| v.as_str()).unwrap_or("");
                                                     @if !avianart_hash.is_empty() {
                                                         a(href = format!("https://avianart.games/perm/{}", avianart_hash), target = "_blank") : avianart_hash;
+                                                    }
+                                                    @let avianart_seed_hash = row.seed_data.as_ref().and_then(|d| d.get("avianart_seed_hash")).and_then(|v| v.as_str()).unwrap_or("");
+                                                    @if !avianart_seed_hash.is_empty() {
+                                                        br;
+                                                        : format!("Hash: {}", avianart_seed_hash);
                                                     }
                                                 }
                                             }
@@ -217,11 +280,11 @@ async fn asyncs_form(
                     }
                     h3 : if edit_kind.is_some() { "Edit Async" } else { "Add/Update Async" };
                     @let hidden_fields = match event.series {
-                        Series::TwwrMain => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid", "avianart_hash"].as_slice(),
-                        Series::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid", "avianart_hash"].as_slice(),
-                        Series::Cabookey | Series::Crosskeys => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "avianart_hash"].as_slice(),
-                        Series::AlttprDe => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "xkeys_uuid"].as_slice(),
-                        _ => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "avianart_hash"].as_slice(),
+                        Series::TwwrMain => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
+                        Series::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
+                        Series::Cabookey | Series::Crosskeys => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "avianart_hash", "avianart_seed_hash"].as_slice(),
+                        Series::AlttprDe => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
+                        _ => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
                     };
                     @let mut errors = ctx.errors().filter(|e| !hidden_fields.iter().any(|f| e.is_for(f))).collect_vec();
                     : full_form(uri!(post(event.series, &*event.event)), csrf, html! {
@@ -261,12 +324,36 @@ async fn asyncs_form(
                                     label(for = "xkeys_uuid") : "ALTTPR UUID";
                                     input(type = "text", name = "xkeys_uuid", id = "xkeys_uuid", value = ctx.field_value("xkeys_uuid").unwrap_or(&default_xkeys_uuid));
                                 });
+                                p : "Seed Hash (optional — select all 5 icons or leave all blank):";
+                                @for (field_name, label, default_val) in [
+                                    ("hash1", "Icon 1", &default_hash[0]),
+                                    ("hash2", "Icon 2", &default_hash[1]),
+                                    ("hash3", "Icon 3", &default_hash[2]),
+                                    ("hash4", "Icon 4", &default_hash[3]),
+                                    ("hash5", "Icon 5", &default_hash[4]),
+                                ] {
+                                    : form_field(field_name, &mut errors, html! {
+                                        label(for = field_name) : label;
+                                        select(name = field_name, id = field_name) {
+                                            option(value = "", selected? = ctx.field_value(field_name).unwrap_or(default_val).is_empty()) : "—";
+                                            @for icon in ALTTPR_HASH_ICONS {
+                                                @let selected = ctx.field_value(field_name).unwrap_or(default_val) == *icon;
+                                                option(value = *icon, selected? = selected) : *icon;
+                                            }
+                                        }
+                                    });
+                                }
                             }
                             Series::AlttprDe => {
                                 : form_field("avianart_hash", &mut errors, html! {
                                     label(for = "avianart_hash") : "Avianart Hash";
                                     input(type = "text", name = "avianart_hash", id = "avianart_hash", value = ctx.field_value("avianart_hash").unwrap_or(&default_avianart_hash), style = "width: 100%; max-width: 600px;");
                                     label(class = "help") : " (The hash from avianart.games/perm/{hash})";
+                                });
+                                : form_field("avianart_seed_hash", &mut errors, html! {
+                                    label(for = "avianart_seed_hash") : "Seed Hash (optional)";
+                                    input(type = "text", name = "avianart_seed_hash", id = "avianart_seed_hash", value = ctx.field_value("avianart_seed_hash").unwrap_or(&default_avianart_seed_hash), style = "width: 100%; max-width: 600px;");
+                                    label(class = "help") : " (e.g. \"Bug Net, Bow, Lamp, Flippers, Boomerang\")";
                                 });
                             }
                             _ => {
@@ -349,6 +436,18 @@ pub(crate) struct AsyncForm {
     #[field(default = None)]
     avianart_hash: Option<String>,
     #[field(default = None)]
+    avianart_seed_hash: Option<String>,
+    #[field(default = None)]
+    hash1: Option<String>,
+    #[field(default = None)]
+    hash2: Option<String>,
+    #[field(default = None)]
+    hash3: Option<String>,
+    #[field(default = None)]
+    hash4: Option<String>,
+    #[field(default = None)]
+    hash5: Option<String>,
+    #[field(default = None)]
     start: Option<String>,
     #[field(default = None)]
     end_time: Option<String>,
@@ -380,10 +479,11 @@ pub(crate) async fn post(
 
     Ok(if let Some(ref value) = form.value {
         let hidden_fields = match event_data.series {
-            Series::TwwrMain => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid"].as_slice(),
-            Series::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid"].as_slice(),
-            Series::Cabookey | Series::Crosskeys => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid"].as_slice(),
-            _ => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid"].as_slice(),
+            Series::TwwrMain => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
+            Series::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
+            Series::Cabookey | Series::Crosskeys => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "avianart_hash", "avianart_seed_hash"].as_slice(),
+            Series::AlttprDe => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
+            _ => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
         };
         let has_relevant_errors = form
             .context
@@ -463,6 +563,32 @@ pub(crate) async fn post(
                 None
             };
 
+            // Parse hash icons for ALTTPR series (Crosskeys DR / Cabookey OWR)
+            let alttpr_hash = if matches!(event_data.series, Series::Crosskeys | Series::Cabookey) {
+                let h = [
+                    value.hash1.as_deref().unwrap_or("").trim(),
+                    value.hash2.as_deref().unwrap_or("").trim(),
+                    value.hash3.as_deref().unwrap_or("").trim(),
+                    value.hash4.as_deref().unwrap_or("").trim(),
+                    value.hash5.as_deref().unwrap_or("").trim(),
+                ];
+                let filled = h.iter().filter(|s| !s.is_empty()).count();
+                if filled == 5 {
+                    Some(h.map(str::to_owned))
+                } else if filled > 0 {
+                    form.context.push_error(
+                        form::Error::validation("All 5 hash icons must be selected, or leave all blank").with_name("hash1"),
+                    );
+                    return Ok(RedirectOrContent::Content(
+                        asyncs_form(transaction, me, uri, csrf.as_ref(), event_data, Some(value.kind), form.context).await?,
+                    ));
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
             // Build seed_data JSON
             let seed_data = if matches!(event_data.series, Series::TwwrMain) {
                 let permalink = value.permalink.as_deref().unwrap_or("").trim();
@@ -477,9 +603,11 @@ pub(crate) async fn post(
                 }
             } else if matches!(event_data.series, Series::AlttprDe) {
                 let avianart_hash = value.avianart_hash.as_deref().unwrap_or("").trim();
+                let avianart_seed_hash = value.avianart_seed_hash.as_deref().unwrap_or("").trim();
                 if !avianart_hash.is_empty() {
                     Some(serde_json::json!({
                         "avianart_hash": avianart_hash,
+                        "avianart_seed_hash": avianart_seed_hash,
                     }))
                 } else {
                     None
@@ -567,15 +695,24 @@ pub(crate) async fn post(
                 None
             };
 
+            let (hash1, hash2, hash3, hash4, hash5): (Option<String>, Option<String>, Option<String>, Option<String>, Option<String>) = match alttpr_hash {
+                Some([h1, h2, h3, h4, h5]) => (Some(h1), Some(h2), Some(h3), Some(h4), Some(h5)),
+                None => (None, None, None, None, None),
+            };
             sqlx::query!(
-                r#"INSERT INTO asyncs (series, event, kind, file_stem, web_id, tfb_uuid, xkeys_uuid, seed_data, start, end_time)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                r#"INSERT INTO asyncs (series, event, kind, file_stem, web_id, tfb_uuid, xkeys_uuid, seed_data, hash1, hash2, hash3, hash4, hash5, start, end_time)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                    ON CONFLICT (series, event, kind) DO UPDATE SET
                        file_stem = EXCLUDED.file_stem,
                        web_id = EXCLUDED.web_id,
                        tfb_uuid = EXCLUDED.tfb_uuid,
                        xkeys_uuid = EXCLUDED.xkeys_uuid,
                        seed_data = EXCLUDED.seed_data,
+                       hash1 = EXCLUDED.hash1,
+                       hash2 = EXCLUDED.hash2,
+                       hash3 = EXCLUDED.hash3,
+                       hash4 = EXCLUDED.hash4,
+                       hash5 = EXCLUDED.hash5,
                        start = EXCLUDED.start,
                        end_time = EXCLUDED.end_time"#,
                 event_data.series as _,
@@ -586,6 +723,11 @@ pub(crate) async fn post(
                 tfb_uuid,
                 xkeys_uuid,
                 seed_data,
+                hash1 as _,
+                hash2 as _,
+                hash3 as _,
+                hash4 as _,
+                hash5 as _,
                 start,
                 end_time
             )

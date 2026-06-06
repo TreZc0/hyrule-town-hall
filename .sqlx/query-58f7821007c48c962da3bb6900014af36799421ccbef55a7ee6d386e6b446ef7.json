@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n            discord_volunteer_info_channel AS \"channel: PgSnowflake<ChannelId>\",\n            volunteer_request_lead_time_hours\n        FROM events WHERE series = $1 AND event = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "channel: PgSnowflake<ChannelId>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "volunteer_request_lead_time_hours",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "58f7821007c48c962da3bb6900014af36799421ccbef55a7ee6d386e6b446ef7"
+}
