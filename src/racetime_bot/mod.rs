@@ -1820,7 +1820,7 @@ impl GlobalState {
             let world_state = if crosskeys_options.inverted_ok { "inverted" } else { "open" };
             let pseudoboots = if crosskeys_options.pb_ok { 1 } else { 0 };
             let skullwoods = if crosskeys_options.zw_ok { "followlinked" } else { "original" };
-            let aga_randomness = if crosskeys_options.all_dungeons_ok { "false" } else { "none" }; 
+            let aga_randomness = if crosskeys_options.all_dungeons_ok { "false" } else { None }; 
 
             let crosskeys_settings = AlttprDoorRandoSetting {
                 aga_randomness: aga_randomness,
