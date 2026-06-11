@@ -319,6 +319,8 @@ pub(crate) enum Goal {
     WeTryToBeBetterS1,
     WeTryToBeBetterS2,
     WolfdashS5,
+    BotwAny2026,
+    BotwMsr2026,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -378,9 +380,12 @@ impl Goal {
             Self::WeTryToBeBetterS1 => series == Series::WeTryToBeBetter && event == "1",
             Self::WeTryToBeBetterS2 => series == Series::WeTryToBeBetter && event == "2",
             Self::WolfdashS5 => series == Series::Wolfdash && event == "5",
+            Self::BotwAny2026 => series == Series::BotwAny && event == "2026",
+            Self::BotwMsr2026 => series == Series::BotwMsr && event == "2026",
         }
     }
 
+    //// Whether this goal uses a custom racetime.gg category or an existing one.
     pub(crate) fn is_custom(&self) -> bool {
         match self {
             | Self::Rsl
@@ -389,6 +394,10 @@ impl Goal {
             | Self::TwwrMainWeekly
             | Self::TwwrMainMiniblins26
             | Self::TwwrMainS9
+            | Self::BotwAny2026
+            | Self::BotwMsr2026
+            | Self::Crosskeys2026
+            | Self::WolfdashS5
                 => false,
             | Self::AlttprDe9Bracket
             | Self::AlttprDe9SwissA
@@ -400,7 +409,6 @@ impl Goal {
             | Self::CoOpS3
             | Self::CopaDoBrasil
             | Self::Crosskeys2025
-            | Self::Crosskeys2026
             | Self::LeagueS8
             | Self::MixedPoolsS2
             | Self::MixedPoolsS3
@@ -422,22 +430,24 @@ impl Goal {
             | Self::TriforceBlitzProgressionSpoiler
             | Self::WeTryToBeBetterS1
             | Self::WeTryToBeBetterS2
-            | Self::WolfdashS5
                 => true,
         }
     }
 
+    //// Defines the goal within a racetime.gg category to be used with an event.
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => "9. Deutsches ALTTPR Turnier",
             Self::AlttprDeRivalsCupBrackets => "ALTTPRDE Rival Cup Brackets",
             Self::AlttprDeRivalsCupGroups => "ALTTPRDE Rival Cup Groups",
+            Self::BotwAny2026 => "Any%",
+            Self::BotwMsr2026 => "Master Sword",
             Self::Cabookey2026 => "Cabookey Tournament 2026",
             Self::Cc7 => "Standard Tournament Season 7 Challenge Cup",
             Self::CoOpS3 => "Co-op Tournament Season 3",
             Self::CopaDoBrasil => "Copa do Brasil",
             Self::Crosskeys2025 => "ALttP Randomizer Crosskeys 2025",
-            Self::Crosskeys2026 => "ALttP Randomizer Crosskeys 2026",
+            Self::Crosskeys2026 => "Beat the game - Tournament (Solo)",
             Self::LeagueS8 => "League Season 8",
             Self::MixedPoolsS2 => "2nd Mixed Pools Tournament",
             Self::MixedPoolsS3 => "3rd Mixed Pools Tournament",
@@ -504,6 +514,8 @@ impl Goal {
             | Self::TwwrMainMiniblins26
             | Self::TwwrMainS9
             | Self::WolfdashS5
+            | Self::BotwAny2026
+            | Self::BotwMsr2026
                 => English,
             | Self::TournoiFrancoS4
             | Self::TournoiFrancoS5
@@ -570,6 +582,8 @@ impl Goal {
             | Self::WeTryToBeBetterS1
             | Self::WeTryToBeBetterS2
             | Self::WolfdashS5
+            | Self::BotwAny2026
+            | Self::BotwMsr2026
                 => None,
         }
     }
@@ -615,6 +629,9 @@ impl Goal {
             | Self::TwwrMainS9
             | Self::WolfdashS5
                 => PrerollMode::Medium,
+            | Self::BotwAny2026
+            | Self::BotwMsr2026
+                => PrerollMode::None,
             | Self::MixedPoolsS2
             | Self::MixedPoolsS3
             | Self::MixedPoolsS4
@@ -635,6 +652,8 @@ impl Goal {
     pub(crate) fn requires_seed(&self) -> bool {
         const NO_SEED_GOALS: &[Goal] = &[
             Goal::WolfdashS5,
+            Goal::BotwAny2026,
+            Goal::BotwMsr2026,
         ];
 
         !NO_SEED_GOALS.contains(self)
@@ -688,6 +707,8 @@ impl Goal {
                 | Self::TwwrMainMiniblins26
                 | Self::TwwrMainS9
                 | Self::WolfdashS5
+                | Self::BotwAny2026
+                | Self::BotwMsr2026
                     => UnlockSpoilerLog::Never
             }
         }
@@ -753,6 +774,8 @@ impl Goal {
             },
             Self::PicRs2 | Self::Rsl => panic!("randomizer version for this goal must be parsed from RSL script"),
             Self::WolfdashS5 => panic!("randomizer version for this goal is unused"),
+            Self::BotwAny2026 => panic!("randomizer version for this goal is unused"),
+            Self::BotwMsr2026 => panic!("randomizer version for this goal is unused"),
         }
     }
 
@@ -791,6 +814,8 @@ impl Goal {
             Self::TriforceBlitzProgressionSpoiler => Some(tfb::progression_spoiler_settings()),
             Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 | Self::TwwrMainS9 => None, // handled via settings_string
             Self::WolfdashS5 => None, // no seed
+            Self::BotwAny2026 => None, // no seed
+            Self::BotwMsr2026 => None, // no seed
             Self::WeTryToBeBetterS1 => Some(wttbb::s1_settings()),
             Self::WeTryToBeBetterS2 => Some(wttbb::s2_settings()),
         }
@@ -905,6 +930,8 @@ impl Goal {
             Self::TriforceBlitzProgressionSpoiler => ctx.say("!seed: The current settings for the mode").await?,
             Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 | Self::TwwrMainS9 => ctx.say("!seed: The permalink validation hash for the race.").await?,
             Self::WolfdashS5 => unreachable!("WolfdashS5 does not use seeds"),
+            Self::BotwAny2026 => unreachable!("BotwAny2026 does not use seeds"),
+            Self::BotwMsr2026 => unreachable!("BotwMsr2026 does not use seeds"),
         }
         Ok(())
     }
@@ -1462,6 +1489,8 @@ impl Goal {
                 [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn't quite understand that" },
             },
             Self::WolfdashS5 => unreachable!("WolfdashS5 does not use seeds"),
+            Self::BotwAny2026 => unreachable!("BotwAny2026 does not use seeds"),
+            Self::BotwMsr2026 => unreachable!("BotwMsr2026 does not use seeds"),
         })
     }
 }
@@ -2000,7 +2029,7 @@ impl GlobalState {
             let world_state = if inverted_ok { "inverted" } else { "open" };
             let pseudoboots = if pb_ok { 1 } else { 0 };
             let skullwoods = if zw_ok { "followlinked" } else { "original" };
-            let aga_randomness = if crosskeys_options.all_dungeons { "false" } else { None }; 
+            let aga_randomness = if all_dungeons_ok { Some(false) } else { None };
 
             let crosskeys_settings = AlttprDoorRandoSetting {
                 aga_randomness: aga_randomness,
@@ -5512,6 +5541,16 @@ impl RaceHandler<GlobalState> for Handler {
                                 true,
                                 vec![],
                             ).await?,
+                            Goal::BotwAny2026 => ctx.send_message(
+                                "Welcome! This is a practice room for the BotW Any% Tournament 2026. Learn more at https://midos.house/event/botwany/2026",
+                                true,
+                                vec![],
+                            ).await?,
+                            Goal::BotwMsr2026 => ctx.send_message(
+                                "Welcome! This is a practice room for the BotW Master Sword Tournament 2026. Learn more at https://midos.house/event/botwmsr/2026",
+                                true,
+                                vec![],
+                            ).await?,
                         },
                         RaceState::Rolled(_) => ctx.say("@entrants I just restarted. You may have to reconfigure !breaks and !fpa. Sorry about that.").await?,
                         RaceState::Draft { .. } | RaceState::Rolling | RaceState::SpoilerSent => unreachable!(),
@@ -5680,6 +5719,8 @@ impl RaceHandler<GlobalState> for Handler {
                             },
                             Goal::TriforceBlitz => this.roll_tfb_dev_seed(ctx, true, goal.unlock_spoiler_log(true, false), English, "a", format!("Triforce Blitz S4 co-op seed")).await,
                             Goal::WolfdashS5 => unreachable!("WolfdashS5 does not require a seed"),
+                            Goal::BotwAny2026 => unreachable!("BotwAny2026 does not require a seed"),
+                            Goal::BotwMsr2026 => unreachable!("BotwMsr2026 does not require a seed"),
                         },
                         RaceState::Draft { state: ref draft_state, .. } => {
                             this.advance_draft(ctx, &state).await?;
@@ -6499,6 +6540,8 @@ impl RaceHandler<GlobalState> for Handler {
                     | Goal::TwwrMainMiniblins26
                     | Goal::TwwrMainS9
                     | Goal::WolfdashS5
+                    | Goal::BotwAny2026
+                    | Goal::BotwMsr2026
                         => {}
                 }
             }

@@ -47,10 +47,12 @@ pub(crate) mod xkeys;
 pub(crate) mod twwrmain;
 pub(crate) mod wolfdash;
 pub(crate) mod botwany;
+pub(crate) mod botwmsr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Sequence)]
 pub(crate) enum Series {
     BotwAny,
+    BotwMsr,
     AlttprDe,
     AlttprSpecials,
     BattleRoyale,
@@ -81,6 +83,7 @@ impl Series {
     pub(crate) fn slug(&self) -> &'static str {
         match self {
             Self::BotwAny => "botwany",
+            Self::BotwMsr => "botwmsr",
             Self::AlttprDe => "alttprde",
             Self::AlttprSpecials => "alttprspecials",
             Self::BattleRoyale => "ohko",
@@ -111,6 +114,7 @@ impl Series {
     pub(crate) fn display_name(&self) -> &'static str {
         match self {
             Self::BotwAny => "BotW Any% Tournaments",
+            Self::BotwMsr => "BotW MSR Tournaments",
             Self::AlttprDe => "Deutsche ALTTPR Turniere",
             Self::AlttprSpecials => "ALTTPR Specials",
             Self::BattleRoyale => "Battle Royale",
@@ -143,9 +147,10 @@ impl Series {
             Self::TriforceBlitz => TimeDelta::hours(2),
             Self::AlttprDe | Self::AlttprSpecials | Self::BattleRoyale | Self::Cabookey | Self::Crosskeys | Self::MysteryD | Self::TwwrMain => TimeDelta::hours(2) + TimeDelta::minutes(30),
             Self::CoOp | Self::MixedPools | Self::Scrubs | Self::SpeedGaming | Self::WeTryToBeBetter => TimeDelta::hours(3),
-            Self::CopaDoBrasil | Self::League | Self::NineDaysOfSaws | Self::SongsOfHope | Self::Standard | Self::TournoiFrancophone => TimeDelta::hours(3) + TimeDelta::minutes(30),
+            Self::CopaDoBrasil | Self::League | Self::NineDaysOfSaws | Self::SongsOfHope | Self::Standard | Self::TournoiFrancophone | Self::Wolfdash => TimeDelta::hours(3) + TimeDelta::minutes(30),
             Self::Mq | Self::Multiworld | Self::Pictionary => TimeDelta::hours(4),
-            Self::BotwAny | Self::Wolfdash => TimeDelta::hours(3) + TimeDelta::minutes(15),
+            Self::BotwAny => TimeDelta::hours(1),
+            Self::BotwMsr => TimeDelta::hours(2),
             Self::Rsl => TimeDelta::hours(4) + TimeDelta::minutes(30),
         }
     }

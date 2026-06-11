@@ -795,6 +795,7 @@ impl Race {
             | Series::TournoiFrancophone
             | Series::TriforceBlitz
             | Series::BotwAny
+            | Series::BotwMsr
             | Series::WeTryToBeBetter
             | Series::Wolfdash
                 => {} // these series are now scheduled via Mido's House
