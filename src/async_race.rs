@@ -248,7 +248,7 @@ impl AsyncRaceManager {
         content.push(" of this round.");
 
         let goal = racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event");
-        if matches!(goal, racetime_bot::Goal::Crosskeys2025) {
+        if matches!(goal, racetime_bot::Goal::Crosskeys2025 | racetime_bot::Goal::Crosskeys2026) {
             let crosskeys_options = racetime_bot::CrosskeysRaceOptions::for_race(db_pool, race).await;
 
             content.push_line("");

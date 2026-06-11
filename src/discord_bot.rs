@@ -2,7 +2,7 @@ use {
     crate::{
         config::ConfigRaceTime,
         prelude::*,
-        racetime_bot::{AlttprDeRaceOptions, CleanShutdown, CrosskeysRaceOptions, GlobalState},
+        racetime_bot::{AlttprDeRaceOptions, CleanShutdown, CrosskeysRaceOptions, GlobalState, RadioChoiceValue},
         async_race::{self, Error as AsyncRaceError},
         volunteer_requests,
     }, serenity::all::{
@@ -4471,6 +4471,40 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             }
         }
     }
+    // Show radio choices (never/random/always) — announce "random" outcomes and "always" outcomes.
+    let radio_choices = event.radio_choice_requirements();
+    if !radio_choices.is_empty() {
+        let team_ids = race.teams().map(|t| t.id).collect_vec();
+        if team_ids.len() > 1 {
+            let rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", team_ids as _)
+                .fetch_all(&mut *transaction).await?;
+            let mut always_labels = Vec::new();
+            let mut random_labels = Vec::new();
+            for (key, label) in radio_choices {
+                let aggregated = rows.iter()
+                    .filter_map(|r| r.custom_choices.as_object().and_then(|obj| obj.get(key)).and_then(RadioChoiceValue::from_json_value))
+                    .min()
+                    .unwrap_or(RadioChoiceValue::Never);
+                match aggregated {
+                    RadioChoiceValue::Always => always_labels.push(label),
+                    RadioChoiceValue::Random => random_labels.push(label),
+                    RadioChoiceValue::Never => {}
+                }
+            }
+            if !always_labels.is_empty() {
+                content.push_line("");
+                content.push_line("");
+                content.push("Both players agreed on: ");
+                content.push_safe(always_labels.join(", "));
+                content.push('.');
+            }
+            for label in random_labels {
+                content.push_line("");
+                content.push_line("");
+                content.push_safe(format!("{label}: random."));
+            }
+        }
+    }
     if let Some(deadline) = race.scheduling_deadline {
         content.push_line("");
         content.push_line("");
@@ -4507,7 +4541,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
         }
         // Mode not yet determined - draft will show separately
     }
-    if let racetime_bot::Goal::Crosskeys2025 = racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event") {
+    if matches!(racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event"), racetime_bot::Goal::Crosskeys2025 | racetime_bot::Goal::Crosskeys2026) {
         let crosskeys_options = CrosskeysRaceOptions::for_race(ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"), race).await;
         content.push_line("");
         content.push_line("");
@@ -4576,6 +4610,10 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
             racetime_bot::Goal::Crosskeys2025 => {
                 let crosskeys_options = CrosskeysRaceOptions::for_race(&global_state.db_pool, &cal_event.race).await;
                 global_state.clone().roll_crosskeys2025_seed(crosskeys_options)
+            }
+            racetime_bot::Goal::Crosskeys2026 => {
+                let crosskeys_options = CrosskeysRaceOptions::for_race(&global_state.db_pool, &cal_event.race).await;
+                global_state.clone().roll_crosskeys2026_seed(crosskeys_options)
             }
             racetime_bot::Goal::MysteryD20 => {
                 global_state.clone().roll_mysteryd20_seed()

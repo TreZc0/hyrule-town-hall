@@ -124,6 +124,16 @@ pub(crate) enum Requirement {
         #[serde(default)]
         locked: bool,
     },
+    /// Must answer a custom never/random/always question, stored in `custom_choices`
+    #[serde(rename_all = "camelCase")]
+    RadioChoice {
+        key: String,
+        #[serde_as(as = "DeserializeRawHtml")]
+        label: RawHtml<String>,
+        /// If true, players cannot change this choice after the event has started.
+        #[serde(default)]
+        locked: bool,
+    },
     /// Must agree to the event rules
     Rules {
         document: Option<Url>,
@@ -230,6 +240,7 @@ impl Requirement {
             Self::TextField2 { .. } => Some(false),
             Self::YesNo { .. } => Some(false),
             Self::BooleanChoice { .. } => Some(false),
+            Self::RadioChoice { .. } => Some(false),
             Self::Rules { .. } => Some(false),
             Self::Poll { .. } => Some(false),
             Self::RestreamConsent { .. } => Some(false),
@@ -536,6 +547,28 @@ impl Requirement {
                     }),
                 }
             }
+            Self::RadioChoice { key, label, .. } => {
+                let key = key.clone();
+                let label = label.clone();
+                let never_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "never");
+                let random_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "random");
+                let always_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "always");
+                RequirementStatus {
+                    blocks_submit: false,
+                    html_content: Box::new(move |errors| html! {
+                        : form_field(&format!("custom_choices[{key}]"), errors, html! {
+                            label(for = &format!("custom_choices[{key}]")) : label;
+                            br;
+                            input(id = &format!("custom_choices[{key}]-never"), type = "radio", name = &format!("custom_choices[{key}]"), value = "never", checked? = never_checked);
+                            label(for = &format!("custom_choices[{key}]-never")) : "Never";
+                            input(id = &format!("custom_choices[{key}]-random"), type = "radio", name = &format!("custom_choices[{key}]"), value = "random", checked? = random_checked);
+                            label(for = &format!("custom_choices[{key}]-random")) : "Random";
+                            input(id = &format!("custom_choices[{key}]-always"), type = "radio", name = &format!("custom_choices[{key}]"), value = "always", checked? = always_checked);
+                            label(for = &format!("custom_choices[{key}]-always")) : "Always";
+                        });
+                    }),
+                }
+            }
             Self::Rules { document } => {
                 let checked = defaults.field_value("confirm").is_some_and(|value| value == "on");
                 let team_config = data.team_config;
@@ -814,6 +847,9 @@ impl Requirement {
             Self::BooleanChoice { key, .. } => if !value.custom_choices.contains_key(key) {
                 form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name(format!("custom_choices[{key}]")));
             },
+            Self::RadioChoice { key, .. } => if !value.custom_choices.get(key).is_some_and(|v| matches!(v.as_str(), "never" | "random" | "always")) {
+                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name(format!("custom_choices[{key}]")));
+            },
             Self::Rules { .. } => if !value.confirm {
                 form_ctx.push_error(form::Error::validation("This field is required.").with_name("confirm"));
             },
@@ -890,6 +926,7 @@ impl Requirement {
                     | Self::Qualifier { .. }
                     | Self::TripleQualifier { .. }
                     | Self::BooleanChoice { .. }
+                    | Self::RadioChoice { .. }
                     | Self::External { .. }
                         => unreachable!(),
                 }));
@@ -973,18 +1010,6 @@ pub(crate) struct EnterForm {
     restream_consent: bool,
     restream_consent_radio: Option<BoolRadio>,
     yes_no: Option<BoolRadio>,
-    all_dungeons_ok: Option<BoolRadio>,
-    flute_ok: Option<BoolRadio>,
-    hard_settings_ok: Option<BoolRadio>,
-    hover_ok: Option<BoolRadio>,
-    inverted_ok: Option<BoolRadio>,
-    keydrop_ok: Option<BoolRadio>,
-    lite_ok: Option<BoolRadio>,
-    mq_ok: Option<BoolRadio>,
-    mirror_scroll_ok: Option<BoolRadio>,
-    no_delay_ok: Option<BoolRadio>,
-    pb_ok: Option<BoolRadio>,
-    zw_ok: Option<BoolRadio>,
     #[field(default = String::new())]
     text_field: String,
     #[field(default = String::new())]
@@ -1342,20 +1367,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                         AND NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')
                     "#, series as _, event, me.id as _).fetch_optional(&mut *transaction).await?;
 
-                    // Merge old-style boolean choices into custom_choices
-                    let mut custom_choices = value.custom_choices.clone();
-                    if value.all_dungeons_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("all_dungeons")).or_insert(format!("yes")); }
-                    if value.flute_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("flute")).or_insert(format!("yes")); }
-                    if value.hard_settings_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hard_settings")).or_insert(format!("yes")); }
-                    if value.hover_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hovering")).or_insert(format!("yes")); }
-                    if value.inverted_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("inverted")).or_insert(format!("yes")); }
-                    if value.keydrop_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("keydrop")).or_insert(format!("yes")); }
-                    if value.lite_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("lite")).or_insert(format!("yes")); }
-                    if value.mirror_scroll_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mirror_scroll")).or_insert(format!("yes")); }
-                    if value.mq_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mq")).or_insert(format!("yes")); }
-                    if value.no_delay_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("no_delay")).or_insert(format!("yes")); }
-                    if value.pb_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("pseudoboots")).or_insert(format!("yes")); }
-                    if value.zw_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("zw")).or_insert(format!("yes")); }
+                    let custom_choices = value.custom_choices.clone();
 
                     let id = if let Some(existing_id) = existing_resigned_team {
                         // Reactivate the existing resigned team
@@ -1538,20 +1550,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                 };
                 if form.context.errors().next().is_none() {
                     let id = Id::<Teams>::new(&mut transaction).await?;
-                    // Merge old-style boolean choices into custom_choices
-                    let mut custom_choices = value.custom_choices.clone();
-                    if value.all_dungeons_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("all_dungeons")).or_insert(format!("yes")); }
-                    if value.flute_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("flute")).or_insert(format!("yes")); }
-                    if value.hard_settings_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hard_settings")).or_insert(format!("yes")); }
-                    if value.hover_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hovering")).or_insert(format!("yes")); }
-                    if value.inverted_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("inverted")).or_insert(format!("yes")); }
-                    if value.keydrop_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("keydrop")).or_insert(format!("yes")); }
-                    if value.lite_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("lite")).or_insert(format!("yes")); }
-                    if value.mirror_scroll_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mirror_scroll")).or_insert(format!("yes")); }
-                    if value.mq_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mq")).or_insert(format!("yes")); }
-                    if value.no_delay_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("no_delay")).or_insert(format!("yes")); }
-                    if value.pb_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("pseudoboots")).or_insert(format!("yes")); }
-                    if value.zw_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("zw")).or_insert(format!("yes")); }
+                    let custom_choices = value.custom_choices.clone();
                     sqlx::query!(
                     "INSERT INTO teams (id, series, event, name, restream_consent, text_field, text_field2, yes_no, mw_impl, custom_choices) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
                         id as _,
@@ -1722,20 +1721,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                 if form.context.errors().next().is_none() {
                     return Ok(if value.step2 {
                         let id = Id::<Teams>::new(&mut transaction).await?;
-                        // Merge old-style boolean choices into custom_choices
-                        let mut custom_choices = value.custom_choices.clone();
-                        if value.all_dungeons_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("all_dungeons")).or_insert(format!("yes")); }
-                        if value.flute_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("flute")).or_insert(format!("yes")); }
-                        if value.hard_settings_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hard_settings")).or_insert(format!("yes")); }
-                        if value.hover_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hovering")).or_insert(format!("yes")); }
-                        if value.inverted_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("inverted")).or_insert(format!("yes")); }
-                        if value.keydrop_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("keydrop")).or_insert(format!("yes")); }
-                        if value.lite_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("lite")).or_insert(format!("yes")); }
-                        if value.mirror_scroll_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mirror_scroll")).or_insert(format!("yes")); }
-                        if value.mq_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mq")).or_insert(format!("yes")); }
-                        if value.no_delay_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("no_delay")).or_insert(format!("yes")); }
-                        if value.pb_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("pseudoboots")).or_insert(format!("yes")); }
-                        if value.zw_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("zw")).or_insert(format!("yes")); }
+                        let custom_choices = value.custom_choices.clone();
                         sqlx::query!(
                             "INSERT INTO teams (id, series, event, name, racetime_slug, restream_consent, text_field, text_field2, yes_no, mw_impl, custom_choices) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
                             id as _,

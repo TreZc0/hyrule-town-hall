@@ -290,6 +290,7 @@ pub(crate) enum Goal {
     CoOpS3,
     CopaDoBrasil,
     Crosskeys2025,
+    Crosskeys2026,
     LeagueS8,
     MixedPoolsS2,
     MixedPoolsS3,
@@ -348,6 +349,7 @@ impl Goal {
             Self::CoOpS3 => series == Series::CoOp && event == "3",
             Self::CopaDoBrasil => series == Series::CopaDoBrasil && event == "1",
             Self::Crosskeys2025 => series == Series::Crosskeys && event == "2025",
+            Self::Crosskeys2026 => series == Series::Crosskeys && event == "2026",
             Self::LeagueS8 => series == Series::League && event == "8",
             Self::MixedPoolsS2 => series == Series::MixedPools && event == "2",
             Self::MixedPoolsS3 => series == Series::MixedPools && event == "3",
@@ -398,6 +400,7 @@ impl Goal {
             | Self::CoOpS3
             | Self::CopaDoBrasil
             | Self::Crosskeys2025
+            | Self::Crosskeys2026
             | Self::LeagueS8
             | Self::MixedPoolsS2
             | Self::MixedPoolsS3
@@ -434,6 +437,7 @@ impl Goal {
             Self::CoOpS3 => "Co-op Tournament Season 3",
             Self::CopaDoBrasil => "Copa do Brasil",
             Self::Crosskeys2025 => "ALttP Randomizer Crosskeys 2025",
+            Self::Crosskeys2026 => "ALttP Randomizer Crosskeys 2026",
             Self::LeagueS8 => "League Season 8",
             Self::MixedPoolsS2 => "2nd Mixed Pools Tournament",
             Self::MixedPoolsS3 => "3rd Mixed Pools Tournament",
@@ -476,6 +480,7 @@ impl Goal {
             | Self::Cc7
             | Self::CoOpS3
             | Self::Crosskeys2025
+            | Self::Crosskeys2026
             | Self::LeagueS8
             | Self::MixedPoolsS2
             | Self::MixedPoolsS3
@@ -543,6 +548,7 @@ impl Goal {
             | Self::CoOpS3
             | Self::CopaDoBrasil
             | Self::Crosskeys2025
+            | Self::Crosskeys2026
             | Self::LeagueS8
             | Self::MixedPoolsS2
             | Self::MixedPoolsS3
@@ -578,6 +584,7 @@ impl Goal {
             | Self::AlttprDeRivalsCupGroups
             | Self::Cabookey2026
             | Self::Crosskeys2025
+            | Self::Crosskeys2026
             | Self::Sgl2023
             | Self::Sgl2024
             | Self::TriforceBlitz
@@ -675,6 +682,7 @@ impl Goal {
                 | Self::AlttprDeRivalsCupGroups
                 | Self::Cabookey2026
                 | Self::Crosskeys2025
+                | Self::Crosskeys2026
                 | Self::MysteryD20
                 | Self::TwwrMainWeekly
                 | Self::TwwrMainMiniblins26
@@ -727,6 +735,7 @@ impl Goal {
             Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups => panic!("randomizer version for this goal is unused"),
             Self::Cabookey2026 => panic!("randomizer version for this goal is unused"),
             Self::Crosskeys2025 => panic!("randomizer version for this goal is unused"),
+            Self::Crosskeys2026 => panic!("randomizer version for this goal is unused"),
             Self::MysteryD20 => panic!("randomizer version for this goal is unused"),
             Self::TwwrMainWeekly | Self::TwwrMainMiniblins26 | Self::TwwrMainS9 => if_chain! {
                 if let Some(event) = event;
@@ -757,6 +766,7 @@ impl Goal {
             Self::CoOpS3 => Some(coop::s3_settings()),
             Self::CopaDoBrasil => Some(br::s1_settings()),
             Self::Crosskeys2025 => None, // per-race settings
+            Self::Crosskeys2026 => None, // per-race settings
             Self::LeagueS8 => Some(league::s8_settings()),
             Self::MixedPoolsS2 => Some(mp::s2_settings()),
             Self::MixedPoolsS3 => Some(mp::s3_settings()),
@@ -820,6 +830,7 @@ impl Goal {
             | Self::AlttprDeRivalsCupGroups
             | Self::Cabookey2026
             | Self::Crosskeys2025
+            | Self::Crosskeys2026
                 => ctx.say("!seed base: The tournament's base settings.").await?,
             | Self::MysteryD20
                 => ctx.say("!seed base: The tournament's stable settings.").await?,
@@ -1070,7 +1081,7 @@ impl Goal {
                 };
                 SeedCommandParseResult::Regular { settings: s::resolve_s7_draft_settings(&settings), unlock_spoiler_log, language: English, article: "a", description: format!("seed with {}", s::display_s7_draft_picks(&settings)) }
             }
-            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB | Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups | Self::Cabookey2026 | Self::Crosskeys2025 | Self::MysteryD20 => match args {
+            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB | Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups | Self::Cabookey2026 | Self::Crosskeys2025 | Self::Crosskeys2026 | Self::MysteryD20 => match args {
                 [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
                 [arg] if arg == "base" => SeedCommandParseResult::Alttpr,
                 [_] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I don't recognize that preset" }),
@@ -1812,14 +1823,24 @@ impl GlobalState {
                 meta: crosskeys_meta,
             };
 
-            let keydrop_mode = if crosskeys_options.keydrop_ok { "keys" } else { "none" };
-            let pottery_mode = if crosskeys_options.keydrop_ok { "keys" } else { "none" };
-            let flute_mode = if crosskeys_options.flute_ok { "active" } else { "normal" };
-            let goal = if crosskeys_options.all_dungeons_ok { "dungeons" } else { "crystals" };
-            let mirrorscroll = if crosskeys_options.mirror_scroll_ok { 1 } else { 0 };
-            let world_state = if crosskeys_options.inverted_ok { "inverted" } else { "open" };
-            let pseudoboots = if crosskeys_options.pb_ok { 1 } else { 0 };
-            let skullwoods = if crosskeys_options.zw_ok { "followlinked" } else { "original" };
+            let keydrop_ok = match crosskeys_options.keydrop { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
+            let flute_ok = match crosskeys_options.flute { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
+            let all_dungeons_ok = match crosskeys_options.all_dungeons { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
+            let inverted_ok = match crosskeys_options.inverted { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
+            let pb_ok = match crosskeys_options.pb { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
+            let zw_ok = match crosskeys_options.zw { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
+            let keydrop_mode = if keydrop_ok { "keys" } else { "none" };
+            let pottery_mode = if keydrop_ok { "keys" } else { "none" };
+            let flute_mode = if flute_ok { "active" } else { "normal" };
+            let goal = if all_dungeons_ok { "dungeons" } else { "crystals" };
+            let mirrorscroll = match crosskeys_options.mirror_scroll {
+                RadioChoiceValue::Never => 0,
+                RadioChoiceValue::Always => 1,
+                RadioChoiceValue::Random => rand::random::<bool>() as u8,
+            };
+            let world_state = if inverted_ok { "inverted" } else { "open" };
+            let pseudoboots = if pb_ok { 1 } else { 0 };
+            let skullwoods = if zw_ok { "followlinked" } else { "original" };
 
             let crosskeys_settings = AlttprDoorRandoSetting {
                 aga_randomness: None,
@@ -1845,18 +1866,19 @@ impl GlobalState {
                 pseudoboots: pseudoboots,
                 shuffle: "crossed",
                 shuffletavern: 0,
+                shuffle_followers: None,
                 skullwoods: skullwoods,
                 swords: None,
             };
 
-            if !crosskeys_options.zw_ok {
+            if !zw_ok {
                 let crosskeys_placements = AlttprDoorRandoPlacements {
                     pinball_room: "Small Key (Skull Woods)",
                 };
                 crosskeys_yaml.placements.insert(1, crosskeys_placements);
             }
 
-            if crosskeys_options.flute_ok {
+            if flute_ok {
                 let starting_flute = &["Ocarina (Activated)"];
                 crosskeys_yaml.start_inventory.insert(1, starting_flute);
             }
@@ -1920,6 +1942,160 @@ impl GlobalState {
                     files: Some(seed::Files::AlttprDoorRando {
                         uuid: uuid,
                         is_owr: false,
+                    }),
+                    progression_spoiler: false,
+                    password: None,
+                },
+                rsl_preset: None,
+                version: None,
+                unlock_spoiler_log: UnlockSpoilerLog::Never
+            }).await.allow_unreceived();
+            Ok(())
+        }.then(|res| async move {
+            match res {
+                Ok(()) => {}
+                Err(e) => update_tx2.send(SeedRollUpdate::Error(e)).await.allow_unreceived(),
+            }
+        }));
+        update_rx
+    }
+
+    pub(crate) fn roll_crosskeys2026_seed(self: Arc<Self>, crosskeys_options: CrosskeysRaceOptions) -> mpsc::Receiver<SeedRollUpdate> {
+        let (update_tx, update_rx) = mpsc::channel(128);
+        let update_tx2 = update_tx.clone();
+        tokio::spawn(async move {
+            let uuid = Uuid::new_v4();
+            let crosskeys_meta = AlttprDoorRandoMeta {
+                bps: true,
+                name: uuid.to_string(),
+                race: true,
+                skip_playthrough: true,
+                spoiler: "full",
+                suppress_rom: true,
+            };
+            let mut crosskeys_yaml = AlttprDoorRandoYaml {
+                placements: HashMap::default(),
+                settings: HashMap::default(),
+                start_inventory: HashMap::default(),
+                meta: crosskeys_meta,
+            };
+
+            let keydrop_ok = match crosskeys_options.keydrop { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
+            let flute_ok = match crosskeys_options.flute { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
+            let all_dungeons_ok = match crosskeys_options.all_dungeons { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
+            let completionist_ok = match crosskeys_options.completionist { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
+            let inverted_ok = match crosskeys_options.inverted { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
+            let pb_ok = match crosskeys_options.pb { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
+            let zw_ok = match crosskeys_options.zw { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
+            let follower_shuffle_ok = match crosskeys_options.follower_shuffle { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
+            let keydrop_mode = if keydrop_ok { "keys" } else { "none" };
+            let pottery_mode = if keydrop_ok { "keys" } else { "none" };
+            let flute_mode = if flute_ok { "active" } else { "normal" };
+            let goal = if completionist_ok { "completionist" } else if all_dungeons_ok { "dungeons" } else { "crystals" };
+            let mirrorscroll = match crosskeys_options.mirror_scroll {
+                RadioChoiceValue::Never => 0,
+                RadioChoiceValue::Always => 1,
+                RadioChoiceValue::Random => rand::random::<bool>() as u8,
+            };
+            let world_state = if inverted_ok { "inverted" } else { "open" };
+            let pseudoboots = if pb_ok { 1 } else { 0 };
+            let skullwoods = if zw_ok { "followlinked" } else { "original" };
+
+            let crosskeys_settings = AlttprDoorRandoSetting {
+                aga_randomness: None,
+                accessibility: "locations",
+                bigkeyshuffle: DungeonShuffleVal::Bool(true),
+                boss_shuffle: None,
+                compassshuffle: DungeonShuffleVal::Bool(true),
+                crystals_ganon: "7",
+                crystals_gt: "7",
+                dropshuffle: keydrop_mode,
+                enemy_shuffle: None,
+                flute_mode: flute_mode,
+                goal: goal,
+                item_functionality: "normal",
+                key_logic_algorithm: "partial",
+                keyshuffle: "wild",
+                linked_drops: "unset",
+                mapshuffle: DungeonShuffleVal::Bool(true),
+                mirrorscroll: mirrorscroll,
+                mode: world_state,
+                ow_mixed: None,
+                pottery: pottery_mode,
+                pseudoboots: pseudoboots,
+                shuffle: "crossed",
+                shuffletavern: 0,
+                shuffle_followers: if follower_shuffle_ok { Some(true) } else { Some(false) },
+                skullwoods: skullwoods,
+                swords: None,
+            };
+
+            if !zw_ok {
+                let crosskeys_placements = AlttprDoorRandoPlacements {
+                    pinball_room: "Small Key (Skull Woods)",
+                };
+                crosskeys_yaml.placements.insert(1, crosskeys_placements);
+            }
+
+            if flute_ok {
+                let starting_flute = &["Ocarina (Activated)"];
+                crosskeys_yaml.start_inventory.insert(1, starting_flute);
+            }
+
+            crosskeys_yaml.settings.insert(1, crosskeys_settings);
+            let yaml_file = tempfile::Builder::new().prefix("alttpr_").suffix(".yml").tempfile().at_unknown()?;
+            let yaml_path = yaml_file.path();
+            tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(serde_yml::to_string(&crosskeys_yaml)?.as_bytes()).await.at(&yaml_file)?;
+
+            const MAX_RETRIES: u8 = 4;
+
+            for attempt in 0..=MAX_RETRIES {
+                let output = Command::new(PYTHON)
+                    .current_dir("/opt/owr")
+                    .arg("DungeonRandomizer.py")
+                    .arg("--customizer")
+                    .arg(yaml_path)
+                    .arg("--outputpath")
+                    .arg("/var/www/midos.house/seed")
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .at_command("DungeonRandomizer.py")?
+                    .wait_with_output()
+                    .await
+                    .at_command("DungeonRandomizer.py")?;
+
+                match output.status.code() {
+                    Some(0) => {
+                        break;
+                    }
+                    Some(1) => {
+                        let last_error = Some(String::from_utf8_lossy(&output.stderr).into_owned());
+                        if attempt < MAX_RETRIES {
+                            sleep(Duration::from_secs(10 + 2u64.pow(attempt as u32))).await;
+                            continue;
+                        }
+                        return Err(RollError::Retries {
+                            num_retries: MAX_RETRIES + 1,
+                            last_error,
+                        });
+                    }
+                    _ => {
+                        return Err(RollError::Wheel(wheel::Error::CommandExit {
+                            name: Cow::Borrowed("DungeonRandomizer.py"),
+                            output
+                        }));
+                    }
+                }
+            }
+
+            let file_hash = Self::retrieve_hash_and_clean_up_spoiler(uuid, "OR_").await.ok();
+            update_tx.send(SeedRollUpdate::Done {
+                seed: seed::Data {
+                    file_hash: file_hash,
+                    files: Some(seed::Files::AlttprDoorRando {
+                        uuid: uuid,
+                        is_owr: true,
                     }),
                     progression_spoiler: false,
                     password: None,
@@ -3401,74 +3577,110 @@ pub(crate) fn owr_choices_description(choices: &HashMap<String, String>) -> Stri
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum RadioChoiceValue {
+    Never,
+    Random,
+    Always,
+}
+
+impl RadioChoiceValue {
+    pub(crate) fn from_json_value(v: &serde_json::Value) -> Option<Self> {
+        match v.as_str()? {
+            "never" | "no" => Some(Self::Never),
+            "random" => Some(Self::Random),
+            "always" | "yes" => Some(Self::Always),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct CrosskeysRaceOptions {
-    all_dungeons_ok: bool,
-    flute_ok: bool,
-    hovering_ok: bool,
-    inverted_ok: bool,
-    keydrop_ok: bool,
-    mirror_scroll_ok: bool,
-    no_delay_ok: bool,
-    pb_ok: bool,
-    zw_ok: bool,
+    all_dungeons: RadioChoiceValue,
+    completionist: RadioChoiceValue,
+    flute: RadioChoiceValue,
+    follower_shuffle: RadioChoiceValue,
+    hovering: RadioChoiceValue,
+    inverted: RadioChoiceValue,
+    keydrop: RadioChoiceValue,
+    pub(crate) mirror_scroll: RadioChoiceValue,
+    no_delay: RadioChoiceValue,
+    pb: RadioChoiceValue,
+    zw: RadioChoiceValue,
 }
 
 impl CrosskeysRaceOptions {
     pub(crate) fn as_seed_options_str(&self) -> String {
         let mut res = Vec::new();
-        if self.all_dungeons_ok  {
-            res.push("a goal of all dungeons");
+        match self.all_dungeons {
+            RadioChoiceValue::Always => res.push("a goal of all dungeons"),
+            RadioChoiceValue::Random => res.push("randomly assigned dungeon goal"),
+            RadioChoiceValue::Never => {}
         }
-        if self.flute_ok {
-            res.push("starting activated flute");
+        match self.completionist {
+            RadioChoiceValue::Always => res.push("completionist goal"),
+            RadioChoiceValue::Random => res.push("randomly assigned completionist goal"),
+            RadioChoiceValue::Never => {}
         }
-        if self.inverted_ok {
-            res.push("inverted world state");
+        match self.follower_shuffle {
+            RadioChoiceValue::Always => res.push("follower shuffle"),
+            RadioChoiceValue::Random => res.push("randomly assigned follower shuffle"),
+            RadioChoiceValue::Never => {}
         }
-        if self.keydrop_ok {
-            res.push("enemy and pot keydrop");
+        match self.flute {
+            RadioChoiceValue::Always => res.push("starting activated flute"),
+            RadioChoiceValue::Random => res.push("randomly assigned starting flute"),
+            RadioChoiceValue::Never => {}
         }
-        if self.mirror_scroll_ok {
-            res.push("starting mirror scroll");
+        match self.inverted {
+            RadioChoiceValue::Always => res.push("inverted world state"),
+            RadioChoiceValue::Random => res.push("randomly assigned world state"),
+            RadioChoiceValue::Never => {}
         }
-        if self.pb_ok {
-            res.push("starting pseudoboots");
+        match self.keydrop {
+            RadioChoiceValue::Always => res.push("enemy and pot keydrop"),
+            RadioChoiceValue::Random => res.push("randomly assigned keydrop"),
+            RadioChoiceValue::Never => {}
         }
-        if self.zw_ok {
-            res.push("zw enabled");
+        match self.mirror_scroll {
+            RadioChoiceValue::Always => res.push("starting mirror scroll"),
+            RadioChoiceValue::Random => res.push("randomly assigned mirror scroll"),
+            RadioChoiceValue::Never => {}
+        }
+        match self.pb {
+            RadioChoiceValue::Always => res.push("starting pseudoboots"),
+            RadioChoiceValue::Random => res.push("randomly assigned pseudoboots"),
+            RadioChoiceValue::Never => {}
+        }
+        match self.zw {
+            RadioChoiceValue::Always => res.push("zw enabled"),
+            RadioChoiceValue::Random => res.push("randomly assigned zw"),
+            RadioChoiceValue::Never => {}
         }
         English.join_str_opt(res).unwrap_or_else(|| format!("base settings"))
     }
 
     pub(crate) fn as_race_options_str(&self) -> String {
         let mut res = Vec::new();
-        if self.hovering_ok {
-            res.push("hovering and moldorm bouncing ALLOWED");
-        } else {
-            res.push("hovering and moldorm bouncing BANNED");
+        match self.hovering {
+            RadioChoiceValue::Always => res.push("hovering and moldorm bouncing ALLOWED"),
+            RadioChoiceValue::Never => res.push("hovering and moldorm bouncing BANNED"),
+            RadioChoiceValue::Random => res.push("hovering and moldorm bouncing: random"),
         }
-
-        if self.no_delay_ok {
-            res.push("no stream delay");
-        } else {
-            res.push("stream delay(10m)");
+        match self.no_delay {
+            RadioChoiceValue::Always => res.push("no stream delay"),
+            RadioChoiceValue::Never => res.push("stream delay(10m)"),
+            RadioChoiceValue::Random => res.push("stream delay: random"),
         }
         English.join_str_opt(res).unwrap()
     }
 
     pub(crate) fn as_race_options_str_no_delay(&self) -> String {
-        let mut res = Vec::new();
-        if self.hovering_ok {
-            res.push("hovering and moldorm bouncing ALLOWED");
-        } else {
-            res.push("hovering and moldorm bouncing BANNED");
-        }
-        // Note: We exclude the delay setting as requested
-        if res.is_empty() {
-            "standard race rules".to_string()
-        } else {
-            res.join(", ")
+        match self.hovering {
+            RadioChoiceValue::Always => "hovering and moldorm bouncing ALLOWED".to_string(),
+            RadioChoiceValue::Never => "hovering and moldorm bouncing BANNED".to_string(),
+            RadioChoiceValue::Random => "hovering and moldorm bouncing: random".to_string(),
         }
     }
 
@@ -3476,15 +3688,17 @@ impl CrosskeysRaceOptions {
         let teams = race.teams();
         let team_rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _).fetch_all(db_pool).await.expect("Database read failed");
         CrosskeysRaceOptions {
-            all_dungeons_ok: team_rows.iter().all(|row| row.custom_choices.get("all_dungeons").is_some_and(|v| v == "yes")),
-            flute_ok: team_rows.iter().all(|row| row.custom_choices.get("flute").is_some_and(|v| v == "yes")),
-            hovering_ok: team_rows.iter().all(|row| row.custom_choices.get("hovering").is_some_and(|v| v == "yes")),
-            inverted_ok: team_rows.iter().all(|row| row.custom_choices.get("inverted").is_some_and(|v| v == "yes")),
-            keydrop_ok: team_rows.iter().all(|row| row.custom_choices.get("keydrop").is_some_and(|v| v == "yes")),
-            mirror_scroll_ok: team_rows.iter().all(|row| row.custom_choices.get("mirror_scroll").is_some_and(|v| v == "yes")),
-            no_delay_ok: team_rows.iter().all(|row| row.custom_choices.get("no_delay").is_some_and(|v| v == "yes")),
-            pb_ok: team_rows.iter().all(|row| row.custom_choices.get("pseudoboots").is_some_and(|v| v == "yes")),
-            zw_ok: team_rows.iter().all(|row| row.custom_choices.get("zw").is_some_and(|v| v == "yes")),
+            all_dungeons: team_rows.iter().map(|row| row.custom_choices.get("all_dungeons").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            completionist: team_rows.iter().map(|row| row.custom_choices.get("completionist").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            flute: team_rows.iter().map(|row| row.custom_choices.get("flute").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            follower_shuffle: team_rows.iter().map(|row| row.custom_choices.get("follower_shuffle").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            hovering: team_rows.iter().map(|row| row.custom_choices.get("hovering").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            inverted: team_rows.iter().map(|row| row.custom_choices.get("inverted").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            keydrop: team_rows.iter().map(|row| row.custom_choices.get("keydrop").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            mirror_scroll: team_rows.iter().map(|row| row.custom_choices.get("mirror_scroll").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            no_delay: team_rows.iter().map(|row| row.custom_choices.get("no_delay").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            pb: team_rows.iter().map(|row| row.custom_choices.get("pseudoboots").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            zw: team_rows.iter().map(|row| row.custom_choices.get("zw").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
         }
     }
 
@@ -3492,15 +3706,17 @@ impl CrosskeysRaceOptions {
         let teams = race.teams();
         let team_rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _).fetch_all(&mut **transaction).await?;
         Ok(CrosskeysRaceOptions {
-            all_dungeons_ok: team_rows.iter().all(|row| row.custom_choices.get("all_dungeons").is_some_and(|v| v == "yes")),
-            flute_ok: team_rows.iter().all(|row| row.custom_choices.get("flute").is_some_and(|v| v == "yes")),
-            hovering_ok: team_rows.iter().all(|row| row.custom_choices.get("hovering").is_some_and(|v| v == "yes")),
-            inverted_ok: team_rows.iter().all(|row| row.custom_choices.get("inverted").is_some_and(|v| v == "yes")),
-            keydrop_ok: team_rows.iter().all(|row| row.custom_choices.get("keydrop").is_some_and(|v| v == "yes")),
-            mirror_scroll_ok: team_rows.iter().all(|row| row.custom_choices.get("mirror_scroll").is_some_and(|v| v == "yes")),
-            no_delay_ok: team_rows.iter().all(|row| row.custom_choices.get("no_delay").is_some_and(|v| v == "yes")),
-            pb_ok: team_rows.iter().all(|row| row.custom_choices.get("pseudoboots").is_some_and(|v| v == "yes")),
-            zw_ok: team_rows.iter().all(|row| row.custom_choices.get("zw").is_some_and(|v| v == "yes")),
+            all_dungeons: team_rows.iter().map(|row| row.custom_choices.get("all_dungeons").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            completionist: team_rows.iter().map(|row| row.custom_choices.get("completionist").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            flute: team_rows.iter().map(|row| row.custom_choices.get("flute").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            follower_shuffle: team_rows.iter().map(|row| row.custom_choices.get("follower_shuffle").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            hovering: team_rows.iter().map(|row| row.custom_choices.get("hovering").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            inverted: team_rows.iter().map(|row| row.custom_choices.get("inverted").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            keydrop: team_rows.iter().map(|row| row.custom_choices.get("keydrop").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            mirror_scroll: team_rows.iter().map(|row| row.custom_choices.get("mirror_scroll").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            no_delay: team_rows.iter().map(|row| row.custom_choices.get("no_delay").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            pb: team_rows.iter().map(|row| row.custom_choices.get("pseudoboots").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
+            zw: team_rows.iter().map(|row| row.custom_choices.get("zw").and_then(RadioChoiceValue::from_json_value).unwrap_or(RadioChoiceValue::Never)).min().unwrap_or(RadioChoiceValue::Never),
         })
     }
 
@@ -3729,6 +3945,8 @@ pub(crate) struct AlttprDoorRandoSetting {
     pub(crate) pseudoboots: u8,
     pub(crate) shuffle: &'static str,
     pub(crate) shuffletavern: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) shuffle_followers: Option<bool>,
     pub(crate) skullwoods: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) swords: Option<&'static str>,
@@ -3960,6 +4178,10 @@ impl Handler {
                         let cal_event = self.official_data.as_ref().expect("Crosskeys2025 goal must have official_data").cal_event.clone();
                         self.roll_crosskeys2025_seed(ctx, cal_event, goal.language(), article).await;
                     }
+                    Goal::Crosskeys2026 => {
+                        let cal_event = self.official_data.as_ref().expect("Crosskeys2026 goal must have official_data").cal_event.clone();
+                        self.roll_crosskeys2026_seed(ctx, cal_event, goal.language(), article).await;
+                    }
                     Goal::MysteryD20 => {
                         let cal_event = self.official_data.as_ref().expect("MysteryD20 goal must have official_data").cal_event.clone();
                         self.roll_mysteryd20_seed(ctx, cal_event, goal.language(), article).await;
@@ -4148,6 +4370,17 @@ impl Handler {
 
         let crosskeys_options = CrosskeysRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race).await;
         self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2025_seed(crosskeys_options), language, article, format!("seed with {}", crosskeys_options.as_seed_options_str()), false).await;
+        ctx.send_message(format!("@entrants Remember: this race will be played with {}!",
+                                    crosskeys_options.as_race_options_str()
+                                ), true, Vec::default()).await.expect("failed to send race options");
+    }
+
+    async fn roll_crosskeys2026_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
+        let official_start = cal_event.start().expect("handling room for official race without start time");
+        let delay_until = official_start - TimeDelta::minutes(10);
+
+        let crosskeys_options = CrosskeysRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race).await;
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys2026_seed(crosskeys_options), language, article, format!("seed with {}", crosskeys_options.as_seed_options_str()), false).await;
         ctx.send_message(format!("@entrants Remember: this race will be played with {}!",
                                     crosskeys_options.as_race_options_str()
                                 ), true, Vec::default()).await.expect("failed to send race options");
@@ -4368,7 +4601,7 @@ impl RaceHandler<GlobalState> for Handler {
                             )
                         }
                     }
-                }, !matches!(goal, Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Cabookey2026 | Goal::Crosskeys2025), Vec::default()).await?;
+                }, !matches!(goal, Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Cabookey2026 | Goal::Crosskeys2025 | Goal::Crosskeys2026), Vec::default()).await?;
                 // Announce mode for events with round_modes set
                 match goal {
                     Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB => {
@@ -4620,6 +4853,7 @@ impl RaceHandler<GlobalState> for Handler {
                             Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups => unreachable!("attempted to handle a user-opened RivalsCup room"),
                             Goal::Cabookey2026 => unreachable!("attempted to handle a user-opened Cabookey2026 room"),
                             Goal::Crosskeys2025 => unreachable!("attempted to handle a user-opened Crosskeys2025 room"),
+                            Goal::Crosskeys2026 => unreachable!("attempted to handle a user-opened Crosskeys2026 room"),
                             Goal::MysteryD20 => unreachable!("attempted to handle a user-opened MysteryD20 room"),
                             Goal::LeagueS8 => ctx.send_message(
                                 "Welcome! This is a practice room for League Season 8. Learn more about the event at https://midos.house/event/league/8",
@@ -5420,8 +5654,10 @@ impl RaceHandler<GlobalState> for Handler {
                             }
                             | Goal::Cabookey2026
                                 => this.roll_owr_seed(ctx, cal_event.clone(), English, "a").await,
-                            | Goal::Crosskeys2025
+                            Goal::Crosskeys2025
                                 => this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await,
+                            Goal::Crosskeys2026
+                                => this.roll_crosskeys2026_seed(ctx, cal_event.clone(), English, "a").await,
                             Goal::TwwrMainWeekly
                             | Goal::TwwrMainMiniblins26
                             | Goal::TwwrMainS9
@@ -6237,6 +6473,7 @@ impl RaceHandler<GlobalState> for Handler {
                     | Goal::CoOpS3
                     | Goal::CopaDoBrasil
                     | Goal::Crosskeys2025
+                    | Goal::Crosskeys2026
                     | Goal::LeagueS8
                     | Goal::MixedPoolsS2
                     | Goal::MixedPoolsS3

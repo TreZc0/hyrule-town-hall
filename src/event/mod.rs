@@ -476,6 +476,30 @@ impl<'a> Data<'a> {
             .collect()
     }
 
+    /// Returns `(key, plain_text_label)` for every `RadioChoice` requirement in the enter flow.
+    pub(crate) fn radio_choice_requirements(&self) -> Vec<(&str, String)> {
+        let Some(ref flow) = self.enter_flow else { return vec![] };
+        flow.requirements.iter()
+            .filter_map(|req| {
+                if let enter::Requirement::RadioChoice { key, label, .. } = req {
+                    let mut plain = String::new();
+                    let mut in_tag = false;
+                    for c in label.0.chars() {
+                        match c {
+                            '<' => in_tag = true,
+                            '>' => in_tag = false,
+                            c if !in_tag => plain.push(c),
+                            _ => {}
+                        }
+                    }
+                    Some((key.as_str(), plain))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     pub(crate) fn is_single_race(&self) -> bool {
         match self.series {
             Series::AlttprDe => false,
@@ -1965,6 +1989,26 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                             label(for = &field_id_no) : "No";
                                         });
                                     }
+                                    @if let enter::Requirement::RadioChoice { key, label, locked } = requirement {
+                                        @let field_name = format!("custom_choices[{key}]");
+                                        @let field_id_never = format!("custom_choices[{key}]-never");
+                                        @let field_id_random = format!("custom_choices[{key}]-random");
+                                        @let field_id_always = format!("custom_choices[{key}]-always");
+                                        @let never_checked = ctx.field_value(&*field_name).map_or_else(|| row.custom_choices.get(key).is_some_and(|v| v == "never"), |value| value == "never");
+                                        @let random_checked = ctx.field_value(&*field_name).map_or_else(|| row.custom_choices.get(key).is_some_and(|v| v == "random"), |value| value == "random");
+                                        @let always_checked = ctx.field_value(&*field_name).map_or_else(|| row.custom_choices.get(key).is_some_and(|v| v == "always"), |value| value == "always");
+                                        @let is_locked = has_active_race || *locked;
+                                        : form_field(&field_name, &mut errors, html! {
+                                            label(for = &field_name) : label;
+                                            br;
+                                            input(id = &field_id_never, type = "radio", name = &field_name, value = "never", checked? = never_checked, disabled? = is_locked);
+                                            label(for = &field_id_never) : "Never";
+                                            input(id = &field_id_random, type = "radio", name = &field_name, value = "random", checked? = random_checked, disabled? = is_locked);
+                                            label(for = &field_id_random) : "Random";
+                                            input(id = &field_id_always, type = "radio", name = &field_name, value = "always", checked? = always_checked, disabled? = is_locked);
+                                            label(for = &field_id_always) : "Always";
+                                        });
+                                    }
                                 }
                             }
                             //TODO options to change team name or swap roles
@@ -2077,14 +2121,18 @@ pub(crate) async fn status_post(pool: &State<PgPool>, http_client: &State<reqwes
             let mut merged_choices = value.custom_choices.clone();
             if let Some(ref enter_flow) = data.enter_flow {
                 for req in &enter_flow.requirements {
-                    if let enter::Requirement::BooleanChoice { key, locked, .. } = req {
-                        if has_active_race || *locked {
-                            if let Some(existing) = row.custom_choices.0.get(key.as_str()) {
-                                merged_choices.insert(key.clone(), existing.clone());
-                            } else {
-                                merged_choices.remove(key.as_str());
+                    match req {
+                        enter::Requirement::BooleanChoice { key, locked, .. }
+                        | enter::Requirement::RadioChoice { key, locked, .. } => {
+                            if has_active_race || *locked {
+                                if let Some(existing) = row.custom_choices.0.get(key.as_str()) {
+                                    merged_choices.insert(key.clone(), existing.clone());
+                                } else {
+                                    merged_choices.remove(key.as_str());
+                                }
                             }
                         }
+                        _ => {}
                     }
                 }
             }

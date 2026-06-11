@@ -1523,6 +1523,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                         enter::Requirement::TextField2 { .. } => {}
                                                         enter::Requirement::YesNo { .. } => {}
                                                         enter::Requirement::BooleanChoice { .. } => {}
+                                                        enter::Requirement::RadioChoice { .. } => {}
                                                         enter::Requirement::Rules { .. } => {}
                                                         enter::Requirement::Poll { .. } => {}
                                                         enter::Requirement::RestreamConsent { .. } => {}

@@ -37,6 +37,7 @@ pub(crate) static OWR_CONFIG: OwrSeedConfig = OwrSeedConfig {
         pseudoboots: 0,
         shuffle: "vanilla",
         shuffletavern: 1,
+        shuffle_followers: None,
         skullwoods: "original",
         swords: Some("assured"),
     },
