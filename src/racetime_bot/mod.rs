@@ -2000,9 +2000,10 @@ impl GlobalState {
             let world_state = if inverted_ok { "inverted" } else { "open" };
             let pseudoboots = if pb_ok { 1 } else { 0 };
             let skullwoods = if zw_ok { "followlinked" } else { "original" };
+            let aga_randomness = if crosskeys_options.all_dungeons { "false" } else { None }; 
 
             let crosskeys_settings = AlttprDoorRandoSetting {
-                aga_randomness: None,
+                aga_randomness: aga_randomness,
                 accessibility: "locations",
                 bigkeyshuffle: DungeonShuffleVal::Bool(true),
                 boss_shuffle: None,
