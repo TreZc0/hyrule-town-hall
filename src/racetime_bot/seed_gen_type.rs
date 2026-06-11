@@ -21,8 +21,11 @@ pub(crate) struct PracticeOption {
 pub(crate) struct OwrEventConfig {
     pub(crate) base_settings: serde_json::Value,
     #[serde(default)]
+    pub(crate) base_placements: serde_json::Value,
+    #[serde(default)]
     pub(crate) start_inventory: Vec<String>,
-    /// Object: choice key → partial settings merged when player picks "yes".
+    /// Object: choice key -> patch. Legacy patches are partial settings objects.
+    /// New patches may be sectioned as { "settings": {}, "placements": {}, "start_inventory": [] }.
     #[serde(default)]
     pub(crate) choice_patches: serde_json::Value,
     /// Optional map from choice key → human-readable label for the practice seed form.
@@ -171,6 +174,13 @@ impl SeedGenType {
                     opts.as_race_options_str(),
                 ))
             }
+            Self::Owr { config } => {
+                let choices = super::owr_choices_for_race(db_pool, race).await;
+                Some(format!(
+                    "This race will be played with {} as settings.",
+                    super::owr_choices_description(&choices, config),
+                ))
+            }
             _ => None,
         }
     }
@@ -181,18 +191,7 @@ impl SeedGenType {
         matches!(self, Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices, .. } | Self::Owr { .. })
     }
 
-    /// For `MutualChoices` events: query the DB for each team's `custom_choices`
-    /// and return a comma-separated string of the human-readable labels for every
-    /// setting that **all** teams chose "yes".
-    ///
-    /// Returns `None` if this seed gen type is not `MutualChoices`, if `labels`
-    /// is empty, or if there are fewer than 2 teams.
-    ///
-    /// `labels` should come from `event::Data::boolean_choice_requirements()`,
-    /// which maps DB keys to human-readable display names.
-    ///
-    /// Accepts any sqlx executor: `&PgPool`, `&mut Transaction<'_, Postgres>`, etc.
-    pub(crate) async fn agreed_settings_str<'e, E>(
+    pub(crate) async fn settings_display_str<'e, E>(
         &self,
         executor: E,
         race: &Race,
@@ -220,23 +219,18 @@ impl SeedGenType {
         .await
         .ok()?;
 
-        // A setting is "agreed" when every team chose "yes" for that key.
-        let agreed = labels
+        let resolved = super::resolve_choice_values(rows.iter().map(|row| &row.custom_choices));
+        let active = labels
             .iter()
-            .filter(|(key, _)| {
-                rows.iter().all(|row| {
-                    row.custom_choices
-                        .get(*key)
-                        .is_some_and(|v| v == "yes")
-                })
+            .filter_map(|(key, label)| {
+                super::format_choice_label(label, resolved.get(*key).copied().unwrap_or_default())
             })
-            .map(|(_, label)| label.as_str())
             .collect_vec();
 
-        if agreed.is_empty() {
+        if active.is_empty() {
             Some("base settings".to_owned())
         } else {
-            Some(agreed.join(", "))
+            Some(active.join(", "))
         }
     }
 }

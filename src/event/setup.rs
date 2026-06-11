@@ -470,7 +470,7 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             details {
                                 summary : "Examples by seed gen type";
                                 pre(style = "font-size: 13px; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
-                                    : "// alttpr_dr — boothisman.de presets:\n{\"source\": \"boothisman\"}\n\n// alttpr_dr — teams agree on settings via custom_choices:\n{\"source\": \"mutual_choices\"}\n\n// alttpr_dr — mystery pool from a weights URL:\n{\"source\": \"mystery_pool\", \"mystery_weights_url\": \"https://example.com/weights.yaml\"}\n\n// twwr — default permalink:\n{\"permalink\": \"MS45MC4wAEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}";
+                                    : "// alttpr_dr — boothisman.de presets:\n{\"source\": \"boothisman\"}\n\n// alttpr_dr — teams agree on settings via custom_choices:\n{\"source\": \"mutual_choices\"}\n\n// alttpr_dr — mystery pool from a weights URL:\n{\"source\": \"mystery_pool\", \"mystery_weights_url\": \"https://example.com/weights.yaml\"}\n\n// owr — base settings plus sectioned choice patches:\n{\"base_settings\":{\"shuffle\":\"crossed\"},\"choice_patches\":{\"flute\":{\"settings\":{\"flute_mode\":\"active\"},\"start_inventory\":[\"Ocarina (Activated)\"]}},\"choice_labels\":{\"flute\":\"starting activated flute\"}}\n\n// twwr — default permalink:\n{\"permalink\": \"MS45MC4wAEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}";
                                 }
                             }
                         });
@@ -561,6 +561,20 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
       "key": "hard_mode_locked",
       "label": "Difficulty: Hard (locked after signup)",
       "locked": true
+    }
+  ]
+}"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "Custom Radio Choice (never/random/always):";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "requirements": [
+    {
+      "type": "radioChoice",
+      "key": "flute",
+      "label": "Starting activated flute",
+      "locked": false
     }
   ]
 }"#;
@@ -1682,7 +1696,7 @@ fn create_form_content(me: &Option<User>, _uri: &Origin<'_>, csrf: Option<&CsrfT
                             details {
                                 summary : "Examples by seed gen type";
                                 pre(style = "font-size: 13px; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
-                                    : "// alttpr_dr — boothisman.de presets:\n{\"source\": \"boothisman\"}\n\n// alttpr_dr — teams agree on settings via custom_choices:\n{\"source\": \"mutual_choices\"}\n\n// alttpr_dr — mystery pool from a weights URL:\n{\"source\": \"mystery_pool\", \"mystery_weights_url\": \"https://example.com/weights.yaml\"}\n\n// twwr — default permalink:\n{\"permalink\": \"MS45MC4wAEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}";
+                                    : "// alttpr_dr — boothisman.de presets:\n{\"source\": \"boothisman\"}\n\n// alttpr_dr — teams agree on settings via custom_choices:\n{\"source\": \"mutual_choices\"}\n\n// alttpr_dr — mystery pool from a weights URL:\n{\"source\": \"mystery_pool\", \"mystery_weights_url\": \"https://example.com/weights.yaml\"}\n\n// owr — base settings plus sectioned choice patches:\n{\"base_settings\":{\"shuffle\":\"crossed\"},\"choice_patches\":{\"flute\":{\"settings\":{\"flute_mode\":\"active\"},\"start_inventory\":[\"Ocarina (Activated)\"]}},\"choice_labels\":{\"flute\":\"starting activated flute\"}}\n\n// twwr — default permalink:\n{\"permalink\": \"MS45MC4wAEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}";
                                 }
                             }
                         });

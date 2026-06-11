@@ -249,7 +249,8 @@ impl AsyncRaceManager {
 
         if let Some(racetime_bot::seed_gen_type::SeedGenType::Owr { .. }) = event.seed_gen_type.as_ref() {
             let choices = racetime_bot::owr_choices_for_race(db_pool, race).await;
-            let description = racetime_bot::owr_choices_description(&choices);
+            let Some(racetime_bot::seed_gen_type::SeedGenType::Owr { config }) = event.seed_gen_type.as_ref() else { unreachable!() };
+            let description = racetime_bot::owr_choices_description(&choices, config);
 
             content.push_line("");
             content.push_line("");
@@ -298,7 +299,7 @@ impl AsyncRaceManager {
                     details.push_line("");
                 }
 
-                if !alttprde_options.custom_choices.is_empty() {
+                if alttprde_options.has_custom_choices() {
                     details.push("**Settings chosen by both runners:** ");
                     let choices = alttprde_options.custom_choices_labels();
                     details.push(choices.join(", "));

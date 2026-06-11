@@ -4446,23 +4446,18 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             }
         }
     };
-    // Show any custom choices that both players agreed on when entering the event.
-    let boolean_choices = event.boolean_choice_requirements();
-    if !boolean_choices.is_empty() {
+    // Show custom choices that affect settings when entering the event.
+    let choice_requirements = event.choice_requirements();
+    if !choice_requirements.is_empty() {
         let team_ids = race.teams().map(|t| t.id).collect_vec();
         if team_ids.len() > 1 {
             let rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", team_ids as _)
                 .fetch_all(&mut *transaction).await?;
-            let num_teams = rows.len();
-            let agreed = boolean_choices.into_iter()
-                .filter(|(key, _)| {
-                    rows.iter().filter(|r| {
-                        r.custom_choices.as_object()
-                            .and_then(|obj| obj.get(*key))
-                            .is_some_and(|v| v == "yes")
-                    }).count() >= num_teams
+            let choices = racetime_bot::resolve_choice_values(rows.iter().map(|row| &row.custom_choices));
+            let agreed = choice_requirements.into_iter()
+                .filter_map(|(key, label)| {
+                    racetime_bot::format_choice_label(&label, choices.get(key).copied().unwrap_or_default())
                 })
-                .map(|(_, label)| label)
                 .collect_vec();
             if !agreed.is_empty() {
                 content.push_line("");

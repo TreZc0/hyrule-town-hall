@@ -499,27 +499,28 @@ impl<'a> Data<'a> {
         self.asyncs_active
     }
 
-    /// Returns `(key, plain_text_label)` for every `BooleanChoice` requirement in the enter flow.
-    pub(crate) fn boolean_choice_requirements(&self) -> Vec<(&str, String)> {
+    /// Returns `(key, plain_text_label)` for every custom choice requirement in the enter flow.
+    pub(crate) fn choice_requirements(&self) -> Vec<(&str, String)> {
         let Some(ref flow) = self.enter_flow else { return vec![] };
         flow.requirements.iter()
             .filter_map(|req| {
-                if let enter::Requirement::BooleanChoice { key, label, .. } = req {
-                    // Strip HTML tags so the label is safe for plain-text contexts (Discord).
-                    let mut plain = String::new();
-                    let mut in_tag = false;
-                    for c in label.0.chars() {
-                        match c {
-                            '<' => in_tag = true,
-                            '>' => in_tag = false,
-                            c if !in_tag => plain.push(c),
-                            _ => {}
-                        }
+                let (key, label) = match req {
+                    enter::Requirement::BooleanChoice { key, label, .. }
+                    | enter::Requirement::RadioChoice { key, label, .. } => (key, label),
+                    _ => return None,
+                };
+                // Strip HTML tags so the label is safe for plain-text contexts (Discord).
+                let mut plain = String::new();
+                let mut in_tag = false;
+                for c in label.0.chars() {
+                    match c {
+                        '<' => in_tag = true,
+                        '>' => in_tag = false,
+                        c if !in_tag => plain.push(c),
+                        _ => {}
                     }
-                    Some((key.as_str(), plain))
-                } else {
-                    None
                 }
+                Some((key.as_str(), plain))
             })
             .collect()
     }
@@ -1957,6 +1958,26 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                             label(for = &field_id_no) : "No";
                                         });
                                     }
+                                    @if let enter::Requirement::RadioChoice { key, label, locked } = requirement {
+                                        @let field_name = format!("custom_choices[{key}]");
+                                        @let field_id_never = format!("custom_choices[{key}]-never");
+                                        @let field_id_random = format!("custom_choices[{key}]-random");
+                                        @let field_id_always = format!("custom_choices[{key}]-always");
+                                        @let never_checked = ctx.field_value(&*field_name).map_or_else(|| row.custom_choices.get(key).is_some_and(|v| v == "never"), |value| value == "never");
+                                        @let random_checked = ctx.field_value(&*field_name).map_or_else(|| row.custom_choices.get(key).is_some_and(|v| v == "random"), |value| value == "random");
+                                        @let always_checked = ctx.field_value(&*field_name).map_or_else(|| row.custom_choices.get(key).is_some_and(|v| v == "always"), |value| value == "always");
+                                        @let is_locked = has_active_race || *locked;
+                                        : form_field(&field_name, &mut errors, html! {
+                                            label(for = &field_name) : label;
+                                            br;
+                                            input(id = &field_id_never, type = "radio", name = &field_name, value = "never", checked? = never_checked, disabled? = is_locked);
+                                            label(for = &field_id_never) : "Never";
+                                            input(id = &field_id_random, type = "radio", name = &field_name, value = "random", checked? = random_checked, disabled? = is_locked);
+                                            label(for = &field_id_random) : "Random";
+                                            input(id = &field_id_always, type = "radio", name = &field_name, value = "always", checked? = always_checked, disabled? = is_locked);
+                                            label(for = &field_id_always) : "Always";
+                                        });
+                                    }
                                 }
                             }
                             //TODO options to change team name or swap roles
@@ -2069,14 +2090,18 @@ pub(crate) async fn status_post(pool: &State<PgPool>, http_client: &State<reqwes
             let mut merged_choices = value.custom_choices.clone();
             if let Some(ref enter_flow) = data.enter_flow {
                 for req in &enter_flow.requirements {
-                    if let enter::Requirement::BooleanChoice { key, locked, .. } = req {
-                        if has_active_race || *locked {
-                            if let Some(existing) = row.custom_choices.0.get(key.as_str()) {
-                                merged_choices.insert(key.clone(), existing.clone());
-                            } else {
-                                merged_choices.remove(key.as_str());
+                    match req {
+                        enter::Requirement::BooleanChoice { key, locked, .. }
+                        | enter::Requirement::RadioChoice { key, locked, .. } => {
+                            if has_active_race || *locked {
+                                if let Some(existing) = row.custom_choices.0.get(key.as_str()) {
+                                    merged_choices.insert(key.clone(), existing.clone());
+                                } else {
+                                    merged_choices.remove(key.as_str());
+                                }
                             }
                         }
+                        _ => {}
                     }
                 }
             }
@@ -3402,12 +3427,12 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, global_state: &State<Arc
             }, vec![], "Generate Practice Seed")
         },
         Some(SeedGenType::Owr { config }) => {
-            let choices: Vec<(String, String)> = config.choice_patches.as_object()
-                .map(|obj| obj.keys().map(|k| {
-                    let label = config.choice_labels.get(k).cloned().unwrap_or_else(|| k.clone());
-                    (k.clone(), label)
-                }).collect())
-                .unwrap_or_default();
+            let choices: Vec<(String, String)> = racetime_bot::owr_choice_keys(config).into_iter()
+                .map(|key| {
+                    let label = config.choice_labels.get(&key).cloned().unwrap_or_else(|| key.clone());
+                    (key, label)
+                })
+                .collect();
             full_form(form_uri, csrf.as_ref(), html! {
                 p : "Check any optional rules to include in your practice seed. Leave all unchecked for base settings.";
                 fieldset {
@@ -3523,8 +3548,8 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
             let choice_labels = form.choices.iter()
                 .map(|k| config.choice_labels.get(k).cloned().unwrap_or_else(|| k.clone()))
                 .collect();
-            let choices: HashMap<String, String> = form.choices.iter()
-                .map(|k| (k.clone(), "yes".to_string()))
+            let choices: HashMap<String, racetime_bot::ChoiceValue> = form.choices.iter()
+                .map(|k| (k.clone(), racetime_bot::ChoiceValue::Always))
                 .collect();
             let rx = Arc::clone(&*global_state).roll_owr_seed(choices, config);
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, choice_labels);
@@ -3547,7 +3572,7 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
                 };
                 custom_choices.insert(key.clone(), url_value);
             }
-            let options = racetime_bot::AlttprDeRaceOptions { mode, custom_choices, display_only_choices: Vec::new() };
+            let options = racetime_bot::AlttprDeRaceOptions { mode, custom_choices, choices: Vec::new() };
             let rx = Arc::clone(&*global_state).roll_alttprde9_seed(options);
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         },

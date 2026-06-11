@@ -2580,6 +2580,7 @@ fn req_type_label(type_str: &str) -> &'static str {
         "textField2" => "Text Field (2nd slot)",
         "yesNo" => "Yes/No Question",
         "booleanChoice" => "Boolean Choice",
+        "radioChoice" => "Radio Choice",
         "rules" => "Rules Agreement",
         "poll" => "Poll",
         "restreamConsent" => "Restream Consent",
@@ -2606,6 +2607,7 @@ fn req_type_tooltip(type_str: &str) -> &'static str {
         "textField2" => "A second independent text field, identical to Text Field but stored separately. Use when two text inputs are needed.",
         "yesNo" => "Presents a simple yes/no question. The answer is stored but does not feed into race settings automatically.",
         "booleanChoice" => "A yes/no question stored under a custom key in the team's choices map. The key can be referenced by race settings to conditionally apply rules. Locked prevents changes after races begin.",
+        "radioChoice" => "A never/random/always question stored under a custom key in the team's choices map. Seed generators can use it to apply a setting always, randomly, or never. Locked prevents changes after races begin.",
         "rules" => "Requires acknowledging the event rules. Links to the event info page or a custom document URL.",
         "poll" => "Requires completing a specific poll. Provide the poll document URL.",
         "restreamConsent" => "Asks whether the participant consents to being restreamed. If optional, they can opt in or out. If required, they must agree to enter.",
@@ -2632,6 +2634,7 @@ fn req_type_default_json(type_str: &str) -> serde_json::Value {
         "textField2" => json!({"type": "textField2", "label": "Enter information here.", "long": false, "regex": "^.+$", "regexErrorMessages": {}, "fallbackErrorMessage": "This field is required."}),
         "yesNo" => json!({"type": "yesNo", "label": "Your question here"}),
         "booleanChoice" => json!({"type": "booleanChoice", "key": "my_choice", "label": "Your question here", "locked": false}),
+        "radioChoice" => json!({"type": "radioChoice", "key": "my_choice", "label": "Your question here", "locked": false}),
         "rules" => json!({"type": "rules"}),
         "poll" => json!({"type": "poll"}),
         "restreamConsent" => json!({"type": "restreamConsent", "optional": false}),
@@ -2676,7 +2679,7 @@ fn req_summary(req: &serde_json::Value) -> String {
             let label = req.get("label").and_then(|v| v.as_str()).unwrap_or("(no label)");
             if label.len() > 60 { format!("{}…", &label[..60]) } else { label.to_owned() }
         }
-        "booleanChoice" => {
+        "booleanChoice" | "radioChoice" => {
             let key = req.get("key").and_then(|v| v.as_str()).unwrap_or("(no key)");
             let label = req.get("label").and_then(|v| v.as_str()).unwrap_or("(no label)");
             let label_short = if label.len() > 40 { format!("{}…", &label[..40]) } else { label.to_owned() };
@@ -2779,7 +2782,7 @@ async fn enter_flow_form(
             let all_req_types = [
                 "raceTime", "raceTimeInvite", "twitch", "discord", "discordGuild",
                 "challonge", "startGG", "startGGEventSignup", "textField", "textField2",
-                "yesNo", "booleanChoice", "rules", "poll", "restreamConsent",
+                "yesNo", "booleanChoice", "radioChoice", "rules", "poll", "restreamConsent",
                 "qualifier", "tripleQualifier", "qualifierPlacement", "rslLeaderboard", "external",
             ];
             let add_type_guide: Vec<(&str, &str, &str)> = all_req_types.iter()
@@ -2861,6 +2864,7 @@ async fn enter_flow_form(
                                 option(value = "textField2") : "Text Field (2nd slot)";
                                 option(value = "yesNo") : "Yes/No Question";
                                 option(value = "booleanChoice") : "Boolean Choice";
+                                option(value = "radioChoice") : "Radio Choice";
                             }
                             optgroup(label = "Agreements") {
                                 option(value = "rules") : "Rules Agreement";
@@ -3179,12 +3183,12 @@ fn build_requirement_json(type_str: &str, v: &EnterFlowEditForm, errors: &mut Ve
             if label.is_empty() { errors.push(("label".into(), "Label is required.".into())); }
             json!({"type": "yesNo", "label": label})
         }
-        "booleanChoice" => {
+        "booleanChoice" | "radioChoice" => {
             let key = v.key.trim();
             if key.is_empty() { errors.push(("key".into(), "Key is required.".into())); }
             let label = v.label.trim();
             if label.is_empty() { errors.push(("label".into(), "Label is required.".into())); }
-            json!({"type": "booleanChoice", "key": key, "label": label, "locked": v.locked})
+            json!({"type": type_str, "key": key, "label": label, "locked": v.locked})
         }
         "rules" => {
             let mut obj = json!({"type": "rules"});
@@ -3403,16 +3407,21 @@ async fn enter_flow_edit_form(
                 });
             }
         }
-        "booleanChoice" => {
+        "booleanChoice" | "radioChoice" => {
             let cur_key = req.get("key").and_then(|v| v.as_str()).unwrap_or_default();
             let cur_label = req.get("label").and_then(|v| v.as_str()).unwrap_or_default();
             let cur_locked = req.get("locked").and_then(|v| v.as_bool()).unwrap_or(false);
             let locked_checked = ctx.field_value("locked").map_or(cur_locked, |v| v == "on");
+            let help = if type_str == "radioChoice" {
+                "Stored in the team's custom_choices map as never, random, or always. Use lowercase with underscores, e.g. hard_mode"
+            } else {
+                "Stored in the team's custom_choices map. Use lowercase with underscores, e.g. hard_mode"
+            };
             html! {
                 : form_field("key", &mut errors, html! {
                     label(for = "key") : "Storage key:";
                     input(type = "text", id = "key", name = "key", value = ctx.field_value("key").unwrap_or(cur_key), style = "width: 100%;");
-                    label(class = "help") : "Stored in the team's custom_choices map. Use lowercase with underscores, e.g. hard_mode";
+                    label(class = "help") : help;
                 });
                 : form_field("label", &mut errors, html! {
                     label(for = "label") : "Question shown to participant (HTML allowed):";

@@ -991,15 +991,15 @@ impl GlobalState {
     }
 
     /// Roll an OWR (Open World Randomizer) seed by applying player choices to the event config.
-    pub(crate) fn roll_owr_seed(self: Arc<Self>, choices: HashMap<String, String>, config: seed_gen_type::OwrEventConfig) -> mpsc::Receiver<SeedRollUpdate> {
+    pub(crate) fn roll_owr_seed(self: Arc<Self>, choices: HashMap<String, ChoiceValue>, config: seed_gen_type::OwrEventConfig) -> mpsc::Receiver<SeedRollUpdate> {
         let uuid = Uuid::new_v4();
         let mut settings = config.base_settings.as_object().cloned().unwrap_or_default();
+        let mut placements = config.base_placements.as_object().cloned().unwrap_or_default();
+        let mut start_inventory = config.start_inventory.clone();
         if let Some(patches) = config.choice_patches.as_object() {
             for (key, patch) in patches {
-                if choices.get(key).is_some_and(|v| v == "yes") {
-                    if let Some(fields) = patch.as_object() {
-                        settings.extend(fields.clone());
-                    }
+                if choices.get(key).copied().unwrap_or_default().roll_enabled() {
+                    apply_owr_patch(&mut settings, &mut placements, &mut start_inventory, patch);
                 }
             }
         }
@@ -1010,9 +1010,14 @@ impl GlobalState {
         let mut yaml_map = serde_yml::Mapping::new();
         yaml_map.insert(serde_yml::Value::String("settings".to_string()), serde_yml::Value::Mapping(settings_map));
         yaml_map.insert(serde_yml::Value::String("meta".to_string()), serde_yml::to_value(&meta).expect("meta serialization cannot fail"));
-        if !config.start_inventory.is_empty() {
+        if !placements.is_empty() {
+            let mut placements_map = serde_yml::Mapping::new();
+            placements_map.insert(player_key.clone(), serde_yml::to_value(serde_json::Value::Object(placements)).expect("placements serialization cannot fail"));
+            yaml_map.insert(serde_yml::Value::String("placements".to_string()), serde_yml::Value::Mapping(placements_map));
+        }
+        if !start_inventory.is_empty() {
             let mut inv_map = serde_yml::Mapping::new();
-            inv_map.insert(player_key, serde_yml::to_value(&config.start_inventory).expect("start_inventory serialization cannot fail"));
+            inv_map.insert(player_key, serde_yml::to_value(&start_inventory).expect("start_inventory serialization cannot fail"));
             yaml_map.insert(serde_yml::Value::String("start_inventory".to_string()), serde_yml::Value::Mapping(inv_map));
         }
         match serde_yml::to_string(&serde_yml::Value::Mapping(yaml_map)) {
@@ -1562,15 +1567,24 @@ pub(crate) fn start_practice_seed_roll(seeds: event::PracticeSeeds, job_id: Uuid
 }
 
 fn build_crosskeys_yaml(opts: &CrosskeysRaceOptions, uuid: Uuid) -> Result<String, serde_yml::Error> {
-    let agreed = &opts.agreed;
     let meta = AlttprDoorRandoMeta { bps: true, name: uuid.to_string(), race: true, skip_playthrough: true, spoiler: "full", suppress_rom: true };
-    let keydrop_mode = if agreed.contains("keydrop") { "keys" } else { "none" };
-    let flute_mode = if agreed.contains("flute") { "active" } else { "normal" };
-    let goal = if agreed.contains("all_dungeons") { "dungeons" } else { "crystals" };
-    let mirrorscroll = if agreed.contains("mirror_scroll") { 1 } else { 0 };
-    let world_state = if agreed.contains("inverted") { "inverted" } else { "open" };
-    let pseudoboots = if agreed.contains("pseudoboots") { 1 } else { 0 };
-    let skullwoods = if agreed.contains("zw") { "followlinked" } else { "original" };
+    let keydrop = opts.choice("keydrop").roll_enabled();
+    let flute = opts.choice("flute").roll_enabled();
+    let all_dungeons = opts.choice("all_dungeons").roll_enabled();
+    let completionist = opts.choice("completionist").roll_enabled();
+    let inverted = opts.choice("inverted").roll_enabled();
+    let mirror_scroll = opts.choice("mirror_scroll").roll_enabled();
+    let pseudoboots = opts.choice("pseudoboots").roll_enabled();
+    let zw = opts.choice("zw").roll_enabled();
+    let follower_shuffle = opts.choice("follower_shuffle");
+    let follower_shuffle_enabled = follower_shuffle.roll_enabled();
+    let keydrop_mode = if keydrop { "keys" } else { "none" };
+    let flute_mode = if flute { "active" } else { "normal" };
+    let goal = if completionist { "completionist" } else if all_dungeons { "dungeons" } else { "crystals" };
+    let mirrorscroll = if mirror_scroll { 1 } else { 0 };
+    let world_state = if inverted { "inverted" } else { "open" };
+    let pseudoboots = if pseudoboots { 1 } else { 0 };
+    let skullwoods = if zw { "followlinked" } else { "original" };
     let settings = AlttprDoorRandoSetting {
         aga_randomness: None,
         accessibility: "locations",
@@ -1595,12 +1609,13 @@ fn build_crosskeys_yaml(opts: &CrosskeysRaceOptions, uuid: Uuid) -> Result<Strin
         pseudoboots,
         shuffle: "crossed",
         shuffletavern: 0,
+        shuffle_followers: (follower_shuffle != ChoiceValue::Never).then_some(follower_shuffle_enabled),
         skullwoods,
         swords: None,
     };
     let player_key = serde_yml::Value::from(1_i64);
     let mut yaml_map = serde_yml::Mapping::new();
-    if !agreed.contains("zw") {
+    if !zw {
         let mut placements_map = serde_yml::Mapping::new();
         placements_map.insert(player_key.clone(), serde_yml::to_value(&AlttprDoorRandoPlacements { pinball_room: "Small Key (Skull Woods)" })?);
         yaml_map.insert(serde_yml::Value::String("placements".to_string()), serde_yml::Value::Mapping(placements_map));
@@ -1608,7 +1623,7 @@ fn build_crosskeys_yaml(opts: &CrosskeysRaceOptions, uuid: Uuid) -> Result<Strin
     let mut settings_map = serde_yml::Mapping::new();
     settings_map.insert(player_key.clone(), serde_yml::to_value(&settings)?);
     yaml_map.insert(serde_yml::Value::String("settings".to_string()), serde_yml::Value::Mapping(settings_map));
-    if agreed.contains("flute") {
+    if flute {
         let mut inv_map = serde_yml::Mapping::new();
         inv_map.insert(player_key, serde_yml::to_value(&["Ocarina (Activated)"] as &[&str])?);
         yaml_map.insert(serde_yml::Value::String("start_inventory".to_string()), serde_yml::Value::Mapping(inv_map));
@@ -2306,33 +2321,145 @@ struct Breaks {
     interval: Duration,
 }
 
-pub(crate) async fn owr_choices_for_race(db_pool: &PgPool, race: &Race) -> HashMap<String, String> {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ChoiceValue {
+    #[default]
+    Never,
+    Random,
+    Always,
+}
+
+impl ChoiceValue {
+    pub(crate) fn from_json_value(value: &serde_json::Value) -> Option<Self> {
+        match value {
+            serde_json::Value::String(value) => Self::from_str(value),
+            serde_json::Value::Bool(true) => Some(Self::Always),
+            serde_json::Value::Bool(false) => Some(Self::Never),
+            serde_json::Value::Number(value) if value.as_i64().is_some_and(|value| value != 0) => Some(Self::Always),
+            serde_json::Value::Number(_) => Some(Self::Never),
+            _ => None,
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "always" | "yes" | "true" | "1" => Some(Self::Always),
+            "random" => Some(Self::Random),
+            "never" | "no" | "false" | "0" => Some(Self::Never),
+            _ => None,
+        }
+    }
+
+    fn roll_enabled(self) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Random => rand::random(),
+            Self::Never => false,
+        }
+    }
+}
+
+pub(crate) fn resolve_choice_values<'a>(choices: impl IntoIterator<Item = &'a serde_json::Value>) -> HashMap<String, ChoiceValue> {
+    let mut choices = choices.into_iter();
+    let Some(first) = choices.next() else { return HashMap::default() };
+    let mut resolved = HashMap::default();
+    if let Some(obj) = first.as_object() {
+        for (key, value) in obj {
+            if let Some(value) = ChoiceValue::from_json_value(value) {
+                if value != ChoiceValue::Never {
+                    resolved.insert(key.clone(), value);
+                }
+            }
+        }
+    }
+    for choices in choices {
+        let keys = resolved.keys().cloned().collect_vec();
+        for key in keys {
+            let next = choices
+                .get(&key)
+                .and_then(ChoiceValue::from_json_value)
+                .unwrap_or_default();
+            let value = resolved[&key].min(next);
+            if value == ChoiceValue::Never {
+                resolved.remove(&key);
+            } else {
+                resolved.insert(key, value);
+            }
+        }
+    }
+    resolved
+}
+
+pub(crate) fn format_choice_label(label: &str, value: ChoiceValue) -> Option<String> {
+    match value {
+        ChoiceValue::Always => Some(label.to_owned()),
+        ChoiceValue::Random => Some(format!("random choice: {label}")),
+        ChoiceValue::Never => None,
+    }
+}
+
+fn apply_json_object_patch(target: &mut serde_json::Map<String, serde_json::Value>, patch: &serde_json::Value) {
+    if let Some(fields) = patch.as_object() {
+        target.extend(fields.clone());
+    }
+}
+
+fn apply_start_inventory_patch(target: &mut Vec<String>, patch: &serde_json::Value) {
+    if let Some(items) = patch.as_array() {
+        target.extend(items.iter().filter_map(|item| item.as_str().map(str::to_owned)));
+    }
+}
+
+fn apply_owr_patch(
+    settings: &mut serde_json::Map<String, serde_json::Value>,
+    placements: &mut serde_json::Map<String, serde_json::Value>,
+    start_inventory: &mut Vec<String>,
+    patch: &serde_json::Value,
+) {
+    let Some(patch_obj) = patch.as_object() else { return };
+    let has_sections = patch_obj.contains_key("settings")
+        || patch_obj.contains_key("placements")
+        || patch_obj.contains_key("start_inventory");
+    if has_sections {
+        if let Some(settings_patch) = patch_obj.get("settings") {
+            apply_json_object_patch(settings, settings_patch);
+        }
+        if let Some(placements_patch) = patch_obj.get("placements") {
+            apply_json_object_patch(placements, placements_patch);
+        }
+        if let Some(start_inventory_patch) = patch_obj.get("start_inventory") {
+            apply_start_inventory_patch(start_inventory, start_inventory_patch);
+        }
+    } else {
+        apply_json_object_patch(settings, patch);
+    }
+}
+
+pub(crate) fn owr_choice_keys(config: &seed_gen_type::OwrEventConfig) -> Vec<String> {
+    let mut keys: HashSet<String> = config.choice_labels.keys().cloned().collect();
+    if let Some(patches) = config.choice_patches.as_object() {
+        keys.extend(patches.keys().cloned());
+    }
+    keys.into_iter().sorted().collect()
+}
+
+pub(crate) async fn owr_choices_for_race(db_pool: &PgPool, race: &Race) -> HashMap<String, ChoiceValue> {
     let team_ids = race.teams().map(|t| t.id).collect_vec();
     let rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", team_ids as _)
         .fetch_all(db_pool)
         .await
         .expect("failed to read team choices for OWR race");
 
-    let mut merged: HashMap<String, String> = HashMap::default();
-    if let Some(first) = rows.first() {
-        if let Some(obj) = first.custom_choices.as_object() {
-            for (k, v) in obj {
-                if v.as_str() == Some("yes") {
-                    merged.insert(k.clone(), "yes".to_string());
-                }
-            }
-        }
-        for row in &rows[1..] {
-            merged.retain(|k, _| row.custom_choices.get(k.as_str()).is_some_and(|v| v == "yes"));
-        }
-    }
-    merged
+    resolve_choice_values(rows.iter().map(|row| &row.custom_choices))
 }
 
-pub(crate) fn owr_choices_description(choices: &HashMap<String, String>) -> String {
-    let active: Vec<&str> = choices.iter()
-        .filter(|(_, v)| v.as_str() == "yes")
-        .map(|(k, _)| k.as_str())
+pub(crate) fn owr_choices_description(choices: &HashMap<String, ChoiceValue>, config: &seed_gen_type::OwrEventConfig) -> String {
+    let active: Vec<String> = choices.iter()
+        .sorted_by_key(|(key, _)| key.as_str())
+        .filter_map(|(key, value)| {
+            let label = config.choice_labels.get(key).map(String::as_str).unwrap_or(key);
+            format_choice_label(label, *value)
+        })
         .collect();
     if active.is_empty() {
         "base settings".to_string()
@@ -2343,8 +2470,7 @@ pub(crate) fn owr_choices_description(choices: &HashMap<String, String>) -> Stri
 
 #[derive(Clone)]
 pub(crate) struct CrosskeysRaceOptions {
-    /// Custom_choices keys where every team agreed (all said "yes").
-    agreed: HashSet<String>,
+    choices: HashMap<String, ChoiceValue>,
 }
 
 impl CrosskeysRaceOptions {
@@ -2352,7 +2478,9 @@ impl CrosskeysRaceOptions {
     fn key_to_seed_label(key: &str) -> Option<&'static str> {
         match key {
             "all_dungeons"  => Some("a goal of all dungeons"),
+            "completionist" => Some("completionist goal"),
             "flute"         => Some("starting activated flute"),
+            "follower_shuffle" => Some("follower shuffle"),
             "inverted"      => Some("inverted world state"),
             "keydrop"       => Some("enemy and pot keydrop"),
             "mirror_scroll" => Some("starting mirror scroll"),
@@ -2362,35 +2490,41 @@ impl CrosskeysRaceOptions {
         }
     }
 
+    fn choice(&self, key: &str) -> ChoiceValue {
+        self.choices.get(key).copied().unwrap_or_default()
+    }
+
     pub(crate) fn as_seed_options_str(&self) -> String {
         // Emit labels in a stable order matching the original display order.
-        let labels: Vec<&str> = ["all_dungeons", "flute", "inverted", "keydrop", "mirror_scroll", "pseudoboots", "zw"]
+        let labels: Vec<String> = ["all_dungeons", "completionist", "flute", "follower_shuffle", "inverted", "keydrop", "mirror_scroll", "pseudoboots", "zw"]
             .into_iter()
-            .filter(|&k| self.agreed.contains(k))
-            .filter_map(Self::key_to_seed_label)
+            .filter_map(|key| {
+                Self::key_to_seed_label(key)
+                    .and_then(|label| format_choice_label(label, self.choice(key)))
+            })
             .collect();
         English.join_str_opt(labels).unwrap_or_else(|| "base settings".to_owned())
     }
 
     pub(crate) fn as_race_options_str(&self) -> String {
-        let hovering = if self.agreed.contains("hovering") {
-            "hovering and moldorm bouncing ALLOWED"
-        } else {
-            "hovering and moldorm bouncing BANNED"
+        let hovering = match self.choice("hovering") {
+            ChoiceValue::Always => "hovering and moldorm bouncing ALLOWED",
+            ChoiceValue::Random => "hovering and moldorm bouncing: random",
+            ChoiceValue::Never => "hovering and moldorm bouncing BANNED",
         };
-        let delay = if self.agreed.contains("no_delay") {
-            "no stream delay"
-        } else {
-            "stream delay(10m)"
+        let delay = match self.choice("no_delay") {
+            ChoiceValue::Always => "no stream delay",
+            ChoiceValue::Random => "stream delay: random",
+            ChoiceValue::Never => "stream delay(10m)",
         };
         format!("{hovering} and {delay}")
     }
 
     pub(crate) fn as_race_options_str_no_delay(&self) -> String {
-        if self.agreed.contains("hovering") {
-            "hovering and moldorm bouncing ALLOWED".to_owned()
-        } else {
-            "hovering and moldorm bouncing BANNED".to_owned()
+        match self.choice("hovering") {
+            ChoiceValue::Always => "hovering and moldorm bouncing ALLOWED".to_owned(),
+            ChoiceValue::Random => "hovering and moldorm bouncing: random".to_owned(),
+            ChoiceValue::Never => "hovering and moldorm bouncing BANNED".to_owned(),
         }
     }
 
@@ -2398,33 +2532,25 @@ impl CrosskeysRaceOptions {
         let teams = race.teams();
         let team_rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _)
             .fetch_all(db_pool).await.expect("Database read failed");
-        let num_teams = team_rows.len();
-        let agreed = if num_teams == 0 {
-            HashSet::default()
-        } else {
-            let mut counts: HashMap<String, usize> = HashMap::default();
-            for row in &team_rows {
-                if let Some(obj) = row.custom_choices.as_object() {
-                    for (key, value) in obj {
-                        if value == "yes" {
-                            *counts.entry(key.clone()).or_default() += 1;
-                        }
-                    }
-                }
-            }
-            counts.into_iter().filter(|(_, count)| *count >= num_teams).map(|(k, _)| k).collect()
-        };
-        CrosskeysRaceOptions { agreed }
+        CrosskeysRaceOptions { choices: resolve_choice_values(team_rows.iter().map(|row| &row.custom_choices)) }
     }
+}
+
+#[derive(Clone)]
+pub(crate) struct AlttprDeChoice {
+    key: String,
+    value: String,
+    label: String,
+    choice: ChoiceValue,
+    display_only: bool,
 }
 
 #[derive(Clone)]
 pub(crate) struct AlttprDeRaceOptions {
     pub(crate) mode: Option<String>,
-    /// Custom choices from player signups, merged together.
+    /// Concrete custom choices for ad-hoc practice seed forms.
     pub(crate) custom_choices: HashMap<String, String>,
-    /// Choices that affect race rules display but not seed rolling.
-    pub(crate) display_only_choices: Vec<String>,
+    pub(crate) choices: Vec<AlttprDeChoice>,
 }
 
 impl AlttprDeRaceOptions {
@@ -2460,6 +2586,12 @@ impl AlttprDeRaceOptions {
 
     /// Get the custom choices as human-readable labels
     pub(crate) fn custom_choices_labels(&self) -> Vec<String> {
+        if !self.choices.is_empty() {
+            return self.choices.iter()
+                .filter(|choice| !choice.display_only)
+                .filter_map(|choice| format_choice_label(&choice.label, choice.choice))
+                .collect()
+        }
         self.custom_choices
             .keys()
             .map(|k| Self::key_to_label(k).unwrap_or(k).to_string())
@@ -2484,23 +2616,34 @@ impl AlttprDeRaceOptions {
     }
 
     pub(crate) fn as_race_options_str(&self) -> String {
-        if self.display_only_choices.is_empty() {
+        let display_only_choices = self.choices.iter()
+            .filter(|choice| choice.display_only)
+            .filter_map(|choice| format_choice_label(&choice.label, choice.choice))
+            .collect_vec();
+        if display_only_choices.is_empty() {
             format!("standard race rules")
         } else {
-            format!("standard race rules ({})", self.display_only_choices.join(", "))
+            format!("standard race rules ({})", display_only_choices.join(", "))
         }
+    }
+
+    pub(crate) fn has_custom_choices(&self) -> bool {
+        !self.custom_choices.is_empty() || self.choices.iter().any(|choice| !choice.display_only)
     }
 
     /// Build the full URL for generating a seed from boothisman.de
     pub(crate) fn seed_url(&self) -> Option<String> {
         let mode = self.mode.as_ref()?;
         let base_url = format!("https://www.boothisman.de/Turnier/{}.php", mode);
-        if self.custom_choices.is_empty() {
+        let mut params: Vec<String> = self.custom_choices.iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect();
+        params.extend(self.choices.iter()
+            .filter(|choice| !choice.display_only && choice.choice.roll_enabled())
+            .map(|choice| format!("{}={}", choice.key, choice.value)));
+        if params.is_empty() {
             Some(base_url)
         } else {
-            let params: Vec<String> = self.custom_choices.iter()
-                .map(|(k, v)| format!("{}={}", k, v))
-                .collect();
             Some(format!("{}?{}", base_url, params.join("&")))
         }
     }
@@ -2524,59 +2667,44 @@ impl AlttprDeRaceOptions {
         let team_rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _)
             .fetch_all(db_pool).await.expect("Database read failed");
 
-        // Collect raw choices from all teams (only include if BOTH players said yes)
-        // For alttprde, a setting is only enabled if both players opted in
-        let mut choice_counts: HashMap<String, u32> = HashMap::new();
-        let num_teams = team_rows.len() as u32;
-
-        for row in &team_rows {
-            if let Some(obj) = row.custom_choices.as_object() {
-                for (key, value) in obj {
-                    let is_yes = match value {
-                        serde_json::Value::String(s) => s == "yes" || s == "1" || s == "true",
-                        serde_json::Value::Bool(b) => *b,
-                        serde_json::Value::Number(n) => n.as_i64().is_some_and(|n| n != 0),
-                        _ => false,
-                    };
-                    if is_yes {
-                        *choice_counts.entry(key.clone()).or_insert(0) += 1;
-                    }
-                }
-            }
-        }
-
-        // Build URL params - only include choices where both players said yes
-        let mut custom_choices = HashMap::new();
-        let mut display_only_choices = Vec::new();
+        let resolved = resolve_choice_values(team_rows.iter().map(|row| &row.custom_choices));
+        let custom_choices = HashMap::new();
+        let mut choices = Vec::new();
         // Handle pool settings with explicit priority: expert (2) > hard (1)
-        let expert_ok = choice_counts.get("pool_expert").is_some_and(|&c| c >= num_teams && num_teams > 0);
-        let hard_ok = choice_counts.get("pool_hard").is_some_and(|&c| c >= num_teams && num_teams > 0);
-        if expert_ok {
-            custom_choices.insert("pool".to_owned(), "2".to_owned());
-        } else if hard_ok {
-            custom_choices.insert("pool".to_owned(), "1".to_owned());
+        if let Some(choice) = resolved.get("pool_expert").copied() {
+            choices.push(AlttprDeChoice {
+                key: "pool".to_owned(),
+                value: "2".to_owned(),
+                label: Self::key_to_label("pool_expert").unwrap_or("Expert Item Pool").to_owned(),
+                choice,
+                display_only: false,
+            });
+        } else if let Some(choice) = resolved.get("pool_hard").copied() {
+            choices.push(AlttprDeChoice {
+                key: "pool".to_owned(),
+                value: "1".to_owned(),
+                label: Self::key_to_label("pool_hard").unwrap_or("Hard Item Pool").to_owned(),
+                choice,
+                display_only: false,
+            });
         }
-        for (key, count) in choice_counts {
-            if count >= num_teams && num_teams > 0 {
-                // Both players agreed to this option
-                let url_value = match key.as_str() {
-                    // Special case: pottery becomes "lottery"
-                    "pots" => "lottery".to_owned(),
-                    // Handled above with explicit priority
-                    "pool_hard" | "pool_expert" => continue,
-                    // Display-only choices: shown in race room but not passed to the seed API
-                    "gtskips" => {
-                        display_only_choices.push("GT Skips".to_owned());
-                        continue;
-                    }
-                    // All other boolean choices become "1"
-                    _ => "1".to_owned(),
-                };
-                custom_choices.insert(key, url_value);
-            }
+        for (key, choice) in resolved {
+            let (url_key, url_value, display_only) = match key.as_str() {
+                "pots" => (key.as_str(), "lottery", false),
+                "pool_hard" | "pool_expert" => continue,
+                "gtskips" => (key.as_str(), "", true),
+                _ => (key.as_str(), "1", false),
+            };
+            choices.push(AlttprDeChoice {
+                key: url_key.to_owned(),
+                value: url_value.to_owned(),
+                label: Self::key_to_label(&key).unwrap_or(key.as_str()).to_owned(),
+                choice,
+                display_only,
+            });
         }
 
-        AlttprDeRaceOptions { mode, custom_choices, display_only_choices }
+        AlttprDeRaceOptions { mode, custom_choices, choices }
     }
 }
 
@@ -2623,6 +2751,8 @@ pub(crate) struct AlttprDoorRandoSetting {
     pub(crate) pseudoboots: u8,
     pub(crate) shuffle: &'static str,
     pub(crate) shuffletavern: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) shuffle_followers: Option<bool>,
     pub(crate) skullwoods: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) swords: Option<&'static str>,
@@ -3099,7 +3229,7 @@ impl Handler {
             .and_then(|sgt| if let seed_gen_type::SeedGenType::Owr { config } = sgt { Some(config.clone()) } else { None })
             .expect("OWR seed roll triggered for event with no OWR seed config");
         let choices = owr_choices_for_race(&ctx.global_state.db_pool, &cal_event.race).await;
-        let description = owr_choices_description(&choices);
+        let description = owr_choices_description(&choices, &config);
         self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_owr_seed(choices, config), language, article, format!("seed with {description}"), false).await;
     }
 

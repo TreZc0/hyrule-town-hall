@@ -1173,7 +1173,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
     }
     if let Some(ref enter_flow) = data.enter_flow {
         for requirement in &enter_flow.requirements {
-            if let enter::Requirement::BooleanChoice { label, .. } = requirement {
+            if let enter::Requirement::BooleanChoice { label, .. } | enter::Requirement::RadioChoice { label, .. } = requirement {
                 column_headers.push(html! {
                     th : label;
                 });
@@ -1545,6 +1545,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                         enter::Requirement::TextField2 { .. } => {}
                                                         enter::Requirement::YesNo { .. } => {}
                                                         enter::Requirement::BooleanChoice { .. } => {}
+                                                        enter::Requirement::RadioChoice { .. } => {}
                                                         enter::Requirement::Rules { .. } => {}
                                                         enter::Requirement::Poll { .. } => {}
                                                         enter::Requirement::RestreamConsent { .. } => {}
@@ -1648,6 +1649,16 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                         td {
                                             @if custom_choices.get(key).is_some_and(|v| v == "yes") {
                                                 : "✓";
+                                            }
+                                        }
+                                    }
+                                    @if let enter::Requirement::RadioChoice { key, .. } = requirement {
+                                        td {
+                                            @match custom_choices.get(key).map(String::as_str) {
+                                                Some("always") => { : "Always"; }
+                                                Some("random") => { : "Random"; }
+                                                Some("never") => { : "Never"; }
+                                                _ => {}
                                             }
                                         }
                                     }

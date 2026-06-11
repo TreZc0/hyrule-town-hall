@@ -124,6 +124,16 @@ pub(crate) enum Requirement {
         #[serde(default)]
         locked: bool,
     },
+    /// Must answer a custom never/random/always question, stored in `custom_choices`
+    #[serde(rename_all = "camelCase")]
+    RadioChoice {
+        key: String,
+        #[serde_as(as = "DeserializeRawHtml")]
+        label: RawHtml<String>,
+        /// If true, players cannot change this choice after the event has started.
+        #[serde(default)]
+        locked: bool,
+    },
     /// Must agree to the event rules
     Rules {
         document: Option<Url>,
@@ -230,6 +240,7 @@ impl Requirement {
             Self::TextField2 { .. } => Some(false),
             Self::YesNo { .. } => Some(false),
             Self::BooleanChoice { .. } => Some(false),
+            Self::RadioChoice { .. } => Some(false),
             Self::Rules { .. } => Some(false),
             Self::Poll { .. } => Some(false),
             Self::RestreamConsent { .. } => Some(false),
@@ -536,6 +547,28 @@ impl Requirement {
                     }),
                 }
             }
+            Self::RadioChoice { key, label, .. } => {
+                let key = key.clone();
+                let label = label.clone();
+                let never_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "never");
+                let random_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "random");
+                let always_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "always");
+                RequirementStatus {
+                    blocks_submit: false,
+                    html_content: Box::new(move |errors| html! {
+                        : form_field(&format!("custom_choices[{key}]"), errors, html! {
+                            label(for = &format!("custom_choices[{key}]")) : label;
+                            br;
+                            input(id = &format!("custom_choices[{key}]-never"), type = "radio", name = &format!("custom_choices[{key}]"), value = "never", checked? = never_checked);
+                            label(for = &format!("custom_choices[{key}]-never")) : "Never";
+                            input(id = &format!("custom_choices[{key}]-random"), type = "radio", name = &format!("custom_choices[{key}]"), value = "random", checked? = random_checked);
+                            label(for = &format!("custom_choices[{key}]-random")) : "Random";
+                            input(id = &format!("custom_choices[{key}]-always"), type = "radio", name = &format!("custom_choices[{key}]"), value = "always", checked? = always_checked);
+                            label(for = &format!("custom_choices[{key}]-always")) : "Always";
+                        });
+                    }),
+                }
+            }
             Self::Rules { document } => {
                 let checked = defaults.field_value("confirm").is_some_and(|value| value == "on");
                 let team_config = data.team_config;
@@ -814,6 +847,9 @@ impl Requirement {
             Self::BooleanChoice { key, .. } => if !value.custom_choices.contains_key(key) {
                 form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name(format!("custom_choices[{key}]")));
             },
+            Self::RadioChoice { key, .. } => if !value.custom_choices.get(key).is_some_and(|value| matches!(value.as_str(), "never" | "random" | "always")) {
+                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name(format!("custom_choices[{key}]")));
+            },
             Self::Rules { .. } => if !value.confirm {
                 form_ctx.push_error(form::Error::validation("This field is required.").with_name("confirm"));
             },
@@ -890,6 +926,7 @@ impl Requirement {
                     | Self::Qualifier { .. }
                     | Self::TripleQualifier { .. }
                     | Self::BooleanChoice { .. }
+                    | Self::RadioChoice { .. }
                     | Self::External { .. }
                         => unreachable!(),
                 }));

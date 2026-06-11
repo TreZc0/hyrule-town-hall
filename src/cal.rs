@@ -2664,7 +2664,7 @@ pub(crate) async fn race_table(
                                 // Add Settings link for races with per-race player-chosen settings
                                 @if race.show_seed() || race.is_ended() || matches!(race.schedule, RaceSchedule::Unscheduled | RaceSchedule::Async { .. } | RaceSchedule::Live { .. }) {
                                     @if let Some(sgt) = event.seed_gen_type.as_ref() {
-                                        @if let Some(summary) = sgt.agreed_settings_str(&mut **transaction, race, &event.boolean_choice_requirements()).await {
+                                        @if let Some(summary) = sgt.settings_display_str(&mut **transaction, race, &event.choice_requirements()).await {
                                             span(class = "settings-link", data_tooltip = summary) {
                                                 : " -Hover for Settings- ";
                                             }
@@ -2676,7 +2676,7 @@ pub(crate) async fn race_table(
                         @if !has_seeds && has_settings {
                             td {
                                 @if let Some(sgt) = event.seed_gen_type.as_ref() {
-                                    @if let Some(summary) = sgt.agreed_settings_str(&mut **transaction, race, &event.boolean_choice_requirements()).await {
+                                    @if let Some(summary) = sgt.settings_display_str(&mut **transaction, race, &event.choice_requirements()).await {
                                         span(class = "settings-link", data_tooltip = summary) {
                                             : "-Hover for Settings-";
                                         }
