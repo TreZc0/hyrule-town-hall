@@ -58,6 +58,9 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
     } else if let Some(ref me) = me {
         if me.is_global_admin() {
             let mut errors = ctx.errors().collect_vec();
+            let all_events = sqlx::query!(
+                r#"SELECT series AS "series: crate::series::Series", event, display_name FROM events ORDER BY series, event"#
+            ).fetch_all(&mut *transaction).await.unwrap_or_default();
             html! {
                 article {
                     h2 : "Event Setup";
@@ -658,6 +661,24 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             }
                         }
                     }
+
+                    h3 : "Copy organizers from another event";
+                    : full_form(uri!(copy_organizers(event.series, &*event.event)), csrf, html! {
+                        : form_field("source_event", &mut errors, html! {
+                            label(for = "copy_source_event") : "Copy organizers from:";
+                            select(id = "copy_source_event", name = "source_event") {
+                                option(value = "") : "-- Select event --";
+                                @for ev in &all_events {
+                                    @if !(ev.series == event.series && ev.event == *event.event) {
+                                        option(value = format!("{}/{}", ev.series.slug(), ev.event)) {
+                                            : format!("{} / {}", ev.series.display_name(), ev.display_name);
+                                        }
+                                    }
+                                }
+                            }
+                            label(class = "help") : "All organizers from the selected event will be added to this event. Existing organizers are kept.";
+                        });
+                    }, errors.clone(), "Copy Organizers");
                 }
             }
         } else {
@@ -1371,6 +1392,50 @@ pub(crate) async fn remove_organizer(pool: &State<PgPool>, me: User, _uri: Origi
         }
     } else {
         RedirectOrContent::Content(setup_form(transaction, Some(me), _uri, csrf.as_ref(), event_data, form.context).await?)
+    })
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct CopyOrganizersForm {
+    #[field(default = String::new())]
+    csrf: String,
+    source_event: String,
+}
+
+#[rocket::post("/event/<series>/<event>/setup/copy-organizers", data = "<form>")]
+pub(crate) async fn copy_organizers(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, CopyOrganizersForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let event_data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    Ok(if let Some(ref value) = form.value {
+        if event_data.is_ended() {
+            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured."));
+        }
+        if !me.is_global_admin() {
+            form.context.push_error(form::Error::validation("You must be a global admin to configure this event."));
+        }
+        let (source_series, source_event_slug) = match value.source_event.splitn(2, '/').collect::<Vec<_>>()[..] {
+            [s, e] if !s.is_empty() && !e.is_empty() => {
+                let source_series = s.parse::<Series>().map_err(|()| StatusOrError::Status(Status::BadRequest))?;
+                (source_series, e.to_owned())
+            }
+            _ => {
+                form.context.push_error(form::Error::validation("Please select a source event.").with_name("source_event"));
+                return Ok(RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?));
+            }
+        };
+        if form.context.errors().next().is_some() {
+            return Ok(RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?));
+        }
+        sqlx::query!(
+            "INSERT INTO organizers (series, event, organizer) SELECT $1, $2, organizer FROM organizers WHERE series = $3 AND event = $4 ON CONFLICT DO NOTHING",
+            event_data.series as _, &event_data.event, source_series as _, &source_event_slug
+        ).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+        RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
+    } else {
+        RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?)
     })
 }
 
