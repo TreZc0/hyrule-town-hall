@@ -410,6 +410,7 @@ enum RestreamersFormDefaults<'v> {
     None,
     AddContext(Context<'v>),
     RemoveContext(Id<Users>, Context<'v>),
+    CopyContext(Context<'v>),
 }
 
 impl<'v> RestreamersFormDefaults<'v> {
@@ -422,6 +423,14 @@ impl<'v> RestreamersFormDefaults<'v> {
 
     fn add_errors(&self) -> Vec<&form::Error<'v>> {
         if let Self::AddContext(ctx) = self {
+            ctx.errors().collect()
+        } else {
+            Vec::default()
+        }
+    }
+
+    fn copy_errors(&self) -> Vec<&form::Error<'v>> {
+        if let Self::CopyContext(ctx) = self {
             ctx.errors().collect()
         } else {
             Vec::default()
@@ -453,6 +462,11 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
         };
         if event.organizers(&mut transaction).await?.contains(me) || me.is_global_admin() || is_game_admin {
             let restreamers = event.restreamers(&mut transaction).await?;
+            let is_elevated = me.is_global_admin() || is_game_admin;
+            let all_events = sqlx::query!(
+                r#"SELECT e.series AS "series: Series", e.event, e.display_name FROM events e WHERE ($1::bool) OR EXISTS (SELECT 1 FROM organizers o WHERE o.series = e.series AND o.event = e.event AND o.organizer = $2) ORDER BY e.series, e.event"#,
+                is_elevated, me.id as _
+            ).fetch_all(&mut *transaction).await?;
             html! {
                 h2 : "Manage restream coordinators";
                 p : "Restream coordinators can add/edit restream URLs and assign restreamers to this event's races.";
@@ -493,6 +507,25 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
                         label(class = "help") : "(Start typing a username to search for users. The search will match display names, racetime.gg IDs, and Discord usernames.)";
                     });
                 }, errors, "Add");
+
+                h3 : "Copy from another event";
+                @let mut copy_errors = defaults.copy_errors();
+                : full_form(uri!(copy_restreamers(event.series, &*event.event)), csrf, html! {
+                    : form_field("source_event", &mut copy_errors, html! {
+                        label(for = "source_event") : "Copy restream coordinators from:";
+                        select(id = "source_event", name = "source_event") {
+                            option(value = "") : "-- Select event --";
+                            @for ev in &all_events {
+                                @if !(ev.series == event.series && ev.event == *event.event) {
+                                    option(value = format!("{}/{}", ev.series.slug(), ev.event)) {
+                                        : format!("{} / {}", ev.series.display_name(), ev.display_name);
+                                    }
+                                }
+                            }
+                        }
+                        label(class = "help") : "All restream coordinators from the selected event will be added to this event. Existing coordinators are kept.";
+                    });
+                }, copy_errors, "Copy");
 
                 script(src = static_url!("user-search.js")) {}
             }
@@ -612,6 +645,55 @@ pub(crate) async fn remove_restreamer(pool: &State<PgPool>, me: User, uri: Origi
         }
     } else {
         RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::RemoveContext(restreamer, form.context)).await?)
+    })
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct CopyRestreamersForm {
+    #[field(default = String::new())]
+    csrf: String,
+    source_event: String,
+}
+
+#[rocket::post("/event/<series>/<event>/configure/restreamers/copy-from", data = "<form>")]
+pub(crate) async fn copy_restreamers(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, CopyRestreamersForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    Ok(if let Some(ref value) = form.value {
+        if data.is_ended() {
+            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured."));
+        }
+        let is_game_admin = if let Some(game) = data.game(&mut transaction).await? {
+            game.is_admin(&mut transaction, &me).await.map_err(event::Error::from)?
+        } else {
+            false
+        };
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() && !is_game_admin {
+            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+        }
+        let (source_series, source_event_slug) = match value.source_event.splitn(2, '/').collect::<Vec<_>>()[..] {
+            [s, e] => {
+                let source_series = s.parse::<Series>().map_err(|()| StatusOrError::Status(Status::BadRequest))?;
+                (source_series, e.to_owned())
+            }
+            _ => {
+                form.context.push_error(form::Error::validation("Please select a source event.").with_name("source_event"));
+                return Ok(RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::CopyContext(form.context)).await?));
+            }
+        };
+        if form.context.errors().next().is_some() {
+            return Ok(RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::CopyContext(form.context)).await?));
+        }
+        sqlx::query!(
+            "INSERT INTO restreamers (series, event, restreamer) SELECT $1, $2, restreamer FROM restreamers WHERE series = $3 AND event = $4 ON CONFLICT DO NOTHING",
+            data.series as _, &data.event, source_series as _, &source_event_slug
+        ).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+        RedirectOrContent::Redirect(Redirect::to(uri!(restreamers_get(series, event))))
+    } else {
+        RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::CopyContext(form.context)).await?)
     })
 }
 
