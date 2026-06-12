@@ -1443,7 +1443,7 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                 if let startgg::user_slug_query::ResponseData { user: Some(startgg::user_slug_query::UserSlugQueryUser { discriminator: Some(slug), .. }) } = response {
                                     msg.push(" with start.gg user slug ");
                                     msg.push_mono_safe(slug);
-                                    msg.push(". Unless they signed up themselves, please go to the start.gg tournament settings › Attendees › Add Attendee, paste the user slug into the search field, and select the first result.");
+                                    msg.push(".");
                                 } else {
                                     msg.push(" with unknown start.gg user ID ");
                                     msg.push_mono_safe(&startgg_id.0);
@@ -1451,10 +1451,21 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                     msg.mention(&ADMIN_USER);
                                     msg.push(" please investigate.");
                                 }
+                                let built_msg = msg.build();
                                 if let Some(organizer_channel) = data.discord_organizer_channel {
-                                    organizer_channel.say(&*discord_ctx, msg.build()).await?;
+                                    if let Err(e) = organizer_channel.say(&*discord_ctx, &built_msg).await {
+                                        let dm_msg = MessageBuilder::default()
+                                            .push("Failed to post to organizer channel (")
+                                            .push_safe(e.to_string())
+                                            .push("). Please handle manually: ")
+                                            .push_safe(&built_msg)
+                                            .build();
+                                        if let Ok(ch) = ADMIN_USER.create_dm_channel(&*discord_ctx).await {
+                                            let _ = ch.say(&*discord_ctx, dm_msg).await;
+                                        }
+                                    }
                                 } else {
-                                    ADMIN_USER.create_dm_channel(&*discord_ctx).await?.say(&*discord_ctx, msg.build()).await?;
+                                    ADMIN_USER.create_dm_channel(&*discord_ctx).await?.say(&*discord_ctx, built_msg).await?;
                                 }
                             } else {
                                 // enter event on start.gg anonymously
@@ -1464,12 +1475,20 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                     .mention_user(&me)
                                     .push(" signed up for ")
                                     .push_safe(&data.display_name)
-                                    .push(" without start.gg account. Either tell them to update their signup, or go to the start.gg tournament settings › Attendees › Add Attendee, click the search field, then click “Or add someone without an account”, then enter ")
-                                    .push_mono_safe(me.display_name())
-                                    .push(" as the gamertag. Please use 'Sync StartGG Participant IDs' on the HTH Configure page to sync after - notify TreZ in case of errors.")
+                                    .push(" without start.gg account.")
                                     .build();
                                 if let Some(organizer_channel) = data.discord_organizer_channel {
-                                    organizer_channel.say(&*discord_ctx, msg).await?;
+                                    if let Err(e) = organizer_channel.say(&*discord_ctx, &msg).await {
+                                        let dm_msg = MessageBuilder::default()
+                                            .push("Failed to post to organizer channel (")
+                                            .push_safe(e.to_string())
+                                            .push("). Please handle manually: ")
+                                            .push_safe(&msg)
+                                            .build();
+                                        if let Ok(ch) = ADMIN_USER.create_dm_channel(&*discord_ctx).await {
+                                            let _ = ch.say(&*discord_ctx, dm_msg).await;
+                                        }
+                                    }
                                 } else {
                                     ADMIN_USER.create_dm_channel(&*discord_ctx).await?.say(&*discord_ctx, msg).await?;
                                 }
