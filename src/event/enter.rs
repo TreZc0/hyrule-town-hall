@@ -120,6 +120,9 @@ pub(crate) enum Requirement {
         key: String,
         #[serde_as(as = "DeserializeRawHtml")]
         label: RawHtml<String>,
+        #[serde_as(as = "Option<DeserializeRawHtml>")]
+        #[serde(default)]
+        prompt: Option<RawHtml<String>>,
         /// If true, players cannot change this choice after the event has started.
         #[serde(default)]
         locked: bool,
@@ -130,6 +133,9 @@ pub(crate) enum Requirement {
         key: String,
         #[serde_as(as = "DeserializeRawHtml")]
         label: RawHtml<String>,
+        #[serde_as(as = "Option<DeserializeRawHtml>")]
+        #[serde(default)]
+        prompt: Option<RawHtml<String>>,
         /// If true, players cannot change this choice after the event has started.
         #[serde(default)]
         locked: bool,
@@ -528,16 +534,16 @@ impl Requirement {
                     }),
                 }
             }
-            Self::BooleanChoice { key, label, .. } => {
+            Self::BooleanChoice { key, label, prompt, .. } => {
                 let key = key.clone();
-                let label = label.clone();
+                let display = prompt.as_ref().unwrap_or(label).clone();
                 let yes_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "yes");
                 let no_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "no");
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
                         : form_field(&format!("custom_choices[{key}]"), errors, html! {
-                            label(for = &format!("custom_choices[{key}]")) : label;
+                            label(for = &format!("custom_choices[{key}]")) : display;
                             br;
                             input(id = &format!("custom_choices[{key}]-yes"), type = "radio", name = &format!("custom_choices[{key}]"), value = "yes", checked? = yes_checked);
                             label(for = &format!("custom_choices[{key}]-yes")) : "Yes";
@@ -547,9 +553,9 @@ impl Requirement {
                     }),
                 }
             }
-            Self::RadioChoice { key, label, .. } => {
+            Self::RadioChoice { key, label, prompt, .. } => {
                 let key = key.clone();
-                let label = label.clone();
+                let display = prompt.as_ref().unwrap_or(label).clone();
                 let never_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "never");
                 let random_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "random");
                 let always_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "always");
@@ -557,7 +563,7 @@ impl Requirement {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| html! {
                         : form_field(&format!("custom_choices[{key}]"), errors, html! {
-                            label(for = &format!("custom_choices[{key}]")) : label;
+                            label(for = &format!("custom_choices[{key}]")) : display;
                             br;
                             input(id = &format!("custom_choices[{key}]-never"), type = "radio", name = &format!("custom_choices[{key}]"), value = "never", checked? = never_checked);
                             label(for = &format!("custom_choices[{key}]-never")) : "Never";
