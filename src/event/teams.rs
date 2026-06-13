@@ -40,6 +40,7 @@ pub(crate) enum QualifierScoreKind {
     Sgl2024Online,
     Sgl2025Online,
     TwwrMiniblins26,
+    TwwrMain,
 }
 
 impl QualifierScoreKind {
@@ -47,13 +48,13 @@ impl QualifierScoreKind {
         match self {
             Self::Standard => 5,
             Self::Sgl2023Online | Self::Sgl2024Online | Self::Sgl2025Online => 3,
-            Self::TwwrMiniblins26 => 2,
+            Self::TwwrMiniblins26 | Self::TwwrMain => 2,
         }
     }
 
     pub(crate) fn max_qualifiers_that_count(self) -> usize {
         match self {
-            Self::TwwrMiniblins26 => 4,
+            Self::TwwrMiniblins26 | Self::TwwrMain => 4,
             _ => usize::MAX,
         }
     }
@@ -307,6 +308,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                     QualifierScoreKind::Standard => 1100.0,
                                     QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => 110.0,
                                     QualifierScoreKind::TwwrMiniblins26 => 5000.0,
+                                    QualifierScoreKind::TwwrMain => 2000.0,
                                 }
                             }), RoundSource::Live(live_race_num)));
                         }
@@ -326,6 +328,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                     QualifierScoreKind::Standard => 1100.0,
                                     QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => 110.0,
                                     QualifierScoreKind::TwwrMiniblins26 => 5000.0,
+                                    QualifierScoreKind::TwwrMain => 2000.0,
                                 }
                             }), RoundSource::Live(live_race_num)));
                         }
@@ -342,6 +345,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                         QualifierScoreKind::Standard => 1100.0,
                                         QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => 110.0,
                                         QualifierScoreKind::TwwrMiniblins26 => 5000.0,
+                                    QualifierScoreKind::TwwrMain => 2000.0,
                                     }
                                 }), RoundSource::Live(live_race_num)));
                             }
@@ -385,7 +389,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                             let par_cutoff = match score_kind {
                                 QualifierScoreKind::Standard => 7u8,
                                 QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => if num_entrants < 20 { 3 } else { 4 },
-                                QualifierScoreKind::TwwrMiniblins26 => 3,
+                                QualifierScoreKind::TwwrMiniblins26 | QualifierScoreKind::TwwrMain => 3,
                             };
                             if worst_case_extrapolation.is_none() && room_data.status.value != RaceStatusValue::Finished && num_finishers < usize::from(par_cutoff) {
                                 continue // scores are not yet accurate
@@ -427,6 +431,10 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                         QualifierScoreKind::TwwrMiniblins26 => {
                                             let par_time = finish_times[0..usize::from(par_cutoff)].iter().sum::<Duration>() / u32::from(par_cutoff);
                                             (2000.0 + ((1.0 - (finish_time.as_secs_f64() - par_time.as_secs_f64()) / par_time.as_secs_f64()) * 1000.0).floor()).max(100.0)
+                                        }
+                                        QualifierScoreKind::TwwrMain => {
+                                            let par_time = finish_times[0..usize::from(par_cutoff)].iter().sum::<Duration>() / u32::from(par_cutoff);
+                                            ((1.0 - (finish_time.as_secs_f64() - par_time.as_secs_f64()) / par_time.as_secs_f64()) * 1000.0).max(100.0)
                                         }
                                     }
                                 } else {
@@ -479,10 +487,10 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     let par_cutoff = match score_kind {
                         QualifierScoreKind::Standard => 7usize.min(num_entrants),
                         QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => if num_entrants < 20 { 3 } else { 4 },
-                        QualifierScoreKind::TwwrMiniblins26 => 3,
+                        QualifierScoreKind::TwwrMiniblins26 | QualifierScoreKind::TwwrMain => 3,
                     };
                     if finish_times.len() < par_cutoff {
-                        if matches!(score_kind, QualifierScoreKind::TwwrMiniblins26) {
+                        if matches!(score_kind, QualifierScoreKind::TwwrMiniblins26 | QualifierScoreKind::TwwrMain) {
                             // Not enough finishers for par — record entries with a
                             // sentinel score of -1 so participation counts are accurate.
                             // Scores will be recalculated when enough finishers exist.
@@ -514,6 +522,10 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                             QualifierScoreKind::TwwrMiniblins26 => {
                                 let par_time = finish_times[0..par_cutoff].iter().sum::<Duration>() / par_cutoff as u32;
                                 (2000.0 + ((1.0 - (finish_time.as_secs_f64() - par_time.as_secs_f64()) / par_time.as_secs_f64()) * 1000.0).floor()).max(100.0)
+                            }
+                            QualifierScoreKind::TwwrMain => {
+                                let par_time = finish_times[0..par_cutoff].iter().sum::<Duration>() / par_cutoff as u32;
+                                ((1.0 - (finish_time.as_secs_f64() - par_time.as_secs_f64()) / par_time.as_secs_f64()) * 1000.0).max(100.0)
                             }
                         };
                         let user = User::from_id(&mut **transaction, *player_id).await?.expect("async player not found");
@@ -665,7 +677,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                                     num_entered, round_scores,
                                 }
                             }
-                            QualifierScoreKind::TwwrMiniblins26 => {
+                            QualifierScoreKind::TwwrMiniblins26 | QualifierScoreKind::TwwrMain => {
                                 let max_count = score_kind.max_qualifiers_that_count();
                                 let num_entered = scores.len();
                                 let num_finished = scores.iter().filter(|&&score| score != 0.0).count(); // -1 sentinel counts as finished
@@ -930,7 +942,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     let (num1, score1, entered1) = match *qualification1 {
                         Qualification::Multiple { num_entered, num_finished, score, .. } => match score_kind { //TODO determine based on enter flow
                             QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online => (num_finished, score, num_entered),
-                            QualifierScoreKind::TwwrMiniblins26 => {
+                            QualifierScoreKind::TwwrMiniblins26 | QualifierScoreKind::TwwrMain => {
                                 let max_count = score_kind.max_qualifiers_that_count();
                                 (num_finished.min(max_count), score, num_entered.min(max_count))
                             }
@@ -941,7 +953,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     let (num2, score2, entered2) = match *qualification2 {
                         Qualification::Multiple { num_entered, num_finished, score, .. } => match score_kind { //TODO determine based on enter flow
                             QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online => (num_finished, score, num_entered),
-                            QualifierScoreKind::TwwrMiniblins26 => {
+                            QualifierScoreKind::TwwrMiniblins26 | QualifierScoreKind::TwwrMain => {
                                 let max_count = score_kind.max_qualifiers_that_count();
                                 (num_finished.min(max_count), score, num_entered.min(max_count))
                             }
@@ -1120,7 +1132,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                 });
             }
         }
-        QualifierKind::Score(QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online | QualifierScoreKind::TwwrMiniblins26) => { //TODO determine based on enter flow
+        QualifierKind::Score(QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online | QualifierScoreKind::TwwrMiniblins26 | QualifierScoreKind::TwwrMain) => { //TODO determine based on enter flow
             column_headers.push(html! {
                 th : "Qualifiers Entered";
             });
@@ -1301,7 +1313,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                 let Qualification::Multiple { num_finished, .. } = qualification else { unreachable!("qualification kind mismatch") };
                                 num_finished < 3
                             }
-                            QualifierKind::Score(QualifierScoreKind::TwwrMiniblins26) => {
+                            QualifierKind::Score(QualifierScoreKind::TwwrMiniblins26 | QualifierScoreKind::TwwrMain) => {
                                 let Qualification::Multiple { num_finished, .. } = qualification else { unreachable!("qualification kind mismatch") };
                                 num_finished < 2
                             }

@@ -556,7 +556,8 @@ impl<'a> Data<'a> {
                     (Series::SpeedGaming, "2024onl") => teams::QualifierScoreKind::Sgl2024Online,
                     (Series::SpeedGaming, "2025onl") => teams::QualifierScoreKind::Sgl2025Online,
                     (Series::Standard, "8") => teams::QualifierScoreKind::Standard,
-                    (Series::TwwrMain, "miniblins26" | "s9") => teams::QualifierScoreKind::TwwrMiniblins26,
+                    (Series::TwwrMain, "miniblins26") => teams::QualifierScoreKind::TwwrMiniblins26,
+                    (Series::TwwrMain, "s9") => teams::QualifierScoreKind::TwwrMain,
                     _ => unreachable!("checked by outer match"),
                 })
             }
