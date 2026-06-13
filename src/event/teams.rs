@@ -1464,10 +1464,10 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                     }
                                     td(style = "text-align: right;") : format!("{score:.2}");
                                 }
-                                (QualifierKind::Score(QualifierScoreKind::TwwrMiniblins26), Qualification::Multiple { num_entered, num_finished, num_forfeited, score, round_scores }) => {
+                                (QualifierKind::Score(score_kind @ (QualifierScoreKind::TwwrMiniblins26 | QualifierScoreKind::TwwrMain)), Qualification::Multiple { num_entered, num_finished, num_forfeited, score, round_scores }) => {
                                     @let hide_counts = !is_organizer && matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !all_qualifiers_ended;
                                     @let hide_points = !is_organizer && matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPoints | QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !all_qualifiers_ended;
-                                    @let max_count = QualifierScoreKind::TwwrMiniblins26.max_qualifiers_that_count();
+                                    @let max_count = score_kind.max_qualifiers_that_count();
                                     td(style = "text-align: right;") {
                                         @if hide_counts { : "—"; }
                                         else { : num_entered.min(max_count); }
@@ -1487,7 +1487,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                         } else if round_scores.is_empty() {
                                             : format!("{score:.2}");
                                         } else {
-                                            @let has_pending = round_scores.iter().take(QualifierScoreKind::TwwrMiniblins26.max_qualifiers_that_count()).any(|rs| rs.score < r64(0.0));
+                                            @let has_pending = round_scores.iter().take(score_kind.max_qualifiers_that_count()).any(|rs| rs.score < r64(0.0));
                                             details(class = "round-breakdown") {
                                                 summary {
                                                     : format!("{score:.2}");
@@ -1496,7 +1496,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                                     }
                                                 }
                                                 div(class = "round-scores") {
-                                                    @for (i, round_score) in round_scores.iter().take(QualifierScoreKind::TwwrMiniblins26.max_qualifiers_that_count()).enumerate() {
+                                                    @for (i, round_score) in round_scores.iter().take(score_kind.max_qualifiers_that_count()).enumerate() {
                                                         div(style = "font-size: 0.85em;") {
                                                             : format!("Race {} ({}): ", i + 1, round_score.source);
                                                             @if round_score.score < r64(0.0) {
