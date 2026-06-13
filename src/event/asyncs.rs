@@ -68,7 +68,7 @@ async fn asyncs_form(
         .and_then(|row| row.tfb_uuid)
         .map(|uuid| uuid.to_string())
         .unwrap_or_default();
-    let is_owr_event = event.series == Series::Cabookey || (event.series == Series::Crosskeys && event.event == "2026");
+    let is_owr_event = event.series == Series::Cabookey;
     let default_xkeys_uuid = if is_owr_event {
         editing_async
             .and_then(|row| row.seed_data.as_ref())
@@ -613,7 +613,7 @@ pub(crate) async fn post(
                 } else {
                     None
                 }
-            } else if matches!(event_data.series, Series::Cabookey) || (event_data.series == Series::Crosskeys && event_data.event == "2026") {
+            } else if matches!(event_data.series, Series::Cabookey) {
                 xkeys_uuid_parsed.map(|uuid| serde_json::json!({
                     "type": "alttpr_owr",
                     "uuid": uuid.to_string(),
@@ -622,8 +622,8 @@ pub(crate) async fn post(
                 None
             };
 
-            // For OWR events (Cabookey, Crosskeys 2026), UUID is stored in seed_data; xkeys_uuid column stays NULL
-            let xkeys_uuid = if matches!(event_data.series, Series::Cabookey) || (event_data.series == Series::Crosskeys && event_data.event == "2026") {
+            // For OWR events (Cabookey), UUID is stored in seed_data; xkeys_uuid column stays NULL
+            let xkeys_uuid = if matches!(event_data.series, Series::Cabookey) {
                 None
             } else {
                 xkeys_uuid_parsed

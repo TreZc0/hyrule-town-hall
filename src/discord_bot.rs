@@ -4607,13 +4607,9 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
                 let choices = racetime_bot::owr_choices_for_race(&global_state.db_pool, &cal_event.race).await;
                 global_state.clone().roll_owr_seed(choices, cabookey::OWR_CONFIG)
             }
-            racetime_bot::Goal::Crosskeys2025 => {
+            racetime_bot::Goal::Crosskeys2025 | racetime_bot::Goal::Crosskeys2026 => {
                 let crosskeys_options = CrosskeysRaceOptions::for_race(&global_state.db_pool, &cal_event.race).await;
-                global_state.clone().roll_crosskeys2025_seed(crosskeys_options)
-            }
-            racetime_bot::Goal::Crosskeys2026 => {
-                let crosskeys_options = CrosskeysRaceOptions::for_race(&global_state.db_pool, &cal_event.race).await;
-                global_state.clone().roll_crosskeys2026_seed(crosskeys_options)
+                global_state.clone().roll_crosskeys_seed(crosskeys_options)
             }
             racetime_bot::Goal::MysteryD20 => {
                 global_state.clone().roll_mysteryd20_seed()
