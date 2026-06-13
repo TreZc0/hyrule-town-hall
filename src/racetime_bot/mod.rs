@@ -651,7 +651,7 @@ impl GlobalState {
             };
             let url = format!(
                 "https://seedbot.twwrando.com/generate?randomizer_path={}&permalink={}&prefix=HTH&generate_spoiler_log={}",
-                randomizer_path, settings_string, generate_spoiler_log
+                randomizer_path, urlencoding::encode(&settings_string), generate_spoiler_log
             );
             match self.http_client.post(&url)
                 .header("accept", "application/json")

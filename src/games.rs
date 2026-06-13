@@ -310,7 +310,7 @@ async fn game_page<'a>(
                     a(href = uri!(manage_restreamers(&game.name))) : "Manage Restream Coordinators";
                 }
                 p {
-                    a(href = uri!(manage_notification_channels(&game.name))) : "Manage Notification Channels";
+                    a(href = uri!(manage_notification_channels(&game.name))) : "Manage Application Notification Channels";
                 }
             } else if is_restreamer {
                 h2 : "Coordinator Actions";
@@ -2048,7 +2048,9 @@ pub(crate) async fn manage_notification_channels(
 
     let content = html! {
         article {
-            h1 : format!("Manage Notification Channels — {}", game.display_name);
+            h1 : format!("Manage Application Notification Channels — {}", game.display_name);
+
+            p : "When a user applies for a volunteer role that is not set to auto-approve, a notification is posted to the configured channel for that role's language. Configure one channel per language below.";
 
             h2 : "Current Notification Channels";
             @if channels.is_empty() {
