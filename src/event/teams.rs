@@ -1173,10 +1173,13 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
     }
     if let Some(ref enter_flow) = data.enter_flow {
         for requirement in &enter_flow.requirements {
-            if let enter::Requirement::BooleanChoice { label, .. } | enter::Requirement::RadioChoice { label, .. } = requirement {
-                column_headers.push(html! {
-                    th : label;
-                });
+            match requirement {
+                enter::Requirement::BooleanChoice { label, .. } | enter::Requirement::RadioChoice { label, .. } => {
+                    column_headers.push(html! {
+                        th : label;
+                    });
+                }
+                _ => {}
             }
         }
     }
@@ -1645,12 +1648,20 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                             }
                             @if let Some(ref enter_flow) = data.enter_flow {
                                 @for requirement in &enter_flow.requirements {
-                                    @if let enter::Requirement::BooleanChoice { key, .. } = requirement {
-                                        td {
+                                    @match requirement {
+                                        enter::Requirement::BooleanChoice { key, .. } => td {
                                             @if custom_choices.get(key).is_some_and(|v| v == "yes") {
                                                 : "✓";
                                             }
                                         }
+                                        enter::Requirement::RadioChoice { key, .. } => td {
+                                            @match custom_choices.get(key).map(|v| v.as_str()) {
+                                                Some("always") => : "✓";
+                                                Some("random") => : "?";
+                                                _ => {}
+                                            }
+                                        }
+                                        _ => {}
                                     }
                                     @if let enter::Requirement::RadioChoice { key, .. } = requirement {
                                         td {

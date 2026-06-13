@@ -1942,7 +1942,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             });
                             @if let Some(ref enter_flow) = data.enter_flow {
                                 @for requirement in &enter_flow.requirements {
-                                    @if let enter::Requirement::BooleanChoice { key, label, locked } = requirement {
+                                    @if let enter::Requirement::BooleanChoice { key, label, prompt, locked } = requirement {
                                         @let field_name = format!("custom_choices[{key}]");
                                         @let field_id_yes = format!("custom_choices[{key}]-yes");
                                         @let field_id_no = format!("custom_choices[{key}]-no");
@@ -1950,7 +1950,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                         @let no_checked = ctx.field_value(&*field_name).map_or_else(|| row.custom_choices.get(key).is_some_and(|v| v == "no"), |value| value == "no");
                                         @let is_locked = has_active_race || *locked;
                                         : form_field(&field_name, &mut errors, html! {
-                                            label(for = &field_name) : label;
+                                            label(for = &field_name) : prompt.as_ref().unwrap_or(label);
                                             br;
                                             input(id = &field_id_yes, type = "radio", name = &field_name, value = "yes", checked? = yes_checked, disabled? = is_locked);
                                             label(for = &field_id_yes) : "Yes";
@@ -1958,7 +1958,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                             label(for = &field_id_no) : "No";
                                         });
                                     }
-                                    @if let enter::Requirement::RadioChoice { key, label, locked } = requirement {
+                                    @if let enter::Requirement::RadioChoice { key, label, prompt, locked } = requirement {
                                         @let field_name = format!("custom_choices[{key}]");
                                         @let field_id_never = format!("custom_choices[{key}]-never");
                                         @let field_id_random = format!("custom_choices[{key}]-random");
@@ -1968,7 +1968,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                         @let always_checked = ctx.field_value(&*field_name).map_or_else(|| row.custom_choices.get(key).is_some_and(|v| v == "always"), |value| value == "always");
                                         @let is_locked = has_active_race || *locked;
                                         : form_field(&field_name, &mut errors, html! {
-                                            label(for = &field_name) : label;
+                                            label(for = &field_name) : prompt.as_ref().unwrap_or(label);
                                             br;
                                             input(id = &field_id_never, type = "radio", name = &field_name, value = "never", checked? = never_checked, disabled? = is_locked);
                                             label(for = &field_id_never) : "Never";
