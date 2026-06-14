@@ -10,7 +10,7 @@ use {
     },
     crate::{
         game,
-
+        hash_icon_db::HashIconData,
         notification::SimpleNotificationKind,
         prelude::*,
         racetime_bot::VersionedBranch,
@@ -3524,7 +3524,7 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, global_state: &State<Arc
                         ("keydrop", "Enemy/Pot Keydrop"),
                         ("mirror_scroll", "Starting Mirror Scroll"),
                         ("pseudoboots", "Starting Pseudoboots"),
-                        ("zw", "Zelda's Wish"),
+                        ("zw", "ZW"),
                     ] {
                         div {
                             input(type="checkbox", id=key, name="choices", value=key);
@@ -3629,7 +3629,7 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
             let settings_string = data.settings_string.ok_or(StatusOrError::Status(Status::NotFound))?;
             let version = data.rando_version;
             transaction.commit().await?;
-            let rx = Arc::clone(&*global_state).roll_twwr_seed(version, settings_string, UnlockSpoilerLog::Now);
+            let rx = Arc::clone(&*global_state).roll_twwr_seed(version, settings_string, UnlockSpoilerLog::Never);
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         },
         racetime_bot::Goal::Cabookey2026 => {
@@ -3737,10 +3737,17 @@ pub(crate) async fn practice_seed_status(pool: &State<PgPool>, practice_seeds: &
                         p {
                             a(href = &url, target = "_blank") : "Open in Patcher";
                         }
-                        @if let Some(hash) = seed_hash {
+                        @if let Some(hash) = &seed_hash {
                             p {
                                 strong : "Seed Hash: ";
-                                code : hash.join(" ");
+                                @let game_id = data.game(&mut transaction).await?.map(|g| g.id).unwrap_or(1);
+                                div(class = "hash") {
+                                    @for hash_icon_name in hash.iter() {
+                                        @if let Some(hash_icon_data) = HashIconData::by_name(&mut transaction, game_id, hash_icon_name).await? {
+                                            img(class = "hash-icon", alt = hash_icon_name, src = format!("/static/hash-icon/{}", hash_icon_data.file_name));
+                                        }
+                                    }
+                                }
                             }
                         }
                         @if !selected_choices.is_empty() {
@@ -3765,10 +3772,17 @@ pub(crate) async fn practice_seed_status(pool: &State<PgPool>, practice_seeds: &
                         p {
                             a(href = &url, target = "_blank") : label.as_str();
                         }
-                        @if let Some(hash) = seed_hash {
+                        @if let Some(hash) = &seed_hash {
                             p {
                                 strong : "Seed Hash: ";
-                                code : hash.join(" ");
+                                @let game_id = data.game(&mut transaction).await?.map(|g| g.id).unwrap_or(1);
+                                div(class = "hash") {
+                                    @for hash_icon_name in hash.iter() {
+                                        @if let Some(hash_icon_data) = HashIconData::by_name(&mut transaction, game_id, hash_icon_name).await? {
+                                            img(class = "hash-icon", alt = hash_icon_name, src = format!("/static/hash-icon/{}", hash_icon_data.file_name));
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
