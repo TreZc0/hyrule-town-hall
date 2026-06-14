@@ -3550,6 +3550,22 @@ impl CrosskeysRaceOptions {
         }
     }
 
+    pub(crate) fn from_always_set(choices: &std::collections::HashSet<&str>) -> Self {
+        let opt = |key: &str| if choices.contains(key) { RadioChoiceValue::Always } else { RadioChoiceValue::Never };
+        CrosskeysRaceOptions {
+            all_dungeons: opt("all_dungeons"),
+            completionist: opt("completionist"),
+            flute: opt("flute"),
+            hovering: RadioChoiceValue::Never,
+            inverted: opt("inverted"),
+            keydrop: opt("keydrop"),
+            mirror_scroll: opt("mirror_scroll"),
+            no_delay: RadioChoiceValue::Never,
+            pb: opt("pseudoboots"),
+            zw: opt("zw"),
+        }
+    }
+
     pub(crate) async fn for_race(db_pool: &PgPool, race: &Race) -> Self {
         let teams = race.teams();
         let team_rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _).fetch_all(db_pool).await.expect("Database read failed");

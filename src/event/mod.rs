@@ -901,7 +901,8 @@ impl<'a> Data<'a> {
                         Some(racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB) => true,
                         Some(racetime_bot::Goal::AlttprDeRivalsCupBrackets | racetime_bot::Goal::AlttprDeRivalsCupGroups) => true,
                         Some(racetime_bot::Goal::Cabookey2026) => true,
-                        Some(racetime_bot::Goal::TwwrMainWeekly | racetime_bot::Goal::TwwrMainMiniblins26) => self.settings_string.is_some(),
+                        Some(racetime_bot::Goal::Crosskeys2025 | racetime_bot::Goal::Crosskeys2026) => true,
+                        Some(racetime_bot::Goal::TwwrMainWeekly | racetime_bot::Goal::TwwrMainMiniblins26 | racetime_bot::Goal::TwwrMainS9) => self.settings_string.is_some(),
                         _ => is_ootr && self.single_settings.is_some(),
                     };
                     has_practice.then(|| uri!(practice_seed(self.series, &*self.event)))
@@ -3491,7 +3492,7 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, global_state: &State<Arc
                 p : "Generate a practice seed with this event's standard settings.";
             }, vec![], "Generate Practice Seed")
         },
-        Some(racetime_bot::Goal::TwwrMainWeekly | racetime_bot::Goal::TwwrMainMiniblins26) if data.settings_string.is_some() => {
+        Some(racetime_bot::Goal::TwwrMainWeekly | racetime_bot::Goal::TwwrMainMiniblins26 | racetime_bot::Goal::TwwrMainS9) if data.settings_string.is_some() => {
             full_form(form_uri, csrf.as_ref(), html! {
                 p : "Generate a practice seed with this event's standard settings.";
             }, vec![], "Generate Practice Seed")
@@ -3505,6 +3506,29 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, global_state: &State<Arc
                         div {
                             input(type="checkbox", id=patch.key, name="choices", value=patch.key);
                             label(for=patch.key) : label_for_owr_choice(patch.key);
+                        }
+                    }
+                }
+            }, vec![], "Generate Practice Seed")
+        },
+        Some(racetime_bot::Goal::Crosskeys2025 | racetime_bot::Goal::Crosskeys2026) => {
+            full_form(form_uri, csrf.as_ref(), html! {
+                p : "Check any optional rules to include in your practice seed. Leave all unchecked for base settings.";
+                fieldset {
+                    legend : "Options";
+                    @for (key, label) in [
+                        ("all_dungeons", "All Dungeons"),
+                        ("completionist", "Completionist"),
+                        ("flute", "Starting Flute"),
+                        ("inverted", "Inverted World State"),
+                        ("keydrop", "Enemy/Pot Keydrop"),
+                        ("mirror_scroll", "Starting Mirror Scroll"),
+                        ("pseudoboots", "Starting Pseudoboots"),
+                        ("zw", "Zelda's Wish"),
+                    ] {
+                        div {
+                            input(type="checkbox", id=key, name="choices", value=key);
+                            label(for=key) : label;
                         }
                     }
                 }
@@ -3599,7 +3623,7 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
     }
 
     match goal.ok_or(StatusOrError::Status(Status::NotFound))? {
-        racetime_bot::Goal::TwwrMainWeekly | racetime_bot::Goal::TwwrMainMiniblins26 => {
+        racetime_bot::Goal::TwwrMainWeekly | racetime_bot::Goal::TwwrMainMiniblins26 | racetime_bot::Goal::TwwrMainS9 => {
             let mut transaction = pool.begin().await?;
             let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
             let settings_string = data.settings_string.ok_or(StatusOrError::Status(Status::NotFound))?;
@@ -3635,6 +3659,12 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
             }
             let options = racetime_bot::AlttprDeRaceOptions { mode, custom_choices, display_only_choices: Vec::new() };
             let rx = Arc::clone(&*global_state).roll_alttprde9_seed(options);
+            racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
+        },
+        racetime_bot::Goal::Crosskeys2025 | racetime_bot::Goal::Crosskeys2026 => {
+            let choices: HashSet<&str> = form.choices.iter().map(|s| s.as_str()).collect();
+            let crosskeys_options = racetime_bot::CrosskeysRaceOptions::from_always_set(&choices);
+            let rx = Arc::clone(&*global_state).roll_crosskeys_seed(crosskeys_options);
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         },
         racetime_bot::Goal::AlttprDeRivalsCupBrackets | racetime_bot::Goal::AlttprDeRivalsCupGroups => {
