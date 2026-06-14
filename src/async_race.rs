@@ -261,19 +261,17 @@ impl AsyncRaceManager {
             content.push("---");
         }
 
-        if let Some(racetime_bot::seed_gen_type::SeedGenType::AlttprDoorRando { source: racetime_bot::seed_gen_type::AlttprDrSource::MutualChoices, .. }) = event.seed_gen_type.as_ref() {
-            let crosskeys_options = racetime_bot::CrosskeysRaceOptions::for_race(db_pool, race).await;
+        if let Some(racetime_bot::seed_gen_type::SeedGenType::AlttprDoorRando { source: racetime_bot::seed_gen_type::AlttprDrSource::MutualChoices { config }, .. }) = event.seed_gen_type.as_ref() {
+            let choices = racetime_bot::owr_choices_for_race(db_pool, race).await;
 
             content.push_line("");
             content.push_line("");
             content.push("---");
             content.push_line("");
-            content.push(format!("**Seed Settings:** {}", crosskeys_options.as_seed_options_str()));
+            content.push(format!("**Seed Settings:** {}", racetime_bot::owr_choices_description(&choices, config)));
             content.push_line("");
 
-            let race_options_str = crosskeys_options.as_race_options_str_no_delay();
-
-            content.push(format!("**Race Rules:** {}", race_options_str));
+            content.push(format!("**Race Rules:** {}", racetime_bot::alttpr_dr_race_options_str(&choices)));
             content.push_line("");
             content.push("---");
         }

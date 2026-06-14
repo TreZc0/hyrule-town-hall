@@ -867,7 +867,7 @@ impl<'a> Data<'a> {
                     let has_practice = match &self.seed_gen_type {
                         Some(SeedGenType::Owr { .. }) => true,
                         Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman, practice_modes, .. }) => !practice_modes.is_empty(),
-                        Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices, .. }) => true,
+                        Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices { .. }, .. }) => true,
                         Some(SeedGenType::AlttprAvianart { practice_presets }) => !practice_presets.is_empty(),
                         Some(SeedGenType::TWWR { .. }) => self.settings_string.is_some(),
                         _ => is_ootr && self.single_settings.is_some(),
@@ -3430,7 +3430,11 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, global_state: &State<Arc
         Some(SeedGenType::Owr { config }) => {
             let choices: Vec<(String, String)> = racetime_bot::owr_choice_keys(config).into_iter()
                 .map(|key| {
-                    let label = config.choice_labels.get(&key).cloned().unwrap_or_else(|| key.clone());
+                    let label = config.choices.get(&key)
+                        .and_then(|e| e.get("label"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&key)
+                        .to_owned();
                     (key, label)
                 })
                 .collect();
@@ -3447,7 +3451,7 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, global_state: &State<Arc
                 }
             }, vec![], "Generate Practice Seed")
         },
-        Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices, practice_choices, .. }) => {
+        Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices { .. }, practice_choices, .. }) => {
             let choices = practice_choices.clone();
             full_form(form_uri, csrf.as_ref(), html! {
                 @if choices.is_empty() {
@@ -3566,7 +3570,11 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
         SeedGenType::Owr { config } => {
             transaction.commit().await?;
             let choice_labels = form.choices.iter()
-                .map(|k| config.choice_labels.get(k).cloned().unwrap_or_else(|| k.clone()))
+                .map(|k| config.choices.get(k)
+                    .and_then(|e| e.get("label"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(k)
+                    .to_owned())
                 .collect();
             let choices: HashMap<String, racetime_bot::ChoiceValue> = form.choices.iter()
                 .map(|k| (k.clone(), racetime_bot::ChoiceValue::Always))
@@ -3574,11 +3582,12 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
             let rx = Arc::clone(&*global_state).roll_owr_seed(choices, config);
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, choice_labels);
         },
-        SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices, .. } => {
+        SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, .. } => {
             transaction.commit().await?;
-            let choices: HashSet<&str> = form.choices.iter().map(|s| s.as_str()).collect();
-            let crosskeys_options = racetime_bot::CrosskeysRaceOptions::from_always_set(&choices);
-            let rx = Arc::clone(&*global_state).roll_crosskeys_seed(crosskeys_options);
+            let choices: HashMap<String, racetime_bot::ChoiceValue> = form.choices.iter()
+                .map(|k| (k.clone(), racetime_bot::ChoiceValue::Always))
+                .collect();
+            let rx = Arc::clone(&*global_state).roll_mutual_choices_dr_seed(config.clone(), choices);
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         },
         SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman, .. } => {

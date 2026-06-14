@@ -2926,6 +2926,32 @@ async fn enter_flow_form(
                     }
                 }
 
+                @let choice_suggestions = event.seed_gen_type.as_ref()
+                    .map(|s| s.radio_choice_suggestions())
+                    .unwrap_or_default();
+                @if !choice_suggestions.is_empty() {
+                    h3 : "Quick-add radio choices from seed config";
+                    p(style = "margin-bottom: 8px; font-size: 0.9em; color: var(--muted-text, #888);") : "These choices are defined in this event's seed config. Click Add to create a radioChoice requirement for each one; the label and key are pre-filled from the seed config.";
+                    @for (choice_key, choice_label) in &choice_suggestions {
+                        @let already_added = requirements.iter().any(|r| {
+                            r.get("type").and_then(|v| v.as_str()) == Some("radioChoice")
+                            && r.get("key").and_then(|v| v.as_str()) == Some(choice_key.as_str())
+                        });
+                        div(style = "display: flex; align-items: center; gap: 10px; margin-bottom: 6px;") {
+                            code(style = "min-width: 140px;") : choice_key;
+                            span : choice_label;
+                            @if already_added {
+                                span(style = "font-size: 0.85em; color: var(--muted-text, #888);") : "(already added)";
+                            } else {
+                                : full_form(uri!(enter_flow_add_radio_choice(event.series, &*event.event)), csrf, html! {
+                                    input(type = "hidden", name = "key", value = choice_key);
+                                    input(type = "hidden", name = "label", value = choice_label);
+                                }, vec![], "Add");
+                            }
+                        }
+                    }
+                }
+
                 h3 : "Add requirement";
                 : full_form(uri!(enter_flow_add(event.series, &*event.event)), csrf, html! {
                     fieldset {
@@ -3074,6 +3100,43 @@ pub(crate) async fn enter_flow_add(pool: &State<PgPool>, me: User, _uri: Origin<
     Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))))
 }
 
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct EnterFlowAddRadioChoiceForm {
+    #[field(default = String::new())]
+    csrf: String,
+    #[field(default = String::new())]
+    key: String,
+    #[field(default = String::new())]
+    label: String,
+}
+
+#[rocket::post("/event/<series>/<event>/configure/enter-flow/add-radio-choice", data = "<form>")]
+pub(crate) async fn enter_flow_add_radio_choice(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, EnterFlowAddRadioChoiceForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if let Some(ref value) = form.value {
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))));
+        }
+        let key = value.key.trim();
+        let label = value.label.trim();
+        if !key.is_empty() && !label.is_empty() {
+            let new_req = json!({"type": "radioChoice", "key": key, "label": label, "locked": false});
+            let mut flow = load_flow_json(&mut transaction, series, event).await?;
+            if let Some(reqs) = flow.get_mut("requirements").and_then(|v| v.as_array_mut()) {
+                reqs.push(new_req);
+            }
+            if serde_json::from_value::<enter::Flow>(flow.clone()).is_ok() {
+                save_flow_json(&mut transaction, flow, series, event).await?;
+                transaction.commit().await?;
+            }
+        }
+    }
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))))
+}
+
 #[rocket::post("/event/<series>/<event>/configure/enter-flow/<idx>/remove", data = "<form>")]
 pub(crate) async fn enter_flow_remove(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, idx: usize, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
@@ -3161,6 +3224,8 @@ pub(crate) struct EnterFlowEditForm {
     fallback_error_message: String,
     #[field(default = String::new())]
     key: String,
+    #[field(default = String::new())]
+    prompt: String,
     #[field(default = false)]
     locked: bool,
     #[field(default = String::new())]
@@ -3270,7 +3335,10 @@ fn build_requirement_json(type_str: &str, v: &EnterFlowEditForm, errors: &mut Ve
             if key.is_empty() { errors.push(("key".into(), "Key is required.".into())); }
             let label = v.label.trim();
             if label.is_empty() { errors.push(("label".into(), "Label is required.".into())); }
-            json!({"type": type_str, "key": key, "label": label, "locked": v.locked})
+            let mut obj = json!({"type": type_str, "key": key, "label": label, "locked": v.locked});
+            let prompt = v.prompt.trim();
+            if !prompt.is_empty() { obj["prompt"] = json!(prompt); }
+            obj
         }
         "rules" => {
             let mut obj = json!({"type": "rules"});
@@ -3492,6 +3560,7 @@ async fn enter_flow_edit_form(
         "booleanChoice" | "radioChoice" => {
             let cur_key = req.get("key").and_then(|v| v.as_str()).unwrap_or_default();
             let cur_label = req.get("label").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_prompt = req.get("prompt").and_then(|v| v.as_str()).unwrap_or_default();
             let cur_locked = req.get("locked").and_then(|v| v.as_bool()).unwrap_or(false);
             let locked_checked = ctx.field_value("locked").map_or(cur_locked, |v| v == "on");
             let help = if type_str == "radioChoice" {
@@ -3506,8 +3575,13 @@ async fn enter_flow_edit_form(
                     label(class = "help") : help;
                 });
                 : form_field("label", &mut errors, html! {
-                    label(for = "label") : "Question shown to participant (HTML allowed):";
+                    label(for = "label") : "Column header in entrants table (HTML allowed):";
                     input(type = "text", id = "label", name = "label", value = ctx.field_value("label").unwrap_or(cur_label), style = "width: 100%;");
+                });
+                : form_field("prompt", &mut errors, html! {
+                    label(for = "prompt") : "Signup form prompt (HTML allowed, optional):";
+                    input(type = "text", id = "prompt", name = "prompt", value = ctx.field_value("prompt").unwrap_or(cur_prompt), style = "width: 100%;");
+                    label(class = "help") : "Shown on the signup form instead of the label. Leave blank to use the label.";
                 });
                 : form_field("locked", &mut errors, html! {
                     input(type = "checkbox", id = "locked", name = "locked", checked? = locked_checked.then_some(""));

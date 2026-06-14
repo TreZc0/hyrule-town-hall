@@ -473,7 +473,7 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             details {
                                 summary : "Examples by seed gen type";
                                 pre(style = "font-size: 13px; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
-                                    : "// alttpr_dr — boothisman.de presets:\n{\"source\": \"boothisman\"}\n\n// alttpr_dr — teams agree on settings via custom_choices:\n{\"source\": \"mutual_choices\"}\n\n// alttpr_dr — mystery pool from a weights URL:\n{\"source\": \"mystery_pool\", \"mystery_weights_url\": \"https://example.com/weights.yaml\"}\n\n// owr — base settings plus sectioned choice patches:\n{\"base_settings\":{\"shuffle\":\"crossed\"},\"choice_patches\":{\"flute\":{\"settings\":{\"flute_mode\":\"active\"},\"start_inventory\":[\"Ocarina (Activated)\"]}},\"choice_labels\":{\"flute\":\"starting activated flute\"}}\n\n// twwr — default permalink:\n{\"permalink\": \"MS45MC4wAEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}";
+                                    : "// alttpr_dr — boothisman.de presets:\n{\"source\": \"boothisman\"}\n\n// alttpr_dr — teams agree on settings via custom_choices:\n{\"source\": \"mutual_choices\"}\n\n// alttpr_dr — mystery pool from a weights URL:\n{\"source\": \"mystery_pool\", \"mystery_weights_url\": \"https://example.com/weights.yaml\"}\n\n// owr — base settings plus per-choice config (label + patch + optional supercedes):\n{\"base_settings\":{\"shuffle\":\"crossed\"},\"choices\":{\"flute\":{\"label\":\"starting activated flute\",\"settings\":{\"flute_mode\":\"active\"},\"start_inventory\":[\"Ocarina (Activated)\"]}}}\n\n// twwr — default permalink:\n{\"permalink\": \"MS45MC4wAEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}";
                                 }
                             }
                         });
@@ -490,139 +490,160 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             p(class = "help") : "Configure the signup requirements as JSON. Leave empty for no requirements.";
                             
                             details {
-                                summary : "Example enter_flow configurations";
+                                summary : "Reference — all requirement types";
                                 div(style = "margin-top: 10px; padding: 15px; background: #f5f5f5; border-radius: 6px; border: 1px solid #ddd;") {
-                                    h4(style = "margin-top: 0; color: #333;") : "Basic Discord Account Requirement:";
-                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                    h4(style = "margin-top: 0; color: #333;") : "Simple account connections (no extra fields):";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{ "type": "raceTime" }      // racetime.gg account linked
+{ "type": "twitch" }        // Twitch via racetime.gg
+{ "type": "discord" }       // Discord account linked
+{ "type": "challonge" }     // Challonge account linked
+{ "type": "rslLeaderboard" } // ≥3 races on RSL leaderboard this season"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "raceTimeInvite — allowlist of racetime.gg user IDs:";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
                                         : r#"{
-  "requirements": [
-    {
-      "type": "discord"
-    }
-  ]
+  "type": "raceTimeInvite",
+  "invites": ["abc123", "def456"],
+  "text": "You must be invited. <a href=\"/apply\">Apply here</a>.",
+  "errorText": "You are not on the invite list."
 }"#;
                                     }
-                                    
-                                    h4(style = "margin-top: 20px; color: #333;") : "Multiple Requirements with Deadline:";
-                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "discordGuild — server membership, optional role:";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "type": "discordGuild",
+  "name": "My Community Server",
+  "roleId": 123456789012345678
+}"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "startGG — account link, optional:";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{ "type": "startGG", "optional": false }"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "startGGEventSignup — must be registered in a specific bracket:";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "type": "startGGEventSignup",
+  "eventSlug": "tournament/my-event/event/open-bracket",
+  "text": "Sign up on <a href=\"https://start.gg/my-event\" target=\"_blank\">start.gg</a>.",
+  "errorText": "You must be registered on start.gg first."
+}"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "textField / textField2 — custom text input:";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "type": "textField",
+  "label": "Your pronouns:",
+  "long": false,
+  "regex": "^.+$",
+  "regexErrorMessages": {},
+  "fallbackErrorMessage": "This field is required."
+}
+// textField2 is identical but stored in a separate slot"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "yesNo — simple yes/no question (not stored in choices):";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{ "type": "yesNo", "label": "Do you agree to stream your races?" }"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "booleanChoice — yes/no stored in custom_choices by key:";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "type": "booleanChoice",
+  "key": "hard_mode",
+  "label": "Hard Mode",
+  "prompt": "Play on hard mode? (shown on signup form; defaults to label)",
+  "locked": false
+}"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "radioChoice — never/random/always stored in custom_choices by key:";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "type": "radioChoice",
+  "key": "flute",
+  "label": "Starting Flute",
+  "prompt": "Activated starting flute? (shown on signup form; defaults to label)",
+  "locked": false
+}"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "rules — must agree to event rules:";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{ "type": "rules" }
+{ "type": "rules", "document": "https://example.com/rules.pdf" }"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "poll — must complete a specific poll:";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{ "type": "poll", "document": "https://example.com/poll" }"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "restreamConsent — restream opt-in/out:";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{ "type": "restreamConsent", "optional": false }
+{ "type": "restreamConsent", "optional": true, "note": "Declining means no restream for your races." }"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "qualifier — async or live qualifier window:";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "type": "qualifier",
+  "asyncStart": "2024-01-01T00:00:00Z",
+  "asyncEnd": "2024-01-07T23:59:59Z",
+  "liveStart": "2024-01-06T18:00:00Z"
+}"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "tripleQualifier — three windows, must complete at least one:";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "type": "tripleQualifier",
+  "asyncStarts": ["2024-01-01T00:00:00Z", "2024-01-08T00:00:00Z", "2024-01-15T00:00:00Z"],
+  "asyncEnds":   ["2024-01-07T23:59:59Z", "2024-01-14T23:59:59Z", "2024-01-21T23:59:59Z"],
+  "liveStarts":  ["2024-01-06T18:00:00Z", "2024-01-13T18:00:00Z", "2024-01-20T18:00:00Z"]
+}"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "qualifierPlacement — must place in top N:";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "type": "qualifierPlacement",
+  "numPlayers": 16,
+  "minRaces": 1,
+  "needFinish": false,
+  "excludePlayers": 0,
+  "event": null
+}
+// "event": "other_event_slug" to check a different event's qualifiers"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "external — manual verification:";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "type": "external",
+  "html": "Fill out <a href=\"https://example.com/form\">this form</a>.",
+  "text": "Fill out the registration form.",
+  "blocksSubmit": true
+}"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "Multiple requirements with deadline:";
+                                    pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
                                         : r#"{
   "requirements": [
-    {
-      "type": "discord"
-    },
-    {
-      "type": "raceTime"
-    },
-    {
-      "type": "startGG"
-    }
+    { "type": "raceTime" },
+    { "type": "discord" },
+    { "type": "startGG", "optional": false }
   ],
   "closes": "2024-01-15T23:59:59Z"
-}"#;
-                                    }
-                                    
-                                    h4(style = "margin-top: 20px; color: #333;") : "Custom Text Field Requirement:";
-                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
-                                        : r#"{
-  "requirements": [
-    {
-      "type": "textField",
-      "label": "What's your favorite Zelda game?",
-      "long": false,
-      "regex": ".*",
-      "regexErrorMessages": [],
-      "fallbackErrorMessage": "Please provide an answer"
-    }
-  ]
-}"#;
-                                    }
-
-                                    h4(style = "margin-top: 20px; color: #333;") : "Discord Guild with Specific Role:";
-                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
-                                        : r#"{
-  "requirements": [
-    {
-      "type": "discordGuild",
-      "name": "My Discord Server",
-      "roleId": "123456789012345678"
-    }
-  ]
-}"#;
-                                    }
-
-                                    h4(style = "margin-top: 20px; color: #333;") : "Custom Boolean Choice (stored in custom_choices by key):";
-                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
-                                        : r#"{
-  "requirements": [
-    {
-      "type": "booleanChoice",
-      "key": "hard_mode",
-      "label": "Difficulty: Hard"
-    },
-    {
-      "type": "booleanChoice",
-      "key": "hard_mode_locked",
-      "label": "Difficulty: Hard (locked after signup)",
-      "locked": true
-    }
-  ]
-}"#;
-                                    }
-
-                                    h4(style = "margin-top: 20px; color: #333;") : "Custom Radio Choice (never/random/always):";
-                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
-                                        : r#"{
-  "requirements": [
-    {
-      "type": "radioChoice",
-      "key": "flute",
-      "label": "Starting activated flute",
-      "locked": false
-    }
-  ]
-}"#;
-                                    }
-
-                                    h4(style = "margin-top: 20px; color: #333;") : "Qualifier Placement Cutoff:";
-                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
-                                        : r#"{
-  "requirements": [
-    {
-      "type": "qualifierPlacement",
-      "numPlayers": 16,
-      "minRaces": 1,
-      "needFinish": false,
-      "excludePlayers": 0
-    }
-  ]
-}"#;
-                                    }
-
-                                    h4(style = "margin-top: 20px; color: #333;") : "Start.gg Event Signup Validation:";
-                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
-                                        : r#"{
-  "requirements": [
-    {
-      "type": "startGGEventSignup",
-      "eventSlug": "tournament/wolfdash/event/open-bracket",
-      "text": "Sign up to <a href='https://start.gg/tournament/wolfdash' target='_blank'>WolfDash on start.gg</a>",
-      "errorText": "You must register for WolfDash on start.gg before entering here."
-    }
-  ]
-}"#;
-                                    }
-
-                                    h4(style = "margin-top: 20px; color: #333;") : "External / Manual Requirement:";
-                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
-                                        : r#"{
-  "requirements": [
-    {
-      "type": "external",
-      "html": "Please fill out <a href=\"https://example.com/form\">this form</a>.",
-      "text": "Please fill out the registration form.",
-      "blocksSubmit": true
-    }
-  ]
 }"#;
                                     }
                                 }
@@ -1761,7 +1782,7 @@ fn create_form_content(me: &Option<User>, _uri: &Origin<'_>, csrf: Option<&CsrfT
                             details {
                                 summary : "Examples by seed gen type";
                                 pre(style = "font-size: 13px; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
-                                    : "// alttpr_dr — boothisman.de presets:\n{\"source\": \"boothisman\"}\n\n// alttpr_dr — teams agree on settings via custom_choices:\n{\"source\": \"mutual_choices\"}\n\n// alttpr_dr — mystery pool from a weights URL:\n{\"source\": \"mystery_pool\", \"mystery_weights_url\": \"https://example.com/weights.yaml\"}\n\n// owr — base settings plus sectioned choice patches:\n{\"base_settings\":{\"shuffle\":\"crossed\"},\"choice_patches\":{\"flute\":{\"settings\":{\"flute_mode\":\"active\"},\"start_inventory\":[\"Ocarina (Activated)\"]}},\"choice_labels\":{\"flute\":\"starting activated flute\"}}\n\n// twwr — default permalink:\n{\"permalink\": \"MS45MC4wAEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}";
+                                    : "// alttpr_dr — boothisman.de presets:\n{\"source\": \"boothisman\"}\n\n// alttpr_dr — teams agree on settings via custom_choices:\n{\"source\": \"mutual_choices\"}\n\n// alttpr_dr — mystery pool from a weights URL:\n{\"source\": \"mystery_pool\", \"mystery_weights_url\": \"https://example.com/weights.yaml\"}\n\n// owr — base settings plus per-choice config (label + patch + optional supercedes):\n{\"base_settings\":{\"shuffle\":\"crossed\"},\"choices\":{\"flute\":{\"label\":\"starting activated flute\",\"settings\":{\"flute_mode\":\"active\"},\"start_inventory\":[\"Ocarina (Activated)\"]}}}\n\n// twwr — default permalink:\n{\"permalink\": \"MS45MC4wAEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}";
                                 }
                             }
                         });

@@ -790,6 +790,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::configure::enter_flow_get,
         event::configure::enter_flow_set_closes,
         event::configure::enter_flow_add,
+        event::configure::enter_flow_add_radio_choice,
         event::configure::enter_flow_remove,
         event::configure::enter_flow_move_up,
         event::configure::enter_flow_move_down,

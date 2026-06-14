@@ -993,35 +993,16 @@ impl GlobalState {
     /// Roll an OWR (Open World Randomizer) seed by applying player choices to the event config.
     pub(crate) fn roll_owr_seed(self: Arc<Self>, choices: HashMap<String, ChoiceValue>, config: seed_gen_type::OwrEventConfig) -> mpsc::Receiver<SeedRollUpdate> {
         let uuid = Uuid::new_v4();
-        let mut settings = config.base_settings.as_object().cloned().unwrap_or_default();
-        let mut placements = config.base_placements.as_object().cloned().unwrap_or_default();
-        let mut start_inventory = config.start_inventory.clone();
-        if let Some(patches) = config.choice_patches.as_object() {
-            for (key, patch) in patches {
-                if choices.get(key).copied().unwrap_or_default().roll_enabled() {
-                    apply_owr_patch(&mut settings, &mut placements, &mut start_inventory, patch);
-                }
-            }
-        }
-        let meta = AlttprDoorRandoMeta { bps: true, name: uuid.to_string(), race: true, skip_playthrough: true, spoiler: "full", suppress_rom: true };
-        let player_key = serde_yml::Value::from(1_i64);
-        let mut settings_map = serde_yml::Mapping::new();
-        settings_map.insert(player_key.clone(), serde_yml::to_value(serde_json::Value::Object(settings)).expect("settings serialization cannot fail"));
-        let mut yaml_map = serde_yml::Mapping::new();
-        yaml_map.insert(serde_yml::Value::String("settings".to_string()), serde_yml::Value::Mapping(settings_map));
-        yaml_map.insert(serde_yml::Value::String("meta".to_string()), serde_yml::to_value(&meta).expect("meta serialization cannot fail"));
-        if !placements.is_empty() {
-            let mut placements_map = serde_yml::Mapping::new();
-            placements_map.insert(player_key.clone(), serde_yml::to_value(serde_json::Value::Object(placements)).expect("placements serialization cannot fail"));
-            yaml_map.insert(serde_yml::Value::String("placements".to_string()), serde_yml::Value::Mapping(placements_map));
-        }
-        if !start_inventory.is_empty() {
-            let mut inv_map = serde_yml::Mapping::new();
-            inv_map.insert(player_key, serde_yml::to_value(&start_inventory).expect("start_inventory serialization cannot fail"));
-            yaml_map.insert(serde_yml::Value::String("start_inventory".to_string()), serde_yml::Value::Mapping(inv_map));
-        }
-        match serde_yml::to_string(&serde_yml::Value::Mapping(yaml_map)) {
+        match build_dr_yaml_from_config(&config, &choices, uuid) {
             Ok(yaml_content) => self.roll_alttpr_dr_seed(yaml_content, uuid, "/opt/owr", false, "OR_"),
+            Err(e) => alttpr_dr_error_receiver(e.into()),
+        }
+    }
+
+    pub(crate) fn roll_mutual_choices_dr_seed(self: Arc<Self>, config: seed_gen_type::OwrEventConfig, choices: HashMap<String, ChoiceValue>) -> mpsc::Receiver<SeedRollUpdate> {
+        let uuid = Uuid::new_v4();
+        match build_dr_yaml_from_config(&config, &choices, uuid) {
+            Ok(yaml_content) => self.roll_alttpr_dr_seed(yaml_content, uuid, "../alttpr", false, "DR_"),
             Err(e) => alttpr_dr_error_receiver(e.into()),
         }
     }
@@ -1148,13 +1129,9 @@ impl GlobalState {
                     Err(e) => alttpr_dr_error_receiver(e.into()),
                 }
             }
-            SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices, .. } => {
-                let crosskeys_options = CrosskeysRaceOptions::for_race(&self.db_pool, &cal_event.race).await;
-                let uuid = Uuid::new_v4();
-                match build_crosskeys_yaml(&crosskeys_options, uuid) {
-                    Ok(yaml_content) => self.roll_alttpr_dr_seed(yaml_content, uuid, "../alttpr", false, "DR_"),
-                    Err(e) => alttpr_dr_error_receiver(e.into()),
-                }
+            SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, .. } => {
+                let choices = owr_choices_for_race(&self.db_pool, &cal_event.race).await;
+                self.roll_mutual_choices_dr_seed(config.clone(), choices)
             }
             SeedGenType::AlttprDoorRando { source: AlttprDrSource::MysteryPool { .. }, .. } => {
                 self.roll_mysteryd20_seed()
@@ -1566,71 +1543,6 @@ pub(crate) fn start_practice_seed_roll(seeds: event::PracticeSeeds, job_id: Uuid
     });
 }
 
-fn build_crosskeys_yaml(opts: &CrosskeysRaceOptions, uuid: Uuid) -> Result<String, serde_yml::Error> {
-    let meta = AlttprDoorRandoMeta { bps: true, name: uuid.to_string(), race: true, skip_playthrough: true, spoiler: "full", suppress_rom: true };
-    let keydrop = opts.choice("keydrop").roll_enabled();
-    let flute = opts.choice("flute").roll_enabled();
-    let all_dungeons = opts.choice("all_dungeons").roll_enabled();
-    let completionist = opts.choice("completionist").roll_enabled();
-    let inverted = opts.choice("inverted").roll_enabled();
-    let mirror_scroll = opts.choice("mirror_scroll").roll_enabled();
-    let pseudoboots = opts.choice("pseudoboots").roll_enabled();
-    let zw = opts.choice("zw").roll_enabled();
-    let follower_shuffle = opts.choice("follower_shuffle");
-    let follower_shuffle_enabled = follower_shuffle.roll_enabled();
-    let keydrop_mode = if keydrop { "keys" } else { "none" };
-    let flute_mode = if flute { "active" } else { "normal" };
-    let goal = if completionist { "completionist" } else if all_dungeons { "dungeons" } else { "crystals" };
-    let mirrorscroll = if mirror_scroll { 1 } else { 0 };
-    let world_state = if inverted { "inverted" } else { "open" };
-    let pseudoboots = if pseudoboots { 1 } else { 0 };
-    let skullwoods = if zw { "followlinked" } else { "original" };
-    let settings = AlttprDoorRandoSetting {
-        aga_randomness: None,
-        accessibility: "locations",
-        bigkeyshuffle: DungeonShuffleVal::Named("wild"),
-        boss_shuffle: None,
-        compassshuffle: DungeonShuffleVal::Named("wild"),
-        crystals_ganon: "7",
-        crystals_gt: "7",
-        dropshuffle: keydrop_mode,
-        enemy_shuffle: None,
-        flute_mode,
-        goal,
-        item_functionality: "normal",
-        key_logic_algorithm: "partial",
-        keyshuffle: "wild",
-        linked_drops: "unset",
-        mapshuffle: DungeonShuffleVal::Named("wild"),
-        mirrorscroll,
-        mode: world_state,
-        ow_mixed: None,
-        pottery: keydrop_mode,
-        pseudoboots,
-        shuffle: "crossed",
-        shuffletavern: 0,
-        shuffle_followers: (follower_shuffle != ChoiceValue::Never).then_some(follower_shuffle_enabled),
-        skullwoods,
-        swords: None,
-    };
-    let player_key = serde_yml::Value::from(1_i64);
-    let mut yaml_map = serde_yml::Mapping::new();
-    if !zw {
-        let mut placements_map = serde_yml::Mapping::new();
-        placements_map.insert(player_key.clone(), serde_yml::to_value(&AlttprDoorRandoPlacements { pinball_room: "Small Key (Skull Woods)" })?);
-        yaml_map.insert(serde_yml::Value::String("placements".to_string()), serde_yml::Value::Mapping(placements_map));
-    }
-    let mut settings_map = serde_yml::Mapping::new();
-    settings_map.insert(player_key.clone(), serde_yml::to_value(&settings)?);
-    yaml_map.insert(serde_yml::Value::String("settings".to_string()), serde_yml::Value::Mapping(settings_map));
-    if flute {
-        let mut inv_map = serde_yml::Mapping::new();
-        inv_map.insert(player_key, serde_yml::to_value(&["Ocarina (Activated)"] as &[&str])?);
-        yaml_map.insert(serde_yml::Value::String("start_inventory".to_string()), serde_yml::Value::Mapping(inv_map));
-    }
-    yaml_map.insert(serde_yml::Value::String("meta".to_string()), serde_yml::to_value(&meta)?);
-    serde_yml::to_string(&serde_yml::Value::Mapping(yaml_map))
-}
 
 fn inject_alttpr_dr_meta(yaml_content: &str, uuid: Uuid) -> Result<String, serde_yml::Error> {
     let mut yaml_value: serde_yml::Value = serde_yml::from_str(yaml_content)?;
@@ -2400,7 +2312,13 @@ pub(crate) fn format_choice_label(label: &str, value: ChoiceValue) -> Option<Str
 
 fn apply_json_object_patch(target: &mut serde_json::Map<String, serde_json::Value>, patch: &serde_json::Value) {
     if let Some(fields) = patch.as_object() {
-        target.extend(fields.clone());
+        for (k, v) in fields {
+            if v.is_null() {
+                target.remove(k);
+            } else {
+                target.insert(k.clone(), v.clone());
+            }
+        }
     }
 }
 
@@ -2421,26 +2339,89 @@ fn apply_owr_patch(
         || patch_obj.contains_key("placements")
         || patch_obj.contains_key("start_inventory");
     if has_sections {
-        if let Some(settings_patch) = patch_obj.get("settings") {
-            apply_json_object_patch(settings, settings_patch);
-        }
-        if let Some(placements_patch) = patch_obj.get("placements") {
-            apply_json_object_patch(placements, placements_patch);
-        }
-        if let Some(start_inventory_patch) = patch_obj.get("start_inventory") {
-            apply_start_inventory_patch(start_inventory, start_inventory_patch);
-        }
+        if let Some(p) = patch_obj.get("settings") { apply_json_object_patch(settings, p); }
+        if let Some(p) = patch_obj.get("placements") { apply_json_object_patch(placements, p); }
+        if let Some(p) = patch_obj.get("start_inventory") { apply_start_inventory_patch(start_inventory, p); }
+        // `label` and `supercedes` are metadata, silently ignored
     } else {
-        apply_json_object_patch(settings, patch);
+        // Legacy flat patch — treat non-metadata keys as settings
+        for (k, v) in patch_obj {
+            if matches!(k.as_str(), "label" | "supercedes") { continue; }
+            if v.is_null() { settings.remove(k); } else { settings.insert(k.clone(), v.clone()); }
+        }
     }
 }
 
-pub(crate) fn owr_choice_keys(config: &seed_gen_type::OwrEventConfig) -> Vec<String> {
-    let mut keys: HashSet<String> = config.choice_labels.keys().cloned().collect();
-    if let Some(patches) = config.choice_patches.as_object() {
-        keys.extend(patches.keys().cloned());
+fn apply_patches_with_supercedes(
+    choices: &HashMap<String, ChoiceValue>,
+    patches_val: &serde_json::Value,
+    settings: &mut serde_json::Map<String, serde_json::Value>,
+    placements: &mut serde_json::Map<String, serde_json::Value>,
+    start_inventory: &mut Vec<String>,
+) {
+    let Some(patches) = patches_val.as_object() else { return };
+    // Evaluate roll_enabled once per key — Random calls rand::random() and must not be called twice.
+    let enabled: HashMap<&str, bool> = patches.keys()
+        .map(|k| (k.as_str(), choices.get(k).copied().unwrap_or_default().roll_enabled()))
+        .collect();
+    let mut suppressed: HashSet<&str> = HashSet::default();
+    for (key, patch) in patches {
+        if *enabled.get(key.as_str()).unwrap_or(&false) {
+            if let Some(arr) = patch.get("supercedes").and_then(|v| v.as_array()) {
+                suppressed.extend(arr.iter().filter_map(|v| v.as_str()));
+            }
+        }
     }
-    keys.into_iter().sorted().collect()
+    for (key, patch) in patches {
+        if !suppressed.contains(key.as_str()) && *enabled.get(key.as_str()).unwrap_or(&false) {
+            apply_owr_patch(settings, placements, start_inventory, patch);
+        }
+    }
+}
+
+fn build_dr_yaml_from_config(config: &seed_gen_type::OwrEventConfig, choices: &HashMap<String, ChoiceValue>, uuid: Uuid) -> Result<String, serde_yml::Error> {
+    let mut settings = config.base_settings.as_object().cloned().unwrap_or_default();
+    let mut placements = config.base_placements.as_object().cloned().unwrap_or_default();
+    let mut start_inventory = config.start_inventory.clone();
+    apply_patches_with_supercedes(choices, &config.choices, &mut settings, &mut placements, &mut start_inventory);
+    let meta = AlttprDoorRandoMeta { bps: true, name: uuid.to_string(), race: true, skip_playthrough: true, spoiler: "full", suppress_rom: true };
+    let player_key = serde_yml::Value::from(1_i64);
+    let mut yaml_map = serde_yml::Mapping::new();
+    let mut settings_map = serde_yml::Mapping::new();
+    settings_map.insert(player_key.clone(), serde_yml::to_value(serde_json::Value::Object(settings)).expect("settings serialization cannot fail"));
+    yaml_map.insert(serde_yml::Value::String("settings".to_string()), serde_yml::Value::Mapping(settings_map));
+    yaml_map.insert(serde_yml::Value::String("meta".to_string()), serde_yml::to_value(&meta).expect("meta serialization cannot fail"));
+    if !placements.is_empty() {
+        let mut placements_map = serde_yml::Mapping::new();
+        placements_map.insert(player_key.clone(), serde_yml::to_value(serde_json::Value::Object(placements)).expect("placements serialization cannot fail"));
+        yaml_map.insert(serde_yml::Value::String("placements".to_string()), serde_yml::Value::Mapping(placements_map));
+    }
+    if !start_inventory.is_empty() {
+        let mut inv_map = serde_yml::Mapping::new();
+        inv_map.insert(player_key, serde_yml::to_value(&start_inventory).expect("start_inventory serialization cannot fail"));
+        yaml_map.insert(serde_yml::Value::String("start_inventory".to_string()), serde_yml::Value::Mapping(inv_map));
+    }
+    serde_yml::to_string(&serde_yml::Value::Mapping(yaml_map))
+}
+
+pub(crate) fn alttpr_dr_race_options_str(choices: &HashMap<String, ChoiceValue>) -> String {
+    let hovering = match choices.get("hovering").copied().unwrap_or_default() {
+        ChoiceValue::Always => "hovering and moldorm bouncing ALLOWED",
+        ChoiceValue::Random => "hovering and moldorm bouncing: random",
+        ChoiceValue::Never => "hovering and moldorm bouncing BANNED",
+    };
+    let delay = match choices.get("no_delay").copied().unwrap_or_default() {
+        ChoiceValue::Always => "no stream delay",
+        ChoiceValue::Random => "stream delay: random",
+        ChoiceValue::Never => "stream delay(10m)",
+    };
+    format!("{hovering} and {delay}")
+}
+
+pub(crate) fn owr_choice_keys(config: &seed_gen_type::OwrEventConfig) -> Vec<String> {
+    config.choices.as_object()
+        .map(|obj| obj.keys().cloned().sorted().collect())
+        .unwrap_or_default()
 }
 
 pub(crate) async fn owr_choices_for_race(db_pool: &PgPool, race: &Race) -> HashMap<String, ChoiceValue> {
@@ -2457,7 +2438,10 @@ pub(crate) fn owr_choices_description(choices: &HashMap<String, ChoiceValue>, co
     let active: Vec<String> = choices.iter()
         .sorted_by_key(|(key, _)| key.as_str())
         .filter_map(|(key, value)| {
-            let label = config.choice_labels.get(key).map(String::as_str).unwrap_or(key);
+            let label = config.choices.get(key)
+                .and_then(|e| e.get("label"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(key);
             format_choice_label(label, *value)
         })
         .collect();
@@ -2468,73 +2452,6 @@ pub(crate) fn owr_choices_description(choices: &HashMap<String, ChoiceValue>, co
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct CrosskeysRaceOptions {
-    choices: HashMap<String, ChoiceValue>,
-}
-
-impl CrosskeysRaceOptions {
-    /// Human-readable label for a seed-option choice key, or None if it is a race-rules key.
-    fn key_to_seed_label(key: &str) -> Option<&'static str> {
-        match key {
-            "all_dungeons"  => Some("a goal of all dungeons"),
-            "completionist" => Some("completionist goal"),
-            "flute"         => Some("starting activated flute"),
-            "follower_shuffle" => Some("follower shuffle"),
-            "inverted"      => Some("inverted world state"),
-            "keydrop"       => Some("enemy and pot keydrop"),
-            "mirror_scroll" => Some("starting mirror scroll"),
-            "pseudoboots"   => Some("starting pseudoboots"),
-            "zw"            => Some("zw enabled"),
-            _               => None,
-        }
-    }
-
-    fn choice(&self, key: &str) -> ChoiceValue {
-        self.choices.get(key).copied().unwrap_or_default()
-    }
-
-    pub(crate) fn as_seed_options_str(&self) -> String {
-        // Emit labels in a stable order matching the original display order.
-        let labels: Vec<String> = ["all_dungeons", "completionist", "flute", "follower_shuffle", "inverted", "keydrop", "mirror_scroll", "pseudoboots", "zw"]
-            .into_iter()
-            .filter_map(|key| {
-                Self::key_to_seed_label(key)
-                    .and_then(|label| format_choice_label(label, self.choice(key)))
-            })
-            .collect();
-        English.join_str_opt(labels).unwrap_or_else(|| "base settings".to_owned())
-    }
-
-    pub(crate) fn as_race_options_str(&self) -> String {
-        let hovering = match self.choice("hovering") {
-            ChoiceValue::Always => "hovering and moldorm bouncing ALLOWED",
-            ChoiceValue::Random => "hovering and moldorm bouncing: random",
-            ChoiceValue::Never => "hovering and moldorm bouncing BANNED",
-        };
-        let delay = match self.choice("no_delay") {
-            ChoiceValue::Always => "no stream delay",
-            ChoiceValue::Random => "stream delay: random",
-            ChoiceValue::Never => "stream delay(10m)",
-        };
-        format!("{hovering} and {delay}")
-    }
-
-    pub(crate) fn as_race_options_str_no_delay(&self) -> String {
-        match self.choice("hovering") {
-            ChoiceValue::Always => "hovering and moldorm bouncing ALLOWED".to_owned(),
-            ChoiceValue::Random => "hovering and moldorm bouncing: random".to_owned(),
-            ChoiceValue::Never => "hovering and moldorm bouncing BANNED".to_owned(),
-        }
-    }
-
-    pub(crate) async fn for_race(db_pool: &PgPool, race: &Race) -> Self {
-        let teams = race.teams();
-        let team_rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", teams.map(|team| team.id).collect_vec() as _)
-            .fetch_all(db_pool).await.expect("Database read failed");
-        CrosskeysRaceOptions { choices: resolve_choice_values(team_rows.iter().map(|row| &row.custom_choices)) }
-    }
-}
 
 #[derive(Clone)]
 pub(crate) struct AlttprDeChoice {
@@ -2990,7 +2907,7 @@ impl Handler {
                         let cal_event = self.official_data.as_ref().expect("AlttprDoorRando/Boothisman must have official_data").cal_event.clone();
                         self.roll_alttprde9_seed(ctx, cal_event, lang, article).await;
                     }
-                    Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MutualChoices, .. }) => {
+                    Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MutualChoices { .. }, .. }) => {
                         let cal_event = self.official_data.as_ref().expect("AlttprDoorRando/MutualChoices must have official_data").cal_event.clone();
                         self.roll_crosskeys2025_seed(ctx, cal_event, lang, article).await;
                     }
@@ -3207,18 +3124,16 @@ impl Handler {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(10);
 
-        let crosskeys_options = CrosskeysRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race).await;
-        let seed_options_str = crosskeys_options.as_seed_options_str();
-        let race_options_str = crosskeys_options.as_race_options_str();
-        let uuid = Uuid::new_v4();
-        let receiver = match build_crosskeys_yaml(&crosskeys_options, uuid) {
-            Ok(yaml_content) => ctx.global_state.clone().roll_alttpr_dr_seed(yaml_content, uuid, "../alttpr", false, "DR_"),
-            Err(e) => alttpr_dr_error_receiver(e.into()),
-        };
+        let config = self.official_data.as_ref()
+            .and_then(|d| d.event.seed_gen_type.as_ref())
+            .and_then(|sgt| if let seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MutualChoices { config }, .. } = sgt { Some(config.clone()) } else { None })
+            .expect("MutualChoices seed roll triggered for event without MutualChoices config");
+        let choices = owr_choices_for_race(&ctx.global_state.db_pool, &cal_event.race).await;
+        let seed_options_str = owr_choices_description(&choices, &config);
+        let race_options_str = alttpr_dr_race_options_str(&choices);
+        let receiver = ctx.global_state.clone().roll_mutual_choices_dr_seed(config, choices);
         self.roll_seed_inner(ctx, Some(delay_until), receiver, language, article, format!("seed with {}", seed_options_str), false).await;
-        ctx.send_message(format!("@entrants Remember: this race will be played with {}!",
-                                    race_options_str
-                                ), true, Vec::default()).await.expect("failed to send race options");
+        ctx.send_message(format!("@entrants Remember: this race will be played with {}!", race_options_str), true, Vec::default()).await.expect("failed to send race options");
     }
 
     async fn roll_owr_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
@@ -3723,7 +3638,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 // else: ban-pick draft event with missing draft state — error already
                                 // reported at room open via the draft_kind check; do not roll
                             }
-                            Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MutualChoices, .. }) => {
+                            Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MutualChoices { .. }, .. }) => {
                                 this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await
                             }
                             Some(seed_gen_type::SeedGenType::Owr { .. }) => {
