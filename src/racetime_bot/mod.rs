@@ -2626,56 +2626,6 @@ impl AlttprDeRaceOptions {
 }
 
 #[derive(Clone, Serialize)]
-pub(crate) struct AlttprDoorRandoPlacements {
-    #[serde(rename = "Skull Woods - Pinball Room")]
-    pinball_room: &'static str,
-}
-
-#[derive(Clone, Copy, Serialize)]
-#[serde(untagged)]
-pub(crate) enum DungeonShuffleVal {
-    #[allow(dead_code)]
-    Bool(bool),
-    Named(&'static str),
-}
-
-#[derive(Clone, Copy, Serialize)]
-pub(crate) struct AlttprDoorRandoSetting {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) aga_randomness: Option<bool>,
-    pub(crate) accessibility: &'static str,
-    pub(crate) bigkeyshuffle: DungeonShuffleVal,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) boss_shuffle: Option<&'static str>,
-    pub(crate) compassshuffle: DungeonShuffleVal,
-    pub(crate) crystals_ganon: &'static str,
-    pub(crate) crystals_gt: &'static str,
-    pub(crate) dropshuffle: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) enemy_shuffle: Option<&'static str>,
-    pub(crate) flute_mode: &'static str,
-    pub(crate) goal: &'static str,
-    pub(crate) item_functionality: &'static str,
-    pub(crate) key_logic_algorithm: &'static str,
-    pub(crate) keyshuffle: &'static str,
-    pub(crate) linked_drops: &'static str,
-    pub(crate) mapshuffle: DungeonShuffleVal,
-    pub(crate) mirrorscroll: u8,
-    pub(crate) mode: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) ow_mixed: Option<u8>,
-    pub(crate) pottery: &'static str,
-    pub(crate) pseudoboots: u8,
-    pub(crate) shuffle: &'static str,
-    pub(crate) shuffletavern: u8,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) shuffle_followers: Option<bool>,
-    pub(crate) skullwoods: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) swords: Option<&'static str>,
-}
-
-#[derive(Clone, Serialize)]
 pub(crate) struct AlttprDoorRandoMeta {
     bps: bool,
     name: String,
