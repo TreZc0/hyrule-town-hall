@@ -3550,7 +3550,7 @@ impl CrosskeysRaceOptions {
         }
     }
 
-    pub(crate) fn from_always_set(choices: &std::collections::HashSet<&str>) -> Self {
+    pub(crate) fn from_always_set(choices: &HashSet<&str>) -> Self {
         let opt = |key: &str| if choices.contains(key) { RadioChoiceValue::Always } else { RadioChoiceValue::Never };
         CrosskeysRaceOptions {
             all_dungeons: opt("all_dungeons"),
