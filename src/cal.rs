@@ -2399,39 +2399,39 @@ pub(crate) async fn race_table(
     let has_buttons = options.can_edit;
     let now = Utc::now();
     Ok(html! {
-        table {
+        table(class = "race-table") {
             thead {
                 tr {
-                    th : "Start";
+                    th(class = "race-col-start") : "Start";
                     @if event.is_none() {
-                        th : "Event";
+                        th(class = "race-col-event") : "Event";
                     }
                     @if phase_round_options.as_ref().is_some_and(|phase_round_options| phase_round_options.is_empty()) {
-                        th : "Phase";
+                        th(class = "race-col-round") : "Phase";
                     }
-                    th : "Round";
+                    th(class = "race-col-round") : "Round";
                     @if has_games {
                         @if options.game_count {
-                            th : "Best of";
+                            th(class = "race-col-game") : "Best of";
                         } else {
-                            th : "Game";
+                            th(class = "race-col-game") : "Game";
                         }
                     }
-                    th(colspan = "6") : "Entrants";
-                    th : "Links";
+                    th(class = "race-col-entrants") : "Entrants";
+                    th(class = "race-col-links") : "Links";
                     @if has_seeds {
-                        th : "Seed";
+                        th(class = "race-col-seed") : "Seed";
                     }
                     @if !has_seeds && has_settings {
-                        th : "Settings";
+                        th(class = "race-col-seed") : "Settings";
                     }
                     @if options.show_restream_consent {
-                        th : "Restream Consent";
+                        th(class = "race-col-consent") : "Restream Consent";
                     }
                     @if has_buttons {
-                        th {}
+                        th(class = "race-col-actions") {}
                     }
-                    th : "Volunteers";
+                    th(class = "race-col-volunteers") : "Volunteers";
                 }
             }
             tbody {
@@ -2445,7 +2445,7 @@ pub(crate) async fn race_table(
                                 hash_map::Entry::Vacant(entry) => entry.insert(race.event(&mut *transaction).await?),
                             }, true)
                         };
-                        td {
+                        td(class = "race-start") {
                             @match race.schedule {
                                 RaceSchedule::Unscheduled => {}
                                 RaceSchedule::Live { start, .. } => {
@@ -2463,10 +2463,10 @@ pub(crate) async fn race_table(
                             }
                         }
                         @if show_event {
-                            td(class = "small-table-content") {
+                            td(class = "small-table-content race-event") {
                                 a(href = uri!(event::info(event.series, &*event.event))) : event.short_name();
                             }
-                            td(class = "large-table-content") : event;
+                            td(class = "large-table-content race-event") : event;
                         }
                         @if let (Some(ctx), Some(phase_round_options), Source::Challonge { id: challonge_id }) = (&options.challonge_import_ctx, &phase_round_options, &race.source) {
                             @if phase_round_options.is_empty() {
@@ -2487,7 +2487,7 @@ pub(crate) async fn race_table(
                                 });
                             }
                         } else {
-                            td {
+                            td(class = "race-round") {
                                 : race.phase;
                                 : " ";
                                 : race.round;
@@ -2499,7 +2499,7 @@ pub(crate) async fn race_table(
                                     input(type = "number", min = "1", max = "255", name = format!("game_count[{challonge_id}]"), value = ctx.field_value(&*format!("game_count[{challonge_id}]")).map_or_else(|| event.default_game_count.to_string(), |game_count| game_count.to_owned()));
                                 });
                             } else {
-                                td {
+                                td(class = "race-game") {
                                     @if let Some(game) = race.game {
                                         : game;
                                     }
@@ -2507,73 +2507,84 @@ pub(crate) async fn race_table(
                             }
                         }
                         @match race.entrants {
-                            Entrants::Open => td(colspan = "6") {
+                            Entrants::Open => td(class = "race-entrants") {
                                 @if let Some(custom_title) = &race.custom_title {
                                     : custom_title;
                                 } else {
-                                    : "(open)";
+                                    span(class = "race-status-pill") : "open";
                                 }
                             }
-                            Entrants::Count { total, finished } => td(colspan = "6") {
-                                : total;
-                                : " (";
-                                : finished;
-                                : " finishers)";
+                            Entrants::Count { total, finished } => td(class = "race-entrants") {
+                                span(class = "race-status-pill") {
+                                    : total;
+                                    : " entrants";
+                                }
+                                span(class = "race-entrant-note") {
+                                    : finished;
+                                    : " finishers";
+                                }
                             }
-                            Entrants::Named(ref entrants) => td(colspan = "6") {
+                            Entrants::Named(ref entrants) => td(class = "race-entrants") {
                                 bdi : entrants;
                             }
                             Entrants::Two([ref team1, ref team2]) => {
-                                td(class = "vs1", colspan = "3") {
-                                    : team1.to_html(&mut *transaction, discord_ctx, false).await?;
-                                    @if let RaceSchedule::Async { start1: Some(start), .. } = race.schedule {
-                                        br;
-                                        small {
-                                            : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                td(class = "race-entrants race-matchup") {
+                                    span(class = "race-entrant") {
+                                        : team1.to_html(&mut *transaction, discord_ctx, false).await?;
+                                        @if let RaceSchedule::Async { start1: Some(start), .. } = race.schedule {
+                                            br;
+                                            small {
+                                                : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                            }
                                         }
                                     }
-                                }
-                                td(class = "vs2", colspan = "3") {
-                                    : team2.to_html(&mut *transaction, discord_ctx, false).await?;
-                                    @if let RaceSchedule::Async { start2: Some(start), .. } = race.schedule {
-                                        br;
-                                        small {
-                                            : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                    span(class = "race-versus") : "vs";
+                                    span(class = "race-entrant") {
+                                        : team2.to_html(&mut *transaction, discord_ctx, false).await?;
+                                        @if let RaceSchedule::Async { start2: Some(start), .. } = race.schedule {
+                                            br;
+                                            small {
+                                                : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                            }
                                         }
                                     }
                                 }
                             }
                             Entrants::Three([ref team1, ref team2, ref team3]) => {
-                                td(colspan = "2") {
-                                    : team1.to_html(&mut *transaction, discord_ctx, false).await?;
-                                    @if let RaceSchedule::Async { start1: Some(start), .. } = race.schedule {
-                                        br;
-                                        small {
-                                            : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                td(class = "race-entrants race-matchup") {
+                                    span(class = "race-entrant") {
+                                        : team1.to_html(&mut *transaction, discord_ctx, false).await?;
+                                        @if let RaceSchedule::Async { start1: Some(start), .. } = race.schedule {
+                                            br;
+                                            small {
+                                                : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                            }
                                         }
                                     }
-                                }
-                                td(colspan = "2") {
-                                    : team2.to_html(&mut *transaction, discord_ctx, false).await?;
-                                    @if let RaceSchedule::Async { start2: Some(start), .. } = race.schedule {
-                                        br;
-                                        small {
-                                            : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                    span(class = "race-versus") : "vs";
+                                    span(class = "race-entrant") {
+                                        : team2.to_html(&mut *transaction, discord_ctx, false).await?;
+                                        @if let RaceSchedule::Async { start2: Some(start), .. } = race.schedule {
+                                            br;
+                                            small {
+                                                : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                            }
                                         }
                                     }
-                                }
-                                td(colspan = "2") {
-                                    : team3.to_html(&mut *transaction, discord_ctx, false).await?;
-                                    @if let RaceSchedule::Async { start3: Some(start), .. } = race.schedule {
-                                        br;
-                                        small {
-                                            : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                    span(class = "race-versus") : "vs";
+                                    span(class = "race-entrant") {
+                                        : team3.to_html(&mut *transaction, discord_ctx, false).await?;
+                                        @if let RaceSchedule::Async { start3: Some(start), .. } = race.schedule {
+                                            br;
+                                            small {
+                                                : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
-                        td {
+                        td(class = "race-links") {
                             div(class = "favicon-container") {
                                 @for (language, video_url) in &race.video_urls {
                                     a(class = "favicon", title = format!("{language} restream"), href = video_url.to_string(), target = "_blank") : favicon(video_url);
@@ -2592,19 +2603,21 @@ pub(crate) async fn race_table(
                                 @for room in race.rooms() {
                                     a(class = "favicon", title = "race room", href = room.to_string(), target = "_blank") : favicon(&room);
                                 }
+                            }
+                            div(class = "race-link-actions") {
                                 // Volunteer button for upcoming live races
                                 @let is_upcoming_live = match race.schedule {
                                     RaceSchedule::Live { end, .. } => end.is_none(),
                                     _ => false,
                                 };
                                 @if is_upcoming_live {
-                                                                    @let scheduled = match race.schedule {
-                                    RaceSchedule::Unscheduled => false,
-                                    RaceSchedule::Live { end, .. } => end.is_none_or(|end_time| end_time > Utc::now()),
-                                    RaceSchedule::Async { .. } => false, // asyncs not eligible
-                                };
-                                @let all_teams_consented = race.restream_consent_required || race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
-                                @if scheduled && all_teams_consented {
+                                    @let scheduled = match race.schedule {
+                                        RaceSchedule::Unscheduled => false,
+                                        RaceSchedule::Live { end, .. } => end.is_none_or(|end_time| end_time > Utc::now()),
+                                        RaceSchedule::Async { .. } => false, // asyncs not eligible
+                                    };
+                                    @let all_teams_consented = race.restream_consent_required || race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                    @if scheduled && all_teams_consented {
                                         @if let Some(user) = user {
                                             @let is_organizer = event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(user));
                                             @let is_event_restreamer = event.restreamers(&mut *transaction).await.ok().map_or(false, |rest| rest.contains(user));
@@ -2616,10 +2629,10 @@ pub(crate) async fn race_table(
                                             };
                                             @let is_restreamer = is_event_restreamer || is_game_restreamer;
                                             @if is_organizer || is_restreamer {
-                                                a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id, _))) : "Manage Volunteers";
+                                                a(class = "clean_button race-action-button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id, _))) : "Manage Volunteers";
                                             } else if let Some(approved_roles) = approved_role_binding_ids {
                                                 @if !approved_roles.is_empty() {
-                                                    a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id, _))) : "Volunteer";
+                                                    a(class = "clean_button race-action-button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id, _))) : "Volunteer";
                                                 }
                                             }
                                         }
@@ -2628,7 +2641,7 @@ pub(crate) async fn race_table(
                             }
                         }
                         @if has_seeds {
-                            td {
+                            td(class = "race-seed") {
                                 @if race.show_seed() {
                                     @let game_id = event.game(&mut *transaction).await?.map(|g| g.id).unwrap_or(1);
                                     // Only show "Add Hash" for games that support hashes (not TWWR)
@@ -2674,7 +2687,7 @@ pub(crate) async fn race_table(
                             }
                         }
                         @if !has_seeds && has_settings {
-                            td {
+                            td(class = "race-seed") {
                                 @if let Some(sgt) = event.seed_gen_type.as_ref() {
                                     @if let Some(summary) = sgt.settings_display_str(&mut **transaction, race, &event.choice_requirements()).await {
                                         span(class = "settings-link", data_tooltip = summary) {
@@ -2694,7 +2707,7 @@ pub(crate) async fn race_table(
                             }
                         }
                         @if options.show_restream_consent {
-                            td {
+                            td(class = "race-consent") {
                                 @if race.restream_consent_required {
                                     : "Required";
                                 } else if let Some(mut teams) = race.teams_opt() {
@@ -2707,29 +2720,29 @@ pub(crate) async fn race_table(
                             }
                         }
                         @if has_buttons {
-                            td {
+                            td(class = "race-actions") {
                                 @if let Some(user) = user {
                                     @let is_admin = u64::from(user.id) == User::GLOBAL_ADMIN_USER_IDS[0];
                                     @let is_organizer = event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(user));
                                     @if is_admin || is_organizer {
-                                        a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
+                                        a(class = "clean_button race-action-button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
                                     } else if options.can_edit {
                                         @match race.schedule {
                                             RaceSchedule::Live { .. } => {
                                                 @let all_teams_consented = race.restream_consent_required || race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
                                                 @if all_teams_consented {
-                                                    a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
+                                                    a(class = "clean_button race-action-button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
                                                 }
                                             }
                                             RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {
-                                                a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
+                                                a(class = "clean_button race-action-button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
                                             }
                                         }
                                     }
                                 }
                             }
                         }
-                        td {
+                        td(class = "race-volunteers") {
                             @if race.is_ended() {
                                 @match race.schedule {
                                     RaceSchedule::Live { .. } => {
@@ -2858,7 +2871,7 @@ pub(crate) async fn race_table(
                                                         .collect::<Vec<_>>()
                                                         .join("\n")
                                                 };
-                                                span(class = "settings-link pending-link", data_tooltip = pending_tooltip) {
+                                                span(class = "settings-link pending-link race-status-pill", data_tooltip = pending_tooltip) {
                                                     : "pending";
                                                 }
                                             } else if !confirmed_signups.is_empty() {
