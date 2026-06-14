@@ -1,9 +1,23 @@
 document.querySelectorAll('.datetime').forEach(function(dateTime) {
     var longFormat = dateTime.dataset.long == 'true';
-    dateTime.textContent = new Date(parseInt(dateTime.dataset.timestamp)).toLocaleString(['en'], {
-        dateStyle: longFormat ? 'full' : 'medium',
-        timeStyle: longFormat ? 'full' : 'short',
-    });
+    var date = new Date(parseInt(dateTime.dataset.timestamp));
+    if (longFormat) {
+        dateTime.textContent = date.toLocaleString(['en'], {
+            dateStyle: 'full',
+            timeStyle: 'full',
+        });
+    } else {
+        var dateText = date.toLocaleDateString(['en'], {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+        }).replace(/, (?=\d{4}$)/, ' ');
+        var timeText = date.toLocaleTimeString(['en'], {
+            hour: 'numeric',
+            minute: '2-digit',
+        });
+        dateTime.textContent = dateText + ', ' + timeText;
+    }
 });
 
 document.querySelectorAll('.daterange').forEach(function(dateRange) {
