@@ -867,6 +867,7 @@ impl<'a> Data<'a> {
                     let has_practice = match &self.seed_gen_type {
                         Some(SeedGenType::Owr { .. }) => true,
                         Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman, practice_modes, .. }) => !practice_modes.is_empty(),
+                        Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices, .. }) => true,
                         Some(SeedGenType::AlttprAvianart { practice_presets }) => !practice_presets.is_empty(),
                         Some(SeedGenType::TWWR { .. }) => self.settings_string.is_some(),
                         _ => is_ootr && self.single_settings.is_some(),
@@ -3446,6 +3447,25 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, global_state: &State<Arc
                 }
             }, vec![], "Generate Practice Seed")
         },
+        Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices, practice_choices, .. }) => {
+            let choices = practice_choices.clone();
+            full_form(form_uri, csrf.as_ref(), html! {
+                @if choices.is_empty() {
+                    p : "Generate a practice seed with base settings.";
+                } else {
+                    p : "Check any optional rules to include in your practice seed. Leave all unchecked for base settings.";
+                    fieldset {
+                        legend : "Options";
+                        @for opt in &choices {
+                            div {
+                                input(type="checkbox", id=opt.value.as_str(), name="choices", value=opt.value.as_str());
+                                label(for=opt.value.as_str()) : opt.label.as_str();
+                            }
+                        }
+                    }
+                }
+            }, vec![], "Generate Practice Seed")
+        },
         Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman, practice_modes, practice_choices }) if !practice_modes.is_empty() => {
             let modes = practice_modes.clone();
             let choices = practice_choices.clone();
@@ -3553,6 +3573,13 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
                 .collect();
             let rx = Arc::clone(&*global_state).roll_owr_seed(choices, config);
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, choice_labels);
+        },
+        SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices, .. } => {
+            transaction.commit().await?;
+            let choices: HashSet<&str> = form.choices.iter().map(|s| s.as_str()).collect();
+            let crosskeys_options = racetime_bot::CrosskeysRaceOptions::from_always_set(&choices);
+            let rx = Arc::clone(&*global_state).roll_crosskeys_seed(crosskeys_options);
+            racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         },
         SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman, .. } => {
             transaction.commit().await?;
