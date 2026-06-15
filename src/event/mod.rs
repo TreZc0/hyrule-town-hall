@@ -683,12 +683,33 @@ impl<'a> Data<'a> {
 
     pub(crate) async fn restreamers(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<User>, Error> {
         let mut buf = Vec::<User>::default();
-        for id in sqlx::query_scalar!(r#"SELECT restreamer AS "restreamer: Id<Users>" FROM restreamers WHERE series = $1 AND event = $2"#, self.series as _, &self.event).fetch_all(&mut **transaction).await? {
+        for id in sqlx::query_scalar!(r#"SELECT DISTINCT restreamer AS "restreamer: Id<Users>" FROM restreamers WHERE series = $1 AND event = $2"#, self.series as _, &self.event).fetch_all(&mut **transaction).await? {
             let user = User::from_id(&mut **transaction, id).await?.ok_or(Error::RestreamerUserData)?;
             let (Ok(idx) | Err(idx)) = buf.binary_search_by(|probe| probe.display_name().cmp(user.display_name()).then_with(|| probe.id.cmp(&user.id)));
             buf.insert(idx, user);
         }
         Ok(buf)
+    }
+
+    pub(crate) async fn restreamers_with_languages(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<(User, Vec<Language>)>, Error> {
+        let rows = sqlx::query!(
+            r#"SELECT DISTINCT restreamer AS "restreamer: Id<Users>", language AS "language: Language" FROM restreamers WHERE series = $1 AND event = $2 ORDER BY restreamer, language"#,
+            self.series as _,
+            &self.event
+        ).fetch_all(&mut **transaction).await?;
+
+        let mut by_id: std::collections::BTreeMap<Id<Users>, Vec<Language>> = std::collections::BTreeMap::new();
+        for row in rows {
+            by_id.entry(row.restreamer).or_default().push(row.language);
+        }
+
+        let mut result = Vec::new();
+        for (id, langs) in by_id {
+            let user = User::from_id(&mut **transaction, id).await?.ok_or(Error::RestreamerUserData)?;
+            result.push((user, langs));
+        }
+        result.sort_by(|(a, _), (b, _)| a.display_name().cmp(b.display_name()).then_with(|| a.id.cmp(&b.id)));
+        Ok(result)
     }
 
     pub(crate) async fn active_async(&self, transaction: &mut Transaction<'_, Postgres>, team_id: Option<Id<Teams>>) -> Result<Option<AsyncKind>, DataError> {
