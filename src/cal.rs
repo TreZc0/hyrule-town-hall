@@ -678,7 +678,7 @@ impl Race {
         for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE series = $1 AND event = $2"#, event.series as _, &event.event).fetch_all(&mut **transaction).await? {
             races.push(Self::from_id(&mut *transaction, http_client, id).await?);
         }
-        races.retain(|race| !race.ignored);
+        races.retain(|race| !race.ignored || race.is_ended());
         races.sort_unstable();
         Ok(races)
     }
@@ -3666,7 +3666,7 @@ pub(crate) async fn auto_ignore_past_custom_races(
 ) -> Result<(), Error> {
     let cutoff = now - TimeDelta::hours(8);
     sqlx::query!(
-        "UPDATE races SET ignored = true \
+        "UPDATE races SET ignored = true, end_time = start + INTERVAL '8 hours' \
          WHERE custom_title IS NOT NULL AND NOT custom_create_room \
          AND start IS NOT NULL AND start < $1 \
          AND end_time IS NULL AND NOT ignored",

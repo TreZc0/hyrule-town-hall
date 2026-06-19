@@ -299,9 +299,21 @@ async fn apply_live_schedule(
     race.schedule_updated_at = Some(Utc::now());
     race.save(&mut transaction).await?;
     // Create or update Discord scheduled event
-    let http_client = {
+    let (http_client, correction_hint) = {
         let data = ctx.data.read().await;
-        data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone()
+        let command_ids_opt = interaction.guild_id().and_then(|guild_id|
+            data.get::<CommandIds>().and_then(|ids| ids.get(&guild_id).copied()).flatten()
+        );
+        let hint = if let Some(ids) = command_ids_opt {
+            if let French = event.language {
+                format!("\nPour corriger une erreur, utilisez </schedule:{}> pour replanifier ou </schedule-remove:{}> pour annuler.", ids.schedule, ids.schedule_remove)
+            } else {
+                format!("\nIf this was a mistake, use </schedule:{}> to reschedule or </schedule-remove:{}> to unschedule.", ids.schedule, ids.schedule_remove)
+            }
+        } else {
+            String::new()
+        };
+        (data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(), hint)
     };
     match crate::discord_scheduled_events::create_discord_scheduled_event(ctx, &mut transaction, &mut race, &event, &http_client).await {
         Ok(()) => {
@@ -350,6 +362,7 @@ async fn apply_live_schedule(
                 response_content.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
                 let response_content = response_content
                     .push(". The race room will be opened momentarily.")
+                    .push(&correction_hint)
                     .build();
                 interaction.edit_response(ctx, EditInteractionResponse::new()
                     .content(response_content)
@@ -571,6 +584,7 @@ async fn apply_live_schedule(
         } else {
             response_content
         };
+        let response_content = format!("{}{}", response_content, correction_hint);
         interaction.edit_response(ctx, EditInteractionResponse::new()
             .content(response_content)
         ).await?;
