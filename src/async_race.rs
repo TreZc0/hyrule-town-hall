@@ -269,9 +269,10 @@ impl AsyncRaceManager {
             content.push("---");
             content.push_line("");
             content.push(format!("**Seed Settings:** {}", racetime_bot::owr_choices_description(&choices, config)));
-            content.push_line("");
-
-            content.push(format!("**Race Rules:** {}", racetime_bot::alttpr_dr_race_options_str(&choices)));
+            if let Some(race_options) = racetime_bot::alttpr_dr_player_rules_str(&choices, config) {
+                content.push_line("");
+                content.push(format!("**Race Rules:** {}", race_options));
+            }
             content.push_line("");
             content.push("---");
         }

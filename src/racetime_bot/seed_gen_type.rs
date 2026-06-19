@@ -26,6 +26,8 @@ pub(crate) struct OwrEventConfig {
     pub(crate) start_inventory: Vec<String>,
     /// Per-choice config object. Each key maps to an entry with optional fields:
     /// - `label`: human-readable label for the practice seed form and display.
+    /// - `value_labels`: optional display labels for `never`, `random`, and `always`.
+    ///   Entries without seed patches are displayed as player rules instead of seed settings.
     /// - `settings`, `placements`, `start_inventory`: patch applied when the choice is enabled.
     ///   Legacy flat patches (bare key→value object, no section keys) are also accepted.
     /// - `supercedes`: list of choice keys whose patches are suppressed when this choice is enabled.
@@ -181,11 +183,16 @@ impl SeedGenType {
             }
             Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, .. } => {
                 let choices = super::owr_choices_for_race(db_pool, race).await;
-                Some(format!(
-                    "This race will be played with {} as settings.\n\nThis race will be played with {}.",
-                    super::owr_choices_description(&choices, config),
-                    super::alttpr_dr_race_options_str(&choices),
-                ))
+                let seed_settings = super::owr_choices_description(&choices, config);
+                if let Some(player_rules) = super::alttpr_dr_player_rules_str(&choices, config) {
+                    Some(format!(
+                        "This race will be played with {} as settings.\n\nThis race will be played with {}.",
+                        seed_settings,
+                        player_rules,
+                    ))
+                } else {
+                    Some(format!("This race will be played with {} as settings.", seed_settings))
+                }
             }
             Self::Owr { config } => {
                 let choices = super::owr_choices_for_race(db_pool, race).await;
@@ -232,13 +239,10 @@ impl SeedGenType {
     where
         E: sqlx::Executor<'e, Database = sqlx::Postgres>,
     {
-        match self {
-            Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices { .. }, .. } | Self::Owr { .. } => {}
+        let config = match self {
+            Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, .. } | Self::Owr { config } => config,
             _ => return None,
-        }
-        if labels.is_empty() {
-            return None;
-        }
+        };
         let team_ids = race.teams().map(|t| t.id).collect_vec();
         if team_ids.len() < 2 {
             return None;
@@ -252,17 +256,17 @@ impl SeedGenType {
         .ok()?;
 
         let resolved = super::resolve_choice_values(rows.iter().map(|row| &row.custom_choices));
-        let active = labels
-            .iter()
-            .filter_map(|(key, label)| {
-                super::format_choice_label(label, resolved.get(*key).copied().unwrap_or_default())
-            })
-            .collect_vec();
-
-        if active.is_empty() {
-            Some("base settings".to_owned())
-        } else {
-            Some(active.join(", "))
+        let seed_settings = super::owr_choices_description_with_labels(&resolved, config, labels);
+        match self {
+            Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices { .. }, .. } => {
+                if let Some(player_rules) = super::alttpr_dr_player_rules_str(&resolved, config) {
+                    Some(format!("Seed Settings: {seed_settings}\nRace Rules: {player_rules}"))
+                } else {
+                    Some(seed_settings)
+                }
+            }
+            Self::Owr { .. } => Some(seed_settings),
+            _ => None,
         }
     }
 }

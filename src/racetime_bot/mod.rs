@@ -2346,7 +2346,7 @@ fn apply_owr_patch(
     } else {
         // Legacy flat patch — treat non-metadata keys as settings
         for (k, v) in patch_obj {
-            if matches!(k.as_str(), "label" | "supercedes") { continue; }
+            if matches!(k.as_str(), "label" | "supercedes" | "value_labels") { continue; }
             if v.is_null() { settings.remove(k); } else { settings.insert(k.clone(), v.clone()); }
         }
     }
@@ -2361,19 +2361,20 @@ fn apply_patches_with_supercedes(
 ) {
     let Some(patches) = patches_val.as_object() else { return };
     // Evaluate roll_enabled once per key — Random calls rand::random() and must not be called twice.
-    let enabled: HashMap<&str, bool> = patches.keys()
-        .map(|k| (k.as_str(), choices.get(k).copied().unwrap_or_default().roll_enabled()))
+    let enabled: HashMap<&str, bool> = patches.iter()
+        .filter(|(_, patch)| choice_entry_affects_seed(Some(patch)))
+        .map(|(k, _)| (k.as_str(), choices.get(k).copied().unwrap_or_default().roll_enabled()))
         .collect();
     let mut suppressed: HashSet<&str> = HashSet::default();
     for (key, patch) in patches {
-        if *enabled.get(key.as_str()).unwrap_or(&false) {
+        if choice_entry_affects_seed(Some(patch)) && *enabled.get(key.as_str()).unwrap_or(&false) {
             if let Some(arr) = patch.get("supercedes").and_then(|v| v.as_array()) {
                 suppressed.extend(arr.iter().filter_map(|v| v.as_str()));
             }
         }
     }
     for (key, patch) in patches {
-        if !suppressed.contains(key.as_str()) && *enabled.get(key.as_str()).unwrap_or(&false) {
+        if choice_entry_affects_seed(Some(patch)) && !suppressed.contains(key.as_str()) && *enabled.get(key.as_str()).unwrap_or(&false) {
             apply_owr_patch(settings, placements, start_inventory, patch);
         }
     }
@@ -2404,18 +2405,54 @@ fn build_dr_yaml_from_config(config: &seed_gen_type::OwrEventConfig, choices: &H
     serde_yml::to_string(&serde_yml::Value::Mapping(yaml_map))
 }
 
-pub(crate) fn alttpr_dr_race_options_str(choices: &HashMap<String, ChoiceValue>) -> String {
-    let hovering = match choices.get("hovering").copied().unwrap_or_default() {
-        ChoiceValue::Always => "hovering and moldorm bouncing ALLOWED",
-        ChoiceValue::Random => "hovering and moldorm bouncing: random",
-        ChoiceValue::Never => "hovering and moldorm bouncing BANNED",
+fn choice_entry<'a>(config: &'a seed_gen_type::OwrEventConfig, key: &str) -> Option<&'a serde_json::Value> {
+    config.choices.as_object()?.get(key)
+}
+
+fn choice_entry_label<'a>(entry: Option<&'a serde_json::Value>, fallback: &'a str) -> &'a str {
+    entry
+        .and_then(|entry| entry.get("label"))
+        .and_then(|label| label.as_str())
+        .unwrap_or(fallback)
+}
+
+fn choice_entry_label_with_labels(entry: Option<&serde_json::Value>, key: &str, labels: &[(&str, String)]) -> String {
+    entry
+        .and_then(|entry| entry.get("label"))
+        .and_then(|label| label.as_str())
+        .map(ToOwned::to_owned)
+        .or_else(|| labels.iter().find(|(label_key, _)| *label_key == key).map(|(_, label)| label.clone()))
+        .unwrap_or_else(|| key.to_owned())
+}
+
+fn choice_entry_affects_seed(entry: Option<&serde_json::Value>) -> bool {
+    let Some(entry) = entry else { return true };
+    let Some(obj) = entry.as_object() else { return false };
+    if obj.contains_key("settings") || obj.contains_key("placements") || obj.contains_key("start_inventory") {
+        return true
+    }
+    obj.keys().any(|key| !matches!(key.as_str(), "label" | "supercedes" | "value_labels"))
+}
+
+fn configured_choice_label(entry: Option<&serde_json::Value>, fallback_label: &str, value: ChoiceValue) -> Option<String> {
+    let value_key = match value {
+        ChoiceValue::Always => "always",
+        ChoiceValue::Random => "random",
+        ChoiceValue::Never => "never",
     };
-    let delay = match choices.get("no_delay").copied().unwrap_or_default() {
-        ChoiceValue::Always => "no stream delay",
-        ChoiceValue::Random => "stream delay: random",
-        ChoiceValue::Never => "stream delay(10m)",
-    };
-    format!("{hovering} and {delay}")
+    if let Some(label) = entry
+        .and_then(|entry| entry.get("value_labels"))
+        .and_then(|labels| labels.get(value_key))
+        .and_then(|label| label.as_str())
+    {
+        if label.is_empty() {
+            None
+        } else {
+            Some(label.to_owned())
+        }
+    } else {
+        format_choice_label(fallback_label, value)
+    }
 }
 
 pub(crate) fn owr_choice_keys(config: &seed_gen_type::OwrEventConfig) -> Vec<String> {
@@ -2434,15 +2471,16 @@ pub(crate) async fn owr_choices_for_race(db_pool: &PgPool, race: &Race) -> HashM
     resolve_choice_values(rows.iter().map(|row| &row.custom_choices))
 }
 
-pub(crate) fn owr_choices_description(choices: &HashMap<String, ChoiceValue>, config: &seed_gen_type::OwrEventConfig) -> String {
+pub(crate) fn owr_choices_description_with_labels(choices: &HashMap<String, ChoiceValue>, config: &seed_gen_type::OwrEventConfig, labels: &[(&str, String)]) -> String {
     let active: Vec<String> = choices.iter()
         .sorted_by_key(|(key, _)| key.as_str())
         .filter_map(|(key, value)| {
-            let label = config.choices.get(key)
-                .and_then(|e| e.get("label"))
-                .and_then(|v| v.as_str())
-                .unwrap_or(key);
-            format_choice_label(label, *value)
+            let entry = choice_entry(config, key);
+            if !choice_entry_affects_seed(entry) {
+                return None
+            }
+            let label = choice_entry_label_with_labels(entry, key, labels);
+            configured_choice_label(entry, &label, *value)
         })
         .collect();
     if active.is_empty() {
@@ -2452,6 +2490,24 @@ pub(crate) fn owr_choices_description(choices: &HashMap<String, ChoiceValue>, co
     }
 }
 
+pub(crate) fn owr_choices_description(choices: &HashMap<String, ChoiceValue>, config: &seed_gen_type::OwrEventConfig) -> String {
+    owr_choices_description_with_labels(choices, config, &[])
+}
+
+pub(crate) fn alttpr_dr_player_rules_str(choices: &HashMap<String, ChoiceValue>, config: &seed_gen_type::OwrEventConfig) -> Option<String> {
+    let player_rules = config.choices.as_object()?
+        .iter()
+        .sorted_by_key(|(key, _)| key.as_str())
+        .filter_map(|(key, entry)| {
+            if choice_entry_affects_seed(Some(entry)) {
+                return None
+            }
+            let label = choice_entry_label(Some(entry), key);
+            configured_choice_label(Some(entry), label, choices.get(key).copied().unwrap_or_default())
+        })
+        .collect_vec();
+    English.join_str_opt(player_rules)
+}
 
 #[derive(Clone)]
 pub(crate) struct AlttprDeChoice {
@@ -3080,10 +3136,12 @@ impl Handler {
             .expect("MutualChoices seed roll triggered for event without MutualChoices config");
         let choices = owr_choices_for_race(&ctx.global_state.db_pool, &cal_event.race).await;
         let seed_options_str = owr_choices_description(&choices, &config);
-        let race_options_str = alttpr_dr_race_options_str(&choices);
+        let race_options_str = alttpr_dr_player_rules_str(&choices, &config);
         let receiver = ctx.global_state.clone().roll_mutual_choices_dr_seed(config, choices);
         self.roll_seed_inner(ctx, Some(delay_until), receiver, language, article, format!("seed with {}", seed_options_str), false).await;
-        ctx.send_message(format!("@entrants Remember: this race will be played with {}!", race_options_str), true, Vec::default()).await.expect("failed to send race options");
+        if let Some(race_options_str) = race_options_str {
+            ctx.send_message(format!("@entrants Remember: this race will be played with {}!", race_options_str), true, Vec::default()).await.expect("failed to send race options");
+        }
     }
 
     async fn roll_owr_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
