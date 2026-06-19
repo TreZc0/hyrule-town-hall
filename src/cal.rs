@@ -800,7 +800,7 @@ impl Race {
             | Series::Wolfdash
                 => {} // these series are now scheduled via Mido's House
         }
-        races.retain(|race| !race.ignored);
+        races.retain(|race| !race.ignored || race.is_ended());
         races.sort_unstable();
         Ok(races)
     }
@@ -3774,7 +3774,7 @@ pub(crate) async fn auto_ignore_past_custom_races(
 ) -> Result<(), Error> {
     let cutoff = now - TimeDelta::hours(8);
     sqlx::query!(
-        "UPDATE races SET ignored = true \
+        "UPDATE races SET ignored = true, end_time = start + INTERVAL '8 hours' \
          WHERE custom_title IS NOT NULL AND NOT custom_create_room \
          AND start IS NOT NULL AND start < $1 \
          AND end_time IS NULL AND NOT ignored",
