@@ -2752,6 +2752,29 @@ pub(crate) struct ManageTeamForm {
     reason: Option<String>,
 }
 
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct ManageTeamChoicesForm {
+    #[field(default = String::new())]
+    csrf: String,
+    restream_consent: bool,
+    custom_choices: HashMap<String, String>,
+    #[field(default = false)]
+    confirm_override: bool,
+}
+
+#[derive(Debug, thiserror::Error, rocket_util::Error)]
+pub(crate) enum ManageTeamChoicesError {
+    #[error(transparent)] Data(#[from] DataError),
+    #[error(transparent)] Event(#[from] Error),
+    #[error(transparent)] Sql(#[from] sqlx::Error),
+}
+
+impl<E: Into<ManageTeamChoicesError>> From<E> for StatusOrError<ManageTeamChoicesError> {
+    fn from(e: E) -> Self {
+        Self::Err(e.into())
+    }
+}
+
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
 pub(crate) enum ManageTeamError {
     #[error(transparent)] Data(#[from] DataError),
@@ -2769,7 +2792,7 @@ impl<E: Into<ManageTeamError>> From<E> for StatusOrError<ManageTeamError> {
     }
 }
 
-async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, ctx: Context<'_>, series: Series, event: &str, team: Id<Teams>) -> Result<RawHtml<String>, StatusOrError<Error>> {
+async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, ctx: Context<'_>, choices_ctx: Context<'_>, series: Series, event: &str, team: Id<Teams>) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let me = me.ok_or(StatusOrError::Status(Status::Unauthorized))?;
@@ -2783,6 +2806,21 @@ async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf
     let has_qualifiers = !matches!(qualifier_kind, QualifierKind::None);
     let is_global_admin = me.is_global_admin();
     let current_startgg_id = team_obj.startgg_id.as_ref().map(|id| id.0.clone());
+    let choices_row = sqlx::query!(
+        r#"SELECT restream_consent, custom_choices AS "custom_choices: Json<HashMap<String, String>>" FROM teams WHERE id = $1"#,
+        team as _
+    ).fetch_one(&mut *transaction).await?;
+    let has_active_race = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND (team1 = $3 OR team2 = $3 OR team3 = $3) AND scheduling_thread IS NOT NULL AND end_time IS NULL AND NOT ignored) AS "exists!""#,
+        data.series as _, &data.event, team as _
+    ).fetch_one(&mut *transaction).await?;
+    let any_locked = has_active_race || data.enter_flow.as_ref().is_some_and(|ef| {
+        ef.requirements.iter().any(|req| match req {
+            enter::Requirement::BooleanChoice { locked, .. }
+            | enter::Requirement::RadioChoice { locked, .. } => *locked,
+            _ => false,
+        })
+    });
 
     Ok(page(transaction, &Some(me), &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Manage — {}", data.display_name), html! {
         h2 {
@@ -2857,12 +2895,76 @@ async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf
                 }
             }
         }
+        h3 : "Edit Signup Choices";
+        @if any_locked {
+            p(class = "error") : "One or more choices are currently locked for this entrant (active race or locked flag).";
+        }
+        form(action = uri!(manage_team_choices_post(series, event, team)).to_string(), method = "post") {
+            : csrf.as_ref();
+            fieldset {
+                div {
+                    input(type = "checkbox", id = "choices-restream_consent", name = "restream_consent",
+                        checked? = choices_ctx.field_value("restream_consent").map_or(choices_row.restream_consent, |v| v == "on"));
+                    label(for = "choices-restream_consent") : "Okay with being restreamed";
+                }
+                @if let Some(ref enter_flow) = data.enter_flow {
+                    @for requirement in &enter_flow.requirements {
+                        @if let enter::Requirement::BooleanChoice { key, label, prompt, .. } = requirement {
+                            @let field_name = format!("custom_choices[{key}]");
+                            @let field_id_yes = format!("choices-custom_choices[{key}]-yes");
+                            @let field_id_no = format!("choices-custom_choices[{key}]-no");
+                            @let yes_checked = choices_ctx.field_value(&*field_name).map_or_else(|| choices_row.custom_choices.get(key.as_str()).is_some_and(|v| v == "yes"), |v| v == "yes");
+                            @let no_checked = choices_ctx.field_value(&*field_name).map_or_else(|| choices_row.custom_choices.get(key.as_str()).is_some_and(|v| v == "no"), |v| v == "no");
+                            div {
+                                label : prompt.as_ref().unwrap_or(label);
+                                br;
+                                input(id = &field_id_yes, type = "radio", name = &field_name, value = "yes", checked? = yes_checked);
+                                label(for = &field_id_yes) : "Yes";
+                                input(id = &field_id_no, type = "radio", name = &field_name, value = "no", checked? = no_checked);
+                                label(for = &field_id_no) : "No";
+                            }
+                        }
+                        @if let enter::Requirement::RadioChoice { key, label, prompt, .. } = requirement {
+                            @let field_name = format!("custom_choices[{key}]");
+                            @let field_id_never = format!("choices-custom_choices[{key}]-never");
+                            @let field_id_random = format!("choices-custom_choices[{key}]-random");
+                            @let field_id_always = format!("choices-custom_choices[{key}]-always");
+                            @let never_checked = choices_ctx.field_value(&*field_name).map_or_else(|| choices_row.custom_choices.get(key.as_str()).is_some_and(|v| v == "never"), |v| v == "never");
+                            @let random_checked = choices_ctx.field_value(&*field_name).map_or_else(|| choices_row.custom_choices.get(key.as_str()).is_some_and(|v| v == "random"), |v| v == "random");
+                            @let always_checked = choices_ctx.field_value(&*field_name).map_or_else(|| choices_row.custom_choices.get(key.as_str()).is_some_and(|v| v == "always"), |v| v == "always");
+                            div {
+                                label : prompt.as_ref().unwrap_or(label);
+                                br;
+                                input(id = &field_id_never, type = "radio", name = &field_name, value = "never", checked? = never_checked);
+                                label(for = &field_id_never) : "Never";
+                                input(id = &field_id_random, type = "radio", name = &field_name, value = "random", checked? = random_checked);
+                                label(for = &field_id_random) : "Random";
+                                input(id = &field_id_always, type = "radio", name = &field_name, value = "always", checked? = always_checked);
+                                label(for = &field_id_always) : "Always";
+                            }
+                        }
+                    }
+                }
+                @if any_locked {
+                    div {
+                        input(type = "checkbox", id = "confirm_override", name = "confirm_override");
+                        label(for = "confirm_override") : "I confirm I want to override locked choices.";
+                    }
+                }
+            }
+            @for error in choices_ctx.errors() {
+                div(class = "error") : error.to_string();
+            }
+            fieldset {
+                input(type = "submit", value = "Save Choices");
+            }
+        }
     }).await?)
 }
 
 #[rocket::get("/event/<series>/<event>/manage/<team>")]
 pub(crate) async fn manage_team(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, team: Id<Teams>) -> Result<RawHtml<String>, StatusOrError<Error>> {
-    manage_team_page(pool, me, uri, csrf, Context::default(), series, event, team).await
+    manage_team_page(pool, me, uri, csrf, Context::default(), Context::default(), series, event, team).await
 }
 
 #[rocket::post("/event/<series>/<event>/manage/<team>", data = "<form>")]
@@ -2885,7 +2987,7 @@ pub(crate) async fn manage_team_post(pool: &State<PgPool>, _http_client: &State<
 
         Ok(if form.context.errors().next().is_some() {
             transaction.rollback().await?;
-            RedirectOrContent::Content(manage_team_page(pool, Some(me), uri, csrf, form.context, series, event, team).await.map_err(|e| match e {
+            RedirectOrContent::Content(manage_team_page(pool, Some(me), uri, csrf, form.context, Context::default(), series, event, team).await.map_err(|e| match e {
                 StatusOrError::Status(status) => StatusOrError::Status(status),
                 StatusOrError::Err(e) => e.into(),
             })?)
@@ -2976,6 +3078,114 @@ pub(crate) async fn manage_team_post(pool: &State<PgPool>, _http_client: &State<
     } else {
         Err(StatusOrError::Err(ManageTeamError::FormValue))
     }
+}
+
+#[rocket::post("/event/<series>/<event>/manage/<team>/choices", data = "<form>")]
+pub(crate) async fn manage_team_choices_post(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    team: Id<Teams>,
+    form: Form<Contextual<'_, ManageTeamChoicesForm>>,
+) -> Result<RedirectOrContent, StatusOrError<ManageTeamChoicesError>> {
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    if !data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if data.is_ended() {
+        form.context.push_error(form::Error::validation("This event has already ended."));
+    }
+    Ok(if let Some(ref value) = form.value {
+        let has_active_race = sqlx::query_scalar!(
+            r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND (team1 = $3 OR team2 = $3 OR team3 = $3) AND scheduling_thread IS NOT NULL AND end_time IS NULL AND NOT ignored) AS "exists!""#,
+            data.series as _, &data.event, team as _
+        ).fetch_one(&mut *transaction).await?;
+        let any_locked = has_active_race || data.enter_flow.as_ref().is_some_and(|ef| {
+            ef.requirements.iter().any(|req| match req {
+                enter::Requirement::BooleanChoice { locked, .. }
+                | enter::Requirement::RadioChoice { locked, .. } => *locked,
+                _ => false,
+            })
+        });
+        if any_locked && !value.confirm_override {
+            form.context.push_error(
+                form::Error::validation("You must check the confirmation box to override locked choices.")
+                    .with_name("confirm_override"),
+            );
+        }
+        if let Some(ref enter_flow) = data.enter_flow {
+            for req in &enter_flow.requirements {
+                match req {
+                    enter::Requirement::BooleanChoice { key, .. } => {
+                        if let Some(val) = value.custom_choices.get(key.as_str()) {
+                            if val != "yes" && val != "no" {
+                                form.context.push_error(
+                                    form::Error::validation(format!("Invalid value for {key}: must be \"yes\" or \"no\"."))
+                                        .with_name(format!("custom_choices[{key}]")),
+                                );
+                            }
+                        }
+                    }
+                    enter::Requirement::RadioChoice { key, .. } => {
+                        if let Some(val) = value.custom_choices.get(key.as_str()) {
+                            if val != "never" && val != "random" && val != "always" {
+                                form.context.push_error(
+                                    form::Error::validation(format!("Invalid value for {key}: must be \"never\", \"random\", or \"always\"."))
+                                        .with_name(format!("custom_choices[{key}]")),
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if form.context.errors().next().is_some() {
+            transaction.rollback().await?;
+            RedirectOrContent::Content(
+                manage_team_page(pool, Some(me), uri, csrf, Context::default(), form.context, series, event, team)
+                    .await
+                    .map_err(|e| match e {
+                        StatusOrError::Status(status) => StatusOrError::Status(status),
+                        StatusOrError::Err(e) => e.into(),
+                    })?,
+            )
+        } else {
+            let team_in_event = sqlx::query_scalar!(
+                r#"SELECT EXISTS(SELECT 1 FROM teams WHERE id = $1 AND series = $2 AND event = $3) AS "exists!""#,
+                team as _, data.series as _, &data.event
+            ).fetch_one(&mut *transaction).await?;
+            if !team_in_event {
+                return Err(StatusOrError::Status(Status::NotFound));
+            }
+            sqlx::query!(
+                "UPDATE teams SET restream_consent = $1, custom_choices = $2 WHERE id = $3",
+                value.restream_consent,
+                Json(&value.custom_choices) as _,
+                team as _
+            )
+            .execute(&mut *transaction)
+            .await?;
+            transaction.commit().await?;
+            RedirectOrContent::Redirect(Redirect::to(uri!(manage_team(series, event, team))))
+        }
+    } else {
+        transaction.rollback().await?;
+        RedirectOrContent::Content(
+            manage_team_page(pool, Some(me), uri, csrf, Context::default(), form.context, series, event, team)
+                .await
+                .map_err(|e| match e {
+                    StatusOrError::Status(status) => StatusOrError::Status(status),
+                    StatusOrError::Err(e) => e.into(),
+                })?,
+        )
+    })
 }
 
 #[derive(FromForm, CsrfForm)]
