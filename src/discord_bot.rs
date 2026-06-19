@@ -4443,11 +4443,23 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             }
             content.push("Bienvenue dans votre ");
             content.push_safe(phase_round);
-            content.push(". Veuillez utiliser ");
+            content.push(".");
+            content.push_line("");
+            content.push_line("");
+            content.push("• ");
             content.mention_command(command_ids.schedule, "schedule");
-            content.push(" pour schedule votre race en live ou ");
+            content.push(" — planifier (ou replanifier) votre race en live");
+            content.push_line("");
+            content.push("• ");
             content.mention_command(command_ids.schedule_async, "schedule-async");
-            content.push(" pour schedule votre async. Vous pouvez entrer directement la date (par exemple `vendredi 20h UTC` ou `demain 15h CET`) ou utiliser <https://hammertime.cyou/> pour générer un timestamp Discord. Si vous n'indiquez pas de fuseau horaire, UTC sera utilisé.");
+            content.push(" — planifier votre async");
+            content.push_line("");
+            content.push("• ");
+            content.mention_command(command_ids.schedule_remove, "schedule-remove");
+            content.push(" — annuler");
+            content.push_line("");
+            content.push_line("");
+            content.push("Vous pouvez entrer directement la date (par exemple `vendredi 20h UTC` ou `demain 15h CET`) ou utiliser <https://hammertime.cyou/> pour générer un timestamp Discord. Si vous n'indiquez pas de fuseau horaire, UTC sera utilisé.");
         } else {
             for team in race.teams() {
                 content.mention_team(&mut transaction, Some(guild_id), team).await?;
@@ -4462,9 +4474,9 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
                 content.push_safe(round.clone());
                 content.push(' ');
             }
-            content.push("match. Use ");
+            content.push("match.");
             if let Some(speedgaming_slug) = &event.speedgaming_slug {
-                content.push("<https://speedgaming.org/");
+                content.push(" Use <https://speedgaming.org/");
                 content.push(speedgaming_slug);
                 if game_count > 1 {
                     content.push("/submit> to schedule your races.");
@@ -4472,14 +4484,26 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
                     content.push("/submit> to schedule your race.");
                 }
             } else {
+                content.push_line("");
+                content.push_line("");
+                content.push("• ");
                 content.mention_command(command_ids.schedule, "schedule");
                 if event.asyncs_allowed() {
-                    content.push(" to schedule as a live race or ");
+                    content.push(" — schedule (or reschedule) as a live race");
+                    content.push_line("");
+                    content.push("• ");
                     content.mention_command(command_ids.schedule_async, "schedule-async");
-                    content.push(" to schedule as an async. You can enter a time naturally (e.g. `friday 8pm UTC` or `tomorrow 15:00 EST`) or use <https://hammertime.cyou/> to generate a Discord timestamp. If no timezone is provided, UTC is assumed.");
+                    content.push(" — schedule as an async");
                 } else {
-                    content.push(" to schedule your race. You can enter a time naturally (e.g. `friday 8pm UTC` or `tomorrow 15:00 EST`) or use <https://hammertime.cyou/> to generate a Discord timestamp. If no timezone is provided, UTC is assumed.");
+                    content.push(" — schedule or reschedule your race");
                 }
+                content.push_line("");
+                content.push("• ");
+                content.mention_command(command_ids.schedule_remove, "schedule-remove");
+                content.push(" — cancel scheduling");
+                content.push_line("");
+                content.push_line("");
+                content.push("You can enter a time naturally (e.g. `friday 8pm UTC` or `tomorrow 15:00 EST`) or use <https://hammertime.cyou/> to generate a Discord timestamp. If no timezone is provided, UTC is assumed.");
                 if game_count > 1 {
                     content.push(" You can use the ");
                     content.push_mono("game:");

@@ -221,7 +221,7 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                 h2 : "More options";
                 ul {
                     li {
-                        a(href = uri!(restreamers_get(event.series, &*event.event))) : "Manage restream coordinators";
+                        a(href = uri!(restreamers_get(event.series, &*event.event, _))) : "Manage restream coordinators";
                     }
                     li {
                         a(href = uri!(weekly_schedules_get(event.series, &*event.event))) : "Manage weekly schedules";
@@ -243,7 +243,7 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
             html! {
                 ul {
                     li {
-                        a(href = uri!(restreamers_get(event.series, &*event.event))) : "Manage restream coordinators";
+                        a(href = uri!(restreamers_get(event.series, &*event.event, _))) : "Manage restream coordinators";
                     }
                 }
             }
@@ -446,7 +446,7 @@ impl<'v> RestreamersFormDefaults<'v> {
     }
 }
 
-async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, defaults: RestreamersFormDefaults<'_>) -> Result<RawHtml<String>, event::Error> {
+async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, defaults: RestreamersFormDefaults<'_>, selected_lang: Option<Language>) -> Result<RawHtml<String>, event::Error> {
     let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, true).await?;
     let content = if event.is_ended() {
         html! {
@@ -464,6 +464,12 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
             let event_restreamers_with_langs = event.restreamers_with_languages(&mut transaction).await?;
             let effective_bindings = super::roles::EffectiveRoleBinding::for_event(&mut transaction, event.series, &event.event).await?;
             let active_languages = super::roles::EffectiveRoleBinding::active_languages(&effective_bindings, event.default_volunteer_language);
+            let current_language = selected_lang
+                .filter(|l| active_languages.contains(l))
+                .or_else(|| active_languages.iter().find(|&&l| l == event.default_volunteer_language).copied())
+                .or_else(|| active_languages.first().copied())
+                .unwrap_or(English);
+            let base_url = format!("/event/{}/{}/configure/restreamers", event.series.slug(), &event.event);
             // Fetch game-level coordinators (grouped by user)
             let game_coordinator_ids: HashSet<Id<Users>>;
             let game_restreamers_grouped: Vec<(User, Vec<Language>)>;
@@ -485,7 +491,17 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
                 .iter()
                 .filter(|(u, _)| !game_coordinator_ids.contains(&u.id))
                 .collect();
+            // Filter by selected language for display
+            let filtered_game_coordinators: Vec<&(User, Vec<Language>)> = game_restreamers_grouped
+                .iter()
+                .filter(|(_, langs)| langs.contains(&current_language))
+                .collect();
+            let filtered_event_only_restreamers: Vec<&&(User, Vec<Language>)> = event_only_restreamers
+                .iter()
+                .filter(|(_, langs)| langs.contains(&current_language))
+                .collect();
             let any_coordinators = !game_restreamers_grouped.is_empty() || !event_only_restreamers.is_empty();
+            let any_filtered = !filtered_game_coordinators.is_empty() || !filtered_event_only_restreamers.is_empty();
             let is_elevated = me.is_global_admin() || is_game_admin;
             let all_events = sqlx::query!(
                 r#"SELECT e.series AS "series: Series", e.event, e.display_name FROM events e WHERE ($1::bool) OR EXISTS (SELECT 1 FROM organizers o WHERE o.series = e.series AND o.event = e.event AND o.organizer = $2) ORDER BY e.series, e.event"#,
@@ -494,8 +510,11 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
             html! {
                 h2 : "Manage restream coordinators";
                 p : "Restream coordinators can add/edit restream URLs and assign restreamers to this event's races.";
+                : super::roles::render_language_tabs(&active_languages, current_language, &base_url);
                 @if !any_coordinators {
                     p : "No restream coordinators so far.";
+                } else if !any_filtered {
+                    p : format!("No restream coordinators for {}.", current_language);
                 } else {
                     table {
                         thead {
@@ -506,14 +525,14 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
                             }
                         }
                         tbody {
-                            @for (restreamer, langs) in &game_restreamers_grouped {
+                            @for (restreamer, langs) in &filtered_game_coordinators {
                                 tr {
                                     td : restreamer;
                                     td : langs.iter().map(|l| l.short_code().to_uppercase()).collect::<Vec<_>>().join(", ");
                                     td : "Game coordinator";
                                 }
                             }
-                            @for (restreamer, langs) in &event_only_restreamers {
+                            @for (restreamer, langs) in &filtered_event_only_restreamers {
                                 tr {
                                     td : restreamer;
                                     td : langs.iter().map(|l| l.short_code().to_uppercase()).collect::<Vec<_>>().join(", ");
@@ -567,8 +586,8 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
                                 }
                             }
                         }
-                        label(class = "help") : "All restream coordinators from the selected event will be added to this event. Existing coordinators are kept.";
                     });
+                    p(class = "help") : "All restream coordinators from the selected event will be added to this event. Existing coordinators are kept.";
                     : form_field("languages", &mut copy_errors, html! {
                         label : "Languages to copy:";
                         @for lang in &active_languages {
@@ -578,8 +597,8 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
                                 : lang;
                             }
                         }
-                        label(class = "help") : "Only coordinators assigned to the selected languages will be copied.";
                     });
+                    p(class = "help") : "Only coordinators assigned to the selected languages will be copied.";
                 }, copy_errors, "Copy");
 
                 script(src = static_url!("user-search.js")) {}
@@ -595,7 +614,7 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
         html! {
             article {
                 p {
-                    a(href = uri!(auth::login(Some(uri!(restreamers_get(event.series, &*event.event)))))) : "Sign in or create a Mido's House account";
+                    a(href = uri!(auth::login(Some(uri!(restreamers_get(event.series, &*event.event, _)))))) : "Sign in or create a Mido's House account";
                     : " to configure this event.";
                 }
             }
@@ -607,11 +626,11 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
     }).await?)
 }
 
-#[rocket::get("/event/<series>/<event>/configure/restreamers")]
-pub(crate) async fn restreamers_get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+#[rocket::get("/event/<series>/<event>/configure/restreamers?<lang>")]
+pub(crate) async fn restreamers_get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String, lang: Option<Language>) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    Ok(restreamers_form(transaction, me, uri, csrf.as_ref(), data, RestreamersFormDefaults::None).await?)
+    Ok(restreamers_form(transaction, me, uri, csrf.as_ref(), data, RestreamersFormDefaults::None, lang).await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -645,7 +664,7 @@ pub(crate) async fn add_restreamer(pool: &State<PgPool>, me: User, uri: Origin<'
             Ok(id) => id,
             Err(_) => {
                 form.context.push_error(form::Error::validation("Invalid user ID format.").with_name("restreamer"));
-                return Ok(RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::AddContext(form.context)).await?));
+                return Ok(RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::AddContext(form.context), None).await?));
             }
         };
         let restreamer_id = Id::<Users>::from(restreamer_id);
@@ -665,7 +684,7 @@ pub(crate) async fn add_restreamer(pool: &State<PgPool>, me: User, uri: Origin<'
             form.context.push_error(form::Error::validation("Please select at least one language.").with_name("languages"));
         }
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::AddContext(form.context)).await?)
+            RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::AddContext(form.context), None).await?)
         } else {
             for &lang in &value.languages {
                 sqlx::query!(
@@ -674,10 +693,10 @@ pub(crate) async fn add_restreamer(pool: &State<PgPool>, me: User, uri: Origin<'
                 ).execute(&mut *transaction).await?;
             }
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(restreamers_get(series, event))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(restreamers_get(series, event, _))))
         }
     } else {
-        RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::AddContext(form.context)).await?)
+        RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::AddContext(form.context), None).await?)
     })
 }
 
@@ -707,13 +726,13 @@ pub(crate) async fn remove_restreamer(pool: &State<PgPool>, me: User, uri: Origi
             form.context.push_error(form::Error::validation("There is no user with this ID."));
         }
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::RemoveContext(restreamer, form.context)).await?)
+            RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::RemoveContext(restreamer, form.context), None).await?)
         } else {
             sqlx::query!("DELETE FROM restreamers WHERE series = $1 AND event = $2 AND restreamer = $3", data.series as _, &data.event, restreamer as _).execute(&**pool).await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(restreamers_get(series, event))))
+            RedirectOrContent::Redirect(Redirect::to(uri!(restreamers_get(series, event, _))))
         }
     } else {
-        RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::RemoveContext(restreamer, form.context)).await?)
+        RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::RemoveContext(restreamer, form.context), None).await?)
     })
 }
 
@@ -751,14 +770,14 @@ pub(crate) async fn copy_restreamers(pool: &State<PgPool>, me: User, uri: Origin
             }
             _ => {
                 form.context.push_error(form::Error::validation("Please select a source event.").with_name("source_event"));
-                return Ok(RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::CopyContext(form.context)).await?));
+                return Ok(RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::CopyContext(form.context), None).await?));
             }
         };
         if value.languages.is_empty() {
             form.context.push_error(form::Error::validation("Please select at least one language.").with_name("languages"));
         }
         if form.context.errors().next().is_some() {
-            return Ok(RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::CopyContext(form.context)).await?));
+            return Ok(RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::CopyContext(form.context), None).await?));
         }
         for &lang in &value.languages {
             sqlx::query!(
@@ -767,9 +786,9 @@ pub(crate) async fn copy_restreamers(pool: &State<PgPool>, me: User, uri: Origin
             ).execute(&mut *transaction).await?;
         }
         transaction.commit().await?;
-        RedirectOrContent::Redirect(Redirect::to(uri!(restreamers_get(series, event))))
+        RedirectOrContent::Redirect(Redirect::to(uri!(restreamers_get(series, event, _))))
     } else {
-        RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::CopyContext(form.context)).await?)
+        RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::CopyContext(form.context), None).await?)
     })
 }
 

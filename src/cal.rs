@@ -3843,6 +3843,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
     } else {
         false
     };
+    let is_admin = me.as_ref().map_or(false, |me| User::GLOBAL_ADMIN_USER_IDS.contains(&u64::from(me.id)));
     
     let mut errors = ctx.as_ref().map(|ctx| ctx.errors().collect()).unwrap_or_default();
     let form = if me.is_some() {
@@ -3983,18 +3984,20 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                 }
             }
             
-            // Race management section
-            fieldset {
-                legend : "Race management";
-                p(style = "font-size: 0.9em; color: #666; margin-bottom: 1em;") : "If a race will not take place at all, you can set it being canceled and hidden from view here.";
-                : form_field("is_canceled", &mut errors, html! {
-                    input(type = "checkbox", id = "is_canceled", name = "is_canceled", checked? = if let Some(ref ctx) = ctx {
-                        ctx.field_value("is_canceled").map_or(false, |value| value == "on")
-                    } else {
-                        race.ignored
+            @if is_organizer || is_admin {
+                // Race management section
+                fieldset {
+                    legend : "Race management";
+                    p(style = "font-size: 0.9em; color: #666; margin-bottom: 1em;") : "To postpone a race, use /reset-race with schedule:True in its scheduling thread, or /schedule-remove to just remove the scheduling. Only mark a race as canceled here if it will not take place at all.";
+                    : form_field("is_canceled", &mut errors, html! {
+                        input(type = "checkbox", id = "is_canceled", name = "is_canceled", checked? = if let Some(ref ctx) = ctx {
+                            ctx.field_value("is_canceled").map_or(false, |value| value == "on")
+                        } else {
+                            race.ignored
+                        });
+                        label(for = "is_canceled") : "Cancel race permanently";
                     });
-                    label(for = "is_canceled") : "Cancel race permanently";
-                });
+                }
             }
 
         }, errors.clone(), "Save")
@@ -4379,6 +4382,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
     Ok(if let Some(ref value) = form.value {
         // Check if user is an organizer for start date editing
         let is_organizer = event.organizers(&mut transaction).await?.contains(&me);
+        let is_admin = User::GLOBAL_ADMIN_USER_IDS.contains(&u64::from(me.id));
 
         if is_organizer && race.is_custom() && value.custom_title.trim().is_empty() {
             form.context.push_error(form::Error::validation("Custom races need a title.").with_name("custom_title"));
@@ -4804,7 +4808,9 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
             race.last_edited_by = Some(me.id);
             race.last_edited_at = Some(Utc::now());
             let was_ignored = race.ignored;
-            race.ignored = value.is_canceled;
+            if is_organizer || is_admin {
+                race.ignored = value.is_canceled;
+            }
             let original_custom_title = race.custom_title.clone();
             if is_organizer && race.is_custom() {
                 race.custom_title = Some(value.custom_title.trim().to_owned());
