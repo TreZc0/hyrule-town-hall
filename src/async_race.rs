@@ -255,7 +255,7 @@ impl AsyncRaceManager {
             content.push_line("");
             content.push("---");
             content.push_line("");
-            content.push(format!("**Seed Settings:** {}", crosskeys_options.as_seed_options_str()));
+            content.push(format!("**Seed Settings:** {}", crosskeys_options.as_seed_options_str(&[])));
             content.push_line("");
 
             let race_options_str = crosskeys_options.as_race_options_str_no_delay();

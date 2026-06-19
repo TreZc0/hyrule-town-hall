@@ -2801,7 +2801,7 @@ pub(crate) async fn race_table(
                                 @if race.show_seed() || race.is_ended() || matches!(race.schedule, RaceSchedule::Unscheduled | RaceSchedule::Async { .. } | RaceSchedule::Live { .. }) {
                                     @if let Some(racetime_bot::Goal::Crosskeys2025 | racetime_bot::Goal::Crosskeys2026) = racetime_bot::Goal::for_event(race.series, &race.event) {
                                         @if let Ok(crosskeys_options) = racetime_bot::CrosskeysRaceOptions::for_race_with_transaction(&mut *transaction, race).await {
-                                            span(class = "settings-link", data_tooltip = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str_no_delay())) {
+                                            span(class = "settings-link", data_tooltip = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(&[]), crosskeys_options.as_race_options_str_no_delay())) {
                                                 : " -Hover for Settings- ";
                                             }
                                         }
@@ -2813,7 +2813,7 @@ pub(crate) async fn race_table(
                             td {
                                 @if let Some(racetime_bot::Goal::Crosskeys2025 | racetime_bot::Goal::Crosskeys2026) = racetime_bot::Goal::for_event(race.series, &race.event) {
                                     @if let Ok(crosskeys_options) = racetime_bot::CrosskeysRaceOptions::for_race_with_transaction(&mut *transaction, race).await {
-                                        span(class = "settings-link", data_tooltip = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str_no_delay())) {
+                                        span(class = "settings-link", data_tooltip = format!("Seed Settings: {}\nRace Rules: {}", crosskeys_options.as_seed_options_str(&[]), crosskeys_options.as_race_options_str_no_delay())) {
                                             : "-Hover for Settings-";
                                         }
                                     }

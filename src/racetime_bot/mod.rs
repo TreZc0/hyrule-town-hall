@@ -3482,47 +3482,25 @@ pub(crate) struct CrosskeysRaceOptions {
 }
 
 impl CrosskeysRaceOptions {
-    pub(crate) fn as_seed_options_str(&self) -> String {
+    pub(crate) fn as_seed_options_str(&self, labels: &[(&str, String)]) -> String {
+        let lbl = |key: &str, fallback: &'static str| labels.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_str()).unwrap_or(fallback).to_owned();
+        let seed_fields = [
+            ("all_dungeons", self.all_dungeons, "All Dungeons"),
+            ("completionist", self.completionist, "Completionist"),
+            ("flute", self.flute, "Starting Flute"),
+            ("inverted", self.inverted, "Inverted"),
+            ("keydrop", self.keydrop, "Keydrop"),
+            ("mirror_scroll", self.mirror_scroll, "Mirror Scroll"),
+            ("pseudoboots", self.pb, "Pseudoboots"),
+            ("zw", self.zw, "ZW"),
+        ];
         let mut res = Vec::new();
-        match self.all_dungeons {
-            RadioChoiceValue::Always => res.push("a goal of all dungeons"),
-            RadioChoiceValue::Random => res.push("randomly assigned dungeon goal"),
-            RadioChoiceValue::Never => {}
-        }
-        match self.completionist {
-            RadioChoiceValue::Always => res.push("completionist goal"),
-            RadioChoiceValue::Random => res.push("randomly assigned completionist goal"),
-            RadioChoiceValue::Never => {}
-        }
-        match self.flute {
-            RadioChoiceValue::Always => res.push("starting activated flute"),
-            RadioChoiceValue::Random => res.push("randomly assigned starting flute"),
-            RadioChoiceValue::Never => {}
-        }
-        match self.inverted {
-            RadioChoiceValue::Always => res.push("inverted world state"),
-            RadioChoiceValue::Random => res.push("randomly assigned world state"),
-            RadioChoiceValue::Never => {}
-        }
-        match self.keydrop {
-            RadioChoiceValue::Always => res.push("enemy and pot keydrop"),
-            RadioChoiceValue::Random => res.push("randomly assigned keydrop"),
-            RadioChoiceValue::Never => {}
-        }
-        match self.mirror_scroll {
-            RadioChoiceValue::Always => res.push("starting mirror scroll"),
-            RadioChoiceValue::Random => res.push("randomly assigned mirror scroll"),
-            RadioChoiceValue::Never => {}
-        }
-        match self.pb {
-            RadioChoiceValue::Always => res.push("starting pseudoboots"),
-            RadioChoiceValue::Random => res.push("randomly assigned pseudoboots"),
-            RadioChoiceValue::Never => {}
-        }
-        match self.zw {
-            RadioChoiceValue::Always => res.push("zw enabled"),
-            RadioChoiceValue::Random => res.push("randomly assigned zw"),
-            RadioChoiceValue::Never => {}
+        for (key, value, fallback) in seed_fields {
+            match value {
+                RadioChoiceValue::Always => res.push(lbl(key, fallback)),
+                RadioChoiceValue::Random => res.push(format!("randomly assigned {}", lbl(key, fallback))),
+                RadioChoiceValue::Never => {}
+            }
         }
         English.join_str_opt(res).unwrap_or_else(|| format!("base settings"))
     }
@@ -4244,8 +4222,13 @@ impl Handler {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(10);
 
+        let mut transaction = ctx.global_state.db_pool.begin().await.expect("failed to start transaction");
+        let event = event::Data::new(&mut transaction, cal_event.race.series, &*cal_event.race.event).await.expect("failed to load event").expect("event not found");
+        transaction.commit().await.expect("failed to commit transaction");
+        let labels = event.radio_choice_requirements();
+
         let crosskeys_options = CrosskeysRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race).await;
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys_seed(crosskeys_options), language, article, format!("seed with {}", crosskeys_options.as_seed_options_str()), false).await;
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys_seed(crosskeys_options), language, article, format!("seed with {}", crosskeys_options.as_seed_options_str(&labels)), false).await;
         ctx.send_message(format!("@entrants Remember: this race will be played with {}!",
                                     crosskeys_options.as_race_options_str()
                                 ), true, Vec::default()).await.expect("failed to send race options");

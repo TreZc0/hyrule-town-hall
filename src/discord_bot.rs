@@ -4575,7 +4575,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
         let crosskeys_options = CrosskeysRaceOptions::for_race(ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"), race).await;
         content.push_line("");
         content.push_line("");
-        content.push(format!("This race will be played with {} as settings.\n\nThis race will be played with {}.", crosskeys_options.as_seed_options_str(), crosskeys_options.as_race_options_str()));
+        content.push(format!("This race will be played with {} as settings.\n\nThis race will be played with {}.", crosskeys_options.as_seed_options_str(&[]), crosskeys_options.as_race_options_str()));
     }
     let thread_id = if let Some(ChannelType::Forum) = scheduling_channel.to_channel(ctx).await?.guild().map(|c| c.kind) {
         scheduling_channel.create_forum_post(ctx, CreateForumPost::new(
