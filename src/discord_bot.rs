@@ -913,10 +913,40 @@ fn parse_timestamp(timestamp: &str) -> Option<DateTime<Utc>> {
         .and_then(|timestamp| Utc.timestamp_opt(timestamp, 0).single())
 }
 
+fn tz_from_abbr(abbr: &str) -> Option<Tz> {
+    match abbr {
+        "UTC" | "GMT" => Some(chrono_tz::UTC),
+        "ET" | "EST" | "EDT" => Some(America::New_York),
+        "CT" | "CST" | "CDT" => Some(America::Chicago),
+        "MT" | "MST" | "MDT" => Some(America::Denver),
+        "PT" | "PST" | "PDT" => Some(America::Los_Angeles),
+        "CET" | "CEST" => Some(Europe::Paris),
+        "WET" | "WEST" => Some(Europe::Lisbon),
+        "EET" | "EEST" => Some(Europe::Helsinki),
+        "BST" => Some(Europe::London),
+        "IST" => Some(chrono_tz::Asia::Kolkata),
+        "JST" => Some(chrono_tz::Asia::Tokyo),
+        "AEST" | "AEDT" | "AET" => Some(chrono_tz::Australia::Sydney),
+        "NZST" | "NZDT" | "NZT" => Some(chrono_tz::Pacific::Auckland),
+        _ => None,
+    }
+}
+
 fn parse_natural_language_timestamp(s: &str) -> Option<DateTime<Utc>> {
-    // `interim` doesn't recognize BST (British Summer Time = UTC+1), so normalize it first.
-    let s = regex_replace!(r"\bBST\b", s, "+01:00");
-    interim::parse_date_string(&s, Utc::now(), interim::Dialect::Us).ok()
+    // If the string ends with a known timezone abbreviation, strip it, parse the
+    // naive date/time with interim, then apply the IANA zone so DST is handled correctly.
+    if let Some((_, s_without_tz, tz_abbr)) = regex_captures!(r"^(.*\S)\s+([A-Z]{2,5})\s*$", s) {
+        if let Some(tz) = tz_from_abbr(tz_abbr) {
+            let as_utc = interim::parse_date_string(s_without_tz, Utc::now(), interim::Dialect::Us).ok()?;
+            let naive = as_utc.naive_utc();
+            return tz.from_local_datetime(&naive)
+                .single()
+                .or_else(|| tz.from_local_datetime(&naive).latest())
+                .map(|dt| dt.to_utc());
+        }
+    }
+    // No recognized abbreviation; let interim handle it (supports Z and numeric offsets).
+    interim::parse_date_string(s, Utc::now(), interim::Dialect::Us).ok()
 }
 
 pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global_state: Arc<GlobalState>, db_pool: PgPool, http_client: reqwest::Client, config: Config, new_room_lock: Arc<Mutex<()>>, clean_shutdown: Arc<Mutex<CleanShutdown>>, shutdown: rocket::Shutdown) -> serenity_utils::Builder {
