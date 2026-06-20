@@ -2,7 +2,7 @@ use crate::{
     game::{Game, GameError},
     prelude::*,
     user::User,
-    event::roles::{GameRoleBinding, RoleType, RoleRequest, RoleRequestStatus, render_language_tabs, render_language_content_box_start, render_language_content_box_end},
+    event::roles::{GameRoleBinding, RoleType, RoleRequest, RoleRequestStatus, render_language_tabs, render_language_content_box_start, render_language_content_box_end, assign_event_override_discord_roles},
     http::{PageError, StatusOrError},
     form::{form_field, full_form, full_form_confirm, button_form, button_form_confirm},
     id::{RoleBindings, RoleRequests, RoleTypes},
@@ -1024,9 +1024,21 @@ pub(crate) async fn apply_for_game_role(
             notes.clone(),
         ).await.map_err(Error::from)?;
 
-        // Send Discord notification for non-auto-approve roles
+        // Send Discord notification for non-auto-approve roles, and assign override discord roles if auto-approved
         if let Some(binding) = role_binding {
-            if !binding.auto_approve {
+            if binding.auto_approve {
+                if let Some(discord_user) = me.discord.as_ref() {
+                    let discord_ctx_guard = discord_ctx.read().await;
+                    if let Err(e) = assign_event_override_discord_roles(
+                        &mut transaction,
+                        &*discord_ctx_guard,
+                        value.role_binding_id,
+                        discord_user.id,
+                    ).await {
+                        eprintln!("Failed to assign event override Discord roles for game binding: {}", e);
+                    }
+                }
+            } else if !binding.auto_approve {
                 if let Ok(Some((_guild_id, channel_id))) = game.notification_channel(&mut transaction, binding.language).await {
                     let discord_ctx = discord_ctx.read().await;
                     let mut msg = MessageBuilder::default();
@@ -1510,14 +1522,20 @@ pub(crate) async fn edit_game_role_binding(
     .await
     .unwrap_or_default();
 
-    let discord = discord_ctx.read().await;
-    for row in affected_events {
-        let _ = volunteer_requests::update_volunteer_posts_for_event(
-            pool,
-            &*discord,
-            row.series,
-            &row.event,
-        ).await;
+    if !affected_events.is_empty() {
+        let pool_clone = pool.inner().clone();
+        let ctx = discord_ctx.inner().clone();
+        tokio::spawn(async move {
+            let discord = ctx.read().await;
+            for row in affected_events {
+                let _ = volunteer_requests::update_volunteer_posts_for_event(
+                    &pool_clone,
+                    &*discord,
+                    row.series,
+                    &row.event,
+                ).await;
+            }
+        });
     }
 
     Ok(Redirect::to(uri!(manage_roles(game_name, _, _))))
