@@ -2193,6 +2193,44 @@ pub(crate) async fn edit_role_binding(
     Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _)))))
 }
 
+/// For a game role binding approval, assigns discord roles from all active/upcoming events that
+/// have a discord_role_id override for this binding — in each event's guild, if the user is a member.
+pub(crate) async fn assign_event_override_discord_roles(
+    pool: &mut Transaction<'_, Postgres>,
+    ctx: &DiscordCtx,
+    binding_id: Id<RoleBindings>,
+    discord_user_id: UserId,
+) -> sqlx::Result<()> {
+    let rows = sqlx::query!(
+        r#"
+            SELECT e.discord_guild AS "discord_guild!", o.discord_role_id AS "discord_role_id!"
+            FROM events e
+            JOIN game_series gs ON gs.series = e.series
+            JOIN role_bindings rb ON rb.id = $1 AND rb.game_id = gs.game_id
+            JOIN event_role_binding_overrides o
+                ON o.series = e.series AND o.event = e.event AND o.role_binding_id = $1
+            WHERE (e.end_time IS NULL OR e.end_time > NOW())
+            AND e.force_custom_role_binding = false
+            AND e.discord_guild IS NOT NULL
+            AND o.discord_role_id IS NOT NULL
+        "#,
+        binding_id as _
+    )
+    .fetch_all(&mut **pool)
+    .await?;
+
+    for row in rows {
+        let guild_id = GuildId::new(row.discord_guild as u64);
+        if let Ok(member) = guild_id.member(ctx, discord_user_id).await {
+            if let Err(e) = member.add_role(ctx, RoleId::new(row.discord_role_id as u64)).await {
+                eprintln!("Failed to assign event override Discord role {} to user {} in guild {}: {}", row.discord_role_id, discord_user_id, row.discord_guild, e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[rocket::post("/event/<series>/<event>/roles/<request>/approve", data = "<form>")]
 pub(crate) async fn approve_role_request(
     pool: &State<PgPool>,
@@ -2254,15 +2292,15 @@ pub(crate) async fn approve_role_request(
             // Update the role request status
             RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Approved).await?;
 
-            // If there's a Discord role ID, assign the role
-            if let Some(binding) = role_binding {
-                if let Some(discord_role_id) = binding.discord_role_id {
-                    let user = User::from_id(&mut *transaction, role_request.user_id).await?
-                        .ok_or(StatusOrError::Status(Status::NotFound))?;
-                    
-                    if let Some(discord_user) = user.discord {
-                        // Get the Discord context and guild
-                        let discord_ctx = discord_ctx.read().await;
+            // Assign Discord roles for this approval
+            let user = User::from_id(&mut *transaction, role_request.user_id).await?
+                .ok_or(StatusOrError::Status(Status::NotFound))?;
+
+            if let Some(discord_user) = user.discord {
+                let discord_ctx = discord_ctx.read().await;
+
+                if let Some(ref binding) = role_binding {
+                    if let Some(discord_role_id) = binding.discord_role_id {
                         if let Some(discord_guild) = data.discord_guild {
                             if let Ok(member) = discord_guild.member(&*discord_ctx, discord_user.id).await {
                                 if let Err(e) = member.add_role(&*discord_ctx, RoleId::new(discord_role_id.try_into().unwrap())).await {
@@ -2271,6 +2309,10 @@ pub(crate) async fn approve_role_request(
                             }
                         }
                     }
+                }
+
+                if let Err(e) = assign_event_override_discord_roles(&mut transaction, &*discord_ctx, role_request.role_binding_id, discord_user.id).await {
+                    eprintln!("Failed to assign event override Discord roles: {}", e);
                 }
             }
 
@@ -2470,6 +2512,26 @@ pub(crate) async fn apply_for_role(
                 notes.clone().unwrap_or_default(),
             )
             .await?;
+
+            if role_binding.auto_approve {
+                if let Some(discord_user) = me.discord.as_ref() {
+                    let discord_ctx = discord_ctx.read().await;
+
+                    if let Some(discord_role_id) = role_binding.discord_role_id {
+                        if let Some(discord_guild) = data.discord_guild {
+                            if let Ok(member) = discord_guild.member(&*discord_ctx, discord_user.id).await {
+                                if let Err(e) = member.add_role(&*discord_ctx, RoleId::new(discord_role_id.try_into().unwrap())).await {
+                                    eprintln!("Failed to assign Discord role {} to user {}: {}", discord_role_id, discord_user.id, e);
+                                }
+                            }
+                        }
+                    }
+
+                    if let Err(e) = assign_event_override_discord_roles(&mut transaction, &*discord_ctx, value.role_binding_id, discord_user.id).await {
+                        eprintln!("Failed to assign event override Discord roles: {}", e);
+                    }
+                }
+            }
 
             // Only send Discord notification for non-auto-approve roles
             if !role_binding.auto_approve {
@@ -4961,8 +5023,7 @@ pub(crate) async fn upsert_role_binding_override(
                 discord_role_id, value.min_count, value.max_count,
             ).await?;
 
-            // Retroactively assign Discord roles only when the discord_role_id actually changed
-            if discord_role_id.is_some() && discord_role_id != prev_discord_role_id {
+            let retroactive_spawn = if discord_role_id.is_some() && discord_role_id != prev_discord_role_id {
                 let new_discord_role_id = discord_role_id.unwrap();
                 let game = game::Game::from_series(&mut transaction, series).await?;
                 let approved_requests = if let Some(game) = game {
@@ -4974,24 +5035,38 @@ pub(crate) async fn upsert_role_binding_override(
                     Vec::new()
                 };
 
-                for request in approved_requests {
-                    let user = User::from_id(&mut *transaction, request.user_id).await?;
-                    if let Some(user) = user {
+                let mut discord_user_ids = Vec::new();
+                for request in &approved_requests {
+                    if let Some(user) = User::from_id(&mut *transaction, request.user_id).await? {
                         if let Some(discord_user) = user.discord {
-                            let discord_ctx = discord_ctx.read().await;
-                            if let Some(discord_guild) = data.discord_guild {
-                                if let Ok(member) = discord_guild.member(&*discord_ctx, discord_user.id).await {
-                                    if let Err(e) = member.add_role(&*discord_ctx, RoleId::new(new_discord_role_id.try_into().unwrap())).await {
-                                        eprintln!("Failed to retroactively assign Discord role {} to user {}: {}", new_discord_role_id, discord_user.id, e);
-                                    }
-                                }
-                            }
+                            discord_user_ids.push(discord_user.id);
                         }
                     }
                 }
-            }
+                data.discord_guild.map(|guild| (new_discord_role_id, guild, discord_user_ids))
+            } else {
+                None
+            };
 
             transaction.commit().await?;
+
+            // Spawn background task to retroactively assign Discord roles after the response returns
+            if let Some((new_discord_role_id, discord_guild, discord_user_ids)) = retroactive_spawn {
+                if !discord_user_ids.is_empty() {
+                    let ctx = discord_ctx.inner().clone();
+                    tokio::spawn(async move {
+                        let ctx = ctx.read().await;
+                        let role_id = RoleId::new(new_discord_role_id.try_into().unwrap());
+                        for discord_user_id in discord_user_ids {
+                            if let Ok(member) = discord_guild.member(&*ctx, discord_user_id).await {
+                                if let Err(e) = member.add_role(&*ctx, role_id).await {
+                                    eprintln!("Failed to retroactively assign Discord role {} to user {}: {}", new_discord_role_id, discord_user_id, e);
+                                }
+                            }
+                        }
+                    });
+                }
+            }
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, _, _))))
         }
     } else {
