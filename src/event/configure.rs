@@ -446,6 +446,98 @@ impl<'v> RestreamersFormDefaults<'v> {
     }
 }
 
+fn parse_language_code(language: &str) -> Option<Language> {
+    match language {
+        "en" => Some(English),
+        "fr" => Some(French),
+        "de" => Some(German),
+        "pt" => Some(Portuguese),
+        _ => None,
+    }
+}
+
+async fn restream_coordinator_discord_roles(transaction: &mut Transaction<'_, Postgres>, data: &Data<'_>) -> Result<HashMap<Language, i64>, event::Error> {
+    Ok(sqlx::query_as::<_, (Language, i64)>(
+        "SELECT language, discord_role_id FROM event_restreamer_discord_roles WHERE series = $1 AND event = $2",
+    )
+    .bind(data.series)
+    .bind(&data.event)
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .collect())
+}
+
+async fn event_restreamers_for_language(transaction: &mut Transaction<'_, Postgres>, data: &Data<'_>, language: Language) -> Result<Vec<Id<Users>>, event::Error> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT DISTINCT restreamer FROM restreamers WHERE series = $1 AND event = $2 AND language = $3",
+    )
+    .bind(data.series)
+    .bind(&data.event)
+    .bind(language)
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .map(Id::<Users>::from)
+    .collect())
+}
+
+async fn sync_restream_coordinator_discord_roles(
+    transaction: &mut Transaction<'_, Postgres>,
+    discord_ctx: &DiscordCtx,
+    data: &Data<'_>,
+    user_id: Id<Users>,
+    extra_managed_role_ids: &[i64],
+) -> Result<(), event::Error> {
+    let Some(discord_guild) = data.discord_guild else { return Ok(()) };
+    let Some(user) = User::from_id(&mut **transaction, user_id).await? else { return Ok(()) };
+    let Some(discord_user) = user.discord else { return Ok(()) };
+
+    let mut managed_role_ids: HashSet<i64> = sqlx::query_scalar::<_, i64>(
+        "SELECT DISTINCT discord_role_id FROM event_restreamer_discord_roles WHERE series = $1 AND event = $2",
+    )
+    .bind(data.series)
+    .bind(&data.event)
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .collect();
+    managed_role_ids.extend(extra_managed_role_ids.iter().copied());
+    if managed_role_ids.is_empty() {
+        return Ok(());
+    }
+
+    let desired_role_ids: HashSet<i64> = sqlx::query_scalar::<_, i64>(
+        r#"SELECT DISTINCT rd.discord_role_id
+           FROM event_restreamer_discord_roles rd
+           JOIN restreamers r ON r.series = rd.series AND r.event = rd.event AND r.language = rd.language
+           WHERE r.series = $1 AND r.event = $2 AND r.restreamer = $3"#,
+    )
+    .bind(data.series)
+    .bind(&data.event)
+    .bind(i64::from(user_id))
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .collect();
+
+    let Ok(member) = discord_guild.member(discord_ctx, discord_user.id).await else { return Ok(()) };
+    let current_role_ids: HashSet<i64> = member.roles.iter().map(|role| role.get() as i64).collect();
+    for role_id in desired_role_ids.difference(&current_role_ids) {
+        if let Err(e) = member.add_role(discord_ctx, RoleId::new(*role_id as u64)).await {
+            eprintln!("Failed to assign restream coordinator Discord role {} to user {}: {}", role_id, discord_user.id, e);
+        }
+    }
+    for role_id in managed_role_ids.difference(&desired_role_ids) {
+        if current_role_ids.contains(role_id) {
+            if let Err(e) = member.remove_role(discord_ctx, RoleId::new(*role_id as u64)).await {
+                eprintln!("Failed to remove restream coordinator Discord role {} from user {}: {}", role_id, discord_user.id, e);
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, defaults: RestreamersFormDefaults<'_>, selected_lang: Option<Language>) -> Result<RawHtml<String>, event::Error> {
     let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, true).await?;
     let content = if event.is_ended() {
@@ -464,11 +556,13 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
             let event_restreamers_with_langs = event.restreamers_with_languages(&mut transaction).await?;
             let effective_bindings = super::roles::EffectiveRoleBinding::for_event(&mut transaction, event.series, &event.event).await?;
             let active_languages = super::roles::EffectiveRoleBinding::active_languages(&effective_bindings, event.default_volunteer_language);
+            let coordinator_role_ids = restream_coordinator_discord_roles(&mut transaction, &event).await?;
             let current_language = selected_lang
                 .filter(|l| active_languages.contains(l))
                 .or_else(|| active_languages.iter().find(|&&l| l == event.default_volunteer_language).copied())
                 .or_else(|| active_languages.first().copied())
                 .unwrap_or(English);
+            let active_language_codes = active_languages.iter().map(|l| l.short_code()).collect::<Vec<_>>().join(",");
             let base_url = format!("/event/{}/{}/configure/restreamers", event.series.slug(), &event.event);
             // Fetch game-level coordinators (grouped by user)
             let game_coordinator_ids: HashSet<Id<Users>>;
@@ -511,6 +605,26 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
                 h2 : "Manage restream coordinators";
                 p : "Restream coordinators can add/edit restream URLs and assign restreamers to this event's races.";
                 : super::roles::render_language_tabs(&active_languages, current_language, &base_url);
+                h3 : format!("{} coordinator Discord role", current_language);
+                @let existing_role_id = coordinator_role_ids.get(&current_language).copied();
+                @let mut role_errors = Vec::new();
+                : full_form(uri!(save_restream_coordinator_discord_role(event.series, &*event.event, current_language.short_code())), csrf, html! {
+                    : form_field("discord_role_id", &mut role_errors, html! {
+                        label(for = "discord_role_id") : "Discord Role ID:";
+                        input(type = "text", id = "discord_role_id", name = "discord_role_id", value? = existing_role_id.map(|id| id.to_string()), placeholder = "e.g. 123456789012345678");
+                    });
+                }, role_errors, "Save role");
+                @if existing_role_id.is_some() {
+                    @let (errors, clear_button) = button_form_confirm(
+                        uri!(clear_restream_coordinator_discord_role(event.series, &*event.event, current_language.short_code())),
+                        csrf,
+                        Vec::new(),
+                        "Clear role",
+                        &format!("Clear the {} restream coordinator Discord role?", current_language),
+                    );
+                    : errors;
+                    div(class = "button-row") : clear_button;
+                }
                 @if !any_coordinators {
                     p : "No restream coordinators so far.";
                 } else if !any_filtered {
@@ -533,14 +647,18 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
                                 }
                             }
                             @for (restreamer, langs) in &filtered_event_only_restreamers {
-                                tr {
+                                @let lang_codes = langs.iter().map(|l| l.short_code()).collect::<Vec<_>>().join(",");
+                                tr(data_user_id = restreamer.id.to_string(), data_languages = &lang_codes, data_available_languages = &active_language_codes, data_update_url = uri!(update_restreamer_languages(event.series, &*event.event, restreamer.id)).to_string(), data_remove_url = uri!(remove_restreamer(event.series, &*event.event, restreamer.id)).to_string()) {
                                     td : restreamer;
-                                    td : langs.iter().map(|l| l.short_code().to_uppercase()).collect::<Vec<_>>().join(", ");
-                                    td {
+                                    td(class = "coordinator-languages") : langs.iter().map(|l| l.short_code().to_uppercase()).collect::<Vec<_>>().join(", ");
+                                    td(class = "coordinator-actions") {
                                         @let errors = defaults.remove_errors(restreamer.id);
                                         @let (errors, button) = button_form(uri!(remove_restreamer(event.series, &*event.event, restreamer.id)), csrf, errors, "Remove");
                                         : errors;
-                                        div(class = "button-row") : button;
+                                        div(class = "button-row") {
+                                            button(class = "button config-edit-btn", onclick = format!("startEditCoordinator('{}')", restreamer.id)) : "Edit";
+                                            : button;
+                                        }
                                     }
                                 }
                             }
@@ -599,9 +717,14 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
                         }
                     });
                     p(class = "help") : "Only coordinators assigned to the selected languages will be copied.";
+                    label {
+                        input(type = "checkbox", name = "copy_role_ids", value = "true");
+                        : " Copy Discord role IDs for selected languages";
+                    }
                 }, copy_errors, "Copy");
 
                 script(src = static_url!("user-search.js")) {}
+                script(src = static_url!("coordinator-edit.js")) {}
             }
         } else {
             html! {
@@ -643,7 +766,7 @@ pub(crate) struct AddRestreamerForm {
 }
 
 #[rocket::post("/event/<series>/<event>/configure/restreamers", data = "<form>")]
-pub(crate) async fn add_restreamer(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, AddRestreamerForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn add_restreamer(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, AddRestreamerForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
@@ -692,6 +815,8 @@ pub(crate) async fn add_restreamer(pool: &State<PgPool>, me: User, uri: Origin<'
                     data.series as _, &data.event, restreamer_id as _, lang as _
                 ).execute(&mut *transaction).await?;
             }
+            let discord_ctx = discord_ctx.read().await;
+            sync_restream_coordinator_discord_roles(&mut transaction, &discord_ctx, &data, restreamer_id, &[]).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(restreamers_get(series, event, _))))
         }
@@ -701,7 +826,7 @@ pub(crate) async fn add_restreamer(pool: &State<PgPool>, me: User, uri: Origin<'
 }
 
 #[rocket::post("/event/<series>/<event>/configure/restreamers/<restreamer>/remove", data = "<form>")]
-pub(crate) async fn remove_restreamer(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, restreamer: Id<Users>, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn remove_restreamer(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, restreamer: Id<Users>, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
@@ -728,12 +853,153 @@ pub(crate) async fn remove_restreamer(pool: &State<PgPool>, me: User, uri: Origi
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::RemoveContext(restreamer, form.context), None).await?)
         } else {
-            sqlx::query!("DELETE FROM restreamers WHERE series = $1 AND event = $2 AND restreamer = $3", data.series as _, &data.event, restreamer as _).execute(&**pool).await?;
+            sqlx::query!("DELETE FROM restreamers WHERE series = $1 AND event = $2 AND restreamer = $3", data.series as _, &data.event, restreamer as _).execute(&mut *transaction).await?;
+            let discord_ctx = discord_ctx.read().await;
+            sync_restream_coordinator_discord_roles(&mut transaction, &discord_ctx, &data, restreamer, &[]).await?;
+            transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(restreamers_get(series, event, _))))
         }
     } else {
         RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::RemoveContext(restreamer, form.context), None).await?)
     })
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct SaveRestreamCoordinatorDiscordRoleForm {
+    #[field(default = String::new())]
+    csrf: String,
+    discord_role_id: String,
+}
+
+#[rocket::post("/event/<series>/<event>/configure/restreamers/roles/<language>", data = "<form>")]
+pub(crate) async fn save_restream_coordinator_discord_role(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, csrf: Option<CsrfToken>, series: Series, event: &str, language: &str, form: Form<Contextual<'_, SaveRestreamCoordinatorDiscordRoleForm>>) -> Result<Redirect, StatusOrError<event::Error>> {
+    let language = parse_language_code(language).ok_or(StatusOrError::Status(Status::BadRequest))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if let Some(ref value) = form.value {
+        let discord_role_id = value.discord_role_id.trim().parse::<i64>()
+            .ok()
+            .filter(|id| *id > 0)
+            .ok_or(StatusOrError::Status(Status::BadRequest))?;
+        let mut transaction = pool.begin().await?;
+        let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+        if data.is_ended() { return Err(StatusOrError::Status(Status::Forbidden)) }
+        let is_game_admin = if let Some(game) = data.game(&mut transaction).await? {
+            game.is_admin(&mut transaction, &me).await.map_err(event::Error::from)?
+        } else {
+            false
+        };
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() && !is_game_admin {
+            return Err(StatusOrError::Status(Status::Forbidden));
+        }
+        let old_role_id = sqlx::query_scalar::<_, i64>(
+            "SELECT discord_role_id FROM event_restreamer_discord_roles WHERE series = $1 AND event = $2 AND language = $3",
+        )
+        .bind(data.series)
+        .bind(&data.event)
+        .bind(language)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        sqlx::query(
+            r#"INSERT INTO event_restreamer_discord_roles (series, event, language, discord_role_id)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (series, event, language)
+               DO UPDATE SET discord_role_id = EXCLUDED.discord_role_id"#,
+        )
+        .bind(data.series)
+        .bind(&data.event)
+        .bind(language)
+        .bind(discord_role_id)
+        .execute(&mut *transaction)
+        .await?;
+        let affected_users = event_restreamers_for_language(&mut transaction, &data, language).await?;
+        let extra_roles = old_role_id.into_iter().collect::<Vec<_>>();
+        let discord_ctx = discord_ctx.read().await;
+        for user_id in affected_users {
+            sync_restream_coordinator_discord_roles(&mut transaction, &discord_ctx, &data, user_id, &extra_roles).await?;
+        }
+        transaction.commit().await?;
+    }
+    Ok(Redirect::to(format!("/event/{}/{}/configure/restreamers?lang={}", series.slug(), event, language.short_code())))
+}
+
+#[rocket::post("/event/<series>/<event>/configure/restreamers/roles/<language>/clear", data = "<form>")]
+pub(crate) async fn clear_restream_coordinator_discord_role(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, csrf: Option<CsrfToken>, series: Series, event: &str, language: &str, form: Form<Contextual<'_, EmptyForm>>) -> Result<Redirect, StatusOrError<event::Error>> {
+    let language = parse_language_code(language).ok_or(StatusOrError::Status(Status::BadRequest))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.value.is_some() {
+        let mut transaction = pool.begin().await?;
+        let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+        if data.is_ended() { return Err(StatusOrError::Status(Status::Forbidden)) }
+        let is_game_admin = if let Some(game) = data.game(&mut transaction).await? {
+            game.is_admin(&mut transaction, &me).await.map_err(event::Error::from)?
+        } else {
+            false
+        };
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() && !is_game_admin {
+            return Err(StatusOrError::Status(Status::Forbidden));
+        }
+        let old_role_id = sqlx::query_scalar::<_, i64>(
+            "DELETE FROM event_restreamer_discord_roles WHERE series = $1 AND event = $2 AND language = $3 RETURNING discord_role_id",
+        )
+        .bind(data.series)
+        .bind(&data.event)
+        .bind(language)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let affected_users = event_restreamers_for_language(&mut transaction, &data, language).await?;
+        let extra_roles = old_role_id.into_iter().collect::<Vec<_>>();
+        let discord_ctx = discord_ctx.read().await;
+        for user_id in affected_users {
+            sync_restream_coordinator_discord_roles(&mut transaction, &discord_ctx, &data, user_id, &extra_roles).await?;
+        }
+        transaction.commit().await?;
+    }
+    Ok(Redirect::to(format!("/event/{}/{}/configure/restreamers?lang={}", series.slug(), event, language.short_code())))
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct UpdateRestreamerLanguagesForm {
+    #[field(default = String::new())]
+    csrf: String,
+    #[field(default = Vec::new())]
+    languages: Vec<Language>,
+}
+
+#[rocket::post("/event/<series>/<event>/configure/restreamers/<restreamer>/update-languages", data = "<form>")]
+pub(crate) async fn update_restreamer_languages(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, csrf: Option<CsrfToken>, series: Series, event: &str, restreamer: Id<Users>, form: Form<Contextual<'_, UpdateRestreamerLanguagesForm>>) -> Result<Redirect, StatusOrError<event::Error>> {
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if let Some(ref value) = form.value {
+        if value.languages.is_empty() {
+            return Err(StatusOrError::Status(Status::BadRequest));
+        }
+        let mut transaction = pool.begin().await?;
+        let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+        if data.is_ended() { return Err(StatusOrError::Status(Status::Forbidden)) }
+        let is_game_admin = if let Some(game) = data.game(&mut transaction).await? {
+            game.is_admin(&mut transaction, &me).await.map_err(event::Error::from)?
+        } else {
+            false
+        };
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() && !is_game_admin {
+            return Err(StatusOrError::Status(Status::Forbidden));
+        }
+        sqlx::query!("DELETE FROM restreamers WHERE series = $1 AND event = $2 AND restreamer = $3", data.series as _, &data.event, restreamer as _)
+            .execute(&mut *transaction)
+            .await?;
+        for &language in &value.languages {
+            sqlx::query!(
+                "INSERT INTO restreamers (series, event, restreamer, language) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+                data.series as _, &data.event, restreamer as _, language as _
+            ).execute(&mut *transaction).await?;
+        }
+        let discord_ctx = discord_ctx.read().await;
+        sync_restream_coordinator_discord_roles(&mut transaction, &discord_ctx, &data, restreamer, &[]).await?;
+        transaction.commit().await?;
+    }
+    Ok(Redirect::to(uri!(restreamers_get(series, event, _))))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -743,10 +1009,12 @@ pub(crate) struct CopyRestreamersForm {
     source_event: String,
     #[field(default = Vec::new())]
     languages: Vec<Language>,
+    #[field(default = false)]
+    copy_role_ids: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/configure/restreamers/copy-from", data = "<form>")]
-pub(crate) async fn copy_restreamers(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, CopyRestreamersForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn copy_restreamers(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, CopyRestreamersForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
@@ -779,11 +1047,49 @@ pub(crate) async fn copy_restreamers(pool: &State<PgPool>, me: User, uri: Origin
         if form.context.errors().next().is_some() {
             return Ok(RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::CopyContext(form.context), None).await?));
         }
+        let mut extra_managed_role_ids = Vec::new();
+        if value.copy_role_ids {
+            for &lang in &value.languages {
+                if let Some(old_role_id) = sqlx::query_scalar::<_, i64>(
+                    "SELECT discord_role_id FROM event_restreamer_discord_roles WHERE series = $1 AND event = $2 AND language = $3",
+                )
+                .bind(data.series)
+                .bind(&data.event)
+                .bind(lang)
+                .fetch_optional(&mut *transaction)
+                .await? {
+                    extra_managed_role_ids.push(old_role_id);
+                }
+                sqlx::query(
+                    r#"INSERT INTO event_restreamer_discord_roles (series, event, language, discord_role_id)
+                       SELECT $1, $2, language, discord_role_id
+                       FROM event_restreamer_discord_roles
+                       WHERE series = $3 AND event = $4 AND language = $5
+                       ON CONFLICT (series, event, language)
+                       DO UPDATE SET discord_role_id = EXCLUDED.discord_role_id"#,
+                )
+                .bind(data.series)
+                .bind(&data.event)
+                .bind(source_series)
+                .bind(&source_event_slug)
+                .bind(lang)
+                .execute(&mut *transaction)
+                .await?;
+            }
+        }
         for &lang in &value.languages {
             sqlx::query!(
                 "INSERT INTO restreamers (series, event, restreamer, language) SELECT $1, $2, restreamer, language FROM restreamers WHERE series = $3 AND event = $4 AND language = $5 ON CONFLICT DO NOTHING",
                 data.series as _, &data.event, source_series as _, &source_event_slug, lang as _
             ).execute(&mut *transaction).await?;
+        }
+        let mut affected_users = HashSet::new();
+        for &lang in &value.languages {
+            affected_users.extend(event_restreamers_for_language(&mut transaction, &data, lang).await?);
+        }
+        let discord_ctx = discord_ctx.read().await;
+        for user_id in affected_users {
+            sync_restream_coordinator_discord_roles(&mut transaction, &discord_ctx, &data, user_id, &extra_managed_role_ids).await?;
         }
         transaction.commit().await?;
         RedirectOrContent::Redirect(Redirect::to(uri!(restreamers_get(series, event, _))))

@@ -1734,7 +1734,12 @@ pub(crate) async fn manage_restreamers(
                     tbody {
                         @for (_uid, (user, langs)) in &grouped {
                             @let lang_codes = langs.iter().map(|l| l.short_code()).collect::<Vec<_>>().join(",");
-                            tr(data_user_id = user.id.to_string(), data_languages = &lang_codes) {
+                            tr(
+                                data_user_id = user.id.to_string(),
+                                data_languages = &lang_codes,
+                                data_update_url = uri!(update_game_restreamer_languages(&game_name, user.id)).to_string(),
+                                data_remove_url = uri!(remove_game_restreamer(&game_name, user.id)).to_string(),
+                            ) {
                                 td : user.display_name();
                                 td(class = "coordinator-languages") {
                                     @for (i, lang) in langs.iter().enumerate() {

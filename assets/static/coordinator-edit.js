@@ -5,18 +5,40 @@ var ALL_LANGUAGES = [
     { code: 'pt', name: 'Portuguese' },
 ];
 
+function coordinatorLanguagesForRow(row) {
+    var available = (row.getAttribute('data-available-languages') || '').split(',').filter(Boolean);
+    if (available.length === 0) return ALL_LANGUAGES;
+    return ALL_LANGUAGES.filter(function(lang) {
+        return available.indexOf(lang.code) >= 0;
+    });
+}
+
+function coordinatorLanguageNames(row, codes) {
+    return codes.map(function(code) {
+        var languages = coordinatorLanguagesForRow(row);
+        for (var i = 0; i < languages.length; i++) {
+            if (languages[i].code === code) return languages[i].name;
+        }
+        for (var i = 0; i < ALL_LANGUAGES.length; i++) {
+            if (ALL_LANGUAGES[i].code === code) return ALL_LANGUAGES[i].name;
+        }
+        return code;
+    });
+}
+
 function startEditCoordinator(userId) {
     var row = document.querySelector('tr[data-user-id="' + userId + '"]');
     if (!row) return;
 
     var currentLangs = (row.getAttribute('data-languages') || '').split(',').filter(Boolean);
+    var languages = coordinatorLanguagesForRow(row);
     var langCell = row.querySelector('.coordinator-languages');
     var actionsCell = row.querySelector('.coordinator-actions');
 
     // Replace languages cell with checkboxes
     var html = '';
-    for (var i = 0; i < ALL_LANGUAGES.length; i++) {
-        var lang = ALL_LANGUAGES[i];
+    for (var i = 0; i < languages.length; i++) {
+        var lang = languages[i];
         var checked = currentLangs.indexOf(lang.code) >= 0 ? ' checked' : '';
         html += '<label style="display: block;"><input type="checkbox" name="lang_' + lang.code + '" value="' + lang.code + '"' + checked + '> ' + lang.name + '</label>';
     }
@@ -38,12 +60,7 @@ function cancelEditCoordinator(userId) {
     var actionsCell = row.querySelector('.coordinator-actions');
 
     // Restore language display
-    var names = currentLangs.map(function(code) {
-        for (var i = 0; i < ALL_LANGUAGES.length; i++) {
-            if (ALL_LANGUAGES[i].code === code) return ALL_LANGUAGES[i].name;
-        }
-        return code;
-    });
+    var names = coordinatorLanguageNames(row, currentLangs);
     langCell.textContent = names.join(', ');
 
     // Restore action buttons
@@ -76,8 +93,12 @@ function saveEditCoordinator(userId) {
         formData.append('languages', selectedLangs[i]);
     }
 
-    var gameName = window.location.pathname.split('/')[2];
-    fetch('/games/' + gameName + '/restreamers/' + userId + '/update-languages', {
+    var updateUrl = row.getAttribute('data-update-url');
+    if (!updateUrl) {
+        var gameName = window.location.pathname.split('/')[2];
+        updateUrl = '/games/' + gameName + '/restreamers/' + userId + '/update-languages';
+    }
+    fetch(updateUrl, {
         method: 'POST',
         body: formData
     })
@@ -87,12 +108,7 @@ function saveEditCoordinator(userId) {
             row.setAttribute('data-languages', selectedLangs.join(','));
 
             var langCell = row.querySelector('.coordinator-languages');
-            var names = selectedLangs.map(function(code) {
-                for (var i = 0; i < ALL_LANGUAGES.length; i++) {
-                    if (ALL_LANGUAGES[i].code === code) return ALL_LANGUAGES[i].name;
-                }
-                return code;
-            });
+            var names = coordinatorLanguageNames(row, selectedLangs);
             langCell.textContent = names.join(', ');
 
             var actionsCell = row.querySelector('.coordinator-actions');
@@ -110,11 +126,16 @@ function saveEditCoordinator(userId) {
 function restoreActionButtons(actionsCell, userId) {
     var csrfInput = document.querySelector('input[name="csrf"]');
     var csrfValue = csrfInput ? csrfInput.value : '';
-    var gameName = window.location.pathname.split('/')[2];
+    var row = document.querySelector('tr[data-user-id="' + userId + '"]');
+    var removeUrl = row ? row.getAttribute('data-remove-url') : '';
+    if (!removeUrl) {
+        var gameName = window.location.pathname.split('/')[2];
+        removeUrl = '/games/' + gameName + '/restreamers/' + userId + '/remove';
+    }
 
     actionsCell.innerHTML = '<div style="display: flex; gap: 8px;">' +
         '<button class="button config-edit-btn" onclick="startEditCoordinator(\'' + userId + '\')">Edit</button>' +
-        '<form method="post" action="/games/' + gameName + '/restreamers/' + userId + '/remove" style="display: inline;" onsubmit="return confirm(\'Are you sure you want to remove this restream coordinator?\')">' +
+        '<form method="post" action="' + removeUrl + '" style="display: inline;" onsubmit="return confirm(\'Are you sure you want to remove this restream coordinator?\')">' +
         '<input type="hidden" name="csrf" value="' + csrfValue + '">' +
         '<input type="submit" value="Delete" class="button">' +
         '</form>' +
