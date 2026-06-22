@@ -2202,6 +2202,18 @@ async fn round_labels_form(mut transaction: Transaction<'_, Postgres>, me: Optio
                 event.series as _, &event.event
             ).fetch_all(&mut *transaction).await?;
 
+            let sample_race = sqlx::query!(
+                "SELECT phase, round FROM races \
+                 WHERE series = $1 AND event = $2 AND ignored = false \
+                 AND (phase IS NOT NULL OR round IS NOT NULL) \
+                 ORDER BY start NULLS LAST LIMIT 1",
+                event.series as _, &event.event
+            ).fetch_optional(&mut *transaction).await?;
+
+            let sample_phase = sample_race.as_ref().and_then(|r| r.phase.clone()).unwrap_or_else(|| "Winners Bracket".to_owned());
+            let sample_round = sample_race.as_ref().and_then(|r| r.round.clone()).unwrap_or_else(|| "Round 1".to_owned());
+            let sample_pool = pool_names.first().cloned().unwrap_or_else(|| "Pool 1".to_owned());
+
             html! {
                 h2 : "Pool Names";
                 p : "Enter pool display names, one per line. The 1st line replaces Pool 1, 2nd line Pool 2, and so on.";
@@ -2277,8 +2289,10 @@ async fn round_labels_form(mut transaction: Transaction<'_, Postgres>, me: Optio
                     }
                     p(id = "round-label-preview",
                       data_event_name = event.display_name.as_str(),
-                      style = "font-style: italic; color: #555;")
-                        : "(enter mapped phase/round values above to see preview)";
+                      data_sample_phase = sample_phase.as_str(),
+                      data_sample_round = sample_round.as_str(),
+                      data_sample_pool = sample_pool.as_str(),
+                      style = "font-style: italic; color: var(--text-muted);") {};
                 }, vec![], "Add Rule");
                 script(src = static_url!("zsr-title-preview.js")) {}
             }
