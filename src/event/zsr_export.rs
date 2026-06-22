@@ -161,6 +161,7 @@ pub(crate) async fn get(
                             th : "Delay (min)";
                             th : "Trigger";
                             th : "Enabled";
+                            th : "Inc. Phase";
                             th : "Actions";
                         }
                     }
@@ -172,6 +173,7 @@ pub(crate) async fn get(
                                 td : export.delay_minutes.to_string();
                                 td : export.trigger_condition.to_string();
                                 td : if export.enabled { "Yes" } else { "No" };
+                                td : if export.include_phase { "Yes" } else { "No" };
                                 td {
                                     a(href = uri!(edit_export(series, &*event, export.id))) : "Edit";
                                     : " | ";
@@ -265,7 +267,7 @@ pub(crate) async fn get(
                          data_event_name = event_data.display_name.as_str(),
                          data_sample_phase = sample_phase.as_str(),
                          data_sample_round = sample_round.as_str(),
-                         style = "display: block; padding: 0.3em 0.5em; background: #f0f0f0;") {}
+                         style = "display: block; padding: 0.3em 0.5em; background: var(--bg-secondary); color: var(--text-primary); margin-bottom: 1em;") {}
                 }, Vec::new(), "Add Export");
             }
 
@@ -496,7 +498,7 @@ pub(crate) async fn edit_export(
                      data_event_name = event_data.display_name.as_str(),
                      data_sample_phase = sample_phase.as_str(),
                      data_sample_round = sample_round.as_str(),
-                     style = "display: block; padding: 0.3em 0.5em; background: #f0f0f0;") {}
+                     style = "display: block; padding: 0.3em 0.5em; background: var(--bg-secondary); color: var(--text-primary); margin-bottom: 1em;") {}
             }, Vec::new(), "Save Changes");
 
             p {

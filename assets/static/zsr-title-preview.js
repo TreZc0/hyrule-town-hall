@@ -35,17 +35,23 @@ document.addEventListener('DOMContentLoaded', function() {
     const labelPreviewEl = document.getElementById('round-label-preview');
     if (labelPreviewEl) {
         const eventName = labelPreviewEl.getAttribute('data-event-name');
+        const samplePhase = labelPreviewEl.getAttribute('data-sample-phase') || 'Winners Bracket';
+        const sampleRound = labelPreviewEl.getAttribute('data-sample-round') || 'Round 1';
+        const samplePool = labelPreviewEl.getAttribute('data-sample-pool') || 'Pool 1';
         const phaseInput = document.getElementById('mapped_phase');
         const roundInput = document.getElementById('mapped_round');
 
-        function updateLabel() {
-            const phase = phaseInput ? phaseInput.value.trim() : '';
-            const round = roundInput ? roundInput.value.trim() : '';
+        function substituteVars(str, fallback) {
+            if (!str) return fallback;
+            return str
+                .replace(/\{%\s*phase\s*%\}/g, samplePhase)
+                .replace(/\{%\s*round\s*%\}/g, sampleRound)
+                .replace(/\{%\s*pool\s*%\}/g, samplePool);
+        }
 
-            if (!phase && !round) {
-                labelPreviewEl.textContent = '(enter mapped phase/round values above to see preview)';
-                return;
-            }
+        function updateLabel() {
+            const phase = substituteVars(phaseInput ? phaseInput.value.trim() : '', samplePhase);
+            const round = substituteVars(roundInput ? roundInput.value.trim() : '', sampleRound);
 
             const standard = buildZsrTitle(eventName, phase, round, false);
             const withPhase = buildZsrTitle(eventName, phase, round, true);
