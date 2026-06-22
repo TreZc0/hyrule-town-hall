@@ -2275,7 +2275,12 @@ async fn round_labels_form(mut transaction: Transaction<'_, Postgres>, me: Optio
                         label(for = "mapped_round") : "Set round to:";
                         input(type = "text", id = "mapped_round", name = "mapped_round", placeholder = "blank = leave unchanged");
                     }
+                    p(id = "round-label-preview",
+                      data_event_name = event.display_name.as_str(),
+                      style = "font-style: italic; color: #555;")
+                        : "(enter mapped phase/round values above to see preview)";
                 }, vec![], "Add Rule");
+                script(src = static_url!("zsr-title-preview.js")) {}
             }
         } else {
             html! {

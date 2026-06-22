@@ -130,6 +130,20 @@ pub(crate) async fn get(
         .filter(|b| !used_backend_ids.contains(&b.id))
         .collect();
 
+    let sample_race = sqlx::query!(
+        "SELECT phase, round FROM races \
+         WHERE series = $1 AND event = $2 AND ignored = false \
+         AND (phase IS NOT NULL OR round IS NOT NULL) \
+         ORDER BY start NULLS LAST LIMIT 1",
+        series as _,
+        &event
+    )
+    .fetch_optional(&mut *transaction)
+    .await?;
+
+    let sample_phase = sample_race.as_ref().and_then(|r| r.phase.clone()).unwrap_or_else(|| "Main Bracket".to_owned());
+    let sample_round = sample_race.as_ref().and_then(|r| r.round.clone()).unwrap_or_else(|| "Round 1".to_owned());
+
     let content = html! {
         : header;
 
@@ -238,6 +252,20 @@ pub(crate) async fn get(
                         input(type = "checkbox", id = "append_mode", name = "append_mode");
                         label(for = "append_mode") : " Append draft mode to title in brackets";
                     });
+
+                    : form_field("include_phase", &mut Vec::new(), html! {
+                        input(type = "checkbox", id = "include_phase", name = "include_phase");
+                        label(for = "include_phase") : " Include phase in title (combined with round, shortened)";
+                    });
+
+                    p {
+                        small : "Title preview:";
+                    }
+                    code(id = "zsr-title-preview",
+                         data_event_name = event_data.display_name.as_str(),
+                         data_sample_phase = sample_phase.as_str(),
+                         data_sample_round = sample_round.as_str(),
+                         style = "display: block; padding: 0.3em 0.5em; background: #f0f0f0;") {}
                 }, Vec::new(), "Add Export");
             }
 
@@ -246,6 +274,8 @@ pub(crate) async fn get(
                 input(type = "hidden", name = "csrf", value = csrf.as_ref().map(|t| t.authenticity_token().to_string()).unwrap_or_default());
                 button(type = "submit") : "Sync All Exports Now";
             }
+
+            script(src = static_url!("zsr-title-preview.js")) {}
         }
     };
 
@@ -277,6 +307,7 @@ pub(crate) struct AddExportForm {
     nodecg_pk: Option<i32>,
     trigger_condition: String,
     append_mode: bool,
+    include_phase: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/zsr-export", data = "<form>")]
@@ -322,6 +353,7 @@ pub(crate) async fn add_export(
             value.nodecg_pk,
             trigger,
             value.append_mode,
+            value.include_phase,
         ).await?;
 
         // Get backend and event data to ensure description entry exists
@@ -380,6 +412,20 @@ pub(crate) async fn edit_export(
     let backend = RestreamingBackend::from_id(&mut transaction, export.backend_id).await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
+    let sample_race = sqlx::query!(
+        "SELECT phase, round FROM races \
+         WHERE series = $1 AND event = $2 AND ignored = false \
+         AND (phase IS NOT NULL OR round IS NOT NULL) \
+         ORDER BY start NULLS LAST LIMIT 1",
+        series as _,
+        &event
+    )
+    .fetch_optional(&mut *transaction)
+    .await?;
+
+    let sample_phase = sample_race.as_ref().and_then(|r| r.phase.clone()).unwrap_or_else(|| "Main Bracket".to_owned());
+    let sample_round = sample_race.as_ref().and_then(|r| r.round.clone()).unwrap_or_else(|| "Round 1".to_owned());
+
     let content = html! {
         : header;
 
@@ -437,11 +483,27 @@ pub(crate) async fn edit_export(
                     input(type = "checkbox", id = "append_mode", name = "append_mode", checked? = export.append_mode);
                     label(for = "append_mode") : " Append draft mode to title in brackets";
                 });
+
+                : form_field("include_phase", &mut Vec::new(), html! {
+                    input(type = "checkbox", id = "include_phase", name = "include_phase", checked? = export.include_phase);
+                    label(for = "include_phase") : " Include phase in title (combined with round, shortened)";
+                });
+
+                p {
+                    small : "Title preview:";
+                }
+                code(id = "zsr-title-preview",
+                     data_event_name = event_data.display_name.as_str(),
+                     data_sample_phase = sample_phase.as_str(),
+                     data_sample_round = sample_round.as_str(),
+                     style = "display: block; padding: 0.3em 0.5em; background: #f0f0f0;") {}
             }, Vec::new(), "Save Changes");
 
             p {
                 a(href = uri!(get(series, &*event))) : "Back to ZSR Export";
             }
+
+            script(src = static_url!("zsr-title-preview.js")) {}
         }
     };
 
@@ -469,6 +531,7 @@ pub(crate) struct UpdateExportForm {
     trigger_condition: String,
     enabled: bool,
     append_mode: bool,
+    include_phase: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/zsr-export/<export_id>/edit", data = "<form>")]
@@ -513,6 +576,7 @@ pub(crate) async fn update_export(
             trigger,
             value.enabled,
             value.append_mode,
+            value.include_phase,
         ).await?;
 
         transaction.commit().await?;

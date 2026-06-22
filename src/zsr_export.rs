@@ -280,6 +280,7 @@ pub(crate) struct ExportConfig {
     pub(crate) trigger_condition: ExportTrigger,
     pub(crate) enabled: bool,
     pub(crate) append_mode: bool,
+    pub(crate) include_phase: bool,
 }
 
 impl ExportConfig {
@@ -301,7 +302,8 @@ impl ExportConfig {
                 nodecg_pk,
                 trigger_condition AS "trigger_condition: ExportTrigger",
                 enabled,
-                append_mode
+                append_mode,
+                include_phase
             FROM zsr_restream_exports
             WHERE id = $1
         "#, id)
@@ -328,7 +330,8 @@ impl ExportConfig {
                 nodecg_pk,
                 trigger_condition AS "trigger_condition: ExportTrigger",
                 enabled,
-                append_mode
+                append_mode,
+                include_phase
             FROM zsr_restream_exports
             WHERE series = $1 AND event = $2
             ORDER BY backend_id
@@ -354,7 +357,8 @@ impl ExportConfig {
                 nodecg_pk,
                 trigger_condition AS "trigger_condition: ExportTrigger",
                 enabled,
-                append_mode
+                append_mode,
+                include_phase
             FROM zsr_restream_exports
             WHERE enabled = true
             ORDER BY series, event, backend_id
@@ -376,14 +380,15 @@ impl ExportConfig {
         nodecg_pk: Option<i32>,
         trigger_condition: ExportTrigger,
         append_mode: bool,
+        include_phase: bool,
     ) -> Result<Self, sqlx::Error> {
         let id = sqlx::query_scalar!(r#"
             INSERT INTO zsr_restream_exports (
                 series, event, backend_id,
                 title, description, estimate_override, delay_minutes, nodecg_pk,
-                trigger_condition, append_mode
+                trigger_condition, append_mode, include_phase
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id
         "#,
             series as _,
@@ -395,7 +400,8 @@ impl ExportConfig {
             delay_minutes,
             nodecg_pk,
             trigger_condition as _,
-            append_mode
+            append_mode,
+            include_phase
         )
         .fetch_one(&mut **transaction)
         .await?;
@@ -413,6 +419,7 @@ impl ExportConfig {
             trigger_condition,
             enabled: true,
             append_mode,
+            include_phase,
         })
     }
 
@@ -428,6 +435,7 @@ impl ExportConfig {
         trigger_condition: ExportTrigger,
         enabled: bool,
         append_mode: bool,
+        include_phase: bool,
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(r#"
             UPDATE zsr_restream_exports SET
@@ -439,6 +447,7 @@ impl ExportConfig {
                 trigger_condition = $7,
                 enabled = $8,
                 append_mode = $9,
+                include_phase = $10,
                 updated_at = NOW()
             WHERE id = $1
         "#,
@@ -450,7 +459,8 @@ impl ExportConfig {
             nodecg_pk,
             trigger_condition as _,
             enabled,
-            append_mode
+            append_mode,
+            include_phase
         )
         .execute(&mut **transaction)
         .await?;
@@ -693,7 +703,21 @@ pub(crate) async fn build_race_title(
 
     // Combine: EventName: Round/Phase (G{n}) - Matchup
     let game_suffix = race.game.map(|g| format!(" (G{})", g)).unwrap_or_default();
-    let mut title = if let Some(round) = &race.round {
+    let mut title = if export.include_phase {
+        if let Some(phase) = &race.phase {
+            let short_phase = phase.split_once(" - ").map(|(before, _)| before).unwrap_or(phase.as_str());
+            if let Some(round) = &race.round {
+                let short_round = round.replace("Round ", "R");
+                format!("{}: {} {}{} - {}", event_name, short_phase, short_round, game_suffix, matchup)
+            } else {
+                format!("{}: {}{} - {}", event_name, short_phase, game_suffix, matchup)
+            }
+        } else if let Some(round) = &race.round {
+            format!("{}: {}{} - {}", event_name, round, game_suffix, matchup)
+        } else {
+            format!("{}: {}{}", event_name, matchup, game_suffix)
+        }
+    } else if let Some(round) = &race.round {
         format!("{}: {}{} - {}", event_name, round, game_suffix, matchup)
     } else if let Some(phase) = &race.phase {
         format!("{}: {}{} - {}", event_name, phase, game_suffix, matchup)

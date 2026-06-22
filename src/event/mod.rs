@@ -2804,7 +2804,6 @@ async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf
     let members = team_obj.members(&mut transaction).await?;
     let qualifier_kind = data.qualifier_kind(&mut transaction).await?;
     let has_qualifiers = !matches!(qualifier_kind, QualifierKind::None);
-    let is_global_admin = me.is_global_admin();
     let current_startgg_id = team_obj.startgg_id.as_ref().map(|id| id.0.clone());
     let choices_row = sqlx::query!(
         r#"SELECT restream_consent, custom_choices AS "custom_choices: Json<HashMap<String, String>>" FROM teams WHERE id = $1"#,
@@ -2881,18 +2880,16 @@ async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf
                 input(type = "submit", value = "Confirm");
             }
         }
-        @if is_global_admin {
-            h3 : "start.gg Entrant ID";
-            form(action = uri!(set_startgg_id(series, event, team)).to_string(), method = "post") {
-                : csrf.as_ref();
-                fieldset {
-                    label(for = "startgg_id") : "start.gg Entrant ID:";
-                    : " ";
-                    input(type = "text", name = "startgg_id", id = "startgg_id", value? = current_startgg_id.as_deref());
-                }
-                fieldset {
-                    input(type = "submit", value = "Save");
-                }
+        h3 : "start.gg Entrant ID";
+        form(action = uri!(set_startgg_id(series, event, team)).to_string(), method = "post") {
+            : csrf.as_ref();
+            fieldset {
+                label(for = "startgg_id") : "start.gg Entrant ID:";
+                : " ";
+                input(type = "text", name = "startgg_id", id = "startgg_id", value? = current_startgg_id.as_deref());
+            }
+            fieldset {
+                input(type = "submit", value = "Save");
             }
         }
         h3 : "Edit Signup Choices";
@@ -3198,9 +3195,6 @@ pub(crate) struct SetStartggIdForm {
 
 #[rocket::post("/event/<series>/<event>/manage/<team>/startgg-id", data = "<form>")]
 pub(crate) async fn set_startgg_id(pool: &State<PgPool>, me: User, csrf: Option<CsrfToken>, series: Series, event: &str, team: Id<Teams>, form: Form<Contextual<'_, SetStartggIdForm>>) -> Result<Redirect, StatusOrError<Error>> {
-    if !me.is_global_admin() {
-        return Err(StatusOrError::Status(Status::Forbidden))
-    }
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     if !data.organizers(&mut transaction).await?.contains(&me) {
