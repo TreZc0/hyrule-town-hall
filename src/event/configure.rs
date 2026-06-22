@@ -855,7 +855,7 @@ pub(crate) struct SaveRestreamCoordinatorDiscordRoleForm {
     discord_role_id: String,
 }
 
-#[rocket::post("/event/<series>/<event>/configure/restreamers/roles/<language>", data = "<form>")]
+#[rocket::post("/event/<series>/<event>/configure/restreamer-discord-roles/<language>", data = "<form>")]
 pub(crate) async fn save_restream_coordinator_discord_role(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, csrf: Option<CsrfToken>, series: Series, event: &str, language: &str, form: Form<Contextual<'_, SaveRestreamCoordinatorDiscordRoleForm>>) -> Result<Redirect, StatusOrError<event::Error>> {
     let language = parse_language_code(language).ok_or(StatusOrError::Status(Status::BadRequest))?;
     let mut form = form.into_inner();
@@ -907,7 +907,7 @@ pub(crate) async fn save_restream_coordinator_discord_role(pool: &State<PgPool>,
     Ok(Redirect::to(format!("/event/{}/{}/configure/restreamers?lang={}", series.slug(), event, language.short_code())))
 }
 
-#[rocket::post("/event/<series>/<event>/configure/restreamers/roles/<language>/clear", data = "<form>")]
+#[rocket::post("/event/<series>/<event>/configure/restreamer-discord-roles/<language>/clear", data = "<form>")]
 pub(crate) async fn clear_restream_coordinator_discord_role(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, csrf: Option<CsrfToken>, series: Series, event: &str, language: &str, form: Form<Contextual<'_, EmptyForm>>) -> Result<Redirect, StatusOrError<event::Error>> {
     let language = parse_language_code(language).ok_or(StatusOrError::Status(Status::BadRequest))?;
     let mut form = form.into_inner();
