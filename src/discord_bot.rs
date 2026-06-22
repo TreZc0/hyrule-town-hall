@@ -1843,6 +1843,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             transaction.rollback().await?;
                                         }
                                         Ok(Some(race)) => {
+                                        let was_ended = race.is_ended();
                                         let race = Race {
                                             schedule: if reset_schedule { RaceSchedule::Unscheduled } else { race.schedule },
                                             schedule_updated_at: if reset_schedule { Some(Utc::now()) } else { race.schedule_updated_at },
@@ -1942,11 +1943,21 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         let scheduling_thread = race.scheduling_thread;
                                         transaction.commit().await?;
                                         let verb = if aspects_reset.len() == NonZero::<usize>::MIN { " has" } else { " have" };
-                                        let response_content = MessageBuilder::default()
-                                            .push(English.join_str(aspects_reset))
-                                            .push(verb)
-                                            .push(" been reset.")
-                                            .build();
+                                        let mut response_builder = MessageBuilder::default();
+                                        response_builder.push(English.join_str(aspects_reset));
+                                        response_builder.push(verb);
+                                        response_builder.push(" been reset.");
+                                        if was_ended {
+                                            let bracket_platform_name = match event.match_source() {
+                                                MatchSource::Challonge { .. } => Some("Challonge"),
+                                                MatchSource::StartGG(_) => Some("start.gg"),
+                                                MatchSource::Manual | MatchSource::League => None,
+                                            };
+                                            if let Some(platform) = bracket_platform_name {
+                                                response_builder.push(format!("\n\n**Note:** This race had a recorded result. Please reset it manually on {platform} as well."));
+                                            }
+                                        }
+                                        let response_content = response_builder.build();
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                             .ephemeral(false)
                                             .content(response_content)
