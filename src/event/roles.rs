@@ -2231,6 +2231,68 @@ pub(crate) async fn assign_event_override_discord_roles(
     Ok(())
 }
 
+pub(crate) async fn remove_event_override_discord_roles(
+    pool: &mut Transaction<'_, Postgres>,
+    ctx: &DiscordCtx,
+    binding_id: Id<RoleBindings>,
+    discord_user_id: UserId,
+) -> sqlx::Result<()> {
+    // Remove event override discord roles from all active events
+    let override_rows = sqlx::query!(
+        r#"
+            SELECT e.discord_guild AS "discord_guild!", o.discord_role_id AS "discord_role_id!"
+            FROM events e
+            JOIN game_series gs ON gs.series = e.series
+            JOIN role_bindings rb ON rb.id = $1 AND rb.game_id = gs.game_id
+            JOIN event_role_binding_overrides o
+                ON o.series = e.series AND o.event = e.event AND o.role_binding_id = $1
+            WHERE (e.end_time IS NULL OR e.end_time > NOW())
+            AND e.force_custom_role_binding = false
+            AND e.discord_guild IS NOT NULL
+            AND o.discord_role_id IS NOT NULL
+        "#,
+        binding_id as _
+    )
+    .fetch_all(&mut **pool)
+    .await?;
+
+    for row in override_rows {
+        let guild_id = GuildId::new(row.discord_guild as u64);
+        if let Ok(member) = guild_id.member(ctx, discord_user_id).await {
+            if let Err(e) = member.remove_role(ctx, RoleId::new(row.discord_role_id as u64)).await {
+                eprintln!("Failed to remove event override Discord role {} from user {} in guild {}: {}", row.discord_role_id, discord_user_id, row.discord_guild, e);
+            }
+        }
+    }
+
+    let game_role_rows = sqlx::query!(
+        r#"
+            SELECT DISTINCT e.discord_guild AS "discord_guild!", rb.discord_role_id AS "discord_role_id!"
+            FROM events e
+            JOIN game_series gs ON gs.series = e.series
+            JOIN role_bindings rb ON rb.id = $1 AND rb.game_id = gs.game_id
+            WHERE (e.end_time IS NULL OR e.end_time > NOW())
+            AND e.force_custom_role_binding = false
+            AND e.discord_guild IS NOT NULL
+            AND rb.discord_role_id IS NOT NULL
+        "#,
+        binding_id as _
+    )
+    .fetch_all(&mut **pool)
+    .await?;
+
+    for row in game_role_rows {
+        let guild_id = GuildId::new(row.discord_guild as u64);
+        if let Ok(member) = guild_id.member(ctx, discord_user_id).await {
+            if let Err(e) = member.remove_role(ctx, RoleId::new(row.discord_role_id as u64)).await {
+                eprintln!("Failed to remove game discord role {} from user {} in guild {}: {}", row.discord_role_id, discord_user_id, row.discord_guild, e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[rocket::post("/event/<series>/<event>/roles/<request>/approve", data = "<form>")]
 pub(crate) async fn approve_role_request(
     pool: &State<PgPool>,
