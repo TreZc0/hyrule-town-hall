@@ -2,7 +2,7 @@ use crate::{
     game::{Game, GameError},
     prelude::*,
     user::User,
-    event::roles::{GameRoleBinding, RoleType, RoleRequest, RoleRequestStatus, render_language_tabs, render_language_content_box_start, render_language_content_box_end, assign_event_override_discord_roles},
+    event::roles::{GameRoleBinding, RoleType, RoleRequest, RoleRequestStatus, render_language_tabs, render_language_content_box_start, render_language_content_box_end, assign_event_override_discord_roles, remove_event_override_discord_roles},
     http::{PageError, StatusOrError},
     form::{form_field, full_form, full_form_confirm, button_form, button_form_confirm},
     id::{RoleBindings, RoleRequests, RoleTypes},
@@ -1091,6 +1091,7 @@ pub(crate) async fn apply_for_game_role(
 #[rocket::post("/games/<game_name>/forfeit", data = "<form>")]
 pub(crate) async fn forfeit_game_role(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: Option<User>,
     uri: Origin<'_>,
     game_name: &str,
@@ -1141,6 +1142,19 @@ pub(crate) async fn forfeit_game_role(
         if let Some(request) = role_request {
             // Update the status to aborted
             RoleRequest::update_status(&mut transaction, request.id, RoleRequestStatus::Aborted).await.map_err(Error::from)?;
+
+            if let Some(discord_user) = me.discord.as_ref() {
+                let discord_ctx_guard = discord_ctx.read().await;
+                if let Err(e) = remove_event_override_discord_roles(
+                    &mut transaction,
+                    &*discord_ctx_guard,
+                    value.role_binding_id,
+                    discord_user.id,
+                ).await {
+                    eprintln!("Failed to remove event override Discord roles on forfeit: {}", e);
+                }
+            }
+
             transaction.commit().await.map_err(Error::from)?;
             RedirectOrContent::Redirect(Redirect::to(uri!(get(game_name, _))))
         } else {
