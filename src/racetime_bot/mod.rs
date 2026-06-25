@@ -5470,7 +5470,9 @@ impl RaceHandler<GlobalState> for Handler {
             }
             lock!(@read state = this.race_state; {
                 if existing_seed.files.is_some() {
-                    this.queue_existing_seed(ctx, goal, existing_seed, English, "a", format!("seed"), true).await; //TODO better article/description
+                    if !matches!(data.status.value, RaceStatusValue::Pending | RaceStatusValue::InProgress) {
+                        this.queue_existing_seed(ctx, goal, existing_seed, English, "a", format!("seed"), true).await; //TODO better article/description
+                    }
                 } else if goal.requires_seed() {
                     // Only roll seeds for goals that require them
                     let event_id = Some((event.series, &*event.event));
