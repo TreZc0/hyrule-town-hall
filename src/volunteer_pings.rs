@@ -6,6 +6,7 @@ use {
     std::collections::HashSet,
     crate::{
         cal::{Entrant, Entrants, Race, RaceSchedule},
+        discord_bot,
         event::{roles::{EffectiveRoleBinding, Signup, VolunteerSignupStatus}},
         game::Game,
         id::{Id, Races},
@@ -18,6 +19,7 @@ use {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
     #[error(transparent)] Cal(#[from] cal::Error),
+    #[error(transparent)] DiscordBot(#[from] discord_bot::Error),
     #[error(transparent)] Event(#[from] event::DataError),
     #[error(transparent)] Sql(#[from] sqlx::Error),
     #[error(transparent)] Serenity(#[from] serenity::Error),
@@ -522,7 +524,7 @@ async fn check_scheduled_workflow(
             _ => continue,
         };
 
-        let matchup = build_matchup_label(&race);
+        let matchup = build_matchup_label(&race, &mut transaction, discord_ctx).await?;
 
         // Get volunteer_request_message_id and channel_id for link
         let msg_info = sqlx::query!(
@@ -683,7 +685,7 @@ async fn check_per_race_workflow(
             _ => { let _ = transaction.rollback().await; continue; }
         };
 
-        let matchup = build_matchup_label(&race);
+        let matchup = build_matchup_label(&race, &mut transaction, discord_ctx).await?;
 
         let msg_info = sqlx::query!(
             r#"SELECT
@@ -789,28 +791,25 @@ pub(crate) async fn delete_stale_ping_messages(
     Ok(())
 }
 
-fn build_matchup_label(race: &Race) -> String {
+async fn build_matchup_label(race: &Race, transaction: &mut Transaction<'_, Postgres>, discord_ctx: &DiscordCtx) -> Result<String, Error> {
     if let Some(custom_title) = &race.custom_title {
-        return custom_title.clone()
+        return Ok(custom_title.clone());
+    }
+
+    async fn entrant_name(entrant: &Entrant, transaction: &mut Transaction<'_, Postgres>, discord_ctx: &DiscordCtx) -> Result<String, discord_bot::Error> {
+        Ok(entrant.name(transaction, discord_ctx).await?.map(|n| n.into_owned()).unwrap_or_else(|| "?".to_string()))
     }
 
     let base = match &race.entrants {
-        Entrants::Two([e1, e2]) => format!("{} vs {}", entrant_short_name(e1), entrant_short_name(e2)),
-        Entrants::Three([e1, e2, e3]) => format!("{} vs {} vs {}", entrant_short_name(e1), entrant_short_name(e2), entrant_short_name(e3)),
+        Entrants::Two([e1, e2]) => format!("{} vs {}", entrant_name(e1, transaction, discord_ctx).await?, entrant_name(e2, transaction, discord_ctx).await?),
+        Entrants::Three([e1, e2, e3]) => format!("{} vs {} vs {}", entrant_name(e1, transaction, discord_ctx).await?, entrant_name(e2, transaction, discord_ctx).await?, entrant_name(e3, transaction, discord_ctx).await?),
         Entrants::Open => "Open Race".to_string(),
         _ => "Race".to_string(),
     };
-    match (&race.round, &race.phase) {
+    Ok(match (&race.round, &race.phase) {
         (Some(r), Some(p)) => format!("{} ({}, {})", base, r, p),
         (Some(r), None) => format!("{} ({})", base, r),
         (None, Some(p)) => format!("{} ({})", base, p),
         (None, None) => base,
-    }
-}
-
-fn entrant_short_name(entrant: &Entrant) -> &str {
-    match entrant {
-        Entrant::Named { name, .. } => name,
-        _ => "?",
-    }
+    })
 }
