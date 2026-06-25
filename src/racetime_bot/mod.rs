@@ -3635,7 +3635,9 @@ impl RaceHandler<GlobalState> for Handler {
             }
             lock!(@read state = this.race_state; {
                 if existing_seed.files().is_some() {
-                    this.queue_existing_seed(ctx, existing_seed, English, "a", format!("seed"), true).await; //TODO better article/description
+                    if !matches!(data.status.value, RaceStatusValue::Pending | RaceStatusValue::InProgress) {
+                        this.queue_existing_seed(ctx, existing_seed, English, "a", format!("seed"), true).await; //TODO better article/description
+                    }
                 } else if event.seed_gen_type.is_some() || event.single_settings.is_some() || event.draft_kind().is_some() {
                     // Only roll seeds for events that have seed configuration
                     let _event_id = Some((event.series, &*event.event));
