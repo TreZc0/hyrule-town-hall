@@ -3319,54 +3319,56 @@ impl RaceHandler<GlobalState> for Handler {
                         Err(msg) => ctx.say(msg).await?,
                     }
                 }
-                ctx.send_message(&if_chain! {
-                    if let French = event.language;
-                    if !event.is_single_race();
-                    if let (Some(phase), Some(round)) = (cal_event.race.phase.as_ref(), cal_event.race.round.as_ref());
-                    if let Some(Some(phase_round)) = sqlx::query_scalar!("SELECT display_fr FROM phase_round_options WHERE series = $1 AND event = $2 AND phase = $3 AND round = $4", event.series as _, &event.event, phase, round).fetch_optional(&mut *transaction).await.to_racetime()?;
-                    then {
-                        format!(
-                            "Bienvenue pour cette race de {phase_round} ! Pour plus d'informations : {}",
-                            uri!(base_uri(), event::info(event.series, &*event.event)),
-                        )
-                    } else {
-                        if let (true, Some(weekly_name)) = (cal_event.race.phase.is_none(), cal_event.race.round.as_deref().and_then(|round| round.strip_suffix(" Weekly"))) {
-                            let settings_desc = if let Ok(Some(schedule)) = WeeklySchedule::for_round(&mut transaction, event.series, &event.event, weekly_name).await {
-                                schedule.settings_description.unwrap_or_else(|| "standard".to_string())
-                            } else {
-                                "standard".to_string()
-                            };
+                if !matches!(data.status.value, RaceStatusValue::Pending | RaceStatusValue::InProgress) {
+                    ctx.send_message(&if_chain! {
+                        if let French = event.language;
+                        if !event.is_single_race();
+                        if let (Some(phase), Some(round)) = (cal_event.race.phase.as_ref(), cal_event.race.round.as_ref());
+                        if let Some(Some(phase_round)) = sqlx::query_scalar!("SELECT display_fr FROM phase_round_options WHERE series = $1 AND event = $2 AND phase = $3 AND round = $4", event.series as _, &event.event, phase, round).fetch_optional(&mut *transaction).await.to_racetime()?;
+                        then {
                             format!(
-                                "Welcome to the {weekly_name} weekly! Current settings: {}. See {} for details.",
-                                settings_desc,
+                                "Bienvenue pour cette race de {phase_round} ! Pour plus d'informations : {}",
                                 uri!(base_uri(), event::info(event.series, &*event.event)),
                             )
                         } else {
-                            format!(
-                                "Welcome to {}! Learn more about the event at {}",
-                                if event.is_single_race() {
-                                    format!("the {}", event.display_name) //TODO remove “the” depending on event name
+                            if let (true, Some(weekly_name)) = (cal_event.race.phase.is_none(), cal_event.race.round.as_deref().and_then(|round| round.strip_suffix(" Weekly"))) {
+                                let settings_desc = if let Ok(Some(schedule)) = WeeklySchedule::for_round(&mut transaction, event.series, &event.event, weekly_name).await {
+                                    schedule.settings_description.unwrap_or_else(|| "standard".to_string())
                                 } else {
-                                    match (cal_event.race.phase.as_deref(), cal_event.race.round.as_deref()) {
-                                        (Some("Qualifier"), Some(round)) => format!("qualifier {round}"),
-                                        (Some("Live Qualifier"), Some(round)) => format!("live qualifier {round}"),
-                                        (Some(phase), Some(round)) => format!("this {phase} {round} race"),
-                                        (Some(phase), None) => format!("this {phase} race"),
-                                        (None, Some(round)) => format!("this {round} race"),
-                                        (None, None) => format!("this {} race", event.display_name),
-                                    }
-                                },
-                                uri!(base_uri(), event::info(event.series, &*event.event)),
-                            )
+                                    "standard".to_string()
+                                };
+                                format!(
+                                    "Welcome to the {weekly_name} weekly! Current settings: {}. See {} for details.",
+                                    settings_desc,
+                                    uri!(base_uri(), event::info(event.series, &*event.event)),
+                                )
+                            } else {
+                                format!(
+                                    "Welcome to {}! Learn more about the event at {}",
+                                    if event.is_single_race() {
+                                        format!("the {}", event.display_name) //TODO remove “the” depending on event name
+                                    } else {
+                                        match (cal_event.race.phase.as_deref(), cal_event.race.round.as_deref()) {
+                                            (Some("Qualifier"), Some(round)) => format!("qualifier {round}"),
+                                            (Some("Live Qualifier"), Some(round)) => format!("live qualifier {round}"),
+                                            (Some(phase), Some(round)) => format!("this {phase} {round} race"),
+                                            (Some(phase), None) => format!("this {phase} race"),
+                                            (None, Some(round)) => format!("this {round} race"),
+                                            (None, None) => format!("this {} race", event.display_name),
+                                        }
+                                    },
+                                    uri!(base_uri(), event::info(event.series, &*event.event)),
+                                )
+                            }
                         }
-                    }
-                }, !matches!(event.seed_gen_type, Some(seed_gen_type::SeedGenType::AlttprDoorRando { .. } | seed_gen_type::SeedGenType::AlttprAvianart { .. })), Vec::default()).await?;
-                // Announce mode for events with round_modes set
-                if matches!(event.seed_gen_type, Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::Boothisman, .. })) {
-                    if event.round_modes.is_some() {
-                        let alttprde_options = AlttprDeRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race, event.round_modes.as_ref()).await;
-                        if let Some(mode_display) = alttprde_options.mode_display() {
-                            ctx.say(format!("This race will be played in {} mode.", mode_display)).await?;
+                    }, !matches!(event.seed_gen_type, Some(seed_gen_type::SeedGenType::AlttprDoorRando { .. } | seed_gen_type::SeedGenType::AlttprAvianart { .. })), Vec::default()).await?;
+                    // Announce mode for events with round_modes set
+                    if matches!(event.seed_gen_type, Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::Boothisman, .. })) {
+                        if event.round_modes.is_some() {
+                            let alttprde_options = AlttprDeRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race, event.round_modes.as_ref()).await;
+                            if let Some(mode_display) = alttprde_options.mode_display() {
+                                ctx.say(format!("This race will be played in {} mode.", mode_display)).await?;
+                            }
                         }
                     }
                 }
@@ -3527,7 +3529,7 @@ impl RaceHandler<GlobalState> for Handler {
                         }
                     }
                 }
-                if let RaceStatusValue::Pending | RaceStatusValue::InProgress = data.status.value { //TODO also check this in official races
+                if let RaceStatusValue::Pending | RaceStatusValue::InProgress = data.status.value {
                     if_chain! {
                         if let Ok(log) = ctx.global_state.http_client.get(format!("https://{}{}/log", racetime_host(), data.url)).send().await;
                         if let Ok(log) = log.detailed_error_for_status().await;
