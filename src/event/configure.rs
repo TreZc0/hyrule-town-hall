@@ -16,7 +16,7 @@ use {
 use rocket::response::content::RawText;
 use serde::Serializer;
 
-async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
+async fn configure_form(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
     let query_string = uri.0.query().map(|q| q.to_string());
     let sync_success = query_string.as_deref().and_then(|q| {
         q.split('&')
@@ -70,26 +70,39 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
             false
         };
         if is_organizer_or_global {
-            let startgg_bulk_add: Option<(String, String)> = if let MatchSource::StartGG(event_slug) = event.match_source() {
+            let startgg_bulk_add: Option<(String, Vec<(String, String)>)> = if let MatchSource::StartGG(event_slug) = event.match_source() {
                 let tournament_slug = event_slug.split('/').nth(1).map(str::to_string).unwrap_or_default();
-                let names: Vec<String> = sqlx::query_scalar!(r#"
-                    SELECT CASE WHEN u.display_source = 'racetime' THEN u.racetime_display_name
-                                WHEN u.display_source = 'discord' THEN u.discord_display_name
-                           END AS "name"
-                    FROM teams t
-                    JOIN team_members tm ON tm.team = t.id
-                    JOIN users u ON u.id = tm.member
-                    WHERE t.series = $1 AND t.event = $2 AND NOT t.resigned
-                    ORDER BY name NULLS LAST
-                "#, event.series as _, &*event.event)
-                    .fetch_all(&mut *transaction)
-                    .await?
-                    .into_iter()
-                    .flatten()
+                let qualifier_kind = event.qualifier_kind(&mut transaction).await?;
+                let mut cache = super::teams::Cache::new(http_client.clone());
+                let signups = super::teams::signups_sorted(
+                    &mut transaction, &mut cache, None, &event,
+                    is_organizer_or_global, qualifier_kind, None, true, false,
+                ).await?;
+                let names: Vec<String> = signups.into_iter()
+                    .filter(|s| match (&qualifier_kind, &s.qualification) {
+                        (QualifierKind::None, _) => true,
+                        (_, super::teams::Qualification::Single { qualified } | super::teams::Qualification::TriforceBlitz { qualified, .. }) => *qualified,
+                        (QualifierKind::Score(score_kind), super::teams::Qualification::Multiple { num_finished, .. }) => *num_finished >= score_kind.required_qualifiers(),
+                        (_, super::teams::Qualification::Multiple { num_finished, .. }) => *num_finished >= 1,
+                    })
+                    .flat_map(|s| s.members.into_iter().filter_map(|m| match m.user {
+                        super::teams::MemberUser::MidosHouse(user) => Some(user.display_name().to_owned()),
+                        super::teams::MemberUser::RaceTime { name, .. } => Some(name),
+                        _ => None,
+                    }))
                     .collect();
-                let names_json = serde_json::to_string(&names)
-                    .unwrap_or_else(|_| "[]".to_string());
-                Some((tournament_slug, names_json))
+                let chunks: Vec<(String, String)> = names.chunks(50)
+                    .enumerate()
+                    .map(|(i, chunk)| {
+                        let start = i * 50 + 1;
+                        let end = start + chunk.len() - 1;
+                        (
+                            format!("Copy seeds {}–{}", start, end),
+                            serde_json::to_string(chunk).unwrap_or_else(|_| "[]".to_string()),
+                        )
+                    })
+                    .collect();
+                if chunks.is_empty() { None } else { Some((tournament_slug, chunks)) }
             } else {
                 None
             };
@@ -144,12 +157,15 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
                                 button(type = "submit", name = "sync_startgg_ids", value = "sync") : "Sync StartGG Participant IDs";
                                 label(class = "help") : "(This will attempt to match teams with solo players to their StartGG entrant IDs.)";
                             });
-                            @if let Some((ref slug, ref names_json)) = startgg_bulk_add {
+                            @if let Some((ref slug, ref chunks)) = startgg_bulk_add {
                                 : form_field("startgg_bulk_add", &mut errors, html! {
                                     a(href = format!("https://www.start.gg/admin/tournament/{}/bulk-add", slug), target = "_blank", rel = "noopener noreferrer", class = "button") : "Open start.gg Bulk Add";
                                     : " ";
-                                    button(type = "button", id = "startgg-bulk-add-copy", data_names = names_json) : "Copy player names to clipboard";
-                                    label(class = "help") : "(Opens the start.gg bulk-add page in a new tab. Copy player names and paste them into the search field on that page.)";
+                                    @for (label, chunk_json) in chunks {
+                                        button(type = "button", class = "button startgg-bulk-add-copy", data_names = chunk_json) : label;
+                                        : " ";
+                                    }
+                                    label(class = "help") : "(Opens the start.gg bulk-add page in a new tab. Copy seeds and paste into the search field on that page to add in seeding order.)";
                                     script(src = static_url!("startgg-bulk-add.js")) {}
                                 });
                             }
@@ -272,10 +288,10 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, me: Option<U
 }
 
 #[rocket::get("/event/<series>/<event>/configure")]
-pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+pub(crate) async fn get(pool: &State<PgPool>, http_client: &State<reqwest::Client>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    Ok(configure_form(transaction, me, uri, csrf.as_ref(), data, Context::default()).await?)
+    Ok(configure_form(transaction, http_client, me, uri, csrf.as_ref(), data, Context::default()).await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -298,7 +314,7 @@ pub(crate) struct ConfigureForm {
 }
 
 #[rocket::post("/event/<series>/<event>/configure", data = "<form>")]
-pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, ConfigureForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Client>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, ConfigureForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
@@ -363,7 +379,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
         }
 
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(configure_form(transaction, Some(me), uri, csrf.as_ref(), data, form.context).await?)
+            RedirectOrContent::Content(configure_form(transaction, http_client, Some(me), uri, csrf.as_ref(), data, form.context).await?)
         } else {
             if let MatchSource::StartGG(_) = data.match_source() {
                 sqlx::query!("UPDATE events SET auto_import = $1 WHERE series = $2 AND event = $3", value.auto_import, data.series as _, &data.event).execute(&mut *transaction).await?;
@@ -402,7 +418,7 @@ pub(crate) async fn post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: 
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
         }
     } else {
-        RedirectOrContent::Content(configure_form(transaction, Some(me), uri, csrf.as_ref(), data, form.context).await?)
+        RedirectOrContent::Content(configure_form(transaction, http_client, Some(me), uri, csrf.as_ref(), data, form.context).await?)
     })
 }
 
