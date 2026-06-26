@@ -2,6 +2,7 @@ query TeamMembersQuery($entrant: ID!) {
   entrant(id: $entrant) {
     name
     participants {
+      gamerTag
       user {
         id
       }

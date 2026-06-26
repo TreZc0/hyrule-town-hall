@@ -3504,23 +3504,50 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                     break
                                 }
                                 Err(Error::UnknownTeamStartGG(entrant)) => {
-                                    let response = startgg::query_cached::<startgg::TeamMembersQuery>(&http_client, &config.startgg, startgg::team_members_query::Variables { entrant: entrant.clone() }).await?;
-                                    let startgg::team_members_query::ResponseData {
-                                        entrant: Some(startgg::team_members_query::TeamMembersQueryEntrant {
-                                            participants: Some(participants),
-                                            ..
-                                        }),
-                                    } = response else { return Err(Error::UnknownTeamStartGG(entrant).into()) };
-                                    let Ok(startgg::team_members_query::TeamMembersQueryEntrantParticipants {
-                                        user: Some(startgg::team_members_query::TeamMembersQueryEntrantParticipantsUser { //TODO if user is None, this is a participant without a start.gg account, match on display name or DM Fenhl about connecting manually, don't return error
-                                            id: Some(user_id),
-                                        }),
-                                    }) = participants.into_iter().filter_map(identity).exactly_one() else { return Err(Error::UnknownTeamStartGG(entrant).into()) };
-                                    let Some(user) = User::from_startgg(&mut *transaction, user_id).await? else { return Err(Error::UnknownTeamStartGG(entrant).into()) };
-                                    let Some(team) = Team::from_event_and_member(&mut transaction, event.series, &event.event, user.id).await? else { return Err(Error::UnknownTeamStartGG(entrant).into()) };
-                                    sqlx::query!("UPDATE teams SET startgg_id = $1 WHERE id = $2", entrant as _, team.id as _).execute(&mut *transaction).await?;
-                                    transaction.commit().await?;
-                                    transaction = db_pool.begin().await?;
+                                    let entrant_display = entrant.to_string();
+                                    let notification_msg: Option<String> = 'resolve: {
+                                        let response = startgg::query_cached::<startgg::TeamMembersQuery>(&http_client, &config.startgg, startgg::team_members_query::Variables { entrant: entrant.clone() }).await?;
+                                        let startgg::team_members_query::ResponseData {
+                                            entrant: Some(startgg::team_members_query::TeamMembersQueryEntrant {
+                                                name: entrant_name,
+                                                participants: Some(participants),
+                                            }),
+                                        } = response else {
+                                            break 'resolve Some(format!("start.gg team ID {entrant_display} is not associated with a Hyrule Town Hall team (event {}/{}, slug: {event_slug})", event.series.slug(), &event.event));
+                                        };
+                                        let gamer_tags = participants.iter().flatten()
+                                            .filter_map(|p| p.gamer_tag.clone())
+                                            .collect::<Vec<_>>();
+                                        let team_info = {
+                                            let tags = gamer_tags.join(", ");
+                                            match entrant_name.as_deref() {
+                                                Some(n) if !tags.is_empty() => format!("{n} ({tags})"),
+                                                Some(n) => n.to_owned(),
+                                                None if !tags.is_empty() => tags,
+                                                None => entrant_display.clone(),
+                                            }
+                                        };
+                                        let make_msg = || format!("start.gg team {team_info} (ID: {entrant_display}) is not associated with a Hyrule Town Hall team (event {}/{}, slug: {event_slug})", event.series.slug(), &event.event);
+                                        let Ok(startgg::team_members_query::TeamMembersQueryEntrantParticipants {
+                                            gamer_tag: _,
+                                            user: Some(startgg::team_members_query::TeamMembersQueryEntrantParticipantsUser { //TODO if user is None, this is a participant without a start.gg account, match on display name or DM Fenhl about connecting manually, don't return error
+                                                id: Some(user_id),
+                                            }),
+                                        }) = participants.into_iter().filter_map(identity).exactly_one() else { break 'resolve Some(make_msg()) };
+                                        let Some(user) = User::from_startgg(&mut *transaction, user_id).await? else { break 'resolve Some(make_msg()) };
+                                        let Some(team) = Team::from_event_and_member(&mut transaction, event.series, &event.event, user.id).await? else { break 'resolve Some(make_msg()) };
+                                        sqlx::query!("UPDATE teams SET startgg_id = $1 WHERE id = $2", entrant as _, team.id as _).execute(&mut *transaction).await?;
+                                        transaction.commit().await?;
+                                        transaction = db_pool.begin().await?;
+                                        None
+                                    };
+                                    if let Some(msg) = notification_msg {
+                                        eprintln!("midos-house: {msg}");
+                                        if let Ok(dm) = discord_bot::ADMIN_USER.create_dm_channel(&*discord_ctx.read().await).await {
+                                            let _ = dm.say(&*discord_ctx.read().await, &msg).await;
+                                        }
+                                        break
+                                    }
                                 }
                                 Err(e) => {
                                     let e = AutoImportError::from(e);
