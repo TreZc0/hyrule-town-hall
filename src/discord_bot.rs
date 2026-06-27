@@ -951,7 +951,7 @@ fn parse_natural_language_timestamp(s: &str) -> Option<DateTime<Utc>> {
     // naive date/time with interim, then apply the IANA zone so DST is handled correctly.
     if let Some((_, s_without_tz, tz_abbr)) = regex_captures!(r"^(.*\S)\s+([A-Za-z]{2,5})\s*$", s) {
         if let Some(tz) = tz_from_abbr(&tz_abbr.to_ascii_uppercase()) {
-            let as_utc = interim::parse_date_string(s_without_tz, Utc::now(), interim::Dialect::Us).ok()?;
+            let as_utc = interim::parse_date_string(&s_without_tz.to_lowercase(), Utc::now(), interim::Dialect::Us).ok()?;
             let naive = as_utc.naive_utc();
             return tz.from_local_datetime(&naive)
                 .single()
@@ -960,7 +960,7 @@ fn parse_natural_language_timestamp(s: &str) -> Option<DateTime<Utc>> {
         }
     }
     // No recognized abbreviation; let interim handle it (supports Z and numeric offsets).
-    interim::parse_date_string(s, Utc::now(), interim::Dialect::Us).ok()
+    interim::parse_date_string(&s.to_lowercase(), Utc::now(), interim::Dialect::Us).ok()
 }
 
 pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global_state: Arc<GlobalState>, db_pool: PgPool, http_client: reqwest::Client, config: Config, new_room_lock: Arc<Mutex<()>>, clean_shutdown: Arc<Mutex<CleanShutdown>>, shutdown: rocket::Shutdown) -> serenity_utils::Builder {
