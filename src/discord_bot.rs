@@ -946,7 +946,7 @@ fn tz_from_abbr(abbr: &str) -> Option<Tz> {
     }
 }
 
-fn parse_natural_language_timestamp(s: &str) -> Option<DateTime<Utc>> {
+fn parse_natural_language_timestamp(s: &str) -> Option<(DateTime<Utc>, Option<Tz>)> {
     // If the string ends with a known timezone abbreviation, strip it, parse the
     // naive date/time with interim, then apply the IANA zone so DST is handled correctly.
     if let Some((_, s_without_tz, tz_abbr)) = regex_captures!(r"^(.*\S)\s+([A-Za-z]{2,5})\s*$", s) {
@@ -956,11 +956,11 @@ fn parse_natural_language_timestamp(s: &str) -> Option<DateTime<Utc>> {
             return tz.from_local_datetime(&naive)
                 .single()
                 .or_else(|| tz.from_local_datetime(&naive).latest())
-                .map(|dt| dt.to_utc());
+                .map(|dt| (dt.to_utc(), Some(tz)));
         }
     }
     // No recognized abbreviation; let interim handle it (supports Z and numeric offsets).
-    interim::parse_date_string(&s.to_lowercase(), Utc::now(), interim::Dialect::Us).ok()
+    interim::parse_date_string(&s.to_lowercase(), Utc::now(), interim::Dialect::Us).ok().map(|dt| (dt, None))
 }
 
 pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global_state: Arc<GlobalState>, db_pool: PgPool, http_client: reqwest::Client, config: Config, new_room_lock: Arc<Mutex<()>>, clean_shutdown: Arc<Mutex<CleanShutdown>>, shutdown: rocket::Shutdown) -> serenity_utils::Builder {
@@ -2022,18 +2022,21 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         _ => panic!("unexpected slash command option type"),
                                     };
                                     let parsed = parse_timestamp(start)
-                                        .map(|dt| (dt, false))
-                                        .or_else(|| parse_natural_language_timestamp(start).map(|dt| (dt, true)));
-                                    if let Some((start, was_natural_language)) = parsed {
-                                        let nl_note = if was_natural_language {
+                                        .map(|dt| (dt, None::<Option<Tz>>))
+                                        .or_else(|| parse_natural_language_timestamp(start).map(|(dt, tz)| (dt, Some(tz))));
+                                    if let Some((start, nl_info)) = parsed {
+                                        let nl_note = nl_info.map(|detected_tz| {
                                             let mut note = MessageBuilder::default();
                                             note.push("-# Interpreted as ");
-                                            note.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
-                                            note.push(" (UTC). Include a timezone like `EST` or `CET` to adjust.\n");
-                                            Some(note.build())
-                                        } else {
-                                            None
-                                        };
+                                            if let Some(tz) = detected_tz {
+                                                note.push(tz.from_utc_datetime(&start.naive_utc()).format("%Y/%m/%d %I:%M %p %Z").to_string());
+                                            } else {
+                                                note.push(start.format("%Y/%m/%d %I:%M %p UTC").to_string());
+                                                note.push(". Include a timezone like `EST` or `CET` to adjust");
+                                            }
+                                            note.push(".\n");
+                                            note.build()
+                                        });
                                         if (start - Utc::now()).to_std().map_or(true, |schedule_notice| schedule_notice > Duration::from_secs(365 * 24 * 60 * 60)) {
                                             interaction.edit_response(ctx, EditInteractionResponse::new()
                                                 .content(if let French = event.language {
@@ -2167,18 +2170,21 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         _ => panic!("unexpected slash command option type"),
                                     };
                                     let parsed = parse_timestamp(start)
-                                        .map(|dt| (dt, false))
-                                        .or_else(|| parse_natural_language_timestamp(start).map(|dt| (dt, true)));
-                                    if let Some((start, was_natural_language)) = parsed {
-                                        let nl_note = if was_natural_language {
+                                        .map(|dt| (dt, None::<Option<Tz>>))
+                                        .or_else(|| parse_natural_language_timestamp(start).map(|(dt, tz)| (dt, Some(tz))));
+                                    if let Some((start, nl_info)) = parsed {
+                                        let nl_note = nl_info.map(|detected_tz| {
                                             let mut note = MessageBuilder::default();
                                             note.push("-# Interpreted as ");
-                                            note.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
-                                            note.push(" (UTC). Include a timezone like `EST` or `CET` to adjust.\n");
-                                            Some(note.build())
-                                        } else {
-                                            None
-                                        };
+                                            if let Some(tz) = detected_tz {
+                                                note.push(tz.from_utc_datetime(&start.naive_utc()).format("%Y/%m/%d %I:%M %p %Z").to_string());
+                                            } else {
+                                                note.push(start.format("%Y/%m/%d %I:%M %p UTC").to_string());
+                                                note.push(". Include a timezone like `EST` or `CET` to adjust");
+                                            }
+                                            note.push(".\n");
+                                            note.build()
+                                        });
                                         if (start - Utc::now()).to_std().map_or(true, |schedule_notice| schedule_notice > Duration::from_secs(365 * 24 * 60 * 60)) {
                                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                                 .ephemeral(true)
