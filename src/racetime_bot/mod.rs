@@ -4475,6 +4475,32 @@ impl RaceHandler<GlobalState> for Handler {
                 if matches!(self.official_data.as_ref().and_then(|d| d.event.seed_gen_type.as_ref()), Some(seed_gen_type::SeedGenType::OotrRsl)) {
                     sqlx::query!("DELETE FROM rsl_seeds WHERE room = $1", format!("https://{}{}", racetime_host(), ctx.data().await.url)).execute(&ctx.global_state.db_pool).await.to_racetime()?;
                 }
+                // Inactivity cancellation: < 2 runners have NotReady|Ready (≥ 1 was still Invited)
+                {
+                    let inactivity_data = ctx.data().await;
+                    let active_count = inactivity_data.entrants.iter()
+                        .filter(|e| matches!(e.status.value, EntrantStatusValue::NotReady | EntrantStatusValue::Ready))
+                        .count();
+                    let any_invited = inactivity_data.entrants.iter()
+                        .any(|e| matches!(e.status.value, EntrantStatusValue::Invited));
+                    let room_url_str = format!("https://{}{}", racetime_host(), inactivity_data.url);
+                    drop(inactivity_data);
+                    if active_count < 2 && any_invited {
+                        if let Some(OfficialRaceData { ref cal_event, .. }) = self.official_data {
+                            sqlx::query!("UPDATE races SET room = NULL WHERE room = $1", room_url_str)
+                                .execute(&ctx.global_state.db_pool)
+                                .await
+                                .to_racetime()?;
+                            if let Some(scheduling_thread) = cal_event.race.scheduling_thread {
+                                scheduling_thread.say(
+                                    &*ctx.global_state.discord_ctx.read().await,
+                                    "The race room was cancelled due to inactivity — not all runners joined in time. \
+                                     Use `/restart-room` in this thread to open a new room.",
+                                ).await.to_racetime()?;
+                            }
+                        }
+                    }
+                }
                 self.cleaned_up.store(true, atomic::Ordering::SeqCst);
             }
             _ => {}
