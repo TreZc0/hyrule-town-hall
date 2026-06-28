@@ -2821,7 +2821,12 @@ async fn volunteer_page(
                     .collect::<Vec<_>>()
             };
 
-            let upcoming_races = Race::for_event(&mut transaction, &reqwest::Client::new(), &data).await?;
+            let mut upcoming_races = Vec::new();
+            for race in Race::for_event(&mut transaction, &reqwest::Client::new(), &data).await? {
+                if race.companion_primary_id(&mut transaction).await?.is_none() {
+                    upcoming_races.push(race);
+                }
+            }
 
             // Get active languages and determine selected language
             let active_languages = EffectiveRoleBinding::active_languages(&effective_role_bindings, data.default_volunteer_language);
