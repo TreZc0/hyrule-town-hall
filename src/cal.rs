@@ -2608,31 +2608,53 @@ pub(crate) async fn race_table(
         .filter_map(|row| Some((row.companion_race_id?, row.room?.parse().ok()?)))
         .collect::<HashMap<_, Url>>()
     };
-    let companion_display_starts = if displayed_race_ids.is_empty() {
-        HashMap::new()
-    } else {
-        sqlx::query!(
+    let mut companion_display_starts = HashMap::new();
+    let mut combined_race_links = HashMap::new();
+    if !displayed_race_ids.is_empty() {
+        let combined_rows = sqlx::query!(
             r#"SELECT id AS "primary_id: Id<Races>", companion_race_id AS "companion_race_id: Id<Races>", start AS "start!"
             FROM races
-            WHERE companion_race_id = ANY($1)
+            WHERE (id = ANY($1) OR companion_race_id = ANY($1))
+              AND companion_race_id IS NOT NULL
               AND start IS NOT NULL"#,
             &displayed_race_ids,
         )
         .fetch_all(&mut **transaction)
-        .await?
-        .into_iter()
-        .filter_map(|row| row.companion_race_id.map(|companion_race_id| (companion_race_id, (row.primary_id, row.start))))
-        .collect::<HashMap<_, _>>()
-    };
+        .await?;
+        for row in combined_rows {
+            let Some(companion_race_id) = row.companion_race_id else {
+                continue
+            };
+            let primary_title = if let Some(primary) = races.iter().find(|race| race.id == row.primary_id) {
+                primary.matchup_label(transaction, discord_ctx).await?
+            } else {
+                Race::from_id(transaction, http_client, row.primary_id).await?
+                    .matchup_label(transaction, discord_ctx).await?
+            };
+            let companion_title = if let Some(companion) = races.iter().find(|race| race.id == companion_race_id) {
+                companion.matchup_label(transaction, discord_ctx).await?
+            } else {
+                Race::from_id(transaction, http_client, companion_race_id).await?
+                    .matchup_label(transaction, discord_ctx).await?
+            };
+            if displayed_race_ids.contains(&i64::from(companion_race_id)) {
+                companion_display_starts.insert(companion_race_id, (row.primary_id, row.start, primary_title.clone()));
+                combined_race_links.insert(companion_race_id, (row.primary_id, primary_title));
+            }
+            if displayed_race_ids.contains(&i64::from(row.primary_id)) {
+                combined_race_links.insert(row.primary_id, (companion_race_id, companion_title));
+            }
+        }
+    }
     let mut displayed_races = races.iter().collect::<Vec<_>>();
     if !companion_display_starts.is_empty() && displayed_races.iter().any(|race| !race.is_ended()) {
         displayed_races.sort_by(|race_a, race_b| {
             let mut schedule_a = race_a.schedule.clone();
-            if let (Some((_, synced_start)), RaceSchedule::Live { start, .. }) = (companion_display_starts.get(&race_a.id), &mut schedule_a) {
+            if let (Some((_, synced_start, _)), RaceSchedule::Live { start, .. }) = (companion_display_starts.get(&race_a.id), &mut schedule_a) {
                 *start = *synced_start;
             }
             let mut schedule_b = race_b.schedule.clone();
-            if let (Some((_, synced_start)), RaceSchedule::Live { start, .. }) = (companion_display_starts.get(&race_b.id), &mut schedule_b) {
+            if let (Some((_, synced_start, _)), RaceSchedule::Live { start, .. }) = (companion_display_starts.get(&race_b.id), &mut schedule_b) {
                 *start = *synced_start;
             }
             schedule_a.cmp(&race_a.entrants, &schedule_b, &race_b.entrants)
@@ -2697,9 +2719,9 @@ pub(crate) async fn race_table(
                                 RaceSchedule::Unscheduled => {}
                                 RaceSchedule::Live { start, .. } => {
                                     @let companion_display_start = companion_display_starts.get(&race.id);
-                                    : format_datetime(companion_display_start.map(|(_, start)| *start).unwrap_or(start), DateTimeFormat { long: false, running_text: false });
-                                    @if let Some((primary_id, _)) = companion_display_start {
-                                        span(title = format!("Synced to combined primary race {}. Original start: {} UTC.", u64::from(*primary_id), start.format("%Y-%m-%d %H:%M"))) : " 🔗";
+                                    : format_datetime(companion_display_start.map(|(_, start, _)| *start).unwrap_or(start), DateTimeFormat { long: false, running_text: false });
+                                    @if let Some((_, _, primary_title)) = companion_display_start {
+                                        span(title = format!("Synced with {primary_title}. Original start: {} UTC.", start.format("%Y-%m-%d %H:%M"))) : " 🔗";
                                     }
                                     @if show_event && options.show_multistreams && let delay = race.stream_delay(event) && !delay.is_zero() {
                                         br;
@@ -2845,6 +2867,9 @@ pub(crate) async fn race_table(
                                 }
                                 @if let Some(room) = shared_rooms.get(&race.id) {
                                     a(class = "favicon", title = "shared race room", href = room.to_string(), target = "_blank") : favicon(room);
+                                }
+                                @if let Some((linked_race_id, linked_title)) = combined_race_links.get(&race.id) {
+                                    a(class = "favicon", title = format!("Combined with {linked_title}"), href = uri!(edit_race(race.series, &*race.event, *linked_race_id, Some(uri))).to_string()) : "🔗";
                                 }
                                 // Volunteer button for upcoming live races
                                 @let is_upcoming_live = match race.schedule {
@@ -4563,12 +4588,17 @@ async fn notify_companion_race_change(
     let companion = Race::from_id(&mut transaction, http_client, companion_race_id).await?;
     let race_label = race.matchup_label(&mut transaction, discord_ctx).await?;
     let companion_label = companion.matchup_label(&mut transaction, discord_ctx).await?;
+    let race_start = match race.schedule {
+        RaceSchedule::Live { start, .. } => Some(format!("<t:{0}:F> (<t:{0}:R>)", start.timestamp())),
+        RaceSchedule::Unscheduled | RaceSchedule::Async { .. } => None,
+    };
+    let race_start_suffix = race_start.map(|start| format!("\n\nStart time: {start}")).unwrap_or_default();
     transaction.commit().await?;
 
     let (race_msg, companion_msg) = if new_companion_race_id.is_some() {
         (
-            format!("This race will be run in a shared race room together with {companion_label} for restream purposes.\n\nPlease note: only the result of your individual matchup ({race_label}) will count for each runner's tournament progression."),
-            format!("This race will be run in a shared race room together with {race_label} for restream purposes.\n\nPlease note: only the result of your individual matchup ({companion_label}) will count for each runner's tournament progression."),
+            format!("This race will be run in a shared race room together with {companion_label} for restream purposes.{race_start_suffix}\n\nPlease note: only the result of your individual matchup will count for each runner's tournament progression."),
+            format!("This race will be run in a shared race room together with {race_label} for restream purposes.{race_start_suffix}\n\nPlease note: only the result of your individual matchup will count for each runner's tournament progression."),
         )
     } else {
         (
