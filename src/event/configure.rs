@@ -2870,16 +2870,16 @@ async fn rounds_form(mut transaction: Transaction<'_, Postgres>, http_client: &r
                         th : "Restream consent required";
                         th : "Scheduling deadline (your local time)";
                     }
-                    @for round in &rounds {
+                    @for (i, round) in rounds.iter().enumerate() {
                         @let cfg = round_configs.get(round);
                         tr {
                             td {
-                                input(type = "hidden", name = "round", value = round);
+                                input(type = "hidden", name = format!("round[{i}]"), value = round);
                                 : round;
                             }
                             td {
-                                input(type = "checkbox", name = "restream_consent_required",
-                                      value = round,
+                                input(type = "checkbox", name = format!("restream_consent_required[{i}]"),
+                                      value = "true",
                                       checked? = cfg.map_or(false, |c| c.restream_consent_required));
                             }
                             td {
@@ -2887,7 +2887,7 @@ async fn rounds_form(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                     .and_then(|c| c.scheduling_deadline)
                                     .map(|dt| dt.format("%Y-%m-%dT%H:%M").to_string())
                                     .unwrap_or_default();
-                                input(type = "datetime-local", name = "scheduling_deadline",
+                                input(type = "datetime-local", name = format!("scheduling_deadline[{i}]"),
                                       data_utc = &deadline_utc, value = &deadline_utc);
                             }
                         }
@@ -2991,9 +2991,9 @@ pub(crate) async fn rounds_apply_all(pool: &State<PgPool>, me: User, _uri: Origi
 pub(crate) struct RoundsSaveForm {
     #[field(default = String::new())]
     csrf: String,
-    round: Vec<String>,
-    restream_consent_required: Vec<String>,
-    scheduling_deadline: Vec<String>,
+    round: HashMap<usize, String>,
+    restream_consent_required: HashMap<usize, bool>,
+    scheduling_deadline: HashMap<usize, String>,
     tz_offset: Option<i32>,
 }
 
@@ -3008,9 +3008,9 @@ pub(crate) async fn rounds_save(pool: &State<PgPool>, me: User, _uri: Origin<'_>
     }
     if let Some(ref value) = form.value {
         let tz_offset = chrono::Duration::minutes(value.tz_offset.unwrap_or(0) as i64);
-        for (i, round) in value.round.iter().enumerate() {
+        for (i, round) in &value.round {
             if round.is_empty() { continue; }
-            let consent = value.restream_consent_required.contains(round);
+            let consent = value.restream_consent_required.get(i).copied().unwrap_or(false);
             let deadline = value.scheduling_deadline.get(i)
                 .filter(|s| !s.is_empty())
                 .and_then(|s| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M").ok())
