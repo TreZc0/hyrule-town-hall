@@ -397,7 +397,7 @@ async fn build_volunteer_needs_for_race_ids(
                 continue;
             }
         };
-        let matchup = get_matchup_description(&mut *transaction, &race).await?;
+        let matchup = get_matchup_description(&mut *transaction, http_client, &race).await?;
         let signups = Signup::for_race(&mut *transaction, *rid).await?;
         let (role_needs, has_any_need) = collect_role_needs_for_bindings(
             &mut *transaction,
@@ -453,6 +453,9 @@ async fn get_races_needing_announcements(
 
     for race_id in race_ids {
         let race = Race::from_id(&mut *transaction, &http_client, race_id).await?;
+        if race.companion_primary_id(transaction).await?.is_some() {
+            continue;
+        }
 
         // Skip if not a live scheduled race
         let _start_time = match race.schedule {
@@ -476,7 +479,7 @@ async fn get_races_needing_announcements(
         }
 
         // Get matchup description
-        let matchup = get_matchup_description(&mut *transaction, &race).await?;
+        let matchup = get_matchup_description(&mut *transaction, &http_client, &race).await?;
 
         // Get role bindings and check volunteer counts
         let role_bindings = EffectiveRoleBinding::for_event(&mut *transaction, series, event).await?;
@@ -505,6 +508,7 @@ async fn get_races_needing_announcements(
 /// Gets a human-readable matchup description for a race.
 async fn get_matchup_description(
     transaction: &mut Transaction<'_, Postgres>,
+    http_client: &reqwest::Client,
     race: &Race,
 ) -> Result<String, Error> {
     if let Some(custom_title) = &race.custom_title {
@@ -555,6 +559,32 @@ async fn get_matchup_description(
     // Append draft mode if present
     if let Some(mode) = draft_mode {
         result = format!("{} [{}]", result, mode);
+    }
+
+    if let Some(companion_race_id) = race.companion_race_id {
+        let companion = Race::from_id(&mut *transaction, http_client, companion_race_id).await?;
+        let companion_matchup = match &companion.entrants {
+            Entrants::Two([e1, e2]) => {
+                let name1 = get_entrant_name(transaction, e1).await?;
+                let name2 = get_entrant_name(transaction, e2).await?;
+                format!("{} vs {}", name1, name2)
+            }
+            Entrants::Three([e1, e2, e3]) => {
+                let name1 = get_entrant_name(transaction, e1).await?;
+                let name2 = get_entrant_name(transaction, e2).await?;
+                let name3 = get_entrant_name(transaction, e3).await?;
+                format!("{} vs {} vs {}", name1, name2, name3)
+            }
+            Entrants::Open => "Open Signup Race".to_string(),
+            _ => "Unknown matchup".to_string(),
+        };
+        let companion_matchup = match (&companion.round, &companion.phase) {
+            (Some(round), Some(phase)) => format!("{} ({}, {})", companion_matchup, round, phase),
+            (Some(round), None) => format!("{} ({})", companion_matchup, round),
+            (None, Some(phase)) => format!("{} ({})", companion_matchup, phase),
+            (None, None) => companion_matchup,
+        };
+        result = format!("{result} / {companion_matchup}");
     }
 
     Ok(result)
@@ -839,6 +869,13 @@ pub(crate) async fn update_volunteer_post_for_race(
 ) -> Result<(), Error> {
     let mut transaction = pool.begin().await?;
     let http_client = reqwest::Client::new();
+    let race_id = sqlx::query_scalar!(
+        r#"SELECT id AS "id: Id<Races>" FROM races WHERE companion_race_id = $1"#,
+        race_id as _,
+    )
+    .fetch_optional(&mut *transaction)
+    .await?
+    .unwrap_or(race_id);
 
     // Get the race's message ID and event info
     let race_info = sqlx::query!(

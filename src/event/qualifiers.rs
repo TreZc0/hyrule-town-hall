@@ -281,6 +281,7 @@ pub(crate) async fn post_race(pool: &State<PgPool>, discord_ctx: &State<RwFuture
                 restream_consent_required: false,
                 custom_title: None,
                 custom_create_room: true,
+                companion_race_id: None,
             };
             race.save(&mut transaction).await?;
             match crate::discord_scheduled_events::create_discord_scheduled_event(&*discord_ctx.read().await, &mut transaction, &mut race, &event_data, http_client.inner()).await {
@@ -823,6 +824,7 @@ pub(crate) async fn post_seeding_race(pool: &State<PgPool>, discord_ctx: &State<
                 restream_consent_required: false,
                 custom_title: None,
                 custom_create_room: true,
+                companion_race_id: None,
             };
             race.save(&mut transaction).await?;
             match crate::discord_scheduled_events::create_discord_scheduled_event(&*discord_ctx.read().await, &mut transaction, &mut race, &event_data, http_client.inner()).await {

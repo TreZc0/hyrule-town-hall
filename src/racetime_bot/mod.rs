@@ -2994,58 +2994,76 @@ impl SeedRollUpdate {
                 }
                 let extra = seed.extra(Utc::now()).await.to_racetime()?;
                 if let Some(OfficialRaceData { cal_event, .. }) = official_data {
+                    let mut race_ids = vec![cal_event.race.id];
+                    if let Some(companion_race_id) = cal_event.race.companion_race_id {
+                        race_ids.push(companion_race_id);
+                    }
                     match seed.files.as_ref().expect("received seed with no files") {
                         seed::Files::MidosHouse { file_stem, .. } => {
-                            sqlx::query!(
-                                "UPDATE races SET file_stem = $1 WHERE id = $2",
-                                file_stem, cal_event.race.id as _,
-                            ).execute(db_pool).await.to_racetime()?;
+                            for race_id in &race_ids {
+                                sqlx::query!(
+                                    "UPDATE races SET file_stem = $1 WHERE id = $2",
+                                    file_stem, *race_id as _,
+                                ).execute(db_pool).await.to_racetime()?;
+                            }
                         }
                         seed::Files::OotrWeb { id, gen_time, file_stem } => {
-                            sqlx::query!(
-                                "UPDATE races SET web_id = $1, web_gen_time = $2, file_stem = $3 WHERE id = $4",
-                                *id as i64, gen_time, file_stem, cal_event.race.id as _,
-                            ).execute(db_pool).await.to_racetime()?;
+                            for race_id in &race_ids {
+                                sqlx::query!(
+                                    "UPDATE races SET web_id = $1, web_gen_time = $2, file_stem = $3 WHERE id = $4",
+                                    *id as i64, gen_time, file_stem, *race_id as _,
+                                ).execute(db_pool).await.to_racetime()?;
+                            }
                         }
                         seed::Files::TriforceBlitz { is_dev, uuid } => {
-                            sqlx::query!(
-                                "UPDATE races SET is_tfb_dev = $1, tfb_uuid = $2 WHERE id = $3",
-                                is_dev, uuid, cal_event.race.id as _,
-                            ).execute(db_pool).await.to_racetime()?;
+                            for race_id in &race_ids {
+                                sqlx::query!(
+                                    "UPDATE races SET is_tfb_dev = $1, tfb_uuid = $2 WHERE id = $3",
+                                    is_dev, uuid, *race_id as _,
+                                ).execute(db_pool).await.to_racetime()?;
+                            }
                         }
                         seed::Files::AlttprDoorRando { uuid, is_owr } => {
-                            if *is_owr {
-                                sqlx::query!(
-                                    "UPDATE races SET seed_data = $1 WHERE id = $2",
-                                    serde_json::json!({"type": "alttpr_owr", "uuid": uuid.to_string()}), cal_event.race.id as _,
-                                ).execute(db_pool).await.to_racetime()?;
-                            } else {
-                                sqlx::query!(
-                                    "UPDATE races SET xkeys_uuid = $1 WHERE id = $2",
-                                    uuid, cal_event.race.id as _,
-                                ).execute(db_pool).await.to_racetime()?;
+                            for race_id in &race_ids {
+                                if *is_owr {
+                                    sqlx::query!(
+                                        "UPDATE races SET seed_data = $1 WHERE id = $2",
+                                        serde_json::json!({"type": "alttpr_owr", "uuid": uuid.to_string()}), *race_id as _,
+                                    ).execute(db_pool).await.to_racetime()?;
+                                } else {
+                                    sqlx::query!(
+                                        "UPDATE races SET xkeys_uuid = $1 WHERE id = $2",
+                                        uuid, *race_id as _,
+                                    ).execute(db_pool).await.to_racetime()?;
+                                }
                             }
                         }
                         seed::Files::TfbSotd { .. } => unimplemented!("Triforce Blitz seed of the day not supported for official races"),
                         seed::Files::TwwrPermalink { permalink, seed_hash } => {
-                            sqlx::query!(
-                                "UPDATE races SET seed_data = $1 WHERE id = $2",
-                                json!({ "permalink": permalink, "seed_hash": seed_hash }), cal_event.race.id as _,
-                            ).execute(db_pool).await.to_racetime()?;
+                            for race_id in &race_ids {
+                                sqlx::query!(
+                                    "UPDATE races SET seed_data = $1 WHERE id = $2",
+                                    json!({ "permalink": permalink, "seed_hash": seed_hash }), *race_id as _,
+                                ).execute(db_pool).await.to_racetime()?;
+                            }
                         }
                         seed::Files::AvianartSeed { hash, seed_hash } => {
-                            sqlx::query!(
-                                "UPDATE races SET seed_data = $1 WHERE id = $2",
-                                json!({ "avianart_hash": hash, "avianart_seed_hash": seed_hash.as_ref().map(|h| h.join(", ")) }),
-                                cal_event.race.id as _,
-                            ).execute(db_pool).await.to_racetime()?;
+                            for race_id in &race_ids {
+                                sqlx::query!(
+                                    "UPDATE races SET seed_data = $1 WHERE id = $2",
+                                    json!({ "avianart_hash": hash, "avianart_seed_hash": seed_hash.as_ref().map(|h| h.join(", ")) }),
+                                    *race_id as _,
+                                ).execute(db_pool).await.to_racetime()?;
+                            }
                         }
                     }
                     if let Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) = extra.file_hash {
-                        sqlx::query!(
-                            "UPDATE races SET hash1 = $1, hash2 = $2, hash3 = $3, hash4 = $4, hash5 = $5 WHERE id = $6",
-                            hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,
-                        ).execute(db_pool).await.to_racetime()?;
+                        for race_id in &race_ids {
+                            sqlx::query!(
+                                "UPDATE races SET hash1 = $1, hash2 = $2, hash3 = $3, hash4 = $4, hash5 = $5 WHERE id = $6",
+                                hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, *race_id as _,
+                            ).execute(db_pool).await.to_racetime()?;
+                        }
                         if let Some(preset) = rsl_preset {
                             match seed.files.as_ref().expect("received seed with no files") {
                                 seed::Files::AlttprDoorRando { .. } => unreachable!(), // ALTTPR Mystery not supported
@@ -3068,7 +3086,10 @@ impl SeedRollUpdate {
                         }
                     }
                     if let Some(password) = extra.password {
-                        sqlx::query!("UPDATE races SET seed_password = $1 WHERE id = $2", password.into_iter().map(char::from).collect::<String>(), cal_event.race.id as _).execute(db_pool).await.to_racetime()?;
+                        let password = password.into_iter().map(char::from).collect::<String>();
+                        for race_id in &race_ids {
+                            sqlx::query!("UPDATE races SET seed_password = $1 WHERE id = $2", &password, *race_id as _).execute(db_pool).await.to_racetime()?;
+                        }
                     }
                 }
                 let seed_url = match seed.files.as_ref().expect("received seed with no files") {
@@ -3367,6 +3388,38 @@ async fn room_options(goal_str: String, goal_is_custom: bool, event: &event::Dat
         chat_message_delay: 0,
         info_user, info_bot, auto_start,
     }
+}
+
+async fn combined_room_member_title(transaction: &mut Transaction<'_, Postgres>, discord_ctx: &DiscordCtx, race: &Race) -> Result<String, Error> {
+    let matchup = match &race.entrants {
+        Entrants::Two([team1, team2]) => format!(
+            "{} vs. {}",
+            team1.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("TBD")),
+            team2.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("TBD")),
+        ),
+        Entrants::Three([team1, team2, team3]) => format!(
+            "{} vs. {} vs. {}",
+            team1.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("TBD")),
+            team2.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("TBD")),
+            team3.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("TBD")),
+        ),
+        Entrants::Named(entrants) => entrants.clone(),
+        Entrants::Open | Entrants::Count { .. } => "TBD".to_owned(),
+    };
+    let game_suffix = race.game.map(|g| format!(" (G{})", g)).unwrap_or_default();
+    Ok(if let Some(phase) = &race.phase {
+        let short_phase = phase.split_once(" - ").map(|(before, _)| before).unwrap_or(phase.as_str());
+        if let Some(round) = &race.round {
+            let short_round = round.replace("Round ", "R");
+            format!("{} {}{} - {}", short_phase, short_round, game_suffix, matchup)
+        } else {
+            format!("{}{} - {}", short_phase, game_suffix, matchup)
+        }
+    } else if let Some(round) = &race.round {
+        format!("{}{} - {}", round, game_suffix, matchup)
+    } else {
+        format!("{}{}", matchup, game_suffix)
+    })
 }
 
 async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl_preset: Option<rsl::Preset>, show_password: bool, transaction: &mut Transaction<'_, Postgres>, game_id: i32) -> Result<(), Error> {
@@ -4406,6 +4459,36 @@ impl RaceHandler<GlobalState> for Handler {
                             entrants.push(member);
                         }
                         Err(msg) => ctx.say(msg).await?,
+                    }
+                }
+                if let Some(companion_race_id) = cal_event.race.companion_race_id {
+                    let companion_event = cal::Event {
+                        race: cal::Race::from_id(&mut transaction, &ctx.global_state.http_client, companion_race_id).await.to_racetime()?,
+                        kind: cal::EventKind::Normal,
+                    };
+                    let companion_event_data = companion_event.race.event(&mut transaction).await.to_racetime()?;
+                    for member in companion_event.racetime_users_to_invite(&mut transaction, &*ctx.global_state.discord_ctx.read().await, &companion_event_data).await.to_racetime()? {
+                        match member {
+                            Ok(member) => {
+                                if let Some(entrant) = data.entrants.iter().find(|entrant| entrant.user.as_ref().is_some_and(|user| user.id == member)) {
+                                    match entrant.status.value {
+                                        EntrantStatusValue::Requested => ctx.accept_request(&member).await?,
+                                        EntrantStatusValue::Invited |
+                                        EntrantStatusValue::Declined |
+                                        EntrantStatusValue::Ready |
+                                        EntrantStatusValue::NotReady |
+                                        EntrantStatusValue::InProgress |
+                                        EntrantStatusValue::Done |
+                                        EntrantStatusValue::Dnf |
+                                        EntrantStatusValue::Dq => {}
+                                    }
+                                } else {
+                                    ctx.invite_user(&member).await?;
+                                }
+                                entrants.push(member);
+                            }
+                            Err(msg) => ctx.say(msg).await?,
+                        }
                     }
                 }
                 if !matches!(data.status.value, RaceStatusValue::Pending | RaceStatusValue::InProgress) {
@@ -6631,7 +6714,15 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
         RaceHandleMode::Notify => Err("please get your equipment and report to the tournament room"),
         RaceHandleMode::RaceTime => match racetime::authorize_with_host(host_info, &client_id, &client_secret, http_client).await {
             Ok((access_token, _)) => {
-                let info_user = if_chain! {
+                let info_user = if let Some(companion_race_id) = cal_event.race.companion_race_id {
+                    let companion = Race::from_id(&mut *transaction, http_client, companion_race_id).await.to_racetime()?;
+                    format!(
+                        "{} / {}",
+                        combined_room_member_title(&mut *transaction, discord_ctx, &cal_event.race).await?,
+                        combined_room_member_title(&mut *transaction, discord_ctx, &companion).await?,
+                    )
+                } else {
+                    if_chain! {
                     if let French = event.language;
                     if let (Some(phase), Some(round)) = (cal_event.race.phase.as_ref(), cal_event.race.round.as_ref());
                     if let Some(Some(phase_round)) = sqlx::query_scalar!("SELECT display_fr FROM phase_round_options WHERE series = $1 AND event = $2 AND phase = $3 AND round = $4", event.series as _, &event.event, phase, round).fetch_optional(&mut **transaction).await.to_racetime()?;
@@ -6733,6 +6824,7 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                             info_user.push_str(&game.to_string());
                         }
                         info_user
+                    }
                     }
                 };
                 let schedule_goal = if let Some(round) = cal_event.race.round.as_deref().and_then(|r| r.strip_suffix(" Weekly")) {
@@ -7049,7 +7141,7 @@ pub(crate) enum PrepareSeedsError {
 
 async fn prepare_seeds(global_state: Arc<GlobalState>, mut seed_cache_rx: watch::Receiver<()>, mut shutdown: rocket::Shutdown) -> Result<(), PrepareSeedsError> {
     'outer: loop {
-        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND room IS NULL AND async_room1 IS NULL AND async_room2 IS NULL AND async_room3 IS NULL AND file_stem IS NULL AND tfb_uuid IS NULL"#).fetch_all(&global_state.db_pool).await? {
+        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND room IS NULL AND async_room1 IS NULL AND async_room2 IS NULL AND async_room3 IS NULL AND file_stem IS NULL AND tfb_uuid IS NULL AND NOT EXISTS (SELECT 1 FROM races r2 WHERE r2.companion_race_id = races.id)"#).fetch_all(&global_state.db_pool).await? {
             let mut transaction = global_state.db_pool.begin().await?;
             let race = Race::from_id(&mut transaction, &global_state.http_client, id).await?;
             let event = race.event(&mut transaction).await?;
@@ -7322,6 +7414,14 @@ async fn create_rooms(global_state: Arc<GlobalState>, mut shutdown: rocket::Shut
                                             Err(e) => eprintln!("Failed to create admin DM channel: {}", e),
                                         }
                                     }
+                                }
+                            }
+                            if let Some(companion_race_id) = cal_event.race.companion_race_id {
+                                let mut transaction = global_state.db_pool.begin().await?;
+                                let companion = Race::from_id(&mut transaction, &global_state.http_client, companion_race_id).await?;
+                                transaction.commit().await?;
+                                if let Some(thread) = companion.scheduling_thread {
+                                    try_discord_send(|| thread.say(&*ctx, &msg), "post shared race room message to companion scheduling thread").await;
                                 }
                             }
                         }

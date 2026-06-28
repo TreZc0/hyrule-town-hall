@@ -451,6 +451,7 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
             round,
             custom_title: None,
             custom_create_room: true,
+            companion_race_id: None,
         });
         Ok(None)
     }

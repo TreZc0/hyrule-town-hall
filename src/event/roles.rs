@@ -4139,14 +4139,25 @@ pub(crate) async fn match_signup_page_get(
     event: &str,
     race_id: Id<Races>,
     lang: Option<Language>,
-) -> Result<RawHtml<String>, StatusOrError<Error>> {
+) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
+    if let Some(primary_id) = sqlx::query_scalar!(
+        r#"SELECT id AS "id: Id<Races>" FROM races WHERE companion_race_id = $1"#,
+        race_id as _,
+    )
+    .fetch_optional(&mut *transaction)
+    .await? {
+        return Ok(RedirectOrContent::Redirect(Redirect::to(match lang {
+            Some(lang) => format!("/event/{}/{}/races/{}/signups?lang={}", series.slug(), event, primary_id, lang.short_code()),
+            None => format!("/event/{}/{}/races/{}/signups", series.slug(), event, primary_id),
+        })))
+    }
     let ctx = Context::default();
     let uri = HttpOrigin::parse_owned(format!("/event/{}/{}/races/{}", series.slug(), event, race_id)).unwrap();
-    Ok(match_signup_page(transaction, me, &Origin(uri.clone()), data, race_id, ctx, csrf, lang).await?)
+    Ok(RedirectOrContent::Content(match_signup_page(transaction, me, &Origin(uri.clone()), data, race_id, ctx, csrf, lang).await?))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -4181,6 +4192,14 @@ pub(crate) async fn withdraw_signup(
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
+    if let Some(primary_id) = sqlx::query_scalar!(
+        r#"SELECT id AS "id: Id<Races>" FROM races WHERE companion_race_id = $1"#,
+        race_id as _,
+    )
+    .fetch_optional(&mut *transaction)
+    .await? {
+        return Ok(RedirectOrContent::Redirect(Redirect::to(format!("/event/{}/{}/races/{}/signups", series.slug(), event, primary_id))))
+    }
     let mut form = form.into_inner();
     form.verify(&csrf);
 

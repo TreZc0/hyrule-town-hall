@@ -394,12 +394,21 @@ struct Race(cal::Race);
     }
 
     /// The race room URL. Null if no room has been opened yet or if this race is asynced.
-    async fn room(&self) -> Option<&str> {
+    async fn room(&self, ctx: &Context<'_>) -> sqlx::Result<Option<String>> {
         if let RaceSchedule::Live { ref room, .. } = self.0.schedule {
-            room.as_ref().map(|url| url.as_str())
-        } else {
-            None
+            if let Some(room) = room {
+                return Ok(Some(room.to_string()))
+            }
         }
+        db!(db = ctx; {
+            Ok(sqlx::query_scalar!(
+                "SELECT room FROM races WHERE companion_race_id = $1 AND room IS NOT NULL",
+                self.0.id as _,
+            )
+            .fetch_optional(&mut **db)
+            .await?
+            .flatten())
+        })
     }
 
     /// A categorization of races within the event, e.g. “Swiss”, “Challenge Cup”, “Live Qualifier”, “Top 8”, “Groups”, or “Bracket”. Combine with round, entrants, and game for a human-readable description of the race.

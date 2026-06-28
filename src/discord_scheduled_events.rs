@@ -101,12 +101,18 @@ async fn resolve_event_location(
 /// Generate Discord event title from race data
 async fn generate_event_title(
     race: &Race,
+    companion: Option<&Race>,
     event_config: &EventData<'_>,
     transaction: &mut Transaction<'_, Postgres>,
     ctx: &DiscordCtx,
 ) -> Result<String, Error> {
     if let Some(custom_title) = &race.custom_title {
-        return Ok(format!("{}: {}", event_config.display_name, custom_title));
+        let mut title = format!("{}: {}", event_config.display_name, custom_title);
+        if let Some(companion) = companion {
+            title.push_str(" / ");
+            title.push_str(&companion.matchup_label(transaction, ctx).await?);
+        }
+        return Ok(title);
     }
 
     let mut title = String::new();
@@ -153,15 +159,22 @@ async fn generate_event_title(
     if let Some(game) = race.game {
         title.push_str(&format!(" (Game {})", game));
     }
+    if let Some(companion) = companion {
+        title.push_str(" / ");
+        title.push_str(&companion.matchup_label(transaction, ctx).await?);
+    }
 
     Ok(title)
 }
 
 /// Generate Discord event description
-fn generate_event_description(
+async fn generate_event_description(
     race: &Race,
+    companion: Option<&Race>,
     event_config: &EventData<'_>,
-) -> String {
+    transaction: &mut Transaction<'_, Postgres>,
+    ctx: &DiscordCtx,
+) -> Result<String, Error> {
     let mut desc = String::new();
 
     // Add event name
@@ -215,7 +228,25 @@ fn generate_event_description(
         }
     }
 
-    desc
+    if let Some(companion) = companion {
+        desc.push_str("\n**Shared race room:**\n");
+        desc.push_str(&format!("This scheduled event covers this race and {} for restream purposes.\n", companion.matchup_label(transaction, ctx).await?));
+        desc.push_str("Only each runner's originally assigned matchup result counts for tournament progression.\n");
+    }
+
+    Ok(desc)
+}
+
+async fn load_companion_race(
+    transaction: &mut Transaction<'_, Postgres>,
+    http_client: &reqwest::Client,
+    race: &Race,
+) -> Result<Option<Race>, Error> {
+    Ok(if let Some(companion_race_id) = race.companion_race_id {
+        Some(Race::from_id(transaction, http_client, companion_race_id).await?)
+    } else {
+        None
+    })
 }
 
 /// Create a Discord scheduled event for a race
@@ -231,6 +262,13 @@ pub(crate) async fn create_discord_scheduled_event(
     let RaceSchedule::Live { start, .. } = race.schedule else {
         return Ok(()); // Only create for live races
     };
+
+    if race.companion_primary_id(transaction).await?.is_some() {
+        if race.discord_scheduled_event_id.is_some() {
+            delete_discord_scheduled_event(ctx, transaction, race, event_config).await?;
+        }
+        return Ok(())
+    }
 
     if !should_create_discord_event(race, event_config) {
         return Ok(());
@@ -248,8 +286,9 @@ pub(crate) async fn create_discord_scheduled_event(
     }
 
     // Generate event content
-    let title = generate_event_title(race, event_config, transaction, ctx).await?;
-    let description = generate_event_description(race, event_config);
+    let companion = load_companion_race(transaction, http_client, race).await?;
+    let title = generate_event_title(race, companion.as_ref(), event_config, transaction, ctx).await?;
+    let description = generate_event_description(race, companion.as_ref(), event_config, transaction, ctx).await?;
     let location = resolve_event_location(transaction, http_client, race, event_config).await?;
 
     // Calculate end time (start + 3 hours default)
@@ -292,6 +331,10 @@ pub(crate) async fn update_discord_scheduled_event(
         return delete_discord_scheduled_event(ctx, transaction, &mut race.clone(), event_config).await;
     };
 
+    if race.companion_primary_id(transaction).await?.is_some() {
+        return delete_discord_scheduled_event(ctx, transaction, &mut race.clone(), event_config).await;
+    }
+
     if !should_create_discord_event(race, event_config) {
         // No longer meets criteria, delete the event
         return delete_discord_scheduled_event(ctx, transaction, &mut race.clone(), event_config).await;
@@ -326,8 +369,9 @@ pub(crate) async fn update_discord_scheduled_event(
         }
 
         // Create a new event
-        let title = generate_event_title(race, event_config, transaction, ctx).await?;
-        let description = generate_event_description(race, event_config);
+        let companion = load_companion_race(transaction, http_client, race).await?;
+        let title = generate_event_title(race, companion.as_ref(), event_config, transaction, ctx).await?;
+        let description = generate_event_description(race, companion.as_ref(), event_config, transaction, ctx).await?;
         let location = resolve_event_location(transaction, http_client, race, event_config).await?;
         let end_time = start + TimeDelta::hours(3);
 
@@ -352,8 +396,9 @@ pub(crate) async fn update_discord_scheduled_event(
     }
 
     // Generate updated content
-    let title = generate_event_title(race, event_config, transaction, ctx).await?;
-    let description = generate_event_description(race, event_config);
+    let companion = load_companion_race(transaction, http_client, race).await?;
+    let title = generate_event_title(race, companion.as_ref(), event_config, transaction, ctx).await?;
+    let description = generate_event_description(race, companion.as_ref(), event_config, transaction, ctx).await?;
     let location = resolve_event_location(transaction, http_client, race, event_config).await?;
 
     let end_time = start + TimeDelta::hours(3);
@@ -373,7 +418,7 @@ pub(crate) async fn update_discord_scheduled_event(
 /// Delete a Discord scheduled event
 pub(crate) async fn delete_discord_scheduled_event(
     ctx: &DiscordCtx,
-    _transaction: &mut Transaction<'_, Postgres>,
+    transaction: &mut Transaction<'_, Postgres>,
     race: &mut Race,
     event_config: &EventData<'_>,
 ) -> Result<(), Error> {
@@ -388,6 +433,9 @@ pub(crate) async fn delete_discord_scheduled_event(
 
     // Clear the stored ID
     race.discord_scheduled_event_id = None;
+    sqlx::query!("UPDATE races SET discord_scheduled_event_id = NULL WHERE id = $1", race.id as _)
+        .execute(&mut **transaction)
+        .await?;
 
     Ok(())
 }
