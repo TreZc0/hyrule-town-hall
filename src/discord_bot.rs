@@ -2108,29 +2108,45 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             // --- Room-creation transaction (inside new_room_lock, same as /schedule pattern) ---
                             let mut transaction = db_pool.begin().await?;
                             lock!(new_room_lock = new_room_lock; {
-                                match racetime_bot::create_room(
-                                    &mut transaction,
-                                    ctx,
-                                    &racetime_host,
-                                    &racetime_config.client_id,
-                                    &racetime_config.client_secret,
-                                    &http_client,
-                                    clean_shutdown,
-                                    &extra_room_senders,
-                                    &cal_event,
-                                    &event,
-                                ).await? {
-                                    Some((_, msg, _)) => {
-                                        transaction.commit().await?;
-                                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                                            .content(format!("New room created: {msg}"))
-                                        ).await?;
-                                    }
-                                    None => {
-                                        transaction.commit().await?;
-                                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                                            .content("Could not create a new room (race may not be eligible). Please contact an organizer.")
-                                        ).await?;
+                                // TOCTOU guard: re-read the room column inside the lock so a second
+                                // concurrent invocation that also saw room=None before acquiring the
+                                // lock does not call create_room a second time.
+                                let current_room = sqlx::query_scalar!(
+                                    r#"SELECT room FROM races WHERE id = $1"#,
+                                    cal_event.race.id as _
+                                )
+                                .fetch_one(&mut *transaction)
+                                .await?;
+                                if current_room.is_some() {
+                                    transaction.commit().await?;
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
+                                        .content("A room was already created (another request beat you to it).")
+                                    ).await?;
+                                } else {
+                                    match racetime_bot::create_room(
+                                        &mut transaction,
+                                        ctx,
+                                        &racetime_host,
+                                        &racetime_config.client_id,
+                                        &racetime_config.client_secret,
+                                        &http_client,
+                                        clean_shutdown,
+                                        &extra_room_senders,
+                                        &cal_event,
+                                        &event,
+                                    ).await? {
+                                        Some((_, msg, _)) => {
+                                            transaction.commit().await?;
+                                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                                .content(format!("New room created: {msg}"))
+                                            ).await?;
+                                        }
+                                        None => {
+                                            transaction.commit().await?;
+                                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                                .content("Could not create a new room (race may not be eligible). Please contact an organizer.")
+                                            ).await?;
+                                        }
                                     }
                                 }
                             });
