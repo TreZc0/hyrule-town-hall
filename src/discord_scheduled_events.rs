@@ -18,6 +18,8 @@ use {
 
 pub(crate) type DiscordCtx = serenity::all::Context;
 
+const MAX_DISCORD_EVENT_TITLE_CHARS: usize = 100;
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
     #[error(transparent)] Serenity(#[from] serenity::Error),
@@ -98,6 +100,83 @@ async fn resolve_event_location(
     })
 }
 
+fn discord_event_title(title: String) -> String {
+    if title.chars().count() <= MAX_DISCORD_EVENT_TITLE_CHARS {
+        title
+    } else {
+        format!("{}...", title.chars().take(MAX_DISCORD_EVENT_TITLE_CHARS - 3).collect::<String>())
+    }
+}
+
+fn compact_title_label(race: &Race) -> String {
+    let phase = race.phase.as_deref()
+        .map(|phase| phase
+            .replace("Winners", "W")
+            .replace("Winner", "W")
+            .replace("Losers", "L")
+            .replace("Loser", "L")
+            .replace("Lower", "L")
+            .replace("Bracket", "")
+            .replace("Quarterfinal", "QF")
+            .replace("Semifinal", "SF")
+            .replace("Final", "F")
+            .split_whitespace()
+            .join(" "));
+    let round = race.round.as_deref()
+        .map(|round| round
+            .replace("Round ", "R")
+            .replace("Quarterfinal", "QF")
+            .replace("Semifinal", "SF")
+            .replace("Final", "F"));
+    let game = race.game.map(|game| format!("G{game}"));
+    [phase, round, game].into_iter().flatten().join(" ")
+}
+
+async fn compact_title_matchup(
+    race: &Race,
+    transaction: &mut Transaction<'_, Postgres>,
+    ctx: &DiscordCtx,
+) -> Result<String, Error> {
+    Ok(match &race.entrants {
+        Entrants::Two([p1, p2]) => {
+            let p1_name = p1.name(transaction, ctx).await?.unwrap_or(Cow::Borrowed("TBD"));
+            let p2_name = p2.name(transaction, ctx).await?.unwrap_or(Cow::Borrowed("TBD"));
+            format!("{p1_name}/{p2_name}")
+        }
+        Entrants::Three([p1, p2, p3]) => {
+            let p1_name = p1.name(transaction, ctx).await?.unwrap_or(Cow::Borrowed("TBD"));
+            let p2_name = p2.name(transaction, ctx).await?.unwrap_or(Cow::Borrowed("TBD"));
+            let p3_name = p3.name(transaction, ctx).await?.unwrap_or(Cow::Borrowed("TBD"));
+            format!("{p1_name}/{p2_name}/{p3_name}")
+        }
+        Entrants::Named(name) => name.clone(),
+        Entrants::Open | Entrants::Count { .. } => "Open Race".to_owned(),
+    })
+}
+
+async fn compact_combined_event_title(
+    race: &Race,
+    companion: &Race,
+    transaction: &mut Transaction<'_, Postgres>,
+    ctx: &DiscordCtx,
+) -> Result<String, Error> {
+    let primary_label = compact_title_label(race);
+    let companion_label = compact_title_label(companion);
+    let primary_matchup = compact_title_matchup(race, transaction, ctx).await?;
+    let companion_matchup = compact_title_matchup(companion, transaction, ctx).await?;
+    Ok(if primary_label == companion_label {
+        if primary_label.is_empty() {
+            format!("{primary_matchup} & {companion_matchup}")
+        } else {
+            format!("{primary_label} - {primary_matchup} & {companion_matchup}")
+        }
+    } else {
+        let primary = if primary_label.is_empty() { primary_matchup } else { format!("{primary_label} - {primary_matchup}") };
+        let companion = if companion_label.is_empty() { companion_matchup } else { format!("{companion_label} - {companion_matchup}") };
+        format!("{primary} & {companion}")
+    })
+}
+
 /// Generate Discord event title from race data
 async fn generate_event_title(
     race: &Race,
@@ -112,7 +191,11 @@ async fn generate_event_title(
             title.push_str(" / ");
             title.push_str(&companion.matchup_label(transaction, ctx).await?);
         }
-        return Ok(title);
+        return Ok(discord_event_title(title));
+    }
+
+    if let Some(companion) = companion {
+        return Ok(discord_event_title(compact_combined_event_title(race, companion, transaction, ctx).await?));
     }
 
     let mut title = String::new();
@@ -164,7 +247,7 @@ async fn generate_event_title(
         title.push_str(&companion.matchup_label(transaction, ctx).await?);
     }
 
-    Ok(title)
+    Ok(discord_event_title(title))
 }
 
 /// Generate Discord event description
