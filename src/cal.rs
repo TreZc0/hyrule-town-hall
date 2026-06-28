@@ -2474,6 +2474,7 @@ pub(crate) async fn race_table(
     };
     let mut companion_display_starts = HashMap::new();
     let mut combined_race_links = HashMap::new();
+    let mut primary_races_by_companion = HashMap::new();
     if !displayed_race_ids.is_empty() {
         let combined_rows = sqlx::query!(
             r#"SELECT id AS "primary_id: Id<Races>", companion_race_id AS "companion_race_id: Id<Races>", start AS "start!"
@@ -2489,21 +2490,22 @@ pub(crate) async fn race_table(
             let Some(companion_race_id) = row.companion_race_id else {
                 continue
             };
-            let primary_title = if let Some(primary) = races.iter().find(|race| race.id == row.primary_id) {
-                primary.matchup_label(transaction, discord_ctx).await?
+            let primary_race = if let Some(primary) = races.iter().find(|race| race.id == row.primary_id) {
+                (*primary).clone()
             } else {
                 Race::from_id(transaction, http_client, row.primary_id).await?
-                    .matchup_label(transaction, discord_ctx).await?
             };
-            let companion_title = if let Some(companion) = races.iter().find(|race| race.id == companion_race_id) {
-                companion.matchup_label(transaction, discord_ctx).await?
+            let companion_race = if let Some(companion) = races.iter().find(|race| race.id == companion_race_id) {
+                (*companion).clone()
             } else {
                 Race::from_id(transaction, http_client, companion_race_id).await?
-                    .matchup_label(transaction, discord_ctx).await?
             };
+            let primary_title = primary_race.matchup_label(transaction, discord_ctx).await?;
+            let companion_title = companion_race.matchup_label(transaction, discord_ctx).await?;
             if displayed_race_ids.contains(&i64::from(companion_race_id)) {
                 companion_display_starts.insert(companion_race_id, (row.primary_id, row.start, primary_title.clone()));
                 combined_race_links.insert(companion_race_id, (row.primary_id, primary_title));
+                primary_races_by_companion.insert(companion_race_id, primary_race);
             }
             if displayed_race_ids.contains(&i64::from(row.primary_id)) {
                 combined_race_links.insert(row.primary_id, (companion_race_id, companion_title));
@@ -2578,6 +2580,8 @@ pub(crate) async fn race_table(
                                 hash_map::Entry::Vacant(entry) => entry.insert(race.event(&mut *transaction).await?),
                             }, true)
                         };
+                        @let restream_race = primary_races_by_companion.get(&race.id).unwrap_or(race);
+                        @let volunteer_race_id = companion_display_starts.get(&race.id).map(|(primary_id, _, _)| *primary_id).unwrap_or(race.id);
                         td {
                             @match race.schedule {
                                 RaceSchedule::Unscheduled => {}
@@ -2712,11 +2716,11 @@ pub(crate) async fn race_table(
                         }
                         td {
                             div(class = "favicon-container") {
-                                @for (language, video_url) in &race.video_urls {
+                                @for (language, video_url) in &restream_race.video_urls {
                                     a(class = "favicon", title = format!("{language} restream"), href = video_url.to_string(), target = "_blank") : favicon(video_url);
                                 }
-                                @if options.show_multistreams && race.video_urls.is_empty() {
-                                    @if let Some(multistream_url) = race.multistream_url(&mut *transaction, http_client, &event).await? {
+                                @if options.show_multistreams && restream_race.video_urls.is_empty() {
+                                    @if let Some(multistream_url) = restream_race.multistream_url(&mut *transaction, http_client, &event).await? {
                                         a(class = "favicon", title = "multistream", href = multistream_url.to_string(), target = "_blank") : favicon(&multistream_url);
                                     }
                                 }
@@ -2746,7 +2750,7 @@ pub(crate) async fn race_table(
                                         RaceSchedule::Live { end, .. } => end.is_none_or(|end_time| end_time > Utc::now()),
                                         RaceSchedule::Async { .. } => false, // asyncs not eligible
                                     };
-                                    @let all_teams_consented = race.restream_consent_required || race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                    @let all_teams_consented = restream_race.restream_consent_required || restream_race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
                                     @if scheduled && all_teams_consented {
                                         @if let Some(user) = user {
                                             @let is_admin = u64::from(user.id) == User::GLOBAL_ADMIN_USER_IDS[0];
@@ -2761,14 +2765,14 @@ pub(crate) async fn race_table(
                                             @let is_restreamer = is_event_restreamer || is_game_restreamer;
                                             @let can_inline_edit = show_event && (options.can_edit || is_admin || is_organizer || is_restreamer);
                                             @if is_organizer || is_restreamer {
-                                                a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id, _))) : "Manage Volunteers";
+                                                a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, volunteer_race_id, _))) : "Manage Volunteers";
                                                 @if can_inline_edit {
                                                     : " | ";
                                                     a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
                                                 }
                                             } else if let Some(approved_roles) = approved_role_binding_ids {
                                                 @if !approved_roles.is_empty() {
-                                                    a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, race.id, _))) : "Volunteer";
+                                                    a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, volunteer_race_id, _))) : "Volunteer";
                                                     @if can_inline_edit {
                                                         : " | ";
                                                         a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
@@ -2873,13 +2877,13 @@ pub(crate) async fn race_table(
                                     } else if options.can_edit {
                                         @match race.schedule {
                                             RaceSchedule::Live { .. } => {
-                                                @let all_teams_consented = race.restream_consent_required || race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                                @let all_teams_consented = restream_race.restream_consent_required || restream_race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
                                                 @if all_teams_consented {
-                                                    a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
+                                                    a(class = "clean_button", href = uri!(crate::cal::edit_race(restream_race.series, &restream_race.event, restream_race.id, Some(uri)))) : "Edit Restreams";
                                                 }
                                             }
                                             RaceSchedule::Async { .. } | RaceSchedule::Unscheduled => {
-                                                a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit Restreams";
+                                                a(class = "clean_button", href = uri!(crate::cal::edit_race(restream_race.series, &restream_race.event, restream_race.id, Some(uri)))) : "Edit Restreams";
                                             }
                                         }
                                     }
@@ -2890,9 +2894,9 @@ pub(crate) async fn race_table(
                             @if race.is_ended() {
                                 @match race.schedule {
                                     RaceSchedule::Live { .. } => {
-                                        @let all_teams_consented = race.restream_consent_required || race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                        @let all_teams_consented = restream_race.restream_consent_required || restream_race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
                                         @if all_teams_consented {
-                                            @let signups = Signup::for_race(&mut *transaction, race.id).await?;
+                                            @let signups = Signup::for_race(&mut *transaction, volunteer_race_id).await?;
                                             @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
 
                                             @if !confirmed_signups.is_empty() {
@@ -2982,9 +2986,9 @@ pub(crate) async fn race_table(
                             } else {
                                 @match race.schedule {
                                     RaceSchedule::Live { .. } => {
-                                        @let all_teams_consented = race.restream_consent_required || race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
+                                        @let all_teams_consented = restream_race.restream_consent_required || restream_race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
                                         @if all_teams_consented {
-                                            @let signups = Signup::for_race(&mut *transaction, race.id).await?;
+                                            @let signups = Signup::for_race(&mut *transaction, volunteer_race_id).await?;
                                             @let pending_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Pending)).collect::<Vec<_>>();
                                             @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
 
@@ -3907,6 +3911,13 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
         false
     };
     let is_admin = me.as_ref().map_or(false, |me| User::GLOBAL_ADMIN_USER_IDS.contains(&u64::from(me.id)));
+    let companion_primary_restream = if let Some(primary_id) = race.companion_primary_id(&mut transaction).await? {
+        let primary = Race::from_id(&mut transaction, &reqwest::Client::new(), primary_id).await?;
+        let primary_label = primary.matchup_label(&mut transaction, discord_ctx).await?;
+        Some((primary_id, primary_label, primary.video_urls.clone(), primary.restreamers.clone()))
+    } else {
+        None
+    };
     let companion_options = if (is_organizer || is_admin) && matches!(race.schedule, RaceSchedule::Live { .. }) {
         let start = match race.schedule {
             RaceSchedule::Live { start, .. } => Some(start),
@@ -4022,7 +4033,53 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                     }
                 }
             }
-            {
+            @if let Some((primary_id, primary_label, primary_video_urls, primary_restreamers)) = &companion_primary_restream {
+                fieldset {
+                    legend : "Restream settings";
+                    p(class = "help") {
+                        : "This race uses the shared restream setup from ";
+                        a(href = uri!(edit_race(race.series, &*race.event, *primary_id, Some(uri.clone())))) : primary_label;
+                        : ". Edit restream URLs, restreamers, and volunteer coverage on the primary race.";
+                    }
+                    @if primary_video_urls.is_empty() && primary_restreamers.is_empty() {
+                        p : "No restream has been assigned on the primary race yet.";
+                    } else {
+                        table {
+                            thead {
+                                tr {
+                                    th;
+                                    th : "Restream URL";
+                                    th : "Restreamer";
+                                }
+                            }
+                            tbody {
+                                @for language in all::<Language>() {
+                                    @if primary_video_urls.contains_key(&language) || primary_restreamers.contains_key(&language) {
+                                        tr {
+                                            th : language;
+                                            td {
+                                                @if let Some(video_url) = primary_video_urls.get(&language) {
+                                                    a(href = video_url.to_string(), target = "_blank") : video_url;
+                                                }
+                                            }
+                                            td {
+                                                @if let Some(restreamer) = primary_restreamers.get(&language) {
+                                                    : restreamer;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if race.series == Series::League && !race.has_any_room() {
+                // restream data entered here would be automatically overwritten
+                fieldset {
+                    label : "To edit restream data, please use the League website.";
+                }
+            } else {
                 table {
                     thead {
                         tr {
@@ -4111,6 +4168,8 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
             @if (is_organizer || is_admin) && matches!(race.schedule, RaceSchedule::Live { .. }) {
                 fieldset {
                     legend : "Shared race room";
+                    p(class = "help") : "Use this when two scheduled 1v1 races should be run in one racetime.gg room for restream coverage. This race becomes the primary race: its start time drives the shared room opening and is shown as the synced time on the companion race.";
+                    p(class = "help") : "The companion race will not get its own racetime room, Discord scheduled event, ZSR export row, or volunteer post. Both matchups share the room, seed, restream volunteer workflow, and room announcement; tournament results are still reported separately for each original matchup.";
                     : form_field("companion_race_id", &mut errors, html! {
                         label(for = "companion_race_id") : "Companion race:";
                         select(name = "companion_race_id", id = "companion_race_id") {
@@ -4569,6 +4628,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
         // Check if user is an organizer for start date editing
         let is_organizer = event.organizers(&mut transaction).await?.contains(&me);
         let is_admin = User::GLOBAL_ADMIN_USER_IDS.contains(&u64::from(me.id));
+        let uses_primary_restream_settings = race.companion_primary_id(&mut transaction).await?.is_some();
 
         if is_organizer && race.is_custom() && value.custom_title.trim().is_empty() {
             form.context.push_error(form::Error::validation("Custom races need a title.").with_name("custom_title"));
@@ -4966,36 +5026,38 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
             }
         }
         let mut restreamers = HashMap::new();
-        for language in all() {
-            if let Some(video_url) = value.video_urls.get(&language) {
-                if !video_url.is_empty() {
-                    if let Err(e) = Url::parse(video_url) {
-                        form.context.push_error(form::Error::validation(format!("Failed to parse URL: {e}")).with_name(format!("video_urls.{}", language.short_code())));
-                    }
-                    if let Some(restreamer) = value.restreamers.get(&language) {
-                        if !restreamer.is_empty() {
-                            if restreamer == "me" {
-                                if let Some(ref racetime) = me.racetime {
-                                    restreamers.insert(language, racetime.id.clone());
-                                } else {
-                                    form.context.push_error(form::Error::validation("A racetime.gg account is required to restream races. Go to your profile and select \"Connect a racetime.gg account\".").with_name(format!("restreamers.{}", language.short_code()))); //TODO direct link
-                                }
-                            } else {
-                                match racetime_bot::parse_user(&mut transaction, http_client, restreamer).await {
-                                    Ok(racetime_id) => { restreamers.insert(language, racetime_id); }
-                                    Err(e @ (racetime_bot::ParseUserError::Format | racetime_bot::ParseUserError::IdNotFound | racetime_bot::ParseUserError::InvalidUrl | racetime_bot::ParseUserError::MidosHouseId | racetime_bot::ParseUserError::MidosHouseUserNoRacetime | racetime_bot::ParseUserError::UrlNotFound)) => {
-                                        form.context.push_error(form::Error::validation(e.to_string()).with_name(format!("restreamers.{}", language.short_code())));
+        if !uses_primary_restream_settings {
+            for language in all() {
+                if let Some(video_url) = value.video_urls.get(&language) {
+                    if !video_url.is_empty() {
+                        if let Err(e) = Url::parse(video_url) {
+                            form.context.push_error(form::Error::validation(format!("Failed to parse URL: {e}")).with_name(format!("video_urls.{}", language.short_code())));
+                        }
+                        if let Some(restreamer) = value.restreamers.get(&language) {
+                            if !restreamer.is_empty() {
+                                if restreamer == "me" {
+                                    if let Some(ref racetime) = me.racetime {
+                                        restreamers.insert(language, racetime.id.clone());
+                                    } else {
+                                        form.context.push_error(form::Error::validation("A racetime.gg account is required to restream races. Go to your profile and select \"Connect a racetime.gg account\".").with_name(format!("restreamers.{}", language.short_code()))); //TODO direct link
                                     }
-                                    Err(racetime_bot::ParseUserError::Reqwest(e)) => return Err(e.into()),
-                                    Err(racetime_bot::ParseUserError::Sql(e)) => return Err(e.into()),
-                                    Err(racetime_bot::ParseUserError::Wheel(e)) => return Err(e.into()),
+                                } else {
+                                    match racetime_bot::parse_user(&mut transaction, http_client, restreamer).await {
+                                        Ok(racetime_id) => { restreamers.insert(language, racetime_id); }
+                                        Err(e @ (racetime_bot::ParseUserError::Format | racetime_bot::ParseUserError::IdNotFound | racetime_bot::ParseUserError::InvalidUrl | racetime_bot::ParseUserError::MidosHouseId | racetime_bot::ParseUserError::MidosHouseUserNoRacetime | racetime_bot::ParseUserError::UrlNotFound)) => {
+                                            form.context.push_error(form::Error::validation(e.to_string()).with_name(format!("restreamers.{}", language.short_code())));
+                                        }
+                                        Err(racetime_bot::ParseUserError::Reqwest(e)) => return Err(e.into()),
+                                        Err(racetime_bot::ParseUserError::Sql(e)) => return Err(e.into()),
+                                        Err(racetime_bot::ParseUserError::Wheel(e)) => return Err(e.into()),
+                                    }
                                 }
                             }
                         }
-                    }
-                } else {
-                    if value.restreamers.get(&language).is_some_and(|restreamer| !restreamer.is_empty()) {
-                        form.context.push_error(form::Error::validation("Please either add a restream URL or remove the restreamer.").with_name(format!("restreamers.{}", language.short_code())));
+                    } else {
+                        if value.restreamers.get(&language).is_some_and(|restreamer| !restreamer.is_empty()) {
+                            form.context.push_error(form::Error::validation("Please either add a restream URL or remove the restreamer.").with_name(format!("restreamers.{}", language.short_code())));
+                        }
                     }
                 }
             }
@@ -5076,7 +5138,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
             // Save original video URLs to check if they changed
             let original_video_urls = race.video_urls.clone();
             
-            if race.series != Series::League || race.has_any_room() {
+            if !uses_primary_restream_settings && (race.series != Series::League || race.has_any_room()) {
                 race.video_urls = value.video_urls.iter().filter(|(_, video_url)| !video_url.is_empty()).map(|(language, video_url)| (*language, Url::parse(video_url).expect("validated"))).collect();
                 race.restreamers = restreamers;
             }
