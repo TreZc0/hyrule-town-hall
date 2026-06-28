@@ -202,7 +202,6 @@ pub(crate) struct CommandIds {
     pronoun_roles: CommandId,
     racing_role: CommandId,
     reset_race: CommandId,
-    #[allow(dead_code)] // removed when handler is wired in Task 3
     restart_room: CommandId,
     pub(crate) schedule: CommandId,
     pub(crate) schedule_async: CommandId,
@@ -1999,6 +1998,141 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 )).await?;
                                 transaction.rollback().await?;
                             }
+                        } else if interaction.data.id == command_ids.restart_room {
+                            // Only usable inside a scheduling thread
+                            let Some(_parent) = interaction.channel.as_ref().and_then(|ch| ch.parent_id) else {
+                                interaction.create_response(ctx, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("This command can only be used inside scheduling threads."),
+                                )).await?;
+                                return Ok(())
+                            };
+
+                            // Defer so we have time for DB + racetime.gg calls
+                            interaction.create_response(ctx, CreateInteractionResponse::Defer(
+                                CreateInteractionResponseMessage::new().ephemeral(false),
+                            )).await?;
+
+                            let (http_client, db_pool) = {
+                                let data = ctx.data.read().await;
+                                (
+                                    data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
+                                    data.get::<DbPool>().expect("database connection pool missing from Discord context").clone(),
+                                )
+                            };
+
+                            // --- Lookup transaction ---
+                            let mut transaction = db_pool.begin().await?;
+
+                            // include_started=true: start may already be in the past after inactivity cancellation
+                            let races = Race::for_scheduling_channel(
+                                &mut transaction, &http_client, interaction.channel_id(), None, true,
+                            ).await?;
+
+                            // Find a live-scheduled race whose room was cleared (inactivity cancellation).
+                            // Require start <= now to exclude upcoming races that simply haven't had a room
+                            // created yet (which would also have room: None but should not be restarted early).
+                            let race = races.into_iter().find(|r| match r.schedule {
+                                RaceSchedule::Live { room: None, start, .. } => start <= Utc::now(),
+                                _ => false,
+                            });
+
+                            let Some(race) = race else {
+                                transaction.commit().await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("No cancelled race found in this thread eligible for restart. \
+                                              The room may already exist or the race is not a live-scheduled race.")
+                                ).await?;
+                                return Ok(())
+                            };
+
+                            let event = race.event(&mut transaction).await?;
+
+                            // Auth: organizer OR a runner (MidosHouseTeam member or Discord entrant)
+                            let is_organizer = event.organizers(&mut transaction).await?
+                                .into_iter()
+                                .any(|o| o.discord.is_some_and(|d| d.id == interaction.user.id));
+
+                            let mut is_runner = false;
+                            if !is_organizer {
+                                let entrant_slice: &[Entrant] = match &race.entrants {
+                                    Entrants::Two(arr) => arr.as_slice(),
+                                    Entrants::Three(arr) => arr.as_slice(),
+                                    _ => &[],
+                                };
+                                'outer: for entrant in entrant_slice {
+                                    match entrant {
+                                        Entrant::Discord { id, .. } if *id == interaction.user.id => {
+                                            is_runner = true;
+                                            break;
+                                        }
+                                        Entrant::MidosHouseTeam(team) => {
+                                            for member in team.members(&mut transaction).await? {
+                                                if member.discord.is_some_and(|d| d.id == interaction.user.id) {
+                                                    is_runner = true;
+                                                    break 'outer;
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+
+                            if !is_organizer && !is_runner {
+                                transaction.commit().await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Only runners or organizers of this race can use `/restart-room`.")
+                                ).await?;
+                                return Ok(())
+                            }
+
+                            // Commit lookup transaction before room creation (handler must be able to find the race)
+                            transaction.commit().await?;
+
+                            let cal_event = cal::Event { race, kind: cal::EventKind::Normal };
+
+                            let (new_room_lock, racetime_host, racetime_config, clean_shutdown, extra_room_senders) = {
+                                let data = ctx.data.read().await;
+                                (
+                                    data.get::<NewRoomLock>().expect("new room lock missing from Discord context").clone(),
+                                    data.get::<RacetimeHost>().expect("racetime.gg host missing from Discord context").clone(),
+                                    data.get::<ConfigRaceTime>().expect("racetime.gg config missing from Discord context").clone(),
+                                    data.get::<CleanShutdown>().expect("clean shutdown state missing from Discord context").clone(),
+                                    data.get::<GlobalState>().expect("global state missing from Discord context").extra_room_senders.clone(),
+                                )
+                            };
+
+                            // --- Room-creation transaction (inside new_room_lock, same as /schedule pattern) ---
+                            let mut transaction = db_pool.begin().await?;
+                            lock!(new_room_lock = new_room_lock; {
+                                match racetime_bot::create_room(
+                                    &mut transaction,
+                                    ctx,
+                                    &racetime_host,
+                                    &racetime_config.client_id,
+                                    &racetime_config.client_secret,
+                                    &http_client,
+                                    clean_shutdown,
+                                    &extra_room_senders,
+                                    &cal_event,
+                                    &event,
+                                ).await? {
+                                    Some((_, msg, _)) => {
+                                        transaction.commit().await?;
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                                            .content(format!("New room created: {msg}"))
+                                        ).await?;
+                                    }
+                                    None => {
+                                        transaction.commit().await?;
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                                            .content("Could not create a new room (race may not be eligible). Please contact an organizer.")
+                                        ).await?;
+                                    }
+                                }
+                            });
                         } else if interaction.data.id == command_ids.schedule {
                             let game = interaction.data.options.get(1).map(|option| match option.value {
                                 CommandDataOptionValue::Integer(game) => i16::try_from(game).expect("game number out of range"),
