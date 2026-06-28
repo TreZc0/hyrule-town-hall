@@ -673,11 +673,12 @@ pub(crate) async fn build_race_title(
     let event_name = export.title.as_deref().unwrap_or(event_display_name);
 
     if let Some(companion) = companion {
+        let race_member = build_combined_member_title(transaction, race, export).await;
+        let companion_member = build_combined_member_title(transaction, companion, export).await;
         let mut title = format!(
-            "{}: {} / {}",
+            "{}: {}",
             event_name,
-            build_combined_member_title(transaction, race, export).await,
-            build_combined_member_title(transaction, companion, export).await,
+            format_combined_pair_title(race_member, companion_member),
         );
         if export.append_mode {
             if let Some(mode) = get_race_mode(race) {
@@ -760,20 +761,20 @@ async fn build_combined_member_title(
         Entrants::Two([e1, e2]) => {
             let name1 = get_entrant_name(transaction, e1).await.unwrap_or_else(|| "TBD".to_owned());
             let name2 = get_entrant_name(transaction, e2).await.unwrap_or_else(|| "TBD".to_owned());
-            format!("{} vs. {}", name1, name2)
+            format!("{}/{}", name1, name2)
         }
         Entrants::Three([e1, e2, e3]) => {
             let name1 = get_entrant_name(transaction, e1).await.unwrap_or_else(|| "TBD".to_owned());
             let name2 = get_entrant_name(transaction, e2).await.unwrap_or_else(|| "TBD".to_owned());
             let name3 = get_entrant_name(transaction, e3).await.unwrap_or_else(|| "TBD".to_owned());
-            format!("{} vs. {} vs. {}", name1, name2, name3)
+            format!("{}/{}/{}", name1, name2, name3)
         }
         _ => "TBD".to_owned(),
     };
     let game_suffix = race.game.map(|g| format!(" (G{})", g)).unwrap_or_default();
     if export.include_phase {
         if let Some(phase) = &race.phase {
-            let short_phase = phase.split_once(" - ").map(|(before, _)| before).unwrap_or(phase.as_str());
+            let short_phase = clean_combined_phase(phase.split_once(" - ").map(|(before, _)| before).unwrap_or(phase.as_str()));
             if let Some(round) = &race.round {
                 let short_round = round.replace("Round ", "R");
                 format!("{} {}{} - {}", short_phase, short_round, game_suffix, matchup)
@@ -788,10 +789,26 @@ async fn build_combined_member_title(
     } else if let Some(round) = &race.round {
         format!("{}{} - {}", round, game_suffix, matchup)
     } else if let Some(phase) = &race.phase {
-        format!("{}{} - {}", phase, game_suffix, matchup)
+        format!("{}{} - {}", clean_combined_phase(phase), game_suffix, matchup)
     } else {
         format!("{}{}", matchup, game_suffix)
     }
+}
+
+fn format_combined_pair_title(primary: String, companion: String) -> String {
+    match (primary.split_once(" - "), companion.split_once(" - ")) {
+        (Some((primary_prefix, primary_matchup)), Some((companion_prefix, companion_matchup))) if primary_prefix == companion_prefix => {
+            format!("{primary_prefix} - {primary_matchup} & {companion_matchup}")
+        }
+        _ => format!("{primary} & {companion}"),
+    }
+}
+
+fn clean_combined_phase(phase: &str) -> String {
+    phase
+        .split_whitespace()
+        .filter(|part| *part != "Bracket")
+        .join(" ")
 }
 
 /// Get the draft mode for a race if available
