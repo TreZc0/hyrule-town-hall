@@ -202,6 +202,8 @@ pub(crate) struct CommandIds {
     pronoun_roles: CommandId,
     racing_role: CommandId,
     reset_race: CommandId,
+    #[allow(dead_code)] // removed when handler is wired in Task 3
+    restart_room: CommandId,
     pub(crate) schedule: CommandId,
     pub(crate) schedule_async: CommandId,
     pub(crate) result_async: CommandId,
@@ -1215,6 +1217,16 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 commands.push(command);
                 idx
             };
+            let restart_room = {
+                let idx = commands.len();
+                commands.push(
+                    CreateCommand::new("restart-room")
+                        .kind(CommandType::ChatInput)
+                        .add_context(InteractionContext::Guild)
+                        .description("Recreates a race room that was cancelled due to inactivity."),
+                );
+                idx
+            };
             let schedule = {
                 let idx = commands.len();
                 commands.push(CreateCommand::new("schedule")
@@ -1473,6 +1485,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 pronoun_roles: commands[pronoun_roles].id,
                 racing_role: commands[racing_role].id,
                 reset_race: commands[reset_race].id,
+                restart_room: commands[restart_room].id,
                 schedule: commands[schedule].id,
                 schedule_async: commands[schedule_async].id,
                 result_async: commands[result_async].id,
