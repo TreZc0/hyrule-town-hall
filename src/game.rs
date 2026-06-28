@@ -13,6 +13,7 @@ pub(crate) struct Game {
     pub(crate) name: String,
     pub(crate) display_name: String,
     pub(crate) description: Option<String>,
+    pub(crate) discord_guild: Option<GuildId>,
     #[allow(dead_code)]
     pub(crate) created_at: DateTime<Utc>,
     #[allow(dead_code)]
@@ -34,7 +35,7 @@ pub(crate) struct GameRacetimeConnection {
 impl Game {
     pub(crate) async fn all(transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<Self>, GameError> {
         let rows = sqlx::query!(
-            r#"SELECT id, name, display_name, description, created_at, updated_at 
+            r#"SELECT id, name, display_name, description, discord_guild AS "discord_guild: PgSnowflake<GuildId>", created_at, updated_at
                FROM games ORDER BY display_name"#
         )
         .fetch_all(&mut **transaction)
@@ -47,6 +48,7 @@ impl Game {
                 name: row.name,
                 display_name: row.display_name,
                 description: row.description,
+                discord_guild: row.discord_guild.map(|PgSnowflake(id)| id),
                 created_at: row.created_at.expect("created_at should not be null"),
                 updated_at: row.updated_at.expect("updated_at should not be null"),
             })
@@ -55,7 +57,7 @@ impl Game {
 
     pub(crate) async fn from_name(transaction: &mut Transaction<'_, Postgres>, name: &str) -> Result<Option<Self>, GameError> {
         let row = sqlx::query!(
-            r#"SELECT id, name, display_name, description, created_at, updated_at 
+            r#"SELECT id, name, display_name, description, discord_guild AS "discord_guild: PgSnowflake<GuildId>", created_at, updated_at
                FROM games WHERE name = $1"#,
             name
         )
@@ -67,6 +69,7 @@ impl Game {
             name: row.name,
             display_name: row.display_name,
             description: row.description,
+            discord_guild: row.discord_guild.map(|PgSnowflake(id)| id),
             created_at: row.created_at.expect("created_at should not be null"),
             updated_at: row.updated_at.expect("updated_at should not be null"),
         }))
@@ -86,7 +89,7 @@ impl Game {
 
     pub(crate) async fn from_series(transaction: &mut Transaction<'_, Postgres>, series: Series) -> Result<Option<Self>, GameError> {
         let row = sqlx::query!(
-            r#"SELECT g.id, g.name, g.display_name, g.description, g.created_at, g.updated_at 
+            r#"SELECT g.id, g.name, g.display_name, g.description, g.discord_guild AS "discord_guild: PgSnowflake<GuildId>", g.created_at, g.updated_at
                FROM games g 
                JOIN game_series gs ON g.id = gs.game_id 
                WHERE gs.series = $1"#,
@@ -100,6 +103,7 @@ impl Game {
             name: row.name,
             display_name: row.display_name,
             description: row.description,
+            discord_guild: row.discord_guild.map(|PgSnowflake(id)| id),
             created_at: row.created_at.expect("created_at should not be null"),
             updated_at: row.updated_at.expect("updated_at should not be null"),
         }))
@@ -209,4 +213,4 @@ impl Game {
 
         Ok(count.unwrap_or(0) > 0)
     }
-} 
+}

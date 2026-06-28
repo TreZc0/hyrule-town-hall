@@ -13,6 +13,56 @@ use crate::{
 };
 use rocket::{uri, form::{Form, Contextual}};
 
+pub(crate) async fn assign_game_discord_role(
+    transaction: &mut Transaction<'_, Postgres>,
+    discord_ctx: &DiscordCtx,
+    game: &Game,
+    role_binding_id: Id<RoleBindings>,
+    discord_user_id: UserId,
+) -> sqlx::Result<()> {
+    let Some(discord_guild) = game.discord_guild else { return Ok(()) };
+    let discord_role_id = sqlx::query_scalar!(
+        r#"SELECT discord_role_id FROM role_bindings WHERE id = $1 AND game_id = $2"#,
+        role_binding_id as _,
+        game.id,
+    )
+    .fetch_optional(&mut **transaction)
+    .await?
+    .flatten();
+    let Some(discord_role_id) = discord_role_id else { return Ok(()) };
+    if let Ok(member) = discord_guild.member(discord_ctx, discord_user_id).await {
+        if let Err(e) = member.add_role(discord_ctx, RoleId::new(discord_role_id.try_into().unwrap())).await {
+            eprintln!("Failed to assign game Discord role {} to user {} in guild {}: {}", discord_role_id, discord_user_id, discord_guild, e);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn remove_game_discord_role(
+    transaction: &mut Transaction<'_, Postgres>,
+    discord_ctx: &DiscordCtx,
+    game: &Game,
+    role_binding_id: Id<RoleBindings>,
+    discord_user_id: UserId,
+) -> sqlx::Result<()> {
+    let Some(discord_guild) = game.discord_guild else { return Ok(()) };
+    let discord_role_id = sqlx::query_scalar!(
+        r#"SELECT discord_role_id FROM role_bindings WHERE id = $1 AND game_id = $2"#,
+        role_binding_id as _,
+        game.id,
+    )
+    .fetch_optional(&mut **transaction)
+    .await?
+    .flatten();
+    let Some(discord_role_id) = discord_role_id else { return Ok(()) };
+    if let Ok(member) = discord_guild.member(discord_ctx, discord_user_id).await {
+        if let Err(e) = member.remove_role(discord_ctx, RoleId::new(discord_role_id.try_into().unwrap())).await {
+            eprintln!("Failed to remove game Discord role {} from user {} in guild {}: {}", discord_role_id, discord_user_id, discord_guild, e);
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
     #[error(transparent)]
@@ -1029,6 +1079,15 @@ pub(crate) async fn apply_for_game_role(
             if binding.auto_approve {
                 if let Some(discord_user) = me.discord.as_ref() {
                     let discord_ctx_guard = discord_ctx.read().await;
+                    if let Err(e) = assign_game_discord_role(
+                        &mut transaction,
+                        &*discord_ctx_guard,
+                        &game,
+                        value.role_binding_id,
+                        discord_user.id,
+                    ).await {
+                        eprintln!("Failed to assign game Discord role for game binding: {}", e);
+                    }
                     if let Err(e) = assign_event_override_discord_roles(
                         &mut transaction,
                         &*discord_ctx_guard,
@@ -1145,6 +1204,15 @@ pub(crate) async fn forfeit_game_role(
 
             if let Some(discord_user) = me.discord.as_ref() {
                 let discord_ctx_guard = discord_ctx.read().await;
+                if let Err(e) = remove_game_discord_role(
+                    &mut transaction,
+                    &*discord_ctx_guard,
+                    &game,
+                    value.role_binding_id,
+                    discord_user.id,
+                ).await {
+                    eprintln!("Failed to remove game Discord role on forfeit: {}", e);
+                }
                 if let Err(e) = remove_event_override_discord_roles(
                     &mut transaction,
                     &*discord_ctx_guard,
@@ -1318,6 +1386,7 @@ pub(crate) async fn remove_game_role_binding(
 #[rocket::post("/games/<game_name>/roles/<request>/approve", data = "<form>")]
 pub(crate) async fn approve_game_role_request(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: Option<User>,
     game_name: &str,
     request: Id<RoleRequests>,
@@ -1337,19 +1406,22 @@ pub(crate) async fn approve_game_role_request(
         let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
         let is_global_admin = me.is_global_admin();
 
+        let role_request = RoleRequest::from_id(&mut transaction, request)
+            .await.map_err(Error::from)?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+
         // Look up the role binding language for restreamer permission check
         let role_binding_language = sqlx::query_scalar!(
-            r#"SELECT rb.language AS "language: Language" FROM role_requests rr JOIN role_bindings rb ON rr.role_binding_id = rb.id WHERE rr.id = $1"#,
-            request as _
+            r#"SELECT rb.language AS "language: Language" FROM role_requests rr JOIN role_bindings rb ON rr.role_binding_id = rb.id WHERE rr.id = $1 AND rb.game_id = $2"#,
+            request as _,
+            game.id,
         )
         .fetch_optional(&mut *transaction)
         .await.map_err(Error::from)?;
-
-        let is_game_restreamer = if let Some(lang) = role_binding_language {
-            game.is_restreamer(&mut transaction, &me, lang).await.map_err(Error::from)?
-        } else {
-            false
+        let Some(role_binding_language) = role_binding_language else {
+            return Err(StatusOrError::Status(Status::NotFound));
         };
+        let is_game_restreamer = game.is_restreamer(&mut transaction, &me, role_binding_language).await.map_err(Error::from)?;
 
         if !is_game_admin && !is_global_admin && !is_game_restreamer {
             return Err(StatusOrError::Status(Status::Forbidden));
@@ -1357,6 +1429,29 @@ pub(crate) async fn approve_game_role_request(
 
         // Update the role request status
         RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Approved).await.map_err(Error::from)?;
+
+        if let Some(user) = User::from_id(&mut *transaction, role_request.user_id).await.map_err(Error::from)? {
+            if let Some(discord_user) = user.discord {
+                let discord_ctx = discord_ctx.read().await;
+                if let Err(e) = assign_game_discord_role(
+                    &mut transaction,
+                    &*discord_ctx,
+                    &game,
+                    role_request.role_binding_id,
+                    discord_user.id,
+                ).await {
+                    eprintln!("Failed to assign game Discord role for approved request: {}", e);
+                }
+                if let Err(e) = assign_event_override_discord_roles(
+                    &mut transaction,
+                    &*discord_ctx,
+                    role_request.role_binding_id,
+                    discord_user.id,
+                ).await {
+                    eprintln!("Failed to assign event override Discord roles for approved game request: {}", e);
+                }
+            }
+        }
 
         transaction.commit().await.map_err(Error::from)?;
     }
@@ -1417,6 +1512,7 @@ pub(crate) async fn reject_game_role_request(
 #[rocket::post("/games/<game_name>/roles/<request>/revoke", data = "<form>")]
 pub(crate) async fn revoke_game_role_request(
     pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: Option<User>,
     game_name: &str,
     request: Id<RoleRequests>,
@@ -1436,18 +1532,21 @@ pub(crate) async fn revoke_game_role_request(
         let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
         let is_global_admin = me.is_global_admin();
 
+        let role_request = RoleRequest::from_id(&mut transaction, request)
+            .await.map_err(Error::from)?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+
         let role_binding_language = sqlx::query_scalar!(
-            r#"SELECT rb.language AS "language: Language" FROM role_requests rr JOIN role_bindings rb ON rr.role_binding_id = rb.id WHERE rr.id = $1"#,
-            request as _
+            r#"SELECT rb.language AS "language: Language" FROM role_requests rr JOIN role_bindings rb ON rr.role_binding_id = rb.id WHERE rr.id = $1 AND rb.game_id = $2"#,
+            request as _,
+            game.id,
         )
         .fetch_optional(&mut *transaction)
         .await.map_err(Error::from)?;
-
-        let is_game_restreamer = if let Some(lang) = role_binding_language {
-            game.is_restreamer(&mut transaction, &me, lang).await.map_err(Error::from)?
-        } else {
-            false
+        let Some(role_binding_language) = role_binding_language else {
+            return Err(StatusOrError::Status(Status::NotFound));
         };
+        let is_game_restreamer = game.is_restreamer(&mut transaction, &me, role_binding_language).await.map_err(Error::from)?;
 
         if !is_game_admin && !is_global_admin && !is_game_restreamer {
             return Err(StatusOrError::Status(Status::Forbidden));
@@ -1455,6 +1554,29 @@ pub(crate) async fn revoke_game_role_request(
 
         // Update the role request status to Aborted
         RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Aborted).await.map_err(Error::from)?;
+
+        if let Some(user) = User::from_id(&mut *transaction, role_request.user_id).await.map_err(Error::from)? {
+            if let Some(discord_user) = user.discord {
+                let discord_ctx = discord_ctx.read().await;
+                if let Err(e) = remove_game_discord_role(
+                    &mut transaction,
+                    &*discord_ctx,
+                    &game,
+                    role_request.role_binding_id,
+                    discord_user.id,
+                ).await {
+                    eprintln!("Failed to remove game Discord role for revoked request: {}", e);
+                }
+                if let Err(e) = remove_event_override_discord_roles(
+                    &mut transaction,
+                    &*discord_ctx,
+                    role_request.role_binding_id,
+                    discord_user.id,
+                ).await {
+                    eprintln!("Failed to remove event override Discord roles for revoked game request: {}", e);
+                }
+            }
+        }
 
         transaction.commit().await.map_err(Error::from)?;
     }

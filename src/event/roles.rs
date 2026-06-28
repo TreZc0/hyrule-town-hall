@@ -839,6 +839,44 @@ impl RoleRequest {
     }
 }
 
+async fn assign_binding_discord_role(
+    pool: &mut Transaction<'_, Postgres>,
+    ctx: &DiscordCtx,
+    data: &Data<'_>,
+    binding: &RoleBinding,
+    discord_user_id: UserId,
+) -> sqlx::Result<()> {
+    let Some(discord_role_id) = binding.discord_role_id else { return Ok(()) };
+    if let Some(game_id) = binding.game_id {
+        if binding.series.is_none() && binding.event.is_none() {
+            let discord_guild = sqlx::query_scalar!(
+                r#"SELECT discord_guild AS "discord_guild: PgSnowflake<GuildId>" FROM games WHERE id = $1"#,
+                game_id,
+            )
+            .fetch_optional(&mut **pool)
+            .await?
+            .flatten()
+            .map(|PgSnowflake(id)| id);
+            if let Some(discord_guild) = discord_guild {
+                if let Ok(member) = discord_guild.member(ctx, discord_user_id).await {
+                    if let Err(e) = member.add_role(ctx, RoleId::new(discord_role_id.try_into().unwrap())).await {
+                        eprintln!("Failed to assign game Discord role {} to user {} in guild {}: {}", discord_role_id, discord_user_id, discord_guild, e);
+                    }
+                }
+            }
+            return Ok(());
+        }
+    }
+    if let Some(discord_guild) = data.discord_guild {
+        if let Ok(member) = discord_guild.member(ctx, discord_user_id).await {
+            if let Err(e) = member.add_role(ctx, RoleId::new(discord_role_id.try_into().unwrap())).await {
+                eprintln!("Failed to assign Discord role {} to user {}: {}", discord_role_id, discord_user_id, e);
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Signup {
     pub(crate) async fn for_race(
         pool: &mut Transaction<'_, Postgres>,
@@ -2362,14 +2400,14 @@ pub(crate) async fn approve_role_request(
                 let discord_ctx = discord_ctx.read().await;
 
                 if let Some(ref binding) = role_binding {
-                    if let Some(discord_role_id) = binding.discord_role_id {
-                        if let Some(discord_guild) = data.discord_guild {
-                            if let Ok(member) = discord_guild.member(&*discord_ctx, discord_user.id).await {
-                                if let Err(e) = member.add_role(&*discord_ctx, RoleId::new(discord_role_id.try_into().unwrap())).await {
-                                    eprintln!("Failed to assign Discord role {} to user {}: {}", discord_role_id, discord_user.id, e);
-                                }
-                            }
-                        }
+                    if let Err(e) = assign_binding_discord_role(
+                        &mut transaction,
+                        &*discord_ctx,
+                        &data,
+                        binding,
+                        discord_user.id,
+                    ).await {
+                        eprintln!("Failed to assign base Discord role: {}", e);
                     }
                 }
 
@@ -2579,14 +2617,14 @@ pub(crate) async fn apply_for_role(
                 if let Some(discord_user) = me.discord.as_ref() {
                     let discord_ctx = discord_ctx.read().await;
 
-                    if let Some(discord_role_id) = role_binding.discord_role_id {
-                        if let Some(discord_guild) = data.discord_guild {
-                            if let Ok(member) = discord_guild.member(&*discord_ctx, discord_user.id).await {
-                                if let Err(e) = member.add_role(&*discord_ctx, RoleId::new(discord_role_id.try_into().unwrap())).await {
-                                    eprintln!("Failed to assign Discord role {} to user {}: {}", discord_role_id, discord_user.id, e);
-                                }
-                            }
-                        }
+                    if let Err(e) = assign_binding_discord_role(
+                        &mut transaction,
+                        &*discord_ctx,
+                        &data,
+                        &role_binding,
+                        discord_user.id,
+                    ).await {
+                        eprintln!("Failed to assign base Discord role: {}", e);
                     }
 
                     if let Err(e) = assign_event_override_discord_roles(&mut transaction, &*discord_ctx, value.role_binding_id, discord_user.id).await {
@@ -3174,14 +3212,19 @@ pub(crate) async fn signup_for_match(
             ));
         }
 
-        if !RoleRequest::approved_for_user(&mut transaction, value.role_binding_id, me.id).await? {
+        let auto_approved_role = if !RoleRequest::approved_for_user(&mut transaction, value.role_binding_id, me.id).await? {
             // For auto-approve bindings, atomically create/upgrade the role request on the spot
             if RoleRequest::ensure_approved_for_auto_approve(&mut transaction, value.role_binding_id, me.id).await?.is_none() {
                 form.context.push_error(form::Error::validation(
                     "You must be approved for this role before you can sign up for matches",
                 ));
+                false
+            } else {
+                true
             }
-        }
+        } else {
+            false
+        };
 
         if Signup::active_for_user(&mut transaction, race_id, value.role_binding_id, me.id).await? {
             form.context.push_error(form::Error::validation(
@@ -3210,6 +3253,41 @@ pub(crate) async fn signup_for_match(
                 Some(value.notes.trim().to_string())
             };
             Signup::create(&mut transaction, race_id, value.role_binding_id, me.id, notes).await?;
+            if auto_approved_role {
+                if let Some(discord_user) = me.discord.as_ref() {
+                    let role_binding = sqlx::query_as!(
+                        RoleBinding,
+                        r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event, rb.game_id,
+                                  rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count, rb.max_count,
+                                  rt.name as role_type_name, rb.discord_role_id, rb.auto_approve,
+                                  rb.language AS "language: Language"
+                               FROM role_bindings rb
+                               JOIN role_types rt ON rb.role_type_id = rt.id
+                               WHERE rb.id = $1"#,
+                        value.role_binding_id as _
+                    )
+                    .fetch_one(&mut *transaction)
+                    .await?;
+                    let discord_ctx = discord_ctx.read().await;
+                    if let Err(e) = assign_binding_discord_role(
+                        &mut transaction,
+                        &*discord_ctx,
+                        &data,
+                        &role_binding,
+                        discord_user.id,
+                    ).await {
+                        eprintln!("Failed to assign auto-approved base Discord role: {}", e);
+                    }
+                    if let Err(e) = assign_event_override_discord_roles(
+                        &mut transaction,
+                        &*discord_ctx,
+                        value.role_binding_id,
+                        discord_user.id,
+                    ).await {
+                        eprintln!("Failed to assign auto-approved event override Discord roles: {}", e);
+                    }
+                }
+            }
             transaction.commit().await?;
 
             // Update the volunteer info post to reflect the new signup

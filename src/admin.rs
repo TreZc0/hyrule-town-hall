@@ -64,7 +64,7 @@ async fn get_accessible_games(user: &User, transaction: &mut Transaction<'_, Pos
     } else {
         // Game admins can only see games they're admin of
         let rows = sqlx::query!(
-            r#"SELECT DISTINCT g.id, g.name, g.display_name, g.description, g.created_at, g.updated_at 
+            r#"SELECT DISTINCT g.id, g.name, g.display_name, g.description, g.discord_guild AS "discord_guild: PgSnowflake<GuildId>", g.created_at, g.updated_at
                FROM games g 
                JOIN game_admins ga ON g.id = ga.game_id 
                WHERE ga.admin_id = $1 
@@ -81,6 +81,7 @@ async fn get_accessible_games(user: &User, transaction: &mut Transaction<'_, Pos
                 name: row.name,
                 display_name: row.display_name,
                 description: row.description,
+                discord_guild: row.discord_guild.map(|PgSnowflake(id)| id),
                 created_at: row.created_at.expect("created_at should not be null"),
                 updated_at: row.updated_at.expect("updated_at should not be null"),
             })
@@ -119,6 +120,7 @@ pub(crate) async fn index(
                             th : "Name";
                             th : "Display Name";
                             th : "Description";
+                            th : "Discord Guild";
                             th : "Actions";
                         }
                     }
@@ -128,6 +130,13 @@ pub(crate) async fn index(
                                 td : &game.name;
                                 td(class = "game-display-name", data_value = &game.display_name) : &game.display_name;
                                 td(class = "game-description", data_value = game.description.as_deref().unwrap_or("")) : game.description.as_deref().unwrap_or("");
+                                td(class = "game-discord-guild", data_value = game.discord_guild.map(|g| g.get().to_string()).unwrap_or_default()) {
+                                    @if let Some(discord_guild) = game.discord_guild {
+                                        : discord_guild.get().to_string();
+                                    } else {
+                                        : "None";
+                                    }
+                                }
                                 td {
                                     div(class = "actions", style = "display: flex; gap: 8px;") {
                                         button(class = "button edit-btn", onclick = format!("startEditGame('{}')", game.name)) : "Edit";
@@ -177,6 +186,8 @@ pub(crate) struct AddGameForm {
     name: String,
     display_name: String,
     description: String,
+    #[field(default = String::new())]
+    discord_guild: String,
 }
 
 #[rocket::get("/admin/game/add")]
@@ -215,6 +226,12 @@ pub(crate) async fn add_game_form(
                     textarea(id = "description", name = "description", rows = "3");
                     p(class = "help") : "(Optional description of the game)";
                 }
+
+                div {
+                    label(for = "discord_guild") : "Discord Guild ID:";
+                    input(type = "text", id = "discord_guild", name = "discord_guild");
+                    p(class = "help") : "(Optional server for game-level volunteer Discord roles)";
+                }
                 
                 div {
                     input(type = "submit", value = "Add Game");
@@ -246,11 +263,17 @@ pub(crate) async fn add_game_post(
     }
 
     let mut transaction = pool.begin().await.map_err(Error::from)?;
+    let discord_guild = if form.discord_guild.trim().is_empty() {
+        None
+    } else {
+        Some(form.discord_guild.trim().parse::<i64>().map_err(|_| StatusOrError::Status(Status::BadRequest))?)
+    };
     sqlx::query!(
-        r#"INSERT INTO games (name, display_name, description) VALUES ($1, $2, $3)"#,
+        r#"INSERT INTO games (name, display_name, description, discord_guild) VALUES ($1, $2, $3, $4)"#,
         form.name,
         form.display_name,
-        if form.description.is_empty() { None } else { Some(&form.description) }
+        if form.description.is_empty() { None } else { Some(&form.description) },
+        discord_guild,
     )
     .execute(&mut *transaction)
     .await
@@ -266,6 +289,8 @@ pub(crate) struct EditGameForm {
     display_name: String,
     #[field(default = String::new())]
     description: String,
+    #[field(default = String::new())]
+    discord_guild: String,
 }
 
 #[rocket::post("/admin/game/<game_name>/edit", data = "<form>")]
@@ -285,11 +310,17 @@ pub(crate) async fn edit_game(
 
     if let Some(ref value) = form.value {
         let description = if value.description.trim().is_empty() { None } else { Some(value.description.trim()) };
+        let discord_guild = if value.discord_guild.trim().is_empty() {
+            None
+        } else {
+            Some(value.discord_guild.trim().parse::<i64>().map_err(|_| StatusOrError::Status(Status::BadRequest))?)
+        };
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         sqlx::query!(
-            "UPDATE games SET display_name = $1, description = $2 WHERE name = $3",
+            "UPDATE games SET display_name = $1, description = $2, discord_guild = $3 WHERE name = $4",
             value.display_name.trim(),
             description,
+            discord_guild,
             game_name,
         )
         .execute(&mut *transaction)
