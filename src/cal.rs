@@ -397,6 +397,7 @@ pub(crate) struct Race {
     pub(crate) restream_consent_required: bool,
     pub(crate) custom_title: Option<String>,
     pub(crate) custom_create_room: bool,
+    pub(crate) companion_race_id: Option<Id<Races>>,
 }
 
 impl Race {
@@ -441,6 +442,54 @@ impl Race {
             Some((position, total)) if total > 1 => format!("Seeding Race {position}"),
             _ => "Seeding Race".to_owned(),
         }))
+    }
+
+    pub(crate) async fn companion_primary_id(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+    ) -> sqlx::Result<Option<Id<Races>>> {
+        sqlx::query_scalar!(
+            r#"SELECT id AS "id: Id<Races>" FROM races WHERE companion_race_id = $1"#,
+            self.id as _,
+        )
+        .fetch_optional(&mut **transaction)
+        .await
+    }
+
+    pub(crate) async fn matchup_label(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        discord_ctx: &DiscordCtx,
+    ) -> Result<String, discord_bot::Error> {
+        let mut label = String::new();
+        if let Some(ref phase) = self.phase {
+            label.push_str(phase);
+            label.push(' ');
+        }
+        if let Some(ref round) = self.round {
+            label.push_str(round);
+            label.push(' ');
+        }
+        match self.entrants {
+            Entrants::Two([ref entrant1, ref entrant2]) => {
+                let name1 = entrant1.name(&mut *transaction, discord_ctx).await?.unwrap_or(Cow::Borrowed("TBD"));
+                let name2 = entrant2.name(&mut *transaction, discord_ctx).await?.unwrap_or(Cow::Borrowed("TBD"));
+                label.push_str(&format!("{name1} vs {name2}"));
+            }
+            Entrants::Three([ref entrant1, ref entrant2, ref entrant3]) => {
+                let name1 = entrant1.name(&mut *transaction, discord_ctx).await?.unwrap_or(Cow::Borrowed("TBD"));
+                let name2 = entrant2.name(&mut *transaction, discord_ctx).await?.unwrap_or(Cow::Borrowed("TBD"));
+                let name3 = entrant3.name(&mut *transaction, discord_ctx).await?.unwrap_or(Cow::Borrowed("TBD"));
+                label.push_str(&format!("{name1} vs {name2} vs {name3}"));
+            }
+            Entrants::Named(ref entrants) => label.push_str(entrants),
+            Entrants::Open => label.push_str("(open)"),
+            Entrants::Count { total, .. } => label.push_str(&format!("{total} entrants")),
+        }
+        if let Some(game) = self.game {
+            label.push_str(&format!(" (game {game})"));
+        }
+        Ok(label.trim().to_owned())
     }
 
     pub(crate) async fn from_id(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, id: Id<Races>) -> Result<Self, Error> {
@@ -517,7 +566,8 @@ impl Race {
             r.scheduling_deadline,
             COALESCE(erc.restream_consent_required, false) AS "restream_consent_required!",
             custom_title,
-            custom_create_room
+            custom_create_room,
+            companion_race_id AS "companion_race_id: Id<Races>"
         FROM races r
         LEFT JOIN events e ON r.series = e.series AND r.event = e.event
         LEFT JOIN event_round_configs erc
@@ -669,6 +719,7 @@ impl Race {
             restream_consent_required: row.restream_consent_required,
             custom_title: row.custom_title,
             custom_create_room: row.custom_create_room,
+            companion_race_id: row.companion_race_id,
             id, source, entrants,
         })
     }
@@ -1303,7 +1354,7 @@ impl Race {
             seed_data.map(Json) as _,
             self.scheduling_deadline
         ).execute(&mut **transaction).await?;
-        sqlx::query!("UPDATE races SET custom_title = $1, custom_create_room = $2 WHERE id = $3", self.custom_title.as_deref(), self.custom_create_room, self.id as _)
+        sqlx::query!("UPDATE races SET custom_title = $1, custom_create_room = $2, companion_race_id = $3 WHERE id = $4", self.custom_title.as_deref(), self.custom_create_room, self.companion_race_id.map(i64::from), self.id as _)
             .execute(&mut **transaction)
             .await?;
         Ok(())
@@ -1423,7 +1474,7 @@ impl Event {
     pub(crate) async fn rooms_to_open(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client) -> Result<Vec<Self>, Error> {
         let mut events = Vec::default();
         // Query with a generous window (60 minutes) to accommodate custom room_open_minutes_before
-        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND room IS NULL AND start IS NOT NULL AND start > NOW() AND (custom_title IS NULL OR custom_create_room) AND (start <= NOW() + TIME '01:00:00' OR (team1 IS NULL AND p1_discord IS NULL AND p1 IS NULL AND (series != 's' OR event != 'w') AND start <= NOW() + TIME '01:00:00'))"#).fetch_all(&mut **transaction).await? {
+        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND room IS NULL AND start IS NOT NULL AND start > NOW() AND (custom_title IS NULL OR custom_create_room) AND NOT EXISTS (SELECT 1 FROM races r2 WHERE r2.companion_race_id = races.id) AND (start <= NOW() + TIME '01:00:00' OR (team1 IS NULL AND p1_discord IS NULL AND p1 IS NULL AND (series != 's' OR event != 'w') AND start <= NOW() + TIME '01:00:00'))"#).fetch_all(&mut **transaction).await? {
             let race = Race::from_id(&mut *transaction, http_client, id).await?;
 
             // Check if this is a weekly race with custom room opening timing
@@ -1601,6 +1652,9 @@ impl Event {
 
     pub(crate) async fn should_create_room(&self, transaction: &mut Transaction<'_, Postgres>, event: &event::Data<'_>) -> Result<RaceHandleMode, event::DataError> {
         if self.race.is_custom() && !self.race.custom_create_room {
+            return Ok(RaceHandleMode::None)
+        }
+        if self.race.companion_primary_id(transaction).await?.is_some() {
             return Ok(RaceHandleMode::None)
         }
         Ok(if event.racetime_goal_slug.is_some() {
@@ -2184,6 +2238,7 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
                 racetime_goal_slug: None,
                 custom_title: Some(custom_title.to_owned()),
                 custom_create_room: value.custom_create_room,
+                companion_race_id: None,
             };
             race.save(&mut transaction).await?;
             transaction.commit().await?;
@@ -2311,6 +2366,7 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
                     restream_consent_required: false,
                     custom_title: None,
                     custom_create_room: true,
+                    companion_race_id: None,
                     scheduling_thread,
                 };
                 if game == 1 {
@@ -2399,6 +2455,60 @@ pub(crate) async fn race_table(
     let root_table = event.is_none();
     let has_buttons = options.can_edit && !root_table;
     let now = Utc::now();
+    let displayed_race_ids = races.iter().map(|race| i64::from(race.id)).collect::<Vec<_>>();
+    let shared_rooms = if displayed_race_ids.is_empty() {
+        HashMap::new()
+    } else {
+        sqlx::query!(
+            r#"SELECT companion_race_id AS "companion_race_id: Id<Races>", room
+            FROM races
+            WHERE companion_race_id = ANY($1)
+              AND room IS NOT NULL"#,
+            &displayed_race_ids,
+        )
+        .fetch_all(&mut **transaction)
+        .await?
+        .into_iter()
+        .filter_map(|row| Some((row.companion_race_id?, row.room?.parse().ok()?)))
+        .collect::<HashMap<_, Url>>()
+    };
+    let companion_display_starts = if displayed_race_ids.is_empty() {
+        HashMap::new()
+    } else {
+        sqlx::query!(
+            r#"SELECT id AS "primary_id: Id<Races>", companion_race_id AS "companion_race_id: Id<Races>", start AS "start!"
+            FROM races
+            WHERE companion_race_id = ANY($1)
+              AND start IS NOT NULL"#,
+            &displayed_race_ids,
+        )
+        .fetch_all(&mut **transaction)
+        .await?
+        .into_iter()
+        .filter_map(|row| row.companion_race_id.map(|companion_race_id| (companion_race_id, (row.primary_id, row.start))))
+        .collect::<HashMap<_, _>>()
+    };
+    let mut displayed_races = races.iter().collect::<Vec<_>>();
+    if !companion_display_starts.is_empty() && displayed_races.iter().any(|race| !race.is_ended()) {
+        displayed_races.sort_by(|race_a, race_b| {
+            let mut schedule_a = race_a.schedule.clone();
+            if let (Some((_, synced_start)), RaceSchedule::Live { start, .. }) = (companion_display_starts.get(&race_a.id), &mut schedule_a) {
+                *start = *synced_start;
+            }
+            let mut schedule_b = race_b.schedule.clone();
+            if let (Some((_, synced_start)), RaceSchedule::Live { start, .. }) = (companion_display_starts.get(&race_b.id), &mut schedule_b) {
+                *start = *synced_start;
+            }
+            schedule_a.cmp(&race_a.entrants, &schedule_b, &race_b.entrants)
+                .then_with(|| race_a.series.slug().cmp(race_b.series.slug()))
+                .then_with(|| race_a.event.cmp(&race_b.event))
+                .then_with(|| race_a.phase.cmp(&race_b.phase))
+                .then_with(|| race_a.round.cmp(&race_b.round))
+                .then_with(|| race_a.source.cmp(&race_b.source))
+                .then_with(|| race_a.game.cmp(&race_b.game))
+                .then_with(|| race_a.id.cmp(&race_b.id))
+        });
+    }
     Ok(html! {
         table {
             thead {
@@ -2436,7 +2546,7 @@ pub(crate) async fn race_table(
                 }
             }
             tbody {
-                @for race in races {
+                @for race in displayed_races {
                     tr {
                         @let (event, show_event) = if let Some(event) = event {
                             (event, false)
@@ -2450,7 +2560,11 @@ pub(crate) async fn race_table(
                             @match race.schedule {
                                 RaceSchedule::Unscheduled => {}
                                 RaceSchedule::Live { start, .. } => {
-                                    : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                    @let companion_display_start = companion_display_starts.get(&race.id);
+                                    : format_datetime(companion_display_start.map(|(_, start)| *start).unwrap_or(start), DateTimeFormat { long: false, running_text: false });
+                                    @if let Some((primary_id, _)) = companion_display_start {
+                                        span(title = format!("Synced to combined primary race {}. Original start: {} UTC.", u64::from(*primary_id), start.format("%Y-%m-%d %H:%M"))) : " 🔗";
+                                    }
                                     @if show_event && options.show_multistreams && let delay = race.stream_delay(event) && !delay.is_zero() {
                                         br;
                                         small {
@@ -2592,6 +2706,9 @@ pub(crate) async fn race_table(
                                 }
                                 @for room in race.rooms() {
                                     a(class = "favicon", title = "race room", href = room.to_string(), target = "_blank") : favicon(&room);
+                                }
+                                @if let Some(room) = shared_rooms.get(&race.id) {
+                                    a(class = "favicon", title = "shared race room", href = room.to_string(), target = "_blank") : favicon(room);
                                 }
                                 // Volunteer button for upcoming live races
                                 @let is_upcoming_live = match race.schedule {
@@ -3361,6 +3478,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                     restream_consent_required: false,
                                     custom_title: None,
                                     custom_create_room: true,
+                                    companion_race_id: None,
                                 };
                                 if let Some(race) = races.iter_mut().find(|race| if let Source::League { id } = race.source { id == match_data.id } else { false }) {
                                     if !race.schedule_locked {
@@ -3648,6 +3766,7 @@ pub(crate) async fn ensure_weekly_races(
                     restream_consent_required: false,
                     custom_title: None,
                     custom_create_room: true,
+                    companion_race_id: None,
                     schedule,
                 };
                 race.save(&mut *transaction).await?;
@@ -3763,6 +3882,57 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
         false
     };
     let is_admin = me.as_ref().map_or(false, |me| User::GLOBAL_ADMIN_USER_IDS.contains(&u64::from(me.id)));
+    let companion_options = if (is_organizer || is_admin) && matches!(race.schedule, RaceSchedule::Live { .. }) {
+        let start = match race.schedule {
+            RaceSchedule::Live { start, .. } => Some(start),
+            RaceSchedule::Unscheduled | RaceSchedule::Async { .. } => None,
+        };
+        if let Some(start) = start {
+            let mut ids: Vec<Id<Races>> = sqlx::query_scalar!(
+                r#"SELECT id AS "id: Id<Races>"
+                FROM races
+                WHERE series = $1
+                  AND event = $2
+                  AND id != $3
+                  AND start IS NOT NULL
+                  AND async_start1 IS NULL
+                  AND start BETWEEN $4::timestamptz - INTERVAL '30 minutes' AND $4::timestamptz + INTERVAL '30 minutes'
+                  AND companion_race_id IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM races r2 WHERE r2.companion_race_id = races.id)
+                  AND NOT ignored
+                ORDER BY start ASC"#,
+                race.series as _,
+                &race.event,
+                race.id as _,
+                start,
+            )
+            .fetch_all(&mut *transaction)
+            .await?;
+            if let Some(companion_race_id) = race.companion_race_id {
+                if !ids.contains(&companion_race_id) {
+                    ids.push(companion_race_id);
+                }
+            }
+            let mut options = Vec::new();
+            for id in ids {
+                if let Ok(companion) = Race::from_id(&mut transaction, &reqwest::Client::new(), id).await {
+                    let start_suffix = if let RaceSchedule::Live { start, .. } = companion.schedule {
+                        format!(" @ {}", start.format("%H:%M UTC"))
+                    } else {
+                        String::new()
+                    };
+                    options.push((id, format!("{} / {} - {}{}", companion.series.slug(), companion.event, companion.matchup_label(&mut transaction, discord_ctx).await?, start_suffix)));
+                }
+            }
+            options
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+    let current_companion_no_longer_eligible = race.companion_race_id.is_some()
+        && !companion_options.iter().any(|(id, _)| Some(*id) == race.companion_race_id);
     
     let mut errors = ctx.as_ref().map(|ctx| ctx.errors().collect()).unwrap_or_default();
     let form = if me.is_some() {
@@ -3911,6 +4081,31 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                         });
                         label(for = "is_canceled") : "Cancel race permanently";
                     });
+                }
+            }
+            @if (is_organizer || is_admin) && matches!(race.schedule, RaceSchedule::Live { .. }) {
+                fieldset {
+                    legend : "Shared race room";
+                    : form_field("companion_race_id", &mut errors, html! {
+                        label(for = "companion_race_id") : "Companion race:";
+                        select(name = "companion_race_id", id = "companion_race_id") {
+                            option(value = "", selected? = if let Some(ref ctx) = ctx {
+                                ctx.field_value("companion_race_id").is_none_or(str::is_empty)
+                            } else {
+                                race.companion_race_id.is_none()
+                            }) : "None";
+                            @for (id, label) in &companion_options {
+                                option(value = id.to_string(), selected? = if let Some(ref ctx) = ctx {
+                                    ctx.field_value("companion_race_id").is_some_and(|value| value == id.to_string())
+                                } else {
+                                    race.companion_race_id == Some(*id)
+                                }) : label;
+                            }
+                        }
+                    });
+                    @if current_companion_no_longer_eligible {
+                        p(class = "help") : "Current companion is no longer eligible. Clear this field to unlink it.";
+                    }
                 }
             }
 
@@ -4235,6 +4430,51 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
     Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Edit Race — {}", event.display_name), content).await?)
 }
 
+async fn notify_companion_race_change(
+    pool: &PgPool,
+    discord_ctx: &DiscordCtx,
+    http_client: &reqwest::Client,
+    race_id: Id<Races>,
+    old_companion_race_id: Option<Id<Races>>,
+    new_companion_race_id: Option<Id<Races>>,
+) -> Result<(), Error> {
+    if old_companion_race_id == new_companion_race_id {
+        return Ok(())
+    }
+    let Some(companion_race_id) = new_companion_race_id.or(old_companion_race_id) else {
+        return Ok(())
+    };
+    let mut transaction = pool.begin().await?;
+    let race = Race::from_id(&mut transaction, http_client, race_id).await?;
+    let companion = Race::from_id(&mut transaction, http_client, companion_race_id).await?;
+    let race_label = race.matchup_label(&mut transaction, discord_ctx).await?;
+    let companion_label = companion.matchup_label(&mut transaction, discord_ctx).await?;
+    transaction.commit().await?;
+
+    let (race_msg, companion_msg) = if new_companion_race_id.is_some() {
+        (
+            format!("This race will be run in a shared race room together with {companion_label} for restream purposes.\n\nPlease note: only the result of your individual matchup ({race_label}) will count for each runner's tournament progression."),
+            format!("This race will be run in a shared race room together with {race_label} for restream purposes.\n\nPlease note: only the result of your individual matchup ({companion_label}) will count for each runner's tournament progression."),
+        )
+    } else {
+        (
+            format!("The shared race room arrangement with {companion_label} has been cancelled. This race will have its own dedicated room."),
+            format!("The shared race room arrangement with {race_label} has been cancelled. This race will have its own dedicated room."),
+        )
+    };
+    if let Some(thread) = race.scheduling_thread {
+        if let Err(e) = thread.say(discord_ctx, race_msg).await {
+            eprintln!("Failed to send companion race notice to primary thread for race {}: {}", race.id, e);
+        }
+    }
+    if let Some(thread) = companion.scheduling_thread {
+        if let Err(e) = thread.say(discord_ctx, companion_msg).await {
+            eprintln!("Failed to send companion race notice to companion thread for race {}: {}", companion.id, e);
+        }
+    }
+    Ok(())
+}
+
 #[rocket::get("/event/<series>/<event>/races/<id>/edit?<redirect_to>")]
 pub(crate) async fn edit_race(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, id: Id<Races>, redirect_to: Option<Origin<'_>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
@@ -4278,6 +4518,7 @@ pub(crate) struct EditRaceForm {
     custom_title: String,
     #[field(default = false)]
     custom_create_room: bool,
+    companion_race_id: Option<Id<Races>>,
 }
 
 #[rocket::post("/event/<series>/<event>/races/<id>/edit?<redirect_to>", data = "<form>")]
@@ -4285,6 +4526,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
     let mut transaction = pool.begin().await?;
     let event = event::Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut race = Race::from_id(&mut transaction, http_client, id).await?;
+    let old_companion_race_id = race.companion_race_id;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if race.series != event.series || race.event != event.event {
@@ -4300,6 +4542,73 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
 
         if is_organizer && race.is_custom() && value.custom_title.trim().is_empty() {
             form.context.push_error(form::Error::validation("Custom races need a title.").with_name("custom_title"));
+        }
+
+        let new_companion_race_id = if is_organizer || is_admin {
+            value.companion_race_id
+        } else {
+            race.companion_race_id
+        };
+        if new_companion_race_id != old_companion_race_id {
+            if let Some(primary_id) = race.companion_primary_id(&mut transaction).await? {
+                form.context.push_error(form::Error::validation(format!("This race is already a companion of race {primary_id}; unlink it there first.")).with_name("companion_race_id"));
+            }
+            if let RaceSchedule::Live { start, .. } = &race.schedule {
+                if *start <= Utc::now() && !is_admin {
+                    form.context.push_error(form::Error::validation("Shared race room links can only be changed after the start by a global admin.").with_name("companion_race_id"));
+                }
+            }
+        }
+        if new_companion_race_id != old_companion_race_id && let Some(companion_race_id) = new_companion_race_id {
+            if companion_race_id == race.id {
+                form.context.push_error(form::Error::validation("Race cannot be its own companion.").with_name("companion_race_id"));
+            } else {
+                match Race::from_id(&mut transaction, http_client, companion_race_id).await {
+                    Ok(companion) => {
+                        if companion.series != race.series || companion.event != race.event || companion.game != race.game {
+                            form.context.push_error(form::Error::validation("Companion must be from the same event and game.").with_name("companion_race_id"));
+                        }
+                        if companion.companion_race_id.is_some() {
+                            form.context.push_error(form::Error::validation("That race already has a companion of its own.").with_name("companion_race_id"));
+                        }
+                        if let Some(primary_id) = companion.companion_primary_id(&mut transaction).await? {
+                            if primary_id != race.id {
+                                form.context.push_error(form::Error::validation("That race is already a companion of another race.").with_name("companion_race_id"));
+                            }
+                        }
+                        match (&race.schedule, &companion.schedule) {
+                            (RaceSchedule::Live { start, end: None, room: None }, RaceSchedule::Live { start: companion_start, end: None, room: None }) => {
+                                if (*start - *companion_start).num_minutes().abs() > 30 {
+                                    form.context.push_error(form::Error::validation("Companion must start within 30 minutes of this race.").with_name("companion_race_id"));
+                                }
+                            }
+                            _ => form.context.push_error(form::Error::validation("Both races must be live, not ended, and must not already have a room.").with_name("companion_race_id")),
+                        }
+                        let entrants_are_1v1 = matches!(race.entrants, Entrants::Two(_)) && matches!(companion.entrants, Entrants::Two(_));
+                        if !entrants_are_1v1 {
+                            form.context.push_error(form::Error::validation("Both races must be 1v1 races.").with_name("companion_race_id"));
+                        }
+                        if entrants_are_1v1 {
+                            let entrant_keys = |entrants: &Entrants| -> Vec<String> {
+                                match entrants {
+                                    Entrants::Two([entrant1, entrant2]) => [entrant1, entrant2].into_iter().filter_map(|entrant| match entrant {
+                                        Entrant::MidosHouseTeam(team) => Some(format!("team:{}", team.id)),
+                                        Entrant::Discord { racetime_id: Some(racetime_id), .. } | Entrant::Named { racetime_id: Some(racetime_id), .. } => Some(format!("rt:{racetime_id}")),
+                                        Entrant::Discord { id, .. } => Some(format!("discord:{id}")),
+                                        Entrant::Named { .. } => None,
+                                    }).collect(),
+                                    _ => Vec::new(),
+                                }
+                            };
+                            let race_keys = entrant_keys(&race.entrants);
+                            if let Some(overlap) = entrant_keys(&companion.entrants).into_iter().find(|key| race_keys.contains(key)) {
+                                form.context.push_error(form::Error::validation(format!("Entrant {overlap} appears in both races; runners must not overlap.")).with_name("companion_race_id"));
+                            }
+                        }
+                    }
+                    Err(_) => form.context.push_error(form::Error::validation("Companion race not found.").with_name("companion_race_id")),
+                }
+            }
         }
         
         // Parse and validate start dates if user is an organizer
@@ -4730,6 +5039,9 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 race.custom_title = Some(value.custom_title.trim().to_owned());
                 race.custom_create_room = value.custom_create_room;
             }
+            if is_organizer || is_admin {
+                race.companion_race_id = new_companion_race_id;
+            }
             
             // Save original video URLs to check if they changed
             let original_video_urls = race.video_urls.clone();
@@ -4823,6 +5135,39 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                     eprintln!("Failed to update Discord scheduled event for race {}: {}", race.id, e);
                 }
             }
+            if race.companion_race_id != old_companion_race_id {
+                if let Err(e) = crate::discord_scheduled_events::create_discord_scheduled_event(&*discord_ctx.read().await, &mut transaction, &mut race, &event, http_client.inner()).await {
+                    eprintln!("Failed to update Discord scheduled event for companion race primary {}: {}", race.id, e);
+                }
+                if let Some(old_companion_race_id) = old_companion_race_id {
+                    if Some(old_companion_race_id) != race.companion_race_id {
+                        match Race::from_id(&mut transaction, http_client, old_companion_race_id).await {
+                            Ok(mut old_companion) => {
+                                if let Err(e) = crate::discord_scheduled_events::create_discord_scheduled_event(&*discord_ctx.read().await, &mut transaction, &mut old_companion, &event, http_client.inner()).await {
+                                    eprintln!("Failed to restore Discord scheduled event for old companion race {}: {}", old_companion.id, e);
+                                }
+                                if let Err(e) = old_companion.save(&mut transaction).await {
+                                    eprintln!("Failed to save old companion race {} after Discord event update: {}", old_companion.id, e);
+                                }
+                            }
+                            Err(e) => eprintln!("Failed to load old companion race {} for Discord event update: {}", old_companion_race_id, e),
+                        }
+                    }
+                }
+                if let Some(new_companion_race_id) = race.companion_race_id {
+                    match Race::from_id(&mut transaction, http_client, new_companion_race_id).await {
+                        Ok(mut new_companion) => {
+                            if let Err(e) = crate::discord_scheduled_events::create_discord_scheduled_event(&*discord_ctx.read().await, &mut transaction, &mut new_companion, &event, http_client.inner()).await {
+                                eprintln!("Failed to suppress Discord scheduled event for new companion race {}: {}", new_companion.id, e);
+                            }
+                            if let Err(e) = new_companion.save(&mut transaction).await {
+                                eprintln!("Failed to save new companion race {} after Discord event update: {}", new_companion.id, e);
+                            }
+                        }
+                        Err(e) => eprintln!("Failed to load new companion race {} for Discord event update: {}", new_companion_race_id, e),
+                    }
+                }
+            }
 
             // Send DM notifications to confirmed volunteers when restream URLs are newly assigned or changed
             if !race.video_urls.is_empty() && race.video_urls != original_video_urls {
@@ -4908,7 +5253,20 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 }
             }
 
+            let new_companion_race_id = race.companion_race_id;
             transaction.commit().await?;
+            if old_companion_race_id != new_companion_race_id {
+                if let Err(e) = notify_companion_race_change(
+                    pool,
+                    &*discord_ctx.read().await,
+                    http_client,
+                    race.id,
+                    old_companion_race_id,
+                    new_companion_race_id,
+                ).await {
+                    eprintln!("Failed to send companion race notification for race {}: {}", race.id, e);
+                }
+            }
 
             // Update the volunteer info post to reflect restream or race name changes
             // (Must be done after commit so the new transaction can see the changes)

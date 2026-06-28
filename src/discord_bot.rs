@@ -1908,6 +1908,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             restream_consent_required: race.restream_consent_required,
                                             custom_title: race.custom_title,
                                             custom_create_room: race.custom_create_room,
+                                            companion_race_id: race.companion_race_id,
                                         };
                                         race.save(&mut transaction).await?;
 
@@ -4229,6 +4230,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             restream_consent_required: race.restream_consent_required,
                             custom_title: race.custom_title,
                             custom_create_room: race.custom_create_room,
+                            companion_race_id: race.companion_race_id,
                         };
                         race.save(&mut transaction).await
                             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;

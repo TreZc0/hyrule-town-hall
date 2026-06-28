@@ -665,11 +665,27 @@ pub(crate) fn is_german_dst(dt: DateTime<Utc>) -> bool {
 pub(crate) async fn build_race_title(
     transaction: &mut Transaction<'_, Postgres>,
     race: &Race,
+    companion: Option<&Race>,
     export: &ExportConfig,
     event_display_name: &str,
 ) -> String {
     // Use export title if set, otherwise event display name
     let event_name = export.title.as_deref().unwrap_or(event_display_name);
+
+    if let Some(companion) = companion {
+        let mut title = format!(
+            "{}: {} / {}",
+            event_name,
+            build_combined_member_title(transaction, race, export).await,
+            build_combined_member_title(transaction, companion, export).await,
+        );
+        if export.append_mode {
+            if let Some(mode) = get_race_mode(race) {
+                title = format!("{} [{}]", title, mode);
+            }
+        }
+        return title
+    }
 
     if let Some(custom_title) = &race.custom_title {
         return format!("{}: {}", event_name, custom_title);
@@ -735,6 +751,49 @@ pub(crate) async fn build_race_title(
     title
 }
 
+async fn build_combined_member_title(
+    transaction: &mut Transaction<'_, Postgres>,
+    race: &Race,
+    export: &ExportConfig,
+) -> String {
+    let matchup = match &race.entrants {
+        Entrants::Two([e1, e2]) => {
+            let name1 = get_entrant_name(transaction, e1).await.unwrap_or_else(|| "TBD".to_owned());
+            let name2 = get_entrant_name(transaction, e2).await.unwrap_or_else(|| "TBD".to_owned());
+            format!("{} vs. {}", name1, name2)
+        }
+        Entrants::Three([e1, e2, e3]) => {
+            let name1 = get_entrant_name(transaction, e1).await.unwrap_or_else(|| "TBD".to_owned());
+            let name2 = get_entrant_name(transaction, e2).await.unwrap_or_else(|| "TBD".to_owned());
+            let name3 = get_entrant_name(transaction, e3).await.unwrap_or_else(|| "TBD".to_owned());
+            format!("{} vs. {} vs. {}", name1, name2, name3)
+        }
+        _ => "TBD".to_owned(),
+    };
+    let game_suffix = race.game.map(|g| format!(" (G{})", g)).unwrap_or_default();
+    if export.include_phase {
+        if let Some(phase) = &race.phase {
+            let short_phase = phase.split_once(" - ").map(|(before, _)| before).unwrap_or(phase.as_str());
+            if let Some(round) = &race.round {
+                let short_round = round.replace("Round ", "R");
+                format!("{} {}{} - {}", short_phase, short_round, game_suffix, matchup)
+            } else {
+                format!("{}{} - {}", short_phase, game_suffix, matchup)
+            }
+        } else if let Some(round) = &race.round {
+            format!("{}{} - {}", round, game_suffix, matchup)
+        } else {
+            format!("{}{}", matchup, game_suffix)
+        }
+    } else if let Some(round) = &race.round {
+        format!("{}{} - {}", round, game_suffix, matchup)
+    } else if let Some(phase) = &race.phase {
+        format!("{}{} - {}", phase, game_suffix, matchup)
+    } else {
+        format!("{}{}", matchup, game_suffix)
+    }
+}
+
 /// Get the draft mode for a race if available
 fn get_race_mode(_race: &Race) -> Option<&str> {
     None
@@ -752,7 +811,10 @@ async fn get_entrant_name(transaction: &mut Transaction<'_, Postgres>, entrant: 
 }
 
 /// Get the runner count string for a race
-pub(crate) fn format_runner_count(race: &Race) -> String {
+pub(crate) fn format_runner_count(race: &Race, companion: Option<&Race>) -> String {
+    if let Some(companion) = companion {
+        return (export_runner_count(&race.entrants) + export_runner_count(&companion.entrants)).to_string()
+    }
     let is_qualifier = race.phase.as_deref() == Some("Qualifier");
     let is_weekly = race.phase.is_none()
         && race.round.as_deref().map(|r| r.ends_with(" Weekly")).unwrap_or(false);
@@ -766,6 +828,15 @@ pub(crate) fn format_runner_count(race: &Race) -> String {
         Entrants::Three(_) => "3".to_owned(),
         Entrants::Count { total, .. } => total.to_string(),
         _ => "2".to_owned(),
+    }
+}
+
+fn export_runner_count(entrants: &Entrants) -> u32 {
+    match entrants {
+        Entrants::Two(_) => 2,
+        Entrants::Three(_) => 3,
+        Entrants::Count { total, .. } => *total,
+        Entrants::Open | Entrants::Named(_) => 2,
     }
 }
 
@@ -980,6 +1051,11 @@ pub(crate) async fn export_race(
     let RaceSchedule::Live { start, .. } = race.schedule else {
         return Err(Error::NotLive);
     };
+    let companion = if let Some(companion_race_id) = race.companion_race_id {
+        Some(Race::from_id(transaction, http_client, companion_race_id).await?)
+    } else {
+        None
+    };
 
     // Generate export ID
     let export_id = generate_export_id(race, export);
@@ -991,7 +1067,7 @@ pub(crate) async fn export_race(
     let utc_date = delayed_start.format("%b %d, %I:%M%p").to_string();
 
     // Build title
-    let title = build_race_title(transaction, race, export, event_display_name).await;
+    let title = build_race_title(transaction, race, companion.as_ref(), export, event_display_name).await;
 
     // Get estimate
     let estimate = export.estimate_override.clone()
@@ -1000,7 +1076,7 @@ pub(crate) async fn export_race(
     // Get volunteers
     let commentators_joined = get_volunteers_for_role(transaction, race, backend, "Commentary").await.unwrap_or_default();
     let trackers_joined = get_volunteers_for_role(transaction, race, backend, "Tracking").await.unwrap_or_default();
-    let runner_count = format_runner_count(race);
+    let runner_count = format_runner_count(race, companion.as_ref());
 
     // Get restream channel alias - only fill the field if an alias is configured
     let restream_channel = if let Some(url) = race.video_urls.get(&backend.language) {
@@ -1182,6 +1258,12 @@ pub(crate) async fn sync_all_races(
                 continue;
             }
         };
+        if let Some(primary_id) = race.companion_primary_id(transaction).await? {
+            if let Err(e) = remove_race(transaction, http_client, race.id, export, &backend).await {
+                errors.push(format!("Race {} companion of {} (remove): {}", race.id, primary_id, e));
+            }
+            continue;
+        }
 
         // Skip races that have already been running for more than 30 minutes — leave
         // any existing sheet row as-is (the sheet is an upcoming-races list, not a results list)
@@ -1329,7 +1411,19 @@ async fn send_volunteer_api(pool: &PgPool, http_client: &reqwest::Client, race_i
     let result: Result<(), Error> = async {
         let mut transaction = pool.begin().await?;
 
+        let race_id = sqlx::query_scalar!(
+            r#"SELECT id AS "id: Id<Races>" FROM races WHERE companion_race_id = $1"#,
+            race_id as _,
+        )
+        .fetch_optional(&mut *transaction)
+        .await?
+        .unwrap_or(race_id);
         let race = Race::from_id(&mut transaction, http_client, race_id).await?;
+        let companion = if let Some(companion_race_id) = race.companion_race_id {
+            Some(Race::from_id(&mut transaction, http_client, companion_race_id).await?)
+        } else {
+            None
+        };
         let event_data = event::Data::new(&mut transaction, race.series, &race.event).await?
             .ok_or(Error::EventNotFound)?;
         let exports = ExportConfig::for_event(&mut transaction, race.series, &race.event).await?;
@@ -1351,7 +1445,7 @@ async fn send_volunteer_api(pool: &PgPool, http_client: &reqwest::Client, race_i
                 continue;
             }
 
-            let title = build_race_title(&mut transaction, &race, export, &event_data.display_name).await;
+            let title = build_race_title(&mut transaction, &race, companion.as_ref(), export, &event_data.display_name).await;
             let commentary = get_confirmed_discord_usernames(&mut transaction, &race, &backend, "Commentary").await?;
             let tracker = get_confirmed_discord_usernames(&mut transaction, &race, &backend, "Tracking").await?;
 
