@@ -847,6 +847,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         notification::dismiss,
         seed::get,
         user::profile,
+        user::set_timezone,
         admin::index,
         admin::add_game_form,
         admin::add_game_post,

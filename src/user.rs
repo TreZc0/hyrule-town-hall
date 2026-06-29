@@ -66,6 +66,7 @@ pub(crate) struct User {
     /// The start.gg user ID as returned by the GraphQL query `currentUser { id }` after OAuth.
     /// Not to be confused with the alphanumeric slug used in the profile page URL and on the profile page itself.
     pub(crate) startgg_id: Option<startgg::ID>,
+    pub(crate) timezone: Option<Tz>,
     pub(crate) is_archivist: bool,
 }
 
@@ -105,6 +106,7 @@ impl User {
         discord_username: Option<String>,
         challonge_id: Option<String>,
         startgg_id: Option<startgg::ID>,
+        timezone: Option<String>,
         is_archivist: bool,
     ) -> Self {
         Self {
@@ -129,6 +131,7 @@ impl User {
                 (None, None) => None,
                 (_, _) => unreachable!("database constraint"),
             },
+            timezone: timezone.as_deref().map(Tz::from_str).transpose().expect("invalid timezone in database"),
             id, display_source, challonge_id, startgg_id, is_archivist,
         }
     }
@@ -147,6 +150,7 @@ impl User {
                 discord_username,
                 challonge_id,
                 startgg_id AS "startgg_id: startgg::ID",
+                timezone,
                 is_archivist
             FROM users WHERE id = $1"#, id as _).fetch_optional(pool).await?
             .map(|row| Self::from_row(
@@ -162,6 +166,7 @@ impl User {
                 row.discord_username,
                 row.challonge_id,
                 row.startgg_id,
+                row.timezone,
                 row.is_archivist,
             ))
         )
@@ -181,6 +186,7 @@ impl User {
                 discord_username,
                 challonge_id,
                 startgg_id AS "startgg_id: startgg::ID",
+                timezone,
                 is_archivist
             FROM users WHERE racetime_id = $1"#, racetime_id).fetch_optional(pool).await?
             .map(|row| Self::from_row(
@@ -196,6 +202,7 @@ impl User {
                 row.discord_username,
                 row.challonge_id,
                 row.startgg_id,
+                row.timezone,
                 row.is_archivist,
             ))
         )
@@ -215,6 +222,7 @@ impl User {
                 discord_username,
                 challonge_id,
                 startgg_id AS "startgg_id: startgg::ID",
+                timezone,
                 is_archivist
             FROM users WHERE discord_id = $1"#, PgSnowflake(discord_id) as _).fetch_optional(pool).await?
             .map(|row| Self::from_row(
@@ -230,6 +238,7 @@ impl User {
                 row.discord_username,
                 row.challonge_id,
                 row.startgg_id,
+                row.timezone,
                 row.is_archivist,
             ))
         )
@@ -249,6 +258,7 @@ impl User {
                 discord_discriminator AS "discord_discriminator: Discriminator",
                 discord_username,
                 challonge_id,
+                timezone,
                 is_archivist
             FROM users WHERE startgg_id = $1"#, startgg_id as _).fetch_optional(pool).await?
             .map(|row| Self::from_row(
@@ -264,6 +274,7 @@ impl User {
                 row.discord_username,
                 row.challonge_id,
                 Some(startgg_id),
+                row.timezone,
                 row.is_archivist,
             ))
         )
@@ -359,6 +370,33 @@ impl PartialEq for User {
 }
 
 impl Eq for User {}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct TimezoneForm {
+    #[field(default = String::new())]
+    csrf: String,
+    timezone: String,
+}
+
+#[rocket::post("/user/<id>/timezone", data = "<form>")]
+pub(crate) async fn set_timezone(pool: &State<PgPool>, me: User, csrf: Option<CsrfToken>, id: Id<Users>, form: Form<Contextual<'_, TimezoneForm>>) -> Result<Redirect, StatusOrError<PageError>> {
+    if me.id != id {
+        return Err(StatusOrError::Status(Status::Forbidden))
+    }
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if let Some(value) = form.value {
+        let timezone = if value.timezone.is_empty() {
+            None
+        } else {
+            Some(value.timezone.parse::<Tz>()
+                .map_err(|_| StatusOrError::Status(Status::BadRequest))?
+                .to_string())
+        };
+        sqlx::query!("UPDATE users SET timezone = $1 WHERE id = $2", timezone, me.id as _).execute(&**pool).await?;
+    }
+    Ok(Redirect::to(uri!(profile(me.id))))
+}
 
 #[rocket::get("/user/<id>")]
 pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, racetime_user: Option<RaceTimeUser>, discord_user: Option<DiscordUser>, http_client: &State<reqwest::Client>, config: &State<Config>, id: Id<Users>) -> Result<RawHtml<String>, StatusOrError<PageError>> {
@@ -600,6 +638,33 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
     let mut events_participated = user.events_participated(&mut transaction).await?;
     events_participated.retain(|event| event.listed);
     events_participated.sort_by_key(|event| (event.base_start.is_some(), Reverse(event.base_start)));
+    let timezone_form = if me.as_ref().is_some_and(|me| me.id == user.id) {
+        let timezones = chrono_tz::TZ_VARIANTS.iter().map(ToString::to_string).sorted().collect_vec();
+        html! {
+            form(method = "post", action = uri!(set_timezone(user.id))) {
+                : csrf;
+                fieldset {
+                    label(for = "timezone") : "Timezone: ";
+                    select(id = "timezone", name = "timezone") {
+                        option(value = "", selected? = user.timezone.is_none()) : "No timezone set";
+                        @for timezone in timezones {
+                            option(value = &timezone, selected? = user.timezone.is_some_and(|user_timezone| user_timezone.to_string() == timezone)) : timezone;
+                        }
+                    }
+                    input(type = "submit", value = "Save timezone");
+                }
+            }
+        }
+    } else if let Some(timezone) = user.timezone {
+        html! {
+            p {
+                : "Timezone: ";
+                code : timezone.to_string();
+            }
+        }
+    } else {
+        html! {}
+    };
     Ok(page(transaction, &me, &uri, PageStyle { kind: if me.as_ref().is_some_and(|me| *me == user) { PageKind::MyProfile } else { PageKind::Other }, ..PageStyle::default() }, &format!("{} — Hyrule Town Hall", user.display_name()), html! {
         h1 {
             bdi : user.display_name();
@@ -612,6 +677,7 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
         : discord;
         : startgg;
         : challonge;
+        : timezone_form;
         @if user.is_archivist {
             p {
                 : "This user is an archivist: ";

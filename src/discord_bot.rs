@@ -947,21 +947,63 @@ fn tz_from_abbr(abbr: &str) -> Option<Tz> {
     }
 }
 
-fn parse_natural_language_timestamp(s: &str) -> Option<(DateTime<Utc>, Option<Tz>)> {
-    // If the string ends with a known timezone abbreviation, strip it, parse the
-    // naive date/time with interim, then apply the IANA zone so DST is handled correctly.
-    if let Some((_, s_without_tz, tz_abbr)) = regex_captures!(r"^(.*\S)\s+([A-Za-z]{2,5})\s*$", s) {
-        if let Some(tz) = tz_from_abbr(&tz_abbr.to_ascii_uppercase()) {
-            let as_utc = interim::parse_date_string(&s_without_tz.to_lowercase(), Utc::now(), interim::Dialect::Us).ok()?;
-            let naive = as_utc.naive_utc();
-            return tz.from_local_datetime(&naive)
-                .single()
-                .or_else(|| tz.from_local_datetime(&naive).latest())
-                .map(|dt| (dt.to_utc(), Some(tz)));
+fn format_utc_offset(offset_seconds: i32) -> String {
+    let sign = if offset_seconds < 0 { '-' } else { '+' };
+    let offset_seconds = offset_seconds.abs();
+    let hours = offset_seconds / 3600;
+    let minutes = (offset_seconds % 3600) / 60;
+    if minutes == 0 {
+        format!("UTC{sign}{hours}")
+    } else {
+        format!("UTC{sign}{hours}:{minutes:02}")
+    }
+}
+
+fn timezone_utc_offset(tz: Tz, at: DateTime<Utc>) -> String {
+    format_utc_offset(tz.from_utc_datetime(&at.naive_utc()).offset().fix().local_minus_utc())
+}
+
+fn parse_datetime_in_timezone(s: &str, tz: Tz) -> Option<DateTime<Utc>> {
+    let as_utc = interim::parse_date_string(&s.to_lowercase(), Utc::now(), interim::Dialect::Us).ok()?;
+    let naive = as_utc.naive_utc();
+    tz.from_local_datetime(&naive)
+        .single()
+        .or_else(|| tz.from_local_datetime(&naive).latest())
+        .map(|dt| dt.to_utc())
+}
+
+struct ParsedNaturalLanguageTimestamp {
+    start: DateTime<Utc>,
+    timezone: Option<Tz>,
+    used_default_timezone: bool,
+}
+
+fn parse_natural_language_timestamp(s: &str, default_timezone: Option<Tz>) -> Option<ParsedNaturalLanguageTimestamp> {
+    // If the string ends with a known timezone abbreviation or IANA timezone,
+    // strip it, parse the naive date/time with interim, then apply the zone so DST is handled correctly.
+    if let Some((_, s_without_tz, tz_name)) = regex_captures!(r"^(.*\S)\s+(\S+)\s*$", s) {
+        if let Some(tz) = tz_name.parse::<Tz>().ok().or_else(|| tz_from_abbr(&tz_name.to_ascii_uppercase())) {
+            return Some(ParsedNaturalLanguageTimestamp {
+                start: parse_datetime_in_timezone(s_without_tz, tz)?,
+                timezone: Some(tz),
+                used_default_timezone: false,
+            });
         }
     }
-    // No recognized abbreviation; let interim handle it (supports Z and numeric offsets).
-    interim::parse_date_string(&s.to_lowercase(), Utc::now(), interim::Dialect::Us).ok().map(|dt| (dt, None))
+    if let Some(tz) = default_timezone {
+        Some(ParsedNaturalLanguageTimestamp {
+            start: parse_datetime_in_timezone(s, tz)?,
+            timezone: Some(tz),
+            used_default_timezone: true,
+        })
+    } else {
+        // No recognized timezone; let interim handle it (supports Z and numeric offsets).
+        interim::parse_date_string(&s.to_lowercase(), Utc::now(), interim::Dialect::Us).ok().map(|start| ParsedNaturalLanguageTimestamp {
+            start,
+            timezone: None,
+            used_default_timezone: false,
+        })
+    }
 }
 
 pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global_state: Arc<GlobalState>, db_pool: PgPool, http_client: reqwest::Client, config: Config, new_room_lock: Arc<Mutex<()>>, clean_shutdown: Arc<Mutex<CleanShutdown>>, shutdown: rocket::Shutdown) -> serenity_utils::Builder {
@@ -2181,25 +2223,34 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     ).await?;
                                     transaction.rollback().await?;
                                 } else if team.is_some() || is_organizer {
-                                    let start = match interaction.data.options[0].value {
-                                        CommandDataOptionValue::String(ref start) => start,
-                                        _ => panic!("unexpected slash command option type"),
-                                    };
-                                    let parsed = parse_timestamp(start)
-                                        .map(|dt| (dt, None::<Option<Tz>>))
-                                        .or_else(|| parse_natural_language_timestamp(start).map(|(dt, tz)| (dt, Some(tz))));
-                                    if let Some((start, nl_info)) = parsed {
-                                        let nl_note = nl_info.map(|detected_tz| {
-                                            let mut note = MessageBuilder::default();
-                                            note.push("-# Interpreted as ");
-                                            if let Some(tz) = detected_tz {
-                                                note.push(tz.from_utc_datetime(&start.naive_utc()).format("%Y/%m/%d %I:%M %p %Z").to_string());
-                                            } else {
-                                                note.push(start.format("%Y/%m/%d %I:%M %p UTC").to_string());
-                                                note.push(". Include a timezone like `EST` or `CET` to adjust");
-                                            }
-                                            note.push(".\n");
-                                            note.build()
+                                        let start = match interaction.data.options[0].value {
+                                            CommandDataOptionValue::String(ref start) => start,
+                                            _ => panic!("unexpected slash command option type"),
+                                        };
+                                        let default_timezone = User::from_discord(&mut *transaction, interaction.user.id).await?
+                                            .and_then(|user| user.timezone);
+                                        let parsed = parse_timestamp(start)
+                                            .map(|start| (start, None))
+                                            .or_else(|| parse_natural_language_timestamp(start, default_timezone).map(|parsed| (parsed.start, Some(parsed))));
+                                        if let Some((start, nl_info)) = parsed {
+                                            let nl_note = nl_info.map(|parsed| {
+                                                let mut note = MessageBuilder::default();
+                                                note.push("-# Interpreted as ");
+                                                if let Some(tz) = parsed.timezone {
+                                                    note.push(tz.from_utc_datetime(&start.naive_utc()).format("%Y/%m/%d %I:%M %p %Z").to_string());
+                                                    note.push(" (");
+                                                    note.push(timezone_utc_offset(tz, start));
+                                                    note.push(')');
+                                                    if parsed.used_default_timezone {
+                                                        note.push(" using your profile timezone ");
+                                                        note.push_mono(tz.to_string());
+                                                    }
+                                                } else {
+                                                    note.push(start.format("%Y/%m/%d %I:%M %p UTC").to_string());
+                                                    note.push(". Set a profile timezone and reschedule or include one like `EST`, `CET`, or `Europe/Berlin` to adjust");
+                                                }
+                                                note.push(".\n");
+                                                note.build()
                                         });
                                         if (start - Utc::now()).to_std().map_or(true, |schedule_notice| schedule_notice > Duration::from_secs(365 * 24 * 60 * 60)) {
                                             interaction.edit_response(ctx, EditInteractionResponse::new()
@@ -2280,12 +2331,12 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             }
                                         }
                                     } else {
-                                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                                            .content(if let French = event.language {
-                                                "Désolé, cela n'est pas un timestamp au format de Discord. Vous pouvez utiliser <https://hammertime.cyou/> pour en générer un, ou entrer directement la date — par exemple `vendredi 20h UTC`, `demain 15h EST`."
-                                            } else {
-                                                "Sorry, I couldn't parse that time. Try natural language like `friday 8pm UTC` or `tomorrow 15:00 EST`, or use <https://hammertime.cyou/> to generate a Discord timestamp."
-                                            })
+                                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                                .content(if let French = event.language {
+                                                    "Désolé, cela n'est pas un timestamp au format de Discord. Vous pouvez utiliser <https://hammertime.cyou/> pour en générer un, ou entrer directement la date — par exemple `vendredi 20h UTC`, `demain 15h EST` ou `vendredi 20h Europe/Paris`."
+                                                } else {
+                                                    "Sorry, I couldn't parse that time. Try natural language like `friday 8pm UTC`, `tomorrow 15:00 EST`, or `friday 20:00 CET`, or use <https://hammertime.cyou/> to generate a Discord timestamp."
+                                                })
                                         ).await?;
                                         transaction.rollback().await?;
                                     }
@@ -2329,25 +2380,34 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     )).await?;
                                     transaction.rollback().await?;
                                 } else if team.is_some() && event.asyncs_allowed() || is_organizer {
-                                    let start = match interaction.data.options[0].value {
-                                        CommandDataOptionValue::String(ref start) => start,
-                                        _ => panic!("unexpected slash command option type"),
-                                    };
-                                    let parsed = parse_timestamp(start)
-                                        .map(|dt| (dt, None::<Option<Tz>>))
-                                        .or_else(|| parse_natural_language_timestamp(start).map(|(dt, tz)| (dt, Some(tz))));
-                                    if let Some((start, nl_info)) = parsed {
-                                        let nl_note = nl_info.map(|detected_tz| {
-                                            let mut note = MessageBuilder::default();
-                                            note.push("-# Interpreted as ");
-                                            if let Some(tz) = detected_tz {
-                                                note.push(tz.from_utc_datetime(&start.naive_utc()).format("%Y/%m/%d %I:%M %p %Z").to_string());
-                                            } else {
-                                                note.push(start.format("%Y/%m/%d %I:%M %p UTC").to_string());
-                                                note.push(". Include a timezone like `EST` or `CET` to adjust");
-                                            }
-                                            note.push(".\n");
-                                            note.build()
+                                        let start = match interaction.data.options[0].value {
+                                            CommandDataOptionValue::String(ref start) => start,
+                                            _ => panic!("unexpected slash command option type"),
+                                        };
+                                        let default_timezone = User::from_discord(&mut *transaction, interaction.user.id).await?
+                                            .and_then(|user| user.timezone);
+                                        let parsed = parse_timestamp(start)
+                                            .map(|start| (start, None))
+                                            .or_else(|| parse_natural_language_timestamp(start, default_timezone).map(|parsed| (parsed.start, Some(parsed))));
+                                        if let Some((start, nl_info)) = parsed {
+                                            let nl_note = nl_info.map(|parsed| {
+                                                let mut note = MessageBuilder::default();
+                                                note.push("-# Interpreted as ");
+                                                if let Some(tz) = parsed.timezone {
+                                                    note.push(tz.from_utc_datetime(&start.naive_utc()).format("%Y/%m/%d %I:%M %p %Z").to_string());
+                                                    note.push(" (");
+                                                    note.push(timezone_utc_offset(tz, start));
+                                                    note.push(')');
+                                                    if parsed.used_default_timezone {
+                                                        note.push(" using your profile timezone ");
+                                                        note.push_mono(tz.to_string());
+                                                    }
+                                                } else {
+                                                    note.push(start.format("%Y/%m/%d %I:%M %p UTC").to_string());
+                                                    note.push(". Set a profile timezone or include one like `EST`, `CET`, or `Europe/Berlin` to adjust");
+                                                }
+                                                note.push(".\n");
+                                                note.build()
                                         });
                                         if (start - Utc::now()).to_std().map_or(true, |schedule_notice| schedule_notice > Duration::from_secs(365 * 24 * 60 * 60)) {
                                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -2751,13 +2811,13 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             }
                                         }
                                     } else {
-                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                            .ephemeral(true)
-                                            .content(if let French = event.language {
-                                                "Désolé, cela n'est pas un timestamp au format de Discord. Vous pouvez utiliser <https://hammertime.cyou/> pour en générer un, ou entrer directement la date — par exemple `vendredi 20h UTC`, `demain 15h EST`."
-                                            } else {
-                                                "Sorry, I couldn't parse that time. Try natural language like `friday 8pm UTC` or `tomorrow 15:00 EST`, or use <https://hammertime.cyou/> to generate a Discord timestamp."
-                                            })
+                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                                    .ephemeral(true)
+                                                    .content(if let French = event.language {
+                                                        "Désolé, cela n'est pas un timestamp au format de Discord. Vous pouvez utiliser <https://hammertime.cyou/> pour en générer un, ou entrer directement la date — par exemple `vendredi 20h UTC`, `demain 15h EST` ou `vendredi 20h Europe/Paris`."
+                                                    } else {
+                                                        "Sorry, I couldn't parse that time. Try natural language like `friday 8pm UTC`, `tomorrow 15:00 EST`, or `friday 20:00 Europe/Berlin`, or use <https://hammertime.cyou/> to generate a Discord timestamp."
+                                                    })
                                         )).await?;
                                         transaction.rollback().await?;
                                     }
@@ -4554,6 +4614,106 @@ pub(crate) enum Error {
     UnregisteredDiscordGuild(GuildId),
 }
 
+struct RunnerTimezone {
+    name: String,
+    profile: Option<Id<Users>>,
+    timezone: Option<Tz>,
+}
+
+async fn runner_timezones_for_entrant(transaction: &mut Transaction<'_, Postgres>, ctx: &DiscordCtx, entrant: &Entrant) -> Result<Vec<RunnerTimezone>, Error> {
+    Ok(match entrant {
+        Entrant::MidosHouseTeam(team) => team.members(transaction).await?
+            .into_iter()
+            .map(|member| RunnerTimezone {
+                name: member.display_name().to_owned(),
+                profile: Some(member.id),
+                timezone: member.timezone,
+            })
+            .collect(),
+        Entrant::Discord { id, .. } => if let Some(user) = User::from_discord(&mut **transaction, *id).await? {
+            vec![RunnerTimezone {
+                name: user.display_name().to_owned(),
+                profile: Some(user.id),
+                timezone: user.timezone,
+            }]
+        } else {
+            let user = id.to_user(ctx).await?;
+            vec![RunnerTimezone {
+                name: user.global_name.unwrap_or(user.name),
+                profile: None,
+                timezone: None,
+            }]
+        },
+        Entrant::Named { name, .. } => vec![RunnerTimezone {
+            name: name.clone(),
+            profile: None,
+            timezone: None,
+        }],
+    })
+}
+
+async fn runner_timezones_for_race(transaction: &mut Transaction<'_, Postgres>, ctx: &DiscordCtx, race: &Race) -> Result<Vec<RunnerTimezone>, Error> {
+    let entrants = match &race.entrants {
+        Entrants::Two(entrants) => entrants.iter().collect_vec(),
+        Entrants::Three(entrants) => entrants.iter().collect_vec(),
+        Entrants::Named(_) | Entrants::Open | Entrants::Count { .. } => Vec::default(),
+    };
+    let mut runners = Vec::default();
+    for entrant in entrants {
+        runners.extend(runner_timezones_for_entrant(transaction, ctx, entrant).await?);
+    }
+    Ok(runners)
+}
+
+fn push_runner_timezones(content: &mut MessageBuilder, runners: &[RunnerTimezone], language: Language) {
+    if runners.is_empty() {
+        return
+    }
+    let now = Utc::now();
+    content.push_line("");
+    content.push_line("");
+    content.push(match language {
+        French => "Fuseaux horaires : ",
+        English | German | Portuguese => "Timezones: ",
+    });
+    for (idx, runner) in runners.iter().enumerate() {
+        if idx > 0 {
+            content.push("; ");
+        }
+        content.push_safe(&runner.name);
+        content.push(": ");
+        if let Some(timezone) = runner.timezone {
+            content.push_mono(timezone.to_string());
+            content.push(" (");
+            content.push(timezone_utc_offset(timezone, now));
+            content.push(')');
+        } else {
+            content.push(match language {
+                French => "non défini",
+                English | German | Portuguese => "not set",
+            });
+        }
+    }
+    if runners.iter().any(|runner| runner.timezone.is_none()) {
+        let profile_links = runners.iter()
+            .filter(|runner| runner.timezone.is_none())
+            .filter_map(|runner| runner.profile)
+            .unique()
+            .map(|profile| format!("<{}/user/{}>", base_uri(), u64::from(profile)))
+            .collect_vec();
+        content.push_line("");
+        content.push(match language {
+            French => "-# Vous pouvez définir votre fuseau horaire sur votre page de profil Hyrule Town Hall",
+            English | German | Portuguese => "-# You can set your timezone on your Hyrule Town Hall profile page",
+        });
+        if !profile_links.is_empty() {
+            content.push(": ");
+            content.push(profile_links.join(", "));
+        }
+        content.push('.');
+    }
+}
+
 pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transaction: Transaction<'a, Postgres>, race: &mut Race, game_count: i16) -> Result<Transaction<'a, Postgres>, Error> {
     let event = race.event(&mut transaction).await?;
     let (Some(guild_id), Some(scheduling_channel)) = (event.discord_guild, event.discord_scheduling_channel) else { return Ok(transaction) };
@@ -4607,6 +4767,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             }
         }
     };
+    let runner_timezones = runner_timezones_for_race(&mut transaction, ctx, race).await?;
     let mut content = MessageBuilder::default();
     if_chain! {
         if let French = event.language;
@@ -4638,7 +4799,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             content.push(" — annuler");
             content.push_line("");
             content.push_line("");
-            content.push("Vous pouvez entrer directement la date (par exemple `vendredi 20h UTC` ou `demain 15h CET`) ou utiliser <https://hammertime.cyou/> pour générer un timestamp Discord. Si vous n'indiquez pas de fuseau horaire, UTC sera utilisé.");
+            content.push("Vous pouvez entrer directement la date (par exemple `vendredi 20h UTC`, `demain 15h CET` ou `vendredi 20h Europe/Paris`) ou utiliser <https://hammertime.cyou/> pour générer un timestamp Discord. Si vous n'indiquez pas de fuseau horaire, votre fuseau horaire de profil sera utilisé s'il est défini ; sinon UTC sera utilisé.");
         } else {
             for team in race.teams() {
                 content.mention_team(&mut transaction, Some(guild_id), team).await?;
@@ -4682,7 +4843,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
                 content.push(" — cancel scheduling");
                 content.push_line("");
                 content.push_line("");
-                content.push("You can enter a time naturally (e.g. `friday 8pm UTC` or `tomorrow 15:00 EST`) or use <https://hammertime.cyou/> to generate a Discord timestamp. If no timezone is provided, UTC is assumed.");
+                content.push("You can enter a time naturally (e.g. `friday 8pm UTC`, `tomorrow 15:00 EST`, or `friday 20:00 Europe/Berlin`) or use <https://hammertime.cyou/> to generate a Discord timestamp. If no timezone is provided, your profile timezone is used if set; otherwise UTC is assumed.");
                 if game_count > 1 {
                     content.push(" You can use the ");
                     content.push_mono("game:");
@@ -4691,6 +4852,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             }
         }
     };
+    push_runner_timezones(&mut content, &runner_timezones, event.language);
     // Show custom choices that affect settings when entering the event.
     let choice_requirements = event.choice_requirements();
     if !choice_requirements.is_empty() {
