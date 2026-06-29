@@ -3386,6 +3386,9 @@ pub(crate) async fn import_races_form(mut transaction: Transaction<'_, Postgres>
 pub(crate) async fn import_races(config: &State<Config>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let event = event::Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    if me.is_some() && matches!(event.match_source(), MatchSource::StartGG(_)) && !event.auto_import {
+        startgg::invalidate_cache().await;
+    }
     Ok(import_races_form(transaction, http_client, &*discord_ctx.read().await, config, me, uri, csrf.as_ref(), event, Context::default()).await?)
 }
 
@@ -3450,6 +3453,7 @@ pub(crate) async fn import_races_post(discord_ctx: &State<RwFuture<DiscordCtx>>,
                 Vec::default()
             }
             MatchSource::StartGG(event_slug) => {
+                startgg::invalidate_cache().await;
                 match startgg::races_to_import(&mut transaction, http_client, config, &event, event_slug).await {
                     Ok((races, skips)) => {
                         if races.is_empty() {
