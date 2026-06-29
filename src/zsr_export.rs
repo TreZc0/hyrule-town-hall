@@ -1222,11 +1222,8 @@ pub(crate) async fn remove_race(
             if let Some(cell) = row.get(0) {
                 if cell == &existing.sheet_row_id {
                     let row_num = idx + 1;
-                    // Clear the row (set all cells to empty)
-                    let updates = vec![
-                        (format!("'Restream Signups'!A{}:Z{}", row_num, row_num), vec![vec![String::new(); 26]]),
-                    ];
-                    sheets::batch_update_values(http_client, &backend.google_sheet_id, updates).await?;
+                    let sheet_id = sheets::get_sheet_id(http_client, &backend.google_sheet_id, "Restream Signups").await?;
+                    sheets::delete_row_at(http_client, &backend.google_sheet_id, sheet_id, row_num).await?;
                     break;
                 }
             }
