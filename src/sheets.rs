@@ -418,6 +418,54 @@ pub(crate) async fn insert_row_at(
     })
 }
 
+/// Delete the row at the given 1-indexed row position
+pub(crate) async fn delete_row_at(
+    http_client: &reqwest::Client,
+    spreadsheet_id: &str,
+    sheet_id: i32,
+    row: usize,
+) -> Result<(), WriteError> {
+    let start_index = (row - 1) as i32;
+
+    #[derive(Serialize)]
+    struct Request { requests: Vec<DeleteDimReq> }
+    #[derive(Serialize)]
+    struct DeleteDimReq { #[serde(rename = "deleteDimension")] delete_dimension: DeleteDimContent }
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DeleteDimContent { range: DimRange }
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DimRange { sheet_id: i32, dimension: String, start_index: i32, end_index: i32 }
+
+    lock!(next_write = WRITE_RATE_LIMIT; {
+        sleep_until(*next_write).await;
+        let token = get_auth_token().await?;
+
+        http_client.post(&format!(
+            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate"
+        ))
+            .bearer_auth(&token)
+            .json(&Request {
+                requests: vec![DeleteDimReq {
+                    delete_dimension: DeleteDimContent {
+                        range: DimRange {
+                            sheet_id,
+                            dimension: "ROWS".to_owned(),
+                            start_index,
+                            end_index: start_index + 1,
+                        },
+                    },
+                }],
+            })
+            .send().await?
+            .detailed_error_for_status().await?;
+
+        *next_write = Instant::now() + RATE_LIMIT;
+        Ok(())
+    })
+}
+
 /// Sort rows from start_row (1-indexed) onwards by column A ascending
 pub(crate) async fn sort_rows_by_column_a(
     http_client: &reqwest::Client,
