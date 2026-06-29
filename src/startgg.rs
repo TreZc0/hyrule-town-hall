@@ -12,6 +12,13 @@ const RATE_LIMIT: Duration = Duration::from_millis(60_000 / 80);
 
 static CACHE: LazyLock<Mutex<(Instant, TypeMap)>> = LazyLock::new(|| Mutex::new((Instant::now() + RATE_LIMIT, TypeMap::default())));
 
+pub(crate) async fn invalidate_cache() {
+    lock!(cache = CACHE; {
+        let (_, ref mut entries) = *cache;
+        *entries = TypeMap::default();
+    })
+}
+
 struct QueryCache<T: GraphQLQuery> {
     _phantom: PhantomData<T>,
 }
