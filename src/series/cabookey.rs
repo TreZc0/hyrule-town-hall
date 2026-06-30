@@ -32,6 +32,7 @@ pub(crate) static OWR_CONFIG: OwrSeedConfig = OwrSeedConfig {
         mapshuffle: DungeonShuffleVal::Named("wild"),
         mirrorscroll: 0,
         mode: "standard",
+        money_balance: Some(0),
         ow_mixed: Some(0),
         pottery: "none",
         pseudoboots: 0,

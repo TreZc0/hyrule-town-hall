@@ -1892,6 +1892,7 @@ impl GlobalState {
                 mapshuffle: DungeonShuffleVal::Bool(true),
                 mirrorscroll: mirrorscroll,
                 mode: world_state,
+                money_balance: None,
                 ow_mixed: None,
                 pottery: pottery_mode,
                 pseudoboots: pseudoboots,
@@ -3850,6 +3851,8 @@ pub(crate) struct AlttprDoorRandoSetting {
     pub(crate) mapshuffle: DungeonShuffleVal,
     pub(crate) mirrorscroll: u8,
     pub(crate) mode: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) money_balance: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) ow_mixed: Option<u8>,
     pub(crate) pottery: &'static str,
