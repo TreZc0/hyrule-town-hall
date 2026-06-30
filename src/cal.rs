@@ -60,14 +60,47 @@ fn volunteer_signup_tooltip(signups: &[&Signup], role_bindings: &[EffectiveRoleB
         .filter_map(|binding| {
             let users = signups.iter()
                 .filter(|signup| signup.role_binding_id == binding.id)
-                .map(|signup| user_cache.get(&signup.user_id)
-                    .and_then(|opt| opt.as_ref())
-                    .map_or_else(|| signup.user_id.to_string(), |u| u.to_string()))
+                .copied()
                 .collect::<Vec<_>>();
             if users.is_empty() {
                 None
             } else {
-                Some(format!("{}: {}", binding.role_type_name, users.join(", ")))
+                Some(format!("{}: {}", binding.role_type_name, volunteer_signup_names(&users, user_cache)))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn volunteer_signup_names(signups: &[&Signup], user_cache: &HashMap<Id<Users>, Option<User>>) -> String {
+    signups.iter()
+        .map(|signup| user_cache.get(&signup.user_id)
+            .and_then(|opt| opt.as_ref())
+            .map_or_else(|| signup.user_id.to_string(), |u| u.to_string()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn confirmed_volunteer_signup_tooltip(confirmed_signups: &[&Signup], pending_signups: &[&Signup], role_bindings: &[EffectiveRoleBinding], language: Language, user_cache: &HashMap<Id<Users>, Option<User>>) -> String {
+    role_bindings.iter()
+        .filter(|binding| binding.language == language)
+        .filter_map(|binding| {
+            let confirmed_users = confirmed_signups.iter()
+                .filter(|signup| signup.role_binding_id == binding.id)
+                .copied()
+                .collect::<Vec<_>>();
+            if confirmed_users.is_empty() {
+                None
+            } else {
+                let mut tooltip = format!("{}: {}", binding.role_type_name, volunteer_signup_names(&confirmed_users, user_cache));
+                let pending_users = pending_signups.iter()
+                    .filter(|signup| signup.role_binding_id == binding.id)
+                    .copied()
+                    .collect::<Vec<_>>();
+                if !pending_users.is_empty() {
+                    write!(&mut tooltip, "\nStill pending: {}", volunteer_signup_names(&pending_users, user_cache)).expect("writing to string");
+                }
+                Some(tooltip)
             }
         })
         .collect::<Vec<_>>()
@@ -3058,7 +3091,11 @@ pub(crate) async fn race_table(
 
                                                 // Group bindings by language and check which languages have volunteers
                                                 @let languages_with_volunteers = volunteer_signup_languages(&confirmed_signups, &role_bindings);
-                                                @let pending_languages = volunteer_signup_languages(&pending_signups, &role_bindings);
+                                                @let pending_open_signups = pending_signups.iter()
+                                                    .copied()
+                                                    .filter(|pending_signup| !confirmed_signups.iter().any(|confirmed_signup| confirmed_signup.role_binding_id == pending_signup.role_binding_id))
+                                                    .collect::<Vec<_>>();
+                                                @let pending_languages = volunteer_signup_languages(&pending_open_signups, &role_bindings);
 
                                                 // Pre-fetch all users into a HashMap for use in tooltips
                                                 @let user_cache = {
@@ -3078,7 +3115,14 @@ pub(crate) async fn race_table(
                                                         @if binding.language == language {
                                                             @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
                                                             @if !binding_signups.is_empty() {
-                                                                : binding.role_type_name;
+                                                                @let pending_binding_signups = pending_signups.iter().copied().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                                                                @if pending_binding_signups.is_empty() {
+                                                                    : binding.role_type_name;
+                                                                } else {
+                                                                    span(class = "settings-link pending-link", data_tooltip = format!("Still pending: {}", volunteer_signup_names(&pending_binding_signups, &user_cache))) {
+                                                                        : binding.role_type_name;
+                                                                    }
+                                                                }
                                                                 : " (";
                                                                 : language.short_code();
                                                                 : "): ";
@@ -3097,7 +3141,7 @@ pub(crate) async fn race_table(
                                                     @for (lang_idx, language) in languages_with_volunteers.iter().enumerate() {
                                                         @if lang_idx > 0 { : ", "; }
 
-                                                        @let tooltip_content = volunteer_signup_tooltip(&confirmed_signups, &role_bindings, *language, &user_cache);
+                                                        @let tooltip_content = confirmed_volunteer_signup_tooltip(&confirmed_signups, &pending_signups, &role_bindings, *language, &user_cache);
 
                                                         span(class = "settings-link", data_tooltip = tooltip_content) {
                                                             : language.to_string();
@@ -3106,13 +3150,32 @@ pub(crate) async fn race_table(
                                                 }
 
                                                 @for (lang_idx, language) in pending_languages.iter().enumerate() {
-                                                    @if lang_idx > 0 || languages_with_volunteers.len() > 1 {
-                                                        br;
-                                                    }
-                                                    @let pending_tooltip = volunteer_signup_tooltip(&pending_signups, &role_bindings, *language, &user_cache);
-                                                    span(class = "settings-link pending-link", data_tooltip = pending_tooltip) {
-                                                        : language.short_code().to_uppercase();
-                                                        : " pending";
+                                                    @if languages_with_volunteers.contains(language) {
+                                                        @let pending_language_bindings = role_bindings.iter()
+                                                            .filter(|binding| binding.language == *language)
+                                                            .filter(|binding| pending_open_signups.iter().any(|signup| signup.role_binding_id == binding.id))
+                                                            .collect::<Vec<_>>();
+                                                        @for (binding_idx, binding) in pending_language_bindings.iter().enumerate() {
+                                                            @if lang_idx > 0 || binding_idx > 0 || languages_with_volunteers.len() > 1 {
+                                                                br;
+                                                            }
+                                                            @let pending_binding_signups = pending_open_signups.iter().copied().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                                                            span(class = "settings-link pending-link", data_tooltip = format!("Pending: {}", volunteer_signup_names(&pending_binding_signups, &user_cache))) {
+                                                                : binding.role_type_name;
+                                                                : " (";
+                                                                : language.short_code();
+                                                                : ") pending";
+                                                            }
+                                                        }
+                                                    } else {
+                                                        @if lang_idx > 0 || languages_with_volunteers.len() > 1 {
+                                                            br;
+                                                        }
+                                                        @let pending_tooltip = volunteer_signup_tooltip(&pending_open_signups, &role_bindings, *language, &user_cache);
+                                                        span(class = "settings-link pending-link", data_tooltip = pending_tooltip) {
+                                                            : language.short_code().to_uppercase();
+                                                            : " pending";
+                                                        }
                                                     }
                                                 }
                                             }
@@ -3141,7 +3204,11 @@ pub(crate) async fn race_table(
 
                                                 // Group bindings by language and check which languages have volunteers
                                                 @let languages_with_volunteers = volunteer_signup_languages(&confirmed_signups, &role_bindings);
-                                                @let pending_languages = volunteer_signup_languages(&pending_signups, &role_bindings);
+                                                @let pending_open_signups = pending_signups.iter()
+                                                    .copied()
+                                                    .filter(|pending_signup| !confirmed_signups.iter().any(|confirmed_signup| confirmed_signup.role_binding_id == pending_signup.role_binding_id))
+                                                    .collect::<Vec<_>>();
+                                                @let pending_languages = volunteer_signup_languages(&pending_open_signups, &role_bindings);
 
                                                 // Pre-fetch all users into a HashMap for use in tooltips
                                                 @let user_cache = {
@@ -3161,7 +3228,14 @@ pub(crate) async fn race_table(
                                                         @if binding.language == language {
                                                             @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
                                                             @if !binding_signups.is_empty() {
-                                                                : binding.role_type_name;
+                                                                @let pending_binding_signups = pending_signups.iter().copied().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                                                                @if pending_binding_signups.is_empty() {
+                                                                    : binding.role_type_name;
+                                                                } else {
+                                                                    span(class = "settings-link pending-link", data_tooltip = format!("Still pending: {}", volunteer_signup_names(&pending_binding_signups, &user_cache))) {
+                                                                        : binding.role_type_name;
+                                                                    }
+                                                                }
                                                                 : " (";
                                                                 : language.short_code();
                                                                 : "): ";
@@ -3180,7 +3254,7 @@ pub(crate) async fn race_table(
                                                     @for (lang_idx, language) in languages_with_volunteers.iter().enumerate() {
                                                         @if lang_idx > 0 { : ", "; }
 
-                                                        @let tooltip_content = volunteer_signup_tooltip(&confirmed_signups, &role_bindings, *language, &user_cache);
+                                                        @let tooltip_content = confirmed_volunteer_signup_tooltip(&confirmed_signups, &pending_signups, &role_bindings, *language, &user_cache);
 
                                                         span(class = "settings-link", data_tooltip = tooltip_content) {
                                                             : language.to_string();
@@ -3189,13 +3263,32 @@ pub(crate) async fn race_table(
                                                 }
 
                                                 @for (lang_idx, language) in pending_languages.iter().enumerate() {
-                                                    @if lang_idx > 0 || languages_with_volunteers.len() > 1 {
-                                                        br;
-                                                    }
-                                                    @let pending_tooltip = volunteer_signup_tooltip(&pending_signups, &role_bindings, *language, &user_cache);
-                                                    span(class = "settings-link pending-link", data_tooltip = pending_tooltip) {
-                                                        : language.short_code().to_uppercase();
-                                                        : " pending";
+                                                    @if languages_with_volunteers.contains(language) {
+                                                        @let pending_language_bindings = role_bindings.iter()
+                                                            .filter(|binding| binding.language == *language)
+                                                            .filter(|binding| pending_open_signups.iter().any(|signup| signup.role_binding_id == binding.id))
+                                                            .collect::<Vec<_>>();
+                                                        @for (binding_idx, binding) in pending_language_bindings.iter().enumerate() {
+                                                            @if lang_idx > 0 || binding_idx > 0 || languages_with_volunteers.len() > 1 {
+                                                                br;
+                                                            }
+                                                            @let pending_binding_signups = pending_open_signups.iter().copied().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
+                                                            span(class = "settings-link pending-link", data_tooltip = format!("Pending: {}", volunteer_signup_names(&pending_binding_signups, &user_cache))) {
+                                                                : binding.role_type_name;
+                                                                : " (";
+                                                                : language.short_code();
+                                                                : ") pending";
+                                                            }
+                                                        }
+                                                    } else {
+                                                        @if lang_idx > 0 || languages_with_volunteers.len() > 1 {
+                                                            br;
+                                                        }
+                                                        @let pending_tooltip = volunteer_signup_tooltip(&pending_open_signups, &role_bindings, *language, &user_cache);
+                                                        span(class = "settings-link pending-link", data_tooltip = pending_tooltip) {
+                                                            : language.short_code().to_uppercase();
+                                                            : " pending";
+                                                        }
                                                     }
                                                 }
                                             }
