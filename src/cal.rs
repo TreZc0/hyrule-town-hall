@@ -29,6 +29,7 @@ use {
         discord_bot,
         event::Tab,
         event::roles::{
+            EffectiveRoleBinding,
             Signup,
             VolunteerSignupStatus
         },
@@ -42,6 +43,36 @@ use {
     crate::id::RoleBindings,
 };
 pub(crate) use mhstatus::EventKind;
+
+fn volunteer_signup_languages(signups: &[&Signup], role_bindings: &[EffectiveRoleBinding]) -> Vec<Language> {
+    let mut languages = role_bindings.iter()
+        .filter(|binding| signups.iter().any(|signup| signup.role_binding_id == binding.id))
+        .map(|binding| binding.language)
+        .collect::<Vec<_>>();
+    languages.sort();
+    languages.dedup();
+    languages
+}
+
+fn volunteer_signup_tooltip(signups: &[&Signup], role_bindings: &[EffectiveRoleBinding], language: Language, user_cache: &HashMap<Id<Users>, Option<User>>) -> String {
+    role_bindings.iter()
+        .filter(|binding| binding.language == language)
+        .filter_map(|binding| {
+            let users = signups.iter()
+                .filter(|signup| signup.role_binding_id == binding.id)
+                .map(|signup| user_cache.get(&signup.user_id)
+                    .and_then(|opt| opt.as_ref())
+                    .map_or_else(|| signup.user_id.to_string(), |u| u.to_string()))
+                .collect::<Vec<_>>();
+            if users.is_empty() {
+                None
+            } else {
+                Some(format!("{}: {}", binding.role_type_name, users.join(", ")))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Source {
@@ -3019,21 +3050,20 @@ pub(crate) async fn race_table(
                                         @let all_teams_consented = restream_race.restream_consent_required || restream_race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
                                         @if all_teams_consented {
                                             @let signups = Signup::for_race(&mut *transaction, volunteer_race_id).await?;
+                                            @let pending_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Pending)).collect::<Vec<_>>();
                                             @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
 
-                                            @if !confirmed_signups.is_empty() {
-                                                @let role_bindings = event::roles::EffectiveRoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
+                                            @if !confirmed_signups.is_empty() || !pending_signups.is_empty() {
+                                                @let role_bindings = EffectiveRoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
 
                                                 // Group bindings by language and check which languages have volunteers
-                                                @let languages_with_volunteers = role_bindings.iter()
-                                                    .filter(|binding| confirmed_signups.iter().any(|s| s.role_binding_id == binding.id))
-                                                    .map(|binding| binding.language)
-                                                    .collect::<HashSet<_>>();
+                                                @let languages_with_volunteers = volunteer_signup_languages(&confirmed_signups, &role_bindings);
+                                                @let pending_languages = volunteer_signup_languages(&pending_signups, &role_bindings);
 
                                                 // Pre-fetch all users into a HashMap for use in tooltips
                                                 @let user_cache = {
                                                     let mut cache = HashMap::new();
-                                                    let unique_user_ids = confirmed_signups.iter().map(|s| s.user_id).collect::<HashSet<_>>();
+                                                    let unique_user_ids = confirmed_signups.iter().chain(pending_signups.iter()).map(|s| s.user_id).collect::<HashSet<_>>();
                                                     for user_id in unique_user_ids {
                                                         let user = User::from_id(&mut **transaction, user_id).await.ok().flatten();
                                                         cache.insert(user_id, user);
@@ -3044,7 +3074,7 @@ pub(crate) async fn race_table(
                                                 @if languages_with_volunteers.len() == 1 {
                                                     // Single language: show volunteers with language abbreviation
                                                     @let language = *languages_with_volunteers.iter().next().unwrap();
-                                                    @for binding in role_bindings {
+                                                    @for binding in &role_bindings {
                                                         @if binding.language == language {
                                                             @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
                                                             @if !binding_signups.is_empty() {
@@ -3067,33 +3097,25 @@ pub(crate) async fn race_table(
                                                     @for (lang_idx, language) in languages_with_volunteers.iter().enumerate() {
                                                         @if lang_idx > 0 { : ", "; }
 
-                                                        // Build tooltip for this language using pre-fetched users
-                                                        @let tooltip_content = role_bindings.iter()
-                                                            .filter(|b| b.language == *language)
-                                                            .filter_map(|binding| {
-                                                                let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
-                                                                if binding_signups.is_empty() {
-                                                                    None
-                                                                } else {
-                                                                    let users = binding_signups.iter()
-                                                                        .map(|signup| user_cache.get(&signup.user_id)
-                                                                            .and_then(|opt| opt.as_ref())
-                                                                            .map_or_else(|| signup.user_id.to_string(), |u| u.to_string()))
-                                                                        .collect::<Vec<_>>()
-                                                                        .join(", ");
-                                                                    Some(format!("{}: {}", binding.role_type_name, users))
-                                                                }
-                                                            })
-                                                            .collect::<Vec<_>>()
-                                                            .join("\n");
+                                                        @let tooltip_content = volunteer_signup_tooltip(&confirmed_signups, &role_bindings, *language, &user_cache);
 
                                                         span(class = "settings-link", data_tooltip = tooltip_content) {
                                                             : language.to_string();
                                                         }
                                                     }
                                                 }
+
+                                                @for (lang_idx, language) in pending_languages.iter().enumerate() {
+                                                    @if lang_idx > 0 || languages_with_volunteers.len() > 1 {
+                                                        br;
+                                                    }
+                                                    @let pending_tooltip = volunteer_signup_tooltip(&pending_signups, &role_bindings, *language, &user_cache);
+                                                    span(class = "settings-link pending-link", data_tooltip = pending_tooltip) {
+                                                        : language.short_code().to_uppercase();
+                                                        : " pending";
+                                                    }
+                                                }
                                             }
-                                            // If no confirmed volunteers, show nothing (empty)
                                         } else {
                                             : "no restream";
                                         }
@@ -3114,49 +3136,17 @@ pub(crate) async fn race_table(
                                             @let pending_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Pending)).collect::<Vec<_>>();
                                             @let confirmed_signups = signups.iter().filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed)).collect::<Vec<_>>();
 
-                                            @if !pending_signups.is_empty() && confirmed_signups.is_empty() {
-                                                @let pending_user_cache = {
-                                                    let mut cache = HashMap::new();
-                                                    let unique_user_ids = pending_signups.iter().map(|s| s.user_id).collect::<HashSet<_>>();
-                                                    for user_id in unique_user_ids {
-                                                        let user = User::from_id(&mut **transaction, user_id).await.ok().flatten();
-                                                        cache.insert(user_id, user);
-                                                    }
-                                                    cache
-                                                };
-                                                @let pending_tooltip = {
-                                                    let mut role_groups: Vec<(&str, Vec<String>)> = Vec::new();
-                                                    for signup in &pending_signups {
-                                                        let name = pending_user_cache.get(&signup.user_id)
-                                                            .and_then(|opt| opt.as_ref())
-                                                            .map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
-                                                        if let Some(entry) = role_groups.iter_mut().find(|(r, _)| *r == signup.role_type_name.as_str()) {
-                                                            entry.1.push(name);
-                                                        } else {
-                                                            role_groups.push((signup.role_type_name.as_str(), vec![name]));
-                                                        }
-                                                    }
-                                                    role_groups.iter()
-                                                        .map(|(role, users)| format!("{}: {}", role, users.join(", ")))
-                                                        .collect::<Vec<_>>()
-                                                        .join("\n")
-                                                };
-                                                span(class = "settings-link pending-link", data_tooltip = pending_tooltip) {
-                                                    : "pending";
-                                                }
-                                            } else if !confirmed_signups.is_empty() {
-                                                @let role_bindings = event::roles::EffectiveRoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
+                                            @if !confirmed_signups.is_empty() || !pending_signups.is_empty() {
+                                                @let role_bindings = EffectiveRoleBinding::for_event(&mut *transaction, race.series, &race.event).await?;
 
                                                 // Group bindings by language and check which languages have volunteers
-                                                @let languages_with_volunteers = role_bindings.iter()
-                                                    .filter(|binding| confirmed_signups.iter().any(|s| s.role_binding_id == binding.id))
-                                                    .map(|binding| binding.language)
-                                                    .collect::<HashSet<_>>();
+                                                @let languages_with_volunteers = volunteer_signup_languages(&confirmed_signups, &role_bindings);
+                                                @let pending_languages = volunteer_signup_languages(&pending_signups, &role_bindings);
 
                                                 // Pre-fetch all users into a HashMap for use in tooltips
                                                 @let user_cache = {
                                                     let mut cache = HashMap::new();
-                                                    let unique_user_ids = confirmed_signups.iter().map(|s| s.user_id).collect::<HashSet<_>>();
+                                                    let unique_user_ids = confirmed_signups.iter().chain(pending_signups.iter()).map(|s| s.user_id).collect::<HashSet<_>>();
                                                     for user_id in unique_user_ids {
                                                         let user = User::from_id(&mut **transaction, user_id).await.ok().flatten();
                                                         cache.insert(user_id, user);
@@ -3167,7 +3157,7 @@ pub(crate) async fn race_table(
                                                 @if languages_with_volunteers.len() == 1 {
                                                     // Single language: show volunteers with language abbreviation
                                                     @let language = *languages_with_volunteers.iter().next().unwrap();
-                                                    @for binding in role_bindings {
+                                                    @for binding in &role_bindings {
                                                         @if binding.language == language {
                                                             @let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
                                                             @if !binding_signups.is_empty() {
@@ -3190,29 +3180,22 @@ pub(crate) async fn race_table(
                                                     @for (lang_idx, language) in languages_with_volunteers.iter().enumerate() {
                                                         @if lang_idx > 0 { : ", "; }
 
-                                                        // Build tooltip for this language using pre-fetched users
-                                                        @let tooltip_content = role_bindings.iter()
-                                                            .filter(|b| b.language == *language)
-                                                            .filter_map(|binding| {
-                                                                let binding_signups = confirmed_signups.iter().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
-                                                                if binding_signups.is_empty() {
-                                                                    None
-                                                                } else {
-                                                                    let users = binding_signups.iter()
-                                                                        .map(|signup| user_cache.get(&signup.user_id)
-                                                                            .and_then(|opt| opt.as_ref())
-                                                                            .map_or_else(|| signup.user_id.to_string(), |u| u.to_string()))
-                                                                        .collect::<Vec<_>>()
-                                                                        .join(", ");
-                                                                    Some(format!("{}: {}", binding.role_type_name, users))
-                                                                }
-                                                            })
-                                                            .collect::<Vec<_>>()
-                                                            .join("\n");
+                                                        @let tooltip_content = volunteer_signup_tooltip(&confirmed_signups, &role_bindings, *language, &user_cache);
 
                                                         span(class = "settings-link", data_tooltip = tooltip_content) {
                                                             : language.to_string();
                                                         }
+                                                    }
+                                                }
+
+                                                @for (lang_idx, language) in pending_languages.iter().enumerate() {
+                                                    @if lang_idx > 0 || languages_with_volunteers.len() > 1 {
+                                                        br;
+                                                    }
+                                                    @let pending_tooltip = volunteer_signup_tooltip(&pending_signups, &role_bindings, *language, &user_cache);
+                                                    span(class = "settings-link pending-link", data_tooltip = pending_tooltip) {
+                                                        : language.short_code().to_uppercase();
+                                                        : " pending";
                                                     }
                                                 }
                                             }
@@ -4024,6 +4007,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
         false
     };
     let is_admin = me.as_ref().map_or(false, |me| User::GLOBAL_ADMIN_USER_IDS.contains(&u64::from(me.id)));
+    let can_edit_race_room = is_organizer || is_admin;
     let companion_primary_restream = if let Some(primary_id) = race.companion_primary_id(&mut transaction).await? {
         let primary = Race::from_id(&mut transaction, &reqwest::Client::new(), primary_id).await?;
         let primary_label = primary.matchup_label(&mut transaction, discord_ctx).await?;
@@ -4031,7 +4015,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
     } else {
         None
     };
-    let companion_options = if (is_organizer || is_admin) && matches!(race.schedule, RaceSchedule::Live { .. }) {
+    let companion_options = if can_edit_race_room && matches!(race.schedule, RaceSchedule::Live { .. }) {
         let start = match race.schedule {
             RaceSchedule::Live { start, .. } => Some(start),
             RaceSchedule::Unscheduled | RaceSchedule::Async { .. } => None,
@@ -4107,42 +4091,44 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                     });
                 }
             }
-            @match race.schedule {
-                RaceSchedule::Unscheduled => {}
-                RaceSchedule::Live { ref room, .. } => : form_field("room", &mut errors, html! {
-                    label(for = "room") : "racetime.gg room:";
-                    input(type = "text", name = "room", value? = if let Some(ref ctx) = ctx {
-                        ctx.field_value("room").map(|room| room.to_string())
-                    } else {
-                        room.as_ref().map(|room| room.to_string())
-                    });
-                });
-                RaceSchedule::Async { ref room1, ref room2, ref room3, .. } => {
-                    : form_field("async_room1", &mut errors, html! {
-                        label(for = "async_room1") : "racetime.gg room (team A):";
-                        input(type = "text", name = "async_room1", value? = if let Some(ref ctx) = ctx {
-                            ctx.field_value("async_room1").map(|room| room.to_string())
+            @if can_edit_race_room {
+                @match race.schedule {
+                    RaceSchedule::Unscheduled => {}
+                    RaceSchedule::Live { ref room, .. } => : form_field("room", &mut errors, html! {
+                        label(for = "room") : "racetime.gg room:";
+                        input(type = "text", name = "room", value? = if let Some(ref ctx) = ctx {
+                            ctx.field_value("room").map(|room| room.to_string())
                         } else {
-                            room1.as_ref().map(|room| room.to_string())
+                            room.as_ref().map(|room| room.to_string())
                         });
                     });
-                    : form_field("async_room2", &mut errors, html! {
-                        label(for = "async_room2") : "racetime.gg room (team B):";
-                        input(type = "text", name = "async_room2", value? = if let Some(ref ctx) = ctx {
-                            ctx.field_value("async_room2").map(|room| room.to_string())
-                        } else {
-                            room2.as_ref().map(|room| room.to_string())
+                    RaceSchedule::Async { ref room1, ref room2, ref room3, .. } => {
+                        : form_field("async_room1", &mut errors, html! {
+                            label(for = "async_room1") : "racetime.gg room (team A):";
+                            input(type = "text", name = "async_room1", value? = if let Some(ref ctx) = ctx {
+                                ctx.field_value("async_room1").map(|room| room.to_string())
+                            } else {
+                                room1.as_ref().map(|room| room.to_string())
+                            });
                         });
-                    });
-                    @if let Entrants::Three(_) = race.entrants {
-                        : form_field("async_room3", &mut errors, html! {
-                            label(for = "async_room3") : "racetime.gg room (team C):";
-                            input(type = "text", name = "async_room3", value? = if let Some(ref ctx) = ctx {
-                                ctx.field_value("async_room3").map(|room| room.to_string())
+                        : form_field("async_room2", &mut errors, html! {
+                            label(for = "async_room2") : "racetime.gg room (team B):";
+                            input(type = "text", name = "async_room2", value? = if let Some(ref ctx) = ctx {
+                                ctx.field_value("async_room2").map(|room| room.to_string())
                             } else {
                                 room2.as_ref().map(|room| room.to_string())
                             });
                         });
+                        @if let Entrants::Three(_) = race.entrants {
+                            : form_field("async_room3", &mut errors, html! {
+                                label(for = "async_room3") : "racetime.gg room (team C):";
+                                input(type = "text", name = "async_room3", value? = if let Some(ref ctx) = ctx {
+                                    ctx.field_value("async_room3").map(|room| room.to_string())
+                                } else {
+                                    room2.as_ref().map(|room| room.to_string())
+                                });
+                            });
+                        }
                     }
                 }
             }
@@ -4278,7 +4264,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                     });
                 }
             }
-            @if (is_organizer || is_admin) && matches!(race.schedule, RaceSchedule::Live { .. }) {
+            @if can_edit_race_room && matches!(race.schedule, RaceSchedule::Live { .. }) {
                 fieldset {
                     legend : "Shared race room";
                     p(class = "help") : "Use this when two scheduled 1v1 races should be run in one racetime.gg room for restream coverage. This race becomes the primary race: its start time drives the shared room opening and is shown as the synced time on the companion race.";
@@ -4741,6 +4727,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
         // Check if user is an organizer for start date editing
         let is_organizer = event.organizers(&mut transaction).await?.contains(&me);
         let is_admin = User::GLOBAL_ADMIN_USER_IDS.contains(&u64::from(me.id));
+        let can_edit_race_room = is_organizer || is_admin;
         let uses_primary_restream_settings = race.companion_primary_id(&mut transaction).await?.is_some();
 
         if is_organizer && race.is_custom() && value.custom_title.trim().is_empty() {
@@ -4933,91 +4920,104 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
         }
         
         let mut valid_room_urls = HashMap::new();
-        match race.schedule {
-            RaceSchedule::Unscheduled => {
-                if !value.room.is_empty() {
-                    form.context.push_error(form::Error::validation("The race room can't be added yet because the race isn't scheduled.").with_name("room"));
+        if can_edit_race_room {
+            match race.schedule {
+                RaceSchedule::Unscheduled => {
+                    if !value.room.is_empty() {
+                        form.context.push_error(form::Error::validation("The race room can't be added yet because the race isn't scheduled.").with_name("room"));
+                    }
+                    if !value.async_room1.is_empty() {
+                        form.context.push_error(form::Error::validation("The race room can't be added yet because the race isn't scheduled.").with_name("async_room1"));
+                    }
+                    if !value.async_room2.is_empty() {
+                        form.context.push_error(form::Error::validation("The race room can't be added yet because the race isn't scheduled.").with_name("async_room2"));
+                    }
+                    if !value.async_room3.is_empty() {
+                        form.context.push_error(form::Error::validation("The race room can't be added yet because the race isn't scheduled.").with_name("async_room3"));
+                    }
                 }
-                if !value.async_room1.is_empty() {
-                    form.context.push_error(form::Error::validation("The race room can't be added yet because the race isn't scheduled.").with_name("async_room1"));
-                }
-                if !value.async_room2.is_empty() {
-                    form.context.push_error(form::Error::validation("The race room can't be added yet because the race isn't scheduled.").with_name("async_room2"));
-                }
-                if !value.async_room3.is_empty() {
-                    form.context.push_error(form::Error::validation("The race room can't be added yet because the race isn't scheduled.").with_name("async_room3"));
-                }
-            }
-            RaceSchedule::Live { .. } => {
-                if !value.room.is_empty() {
-                    match Url::parse(&value.room) {
-                        Ok(room) => if let Some(host) = room.host_str() {
-                            if host == racetime_host() {
-                                valid_room_urls.insert("room", room);
+                RaceSchedule::Live { .. } => {
+                    if !value.room.is_empty() {
+                        match Url::parse(&value.room) {
+                            Ok(room) => if let Some(host) = room.host_str() {
+                                if host == racetime_host() {
+                                    valid_room_urls.insert("room", room);
+                                } else {
+                                    form.context.push_error(form::Error::validation("Race room must be a racetime.gg URL.").with_name("room"));
+                                }
                             } else {
                                 form.context.push_error(form::Error::validation("Race room must be a racetime.gg URL.").with_name("room"));
                             }
-                        } else {
-                            form.context.push_error(form::Error::validation("Race room must be a racetime.gg URL.").with_name("room"));
+                            Err(e) => form.context.push_error(form::Error::validation(format!("Failed to parse race room URL: {e}")).with_name("room")),
                         }
-                        Err(e) => form.context.push_error(form::Error::validation(format!("Failed to parse race room URL: {e}")).with_name("room")),
+                    }
+                    if !value.async_room1.is_empty() {
+                        form.context.push_error(form::Error::validation("The race room can't be added yet because the race isn't scheduled.").with_name("async_room1"));
+                    }
+                    if !value.async_room2.is_empty() {
+                        form.context.push_error(form::Error::validation("The race room can't be added yet because the race isn't scheduled.").with_name("async_room2"));
+                    }
+                    if !value.async_room3.is_empty() {
+                        form.context.push_error(form::Error::validation("The race room can't be added yet because the race isn't scheduled.").with_name("async_room3"));
                     }
                 }
-                if !value.async_room1.is_empty() {
-                    form.context.push_error(form::Error::validation("The race room can't be added yet because the race isn't scheduled.").with_name("async_room1"));
-                }
-                if !value.async_room2.is_empty() {
-                    form.context.push_error(form::Error::validation("The race room can't be added yet because the race isn't scheduled.").with_name("async_room2"));
-                }
-                if !value.async_room3.is_empty() {
-                    form.context.push_error(form::Error::validation("The race room can't be added yet because the race isn't scheduled.").with_name("async_room3"));
-                }
-            }
-            RaceSchedule::Async { .. } => {
-                if !value.room.is_empty() {
-                    form.context.push_error(form::Error::validation("The race room can't be added yet because the race isn't scheduled.").with_name("room"));
-                }
-                if !value.async_room1.is_empty() {
-                    match Url::parse(&value.async_room1) {
-                        Ok(room) => if let Some(host) = room.host_str() {
-                            if host == racetime_host() {
-                                valid_room_urls.insert("async_room1", room);
+                RaceSchedule::Async { .. } => {
+                    if !value.room.is_empty() {
+                        form.context.push_error(form::Error::validation("The race room can't be added yet because the race isn't scheduled.").with_name("room"));
+                    }
+                    if !value.async_room1.is_empty() {
+                        match Url::parse(&value.async_room1) {
+                            Ok(room) => if let Some(host) = room.host_str() {
+                                if host == racetime_host() {
+                                    valid_room_urls.insert("async_room1", room);
+                                } else {
+                                    form.context.push_error(form::Error::validation("Race room must be a racetime.gg URL.").with_name("async_room1"));
+                                }
                             } else {
                                 form.context.push_error(form::Error::validation("Race room must be a racetime.gg URL.").with_name("async_room1"));
                             }
-                        } else {
-                            form.context.push_error(form::Error::validation("Race room must be a racetime.gg URL.").with_name("async_room1"));
+                            Err(e) => form.context.push_error(form::Error::validation(format!("Failed to parse race room URL: {e}")).with_name("async_room1")),
                         }
-                        Err(e) => form.context.push_error(form::Error::validation(format!("Failed to parse race room URL: {e}")).with_name("async_room1")),
                     }
-                }
-                if !value.async_room2.is_empty() {
-                    match Url::parse(&value.async_room2) {
-                        Ok(room) => if let Some(host) = room.host_str() {
-                            if host == racetime_host() {
-                                valid_room_urls.insert("async_room2", room);
+                    if !value.async_room2.is_empty() {
+                        match Url::parse(&value.async_room2) {
+                            Ok(room) => if let Some(host) = room.host_str() {
+                                if host == racetime_host() {
+                                    valid_room_urls.insert("async_room2", room);
+                                } else {
+                                    form.context.push_error(form::Error::validation("Race room must be a racetime.gg URL.").with_name("async_room2"));
+                                }
                             } else {
                                 form.context.push_error(form::Error::validation("Race room must be a racetime.gg URL.").with_name("async_room2"));
                             }
-                        } else {
-                            form.context.push_error(form::Error::validation("Race room must be a racetime.gg URL.").with_name("async_room2"));
+                            Err(e) => form.context.push_error(form::Error::validation(format!("Failed to parse race room URL: {e}")).with_name("async_room2")),
                         }
-                        Err(e) => form.context.push_error(form::Error::validation(format!("Failed to parse race room URL: {e}")).with_name("async_room2")),
                     }
-                }
-                if !value.async_room3.is_empty() {
-                    match Url::parse(&value.async_room3) {
-                        Ok(room) => if let Some(host) = room.host_str() {
-                            if host == racetime_host() {
-                                valid_room_urls.insert("async_room3", room);
+                    if !value.async_room3.is_empty() {
+                        match Url::parse(&value.async_room3) {
+                            Ok(room) => if let Some(host) = room.host_str() {
+                                if host == racetime_host() {
+                                    valid_room_urls.insert("async_room3", room);
+                                } else {
+                                    form.context.push_error(form::Error::validation("Race room must be a racetime.gg URL.").with_name("async_room3"));
+                                }
                             } else {
                                 form.context.push_error(form::Error::validation("Race room must be a racetime.gg URL.").with_name("async_room3"));
                             }
-                        } else {
-                            form.context.push_error(form::Error::validation("Race room must be a racetime.gg URL.").with_name("async_room3"));
+                            Err(e) => form.context.push_error(form::Error::validation(format!("Failed to parse race room URL: {e}")).with_name("async_room3")),
                         }
-                        Err(e) => form.context.push_error(form::Error::validation(format!("Failed to parse race room URL: {e}")).with_name("async_room3")),
                     }
+                }
+            }
+        } else {
+            for (field_name, value) in [
+                ("room", &value.room),
+                ("async_room1", &value.async_room1),
+                ("async_room2", &value.async_room2),
+                ("async_room3", &value.async_room3),
+            ] {
+                if !value.is_empty() {
+                    form.context.push_error(form::Error::validation("Only event organizers or global admins can edit racetime.gg race rooms.").with_name(field_name));
                 }
             }
         }
@@ -5221,8 +5221,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                         *room3 = (!value.async_room3.is_empty()).then(|| Url::parse(&value.async_room3).expect("validated"));
                     }
                 }
-            } else {
-                // Non-organizers can only update room URLs
+            } else if is_admin {
                 match &mut race.schedule {
                     RaceSchedule::Unscheduled => {}
                     RaceSchedule::Live { room, .. } => *room = (!value.room.is_empty()).then(|| Url::parse(&value.room).expect("validated")),
@@ -5388,7 +5387,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
 
                     if let RaceSchedule::Live { start: race_start_time, .. } = race.schedule {
                         let signups = Signup::for_race(&mut transaction, race.id).await?;
-                        let role_bindings = event::roles::EffectiveRoleBinding::for_event(&mut transaction, event.series, &event.event).await?;
+                        let role_bindings = EffectiveRoleBinding::for_event(&mut transaction, event.series, &event.event).await?;
 
                         let discord_ctx = discord_ctx.read().await;
 
