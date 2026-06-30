@@ -54,6 +54,40 @@ fn volunteer_signup_languages(signups: &[&Signup], role_bindings: &[EffectiveRol
     languages
 }
 
+fn schedule_room_urls(schedule: &RaceSchedule) -> Vec<Url> {
+    match schedule {
+        RaceSchedule::Unscheduled => Vec::default(),
+        RaceSchedule::Live { room, .. } => room.iter().cloned().collect(),
+        RaceSchedule::Async { room1, room2, room3, .. } => [room1, room2, room3].into_iter().filter_map(|room| room.clone()).collect(),
+    }
+}
+
+async fn notify_racetime_bot_of_manual_room(global_state: &racetime_bot::GlobalState, room: &Url) {
+    if room.host_str() != Some(racetime_host()) { return }
+    let Some(mut path_segments) = room.path_segments() else { return };
+    let Some(category_slug) = path_segments.next().filter(|segment| !segment.is_empty()).map(str::to_owned) else { return };
+    let Some(race_slug) = path_segments.next().filter(|segment| !segment.is_empty()).map(str::to_owned) else { return };
+    let extra_room_senders = &global_state.extra_room_senders;
+    lock!(@read senders = extra_room_senders; {
+        if let Some(sender) = senders.get(&category_slug) {
+            match sender.try_send(race_slug) {
+                Ok(()) => {}
+                Err(tokio::sync::mpsc::error::TrySendError::Full(race_slug)) => {
+                    let sender = sender.clone();
+                    tokio::spawn(async move {
+                        sender.send(race_slug).await.ok();
+                    });
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(race_slug)) => {
+                    eprintln!("Failed to notify racetime bot about manually added room {room}: sender for category {category_slug} is closed (room slug {race_slug})");
+                }
+            }
+        } else {
+            eprintln!("Failed to notify racetime bot about manually added room {room}: no bot registered for category {category_slug}");
+        }
+    });
+}
+
 fn volunteer_signup_tooltip(signups: &[&Signup], role_bindings: &[EffectiveRoleBinding], language: Language, user_cache: &HashMap<Id<Users>, Option<User>>) -> String {
     role_bindings.iter()
         .filter(|binding| binding.language == language)
@@ -4803,11 +4837,12 @@ pub(crate) struct EditRaceForm {
 }
 
 #[rocket::post("/event/<series>/<event>/races/<id>/edit?<redirect_to>", data = "<form>")]
-pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, id: Id<Races>, redirect_to: Option<Origin<'_>>, form: Form<Contextual<'_, EditRaceForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, global_state: &State<Arc<racetime_bot::GlobalState>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, id: Id<Races>, redirect_to: Option<Origin<'_>>, form: Form<Contextual<'_, EditRaceForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let event = event::Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut race = Race::from_id(&mut transaction, http_client, id).await?;
     let old_companion_race_id = race.companion_race_id;
+    let old_room_urls = schedule_room_urls(&race.schedule).into_iter().collect::<HashSet<_>>();
     let mut form = form.into_inner();
     form.verify(&csrf);
     if race.series != event.series || race.event != event.event {
@@ -5353,6 +5388,9 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
             if let (Some(id), Some(gen_time), Some(file_stem)) = (web_id, web_gen_time, file_stem) {
                 race.seed.files = Some(seed::Files::OotrWeb { id, gen_time, file_stem: Cow::Owned(file_stem) });
             }
+            let manually_added_room_urls = schedule_room_urls(&race.schedule).into_iter()
+                .filter(|room| !old_room_urls.contains(room))
+                .collect_vec();
             race.save(&mut transaction).await?;
 
             // Send cancel DMs to confirmed volunteers if race was just canceled
@@ -5552,6 +5590,9 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
 
             let new_companion_race_id = race.companion_race_id;
             transaction.commit().await?;
+            for room in &manually_added_room_urls {
+                notify_racetime_bot_of_manual_room(global_state, room).await;
+            }
             if old_companion_race_id != new_companion_race_id {
                 if let Err(e) = notify_companion_race_change(
                     pool,
