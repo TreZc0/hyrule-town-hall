@@ -1748,8 +1748,14 @@ async fn weekly_schedules_form(mut transaction: Transaction<'_, Postgres>, me: O
                     : form_field("timezone", &mut errors, html! {
                         label(for = "timezone") : "Timezone:";
                         select(id = "timezone", name = "timezone") {
-                            option(value = "", disabled = "disabled", selected? = defaults.add_timezone().map_or(true, |v| v.is_empty())) : "Select timezone";
-                            option(value = "", id = "local-tz-option") : "Local timezone (detecting...)";
+                            option(value = "", disabled = "disabled", selected? = defaults.add_timezone().map_or(me.timezone.is_none(), |v| v.is_empty() && me.timezone.is_none())) : "Select timezone";
+                            option(value? = me.timezone.map(|timezone| timezone.name()), id = "local-tz-option", selected? = defaults.add_timezone().map_or(me.timezone.is_some(), |v| v.is_empty() && me.timezone.is_some())) {
+                                @if let Some(timezone) = me.timezone {
+                                    : format!("Profile timezone ({})", timezone.name());
+                                } else {
+                                    : "Local timezone (detecting...)";
+                                }
+                            }
                             option(value = "UTC", selected? = defaults.add_timezone().map_or(false, |v| v == "UTC")) : "UTC";
                             option(value = "Europe/Berlin", selected? = defaults.add_timezone().map_or(false, |v| v == "Europe/Berlin")) : "Europe/Berlin (CET/CEST)";
                             option(value = "America/New_York", selected? = defaults.add_timezone().map_or(false, |v| v == "America/New_York")) : "America/New_York (Eastern)";
@@ -2110,7 +2116,13 @@ async fn weekly_schedule_edit_form(mut transaction: Transaction<'_, Postgres>, m
                             @if current_tz != "UTC" && current_tz != "Europe/Berlin" && current_tz != "America/New_York" && current_tz != "America/Los_Angeles" {
                                 option(value = current_tz, selected = "selected") : format!("{} (current)", current_tz);
                             }
-                            option(value = "", id = "local-tz-option") : "Local timezone (detecting...)";
+                            option(value? = me.timezone.map(|timezone| timezone.name()), id = "local-tz-option") {
+                                @if let Some(timezone) = me.timezone {
+                                    : format!("Profile timezone ({})", timezone.name());
+                                } else {
+                                    : "Local timezone (detecting...)";
+                                }
+                            }
                             option(value = "UTC", selected? = current_tz == "UTC") : "UTC";
                             option(value = "Europe/Berlin", selected? = current_tz == "Europe/Berlin") : "Europe/Berlin (CET/CEST)";
                             option(value = "America/New_York", selected? = current_tz == "America/New_York") : "America/New_York (Eastern)";

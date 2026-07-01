@@ -155,6 +155,7 @@ impl IsNetworkError for PageError {
 pub(crate) type PageResult = Result<RawHtml<String>, PageError>;
 
 pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option<User>, uri: &Origin<'_>, style: PageStyle, title: &str, content: impl ToHtml) -> PageResult {
+    let content = apply_profile_timezone_fallbacks(content.to_html(), me.as_ref().and_then(|me| me.timezone));
     let notifications = if let Some(me) = me {
         if let PageKind::Notifications = style.kind {
             Vec::default()
