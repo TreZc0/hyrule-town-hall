@@ -5028,7 +5028,7 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
             racetime_bot::Goal::MysteryD20 => {
                 global_state.clone().roll_mysteryd20_seed()
             }
-            racetime_bot::Goal::TwwrMainWeekly | racetime_bot::Goal::TwwrMainMiniblins26 => {
+            racetime_bot::Goal::TwwrMainWeekly | racetime_bot::Goal::TwwrMainMiniblins26 | racetime_bot::Goal::TwwrMainS9 => {
                 let settings_string = event.settings_string.clone().expect("TWWR event missing settings string");
                 let version = goal.rando_version(Some(&event));
                 global_state.clone().roll_twwr_seed(Some(version), settings_string, UnlockSpoilerLog::Never)
