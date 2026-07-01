@@ -21,6 +21,7 @@ use {
 };
 
 pub(crate) static SYNC_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+const MAX_ZSR_TITLE_CHARS: usize = 100; ///limitation by Discord events and Youtube
 
 /// Tracks the latest debounce version per race_id. When a volunteer status changes, the version
 /// is bumped and a task is spawned to fire after 20 s. The task only fires if its version is still
@@ -685,71 +686,102 @@ pub(crate) async fn build_race_title(
                 title = format!("{} [{}]", title, mode);
             }
         }
-        return title
+        return enforce_zsr_title_limit(title)
     }
 
     if let Some(custom_title) = &race.custom_title {
-        return format!("{}: {}", event_name, custom_title);
+        return enforce_zsr_title_limit(format!("{}: {}", event_name, custom_title));
     }
 
     if let Some(label) = race.seeding_race_label(transaction).await.unwrap_or(None) {
-        return format!("{}: {}", event_name, label);
+        return enforce_zsr_title_limit(format!("{}: {}", event_name, label));
     }
 
     // Qualifier races get a simplified title without matchup
     if race.phase.as_deref() == Some("Qualifier") {
         let round = race.round.as_deref().unwrap_or("1");
-        return format!("{}: Qualifier {}", event_name, round);
+        return enforce_zsr_title_limit(format!("{}: Qualifier {}", event_name, round));
     }
 
     // Build matchup string
-    let matchup = match &race.entrants {
+    let (matchup, compact_matchup) = match &race.entrants {
         Entrants::Two([e1, e2]) => {
             let name1 = get_entrant_name(transaction, e1).await.unwrap_or_else(|| "TBD".to_owned());
             let name2 = get_entrant_name(transaction, e2).await.unwrap_or_else(|| "TBD".to_owned());
-            format!("{} vs. {}", name1, name2)
+            (format!("{} vs. {}", name1, name2), format!("{}/{}", name1, name2))
         }
         Entrants::Three([e1, e2, e3]) => {
             let name1 = get_entrant_name(transaction, e1).await.unwrap_or_else(|| "TBD".to_owned());
             let name2 = get_entrant_name(transaction, e2).await.unwrap_or_else(|| "TBD".to_owned());
             let name3 = get_entrant_name(transaction, e3).await.unwrap_or_else(|| "TBD".to_owned());
-            format!("{} vs. {} vs. {}", name1, name2, name3)
+            (format!("{} vs. {} vs. {}", name1, name2, name3), format!("{}/{}/{}", name1, name2, name3))
         }
-        _ => "TBD".to_owned(),
+        _ => ("TBD".to_owned(), "TBD".to_owned()),
     };
 
-    // Combine: EventName: Round/Phase (G{n}) - Matchup
+    let title = build_normal_race_title(event_name, race, export, &matchup, false);
+    let title = append_race_mode(title, race, export);
+    if zsr_title_fits(&title) {
+        return title
+    }
+
+    let title = build_normal_race_title(event_name, race, export, &compact_matchup, true);
+    let title = append_race_mode(title, race, export);
+    enforce_zsr_title_limit(title)
+}
+
+fn build_normal_race_title(event_name: &str, race: &Race, export: &ExportConfig, matchup: &str, compact: bool) -> String {
     let game_suffix = race.game.map(|g| format!(" (G{})", g)).unwrap_or_default();
-    let mut title = if export.include_phase {
+    if export.include_phase {
         if let Some(phase) = &race.phase {
-            let short_phase = phase.split_once(" - ").map(|(before, _)| before).unwrap_or(phase.as_str());
+            let phase = phase.split_once(" - ").map(|(before, _)| before).unwrap_or(phase.as_str());
+            let phase = if compact { clean_combined_phase(phase) } else { phase.to_owned() };
             if let Some(round) = &race.round {
-                let short_round = round.replace("Round ", "R");
-                format!("{}: {} {}{} - {}", event_name, short_phase, short_round, game_suffix, matchup)
+                let round = if compact { round.replace("Round ", "R") } else { round.clone() };
+                format!("{}: {} {}{} - {}", event_name, phase, round, game_suffix, matchup)
             } else {
-                format!("{}: {}{} - {}", event_name, short_phase, game_suffix, matchup)
+                format!("{}: {}{} - {}", event_name, phase, game_suffix, matchup)
             }
         } else if let Some(round) = &race.round {
+            let round = if compact { round.replace("Round ", "R") } else { round.clone() };
             format!("{}: {}{} - {}", event_name, round, game_suffix, matchup)
         } else {
             format!("{}: {}{}", event_name, matchup, game_suffix)
         }
     } else if let Some(round) = &race.round {
+        let round = if compact { round.replace("Round ", "R") } else { round.clone() };
         format!("{}: {}{} - {}", event_name, round, game_suffix, matchup)
     } else if let Some(phase) = &race.phase {
+        let phase = if compact { clean_combined_phase(phase) } else { phase.clone() };
         format!("{}: {}{} - {}", event_name, phase, game_suffix, matchup)
     } else {
         format!("{}: {}{}", event_name, matchup, game_suffix)
-    };
+    }
+}
 
-    // Append draft mode if enabled and available
+fn append_race_mode(mut title: String, race: &Race, export: &ExportConfig) -> String {
     if export.append_mode {
         if let Some(mode) = get_race_mode(race) {
             title = format!("{} [{}]", title, mode);
         }
     }
-
     title
+}
+
+fn zsr_title_fits(title: &str) -> bool {
+    if title.chars().count() <= MAX_ZSR_TITLE_CHARS {
+        true
+    } else {
+        false
+    }
+}
+
+fn enforce_zsr_title_limit(title: String) -> String {
+    if zsr_title_fits(&title) {
+        title
+    } else {
+        title.chars().take(MAX_ZSR_TITLE_CHARS).collect()
+    }
 }
 
 async fn build_combined_member_title(
