@@ -6891,7 +6891,10 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
             lock!(clean_shutdown = clean_shutdown; {
                 if clean_shutdown.should_handle_new() {
                     let room = OpenRoom::Discord { id: cal_event.race.id.into(), kind: cal_event.kind };
-                    assert!(clean_shutdown.open_rooms.insert(room.clone()));
+                    if !clean_shutdown.open_rooms.insert(room.clone()) {
+                        unlock!();
+                        return Ok(None)
+                    }
                     clean_shutdown.updates.send(CleanShutdownUpdate::RoomOpened(room)).allow_unreceived();
                     let discord_ctx = discord_ctx.clone();
                     let cal_event = cal_event.clone();
