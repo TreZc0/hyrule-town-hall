@@ -21,7 +21,8 @@ use {
 };
 
 pub(crate) static SYNC_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
-const MAX_ZSR_TITLE_CHARS: usize = 100; ///limitation by Discord events and Youtube
+// Limitation by Discord events and YouTube.
+const MAX_ZSR_TITLE_CHARS: usize = 100;
 
 /// Tracks the latest debounce version per race_id. When a volunteer status changes, the version
 /// is bumped and a task is spawned to fire after 20 s. The task only fires if its version is still
@@ -686,21 +687,21 @@ pub(crate) async fn build_race_title(
                 title = format!("{} [{}]", title, mode);
             }
         }
-        return enforce_zsr_title_limit(title)
+        return title
     }
 
     if let Some(custom_title) = &race.custom_title {
-        return enforce_zsr_title_limit(format!("{}: {}", event_name, custom_title));
+        return format!("{}: {}", event_name, custom_title);
     }
 
     if let Some(label) = race.seeding_race_label(transaction).await.unwrap_or(None) {
-        return enforce_zsr_title_limit(format!("{}: {}", event_name, label));
+        return format!("{}: {}", event_name, label);
     }
 
     // Qualifier races get a simplified title without matchup
     if race.phase.as_deref() == Some("Qualifier") {
         let round = race.round.as_deref().unwrap_or("1");
-        return enforce_zsr_title_limit(format!("{}: Qualifier {}", event_name, round));
+        return format!("{}: Qualifier {}", event_name, round);
     }
 
     // Build matchup string
@@ -725,9 +726,14 @@ pub(crate) async fn build_race_title(
         return title
     }
 
-    let title = build_normal_race_title(event_name, race, export, &compact_matchup, true);
+    let title = build_normal_race_title(event_name, race, export, &matchup, true);
     let title = append_race_mode(title, race, export);
-    enforce_zsr_title_limit(title)
+    if zsr_title_fits(&title) {
+        return title
+    }
+
+    let title = build_normal_race_title(event_name, race, export, &compact_matchup, true);
+    append_race_mode(title, race, export)
 }
 
 fn build_normal_race_title(event_name: &str, race: &Race, export: &ExportConfig, matchup: &str, compact: bool) -> String {
@@ -773,14 +779,6 @@ fn zsr_title_fits(title: &str) -> bool {
         true
     } else {
         false
-    }
-}
-
-fn enforce_zsr_title_limit(title: String) -> String {
-    if zsr_title_fits(&title) {
-        title
-    } else {
-        title.chars().take(MAX_ZSR_TITLE_CHARS).collect()
     }
 }
 
