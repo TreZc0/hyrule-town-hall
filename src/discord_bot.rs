@@ -4672,26 +4672,27 @@ fn push_runner_timezones(content: &mut MessageBuilder, runners: &[RunnerTimezone
     let now = Utc::now();
     content.push_line("");
     content.push_line("");
-    content.push(match language {
-        French => "Fuseaux horaires : ",
-        English | German | Portuguese => "Timezones: ",
-    });
-    for (idx, runner) in runners.iter().enumerate() {
-        if idx > 0 {
-            content.push("; ");
-        }
-        content.push_safe(&runner.name);
-        content.push(": ");
-        if let Some(timezone) = runner.timezone {
-            content.push_mono(timezone.to_string());
-            content.push(" (");
-            content.push(timezone_utc_offset(timezone, now));
-            content.push(')');
-        } else {
-            content.push(match language {
-                French => "non défini",
-                English | German | Portuguese => "not set",
-            });
+    if runners.iter().any(|runner| runner.timezone.is_some()) {
+        content.push(match language {
+            French => "Fuseaux horaires :",
+            English | German | Portuguese => "Timezones:",
+        });
+        content.push_line("");
+        for runner in runners {
+            content.push_safe(&runner.name);
+            content.push(": ");
+            if let Some(timezone) = runner.timezone {
+                content.push_mono(timezone.to_string());
+                content.push(" (");
+                content.push(timezone_utc_offset(timezone, now));
+                content.push(')');
+            } else {
+                content.push(match language {
+                    French => "non défini",
+                    English | German | Portuguese => "not set",
+                });
+            }
+            content.push_line("");
         }
     }
     if runners.iter().any(|runner| runner.timezone.is_none()) {
@@ -4701,7 +4702,9 @@ fn push_runner_timezones(content: &mut MessageBuilder, runners: &[RunnerTimezone
             .unique()
             .map(|profile| format!("<{}/user/{}>", base_uri(), u64::from(profile)))
             .collect_vec();
-        content.push_line("");
+        if runners.iter().any(|runner| runner.timezone.is_some()) {
+            content.push_line("");
+        }
         content.push(match language {
             French => "-# Vous pouvez définir votre fuseau horaire sur votre page de profil Hyrule Town Hall",
             English | German | Portuguese => "-# You can set your timezone on your Hyrule Town Hall profile page",
@@ -4710,6 +4713,10 @@ fn push_runner_timezones(content: &mut MessageBuilder, runners: &[RunnerTimezone
             content.push(": ");
             content.push(profile_links.join(", "));
         }
+        content.push(match language {
+            French => ". Une fois d\u{00e9}fini, il appara\u{00ee}tra dans les futurs fils de planification et sera utilis\u{00e9} comme fuseau horaire par d\u{00e9}faut pour vos horaires de planification lorsqu'aucun fuseau horaire n'est fourni",
+            English | German | Portuguese => ". Once set, it will show up in any future scheduling thread and be used as the default for your scheduling times when no timezone is provided.",
+        });
         content.push('.');
     }
 }
