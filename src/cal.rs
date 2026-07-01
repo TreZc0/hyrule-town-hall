@@ -2255,7 +2255,7 @@ pub(crate) async fn create_race_form(mut transaction: Transaction<'_, Postgres>,
                     label(for = "start_date") : "Start date (YYYY-MM-DD HH:MM in your timezone):";
                     input(type = "text", name = "start_date", value? = ctx.field_value("start_date"));
                 });
-                input(type = "hidden", name = "timezone", id = "timezone-field");
+                input(type = "hidden", name = "timezone", id = "timezone-field", value? = me.as_ref().and_then(|me| me.timezone).map(|timezone| timezone.name()));
                 : form_field("custom_create_room", &mut errors, html! {
                     input(type = "checkbox", id = "custom_create_room", name = "custom_create_room", checked? = ctx.field_value("custom_create_room").map_or(ctx.field_value("custom_title").is_none(), |value| value == "on"));
                     label(for = "custom_create_room") : "Create racetime.gg room automatically";
@@ -4535,7 +4535,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                                 });
                                 small : "input in your local time (name of timezone)";
                             });
-                            input(type = "hidden", name = "timezone", id = "timezone-field");
+                            input(type = "hidden", name = "timezone", id = "timezone-field", value? = me.timezone.map(|timezone| timezone.name()));
                         }
                         RaceSchedule::Live { start, end, room: _ } => {
                             p {
@@ -4551,7 +4551,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                                 });
                                 small : "Leave empty to keep current time";
                             });
-                            input(type = "hidden", name = "timezone", id = "timezone-field");
+                            input(type = "hidden", name = "timezone", id = "timezone-field", value? = me.timezone.map(|timezone| timezone.name()));
 
                         }
                         RaceSchedule::Async { start1, start2, start3, end1, end2, end3, room1: _, room2: _, room3: _ } => {

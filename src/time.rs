@@ -157,6 +157,88 @@ pub(crate) struct DateTimeFormat {
     pub(crate) running_text: bool,
 }
 
+fn format_datetime_in_timezone(datetime: DateTime<Utc>, timezone: Tz, long: bool) -> String {
+    let local = datetime.with_timezone(&timezone);
+    local.format(if long { "%A, %B %-d, %Y, %H:%M:%S %Z" } else { "%b %-d, %Y, %H:%M %Z" }).to_string()
+}
+
+fn format_date_range_in_timezone(start: DateTime<Utc>, end: DateTime<Utc>, timezone: Tz) -> String {
+    let start = start.with_timezone(&timezone);
+    let end = end.with_timezone(&timezone);
+    if start.year() != end.year() {
+        format!("{}-{}", start.format("%B %-d, %Y"), end.format("%B %-d, %Y"))
+    } else if start.month() != end.month() {
+        format!("{}-{}", start.format("%B %-d"), end.format("%B %-d, %Y"))
+    } else if start.day() != end.day() {
+        format!("{}-{}", start.format("%B %-d"), end.format("%-d, %Y"))
+    } else {
+        start.format("%B %-d, %Y").to_string()
+    }
+}
+
+fn format_recurring_time_in_timezone(datetime: DateTime<Utc>, timezone: Tz) -> String {
+    datetime.with_timezone(&timezone).format("%A at %H:%M %Z").to_string()
+}
+
+fn attr_value<'a>(tag: &'a str, attr: &str) -> Option<&'a str> {
+    let needle = format!(r#"{attr}=""#);
+    let start = tag.find(&needle)? + needle.len();
+    let end = tag[start..].find('"')?;
+    Some(&tag[start..start + end])
+}
+
+fn rewrite_span_contents(mut html: String, class: &str, mut replacement: impl FnMut(&str) -> Option<String>) -> String {
+    let needle = format!(r#"<span class="{class}""#);
+    let mut rewritten = String::with_capacity(html.len());
+    while let Some(start) = html.find(&needle) {
+        rewritten.push_str(&html[..start]);
+        let span = &html[start..];
+        let Some(tag_end) = span.find('>') else {
+            rewritten.push_str(span);
+            return rewritten
+        };
+        let tag = &span[..=tag_end];
+        let after_tag = &span[tag_end + 1..];
+        let Some(end) = after_tag.find("</span>") else {
+            rewritten.push_str(span);
+            return rewritten
+        };
+        rewritten.push_str(tag);
+        if let Some(replacement) = replacement(tag) {
+            rewritten.push_str(&replacement);
+        } else {
+            rewritten.push_str(&after_tag[..end]);
+        }
+        rewritten.push_str("</span>");
+        html = after_tag[end + "</span>".len()..].to_owned();
+    }
+    rewritten.push_str(&html);
+    rewritten
+}
+
+pub(crate) fn apply_profile_timezone_fallbacks(html: RawHtml<String>, timezone: Option<Tz>) -> RawHtml<String> {
+    let Some(timezone) = timezone else { return html };
+    let mut html = html.0;
+    html = rewrite_span_contents(html, "datetime", |tag| {
+        let timestamp = attr_value(tag, "data-timestamp")?.parse().ok()?;
+        let long = attr_value(tag, "data-long")? == "true";
+        DateTime::<Utc>::from_timestamp_millis(timestamp)
+            .map(|datetime| format_datetime_in_timezone(datetime, timezone, long))
+    });
+    html = rewrite_span_contents(html, "daterange", |tag| {
+        let start = DateTime::<Utc>::from_timestamp_millis(attr_value(tag, "data-start")?.parse().ok()?)?;
+        let end = DateTime::<Utc>::from_timestamp_millis(attr_value(tag, "data-end")?.parse().ok()?)?;
+        Some(format_date_range_in_timezone(start, end, timezone))
+    });
+    html = rewrite_span_contents(html, "recurring-time", |tag| {
+        let timestamp = attr_value(tag, "data-timestamp")?.parse().ok()?;
+        DateTime::<Utc>::from_timestamp_millis(timestamp)
+            .map(|datetime| format_recurring_time_in_timezone(datetime, timezone))
+    });
+    html = rewrite_span_contents(html, "timezone", |_| Some(timezone.name().to_owned()));
+    RawHtml(html)
+}
+
 pub(crate) fn format_datetime<Z: TimeZone>(datetime: DateTime<Z>, format: DateTimeFormat) -> RawHtml<String> {
     let utc = datetime.to_utc();
     let paris = datetime.with_timezone(&Europe::Paris);
