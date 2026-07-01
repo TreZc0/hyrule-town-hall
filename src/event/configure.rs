@@ -1749,7 +1749,7 @@ async fn weekly_schedules_form(mut transaction: Transaction<'_, Postgres>, me: O
                         label(for = "timezone") : "Timezone:";
                         select(id = "timezone", name = "timezone") {
                             option(value = "", disabled = "disabled", selected? = defaults.add_timezone().map_or(me.timezone.is_none(), |v| v.is_empty() && me.timezone.is_none())) : "Select timezone";
-                            option(value? = me.timezone.map(|timezone| timezone.name()), id = "local-tz-option", selected? = defaults.add_timezone().map_or(me.timezone.is_some(), |v| v.is_empty() && me.timezone.is_some())) {
+                            option(value = me.timezone.map(|timezone| timezone.name()).unwrap_or(""), id = "local-tz-option", selected? = defaults.add_timezone().map_or(me.timezone.is_some(), |v| v.is_empty() && me.timezone.is_some())) {
                                 @if let Some(timezone) = me.timezone {
                                     : format!("Profile timezone ({})", timezone.name());
                                 } else {
@@ -2116,7 +2116,7 @@ async fn weekly_schedule_edit_form(mut transaction: Transaction<'_, Postgres>, m
                             @if current_tz != "UTC" && current_tz != "Europe/Berlin" && current_tz != "America/New_York" && current_tz != "America/Los_Angeles" {
                                 option(value = current_tz, selected = "selected") : format!("{} (current)", current_tz);
                             }
-                            option(value? = me.timezone.map(|timezone| timezone.name()), id = "local-tz-option") {
+                            option(value = me.timezone.map(|timezone| timezone.name()).unwrap_or(""), id = "local-tz-option") {
                                 @if let Some(timezone) = me.timezone {
                                     : format!("Profile timezone ({})", timezone.name());
                                 } else {
