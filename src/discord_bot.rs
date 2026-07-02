@@ -4616,7 +4616,6 @@ pub(crate) enum Error {
 
 struct RunnerTimezone {
     name: String,
-    profile: Option<Id<Users>>,
     timezone: Option<Tz>,
 }
 
@@ -4626,27 +4625,23 @@ async fn runner_timezones_for_entrant(transaction: &mut Transaction<'_, Postgres
             .into_iter()
             .map(|member| RunnerTimezone {
                 name: member.display_name().to_owned(),
-                profile: Some(member.id),
                 timezone: member.timezone,
             })
             .collect(),
         Entrant::Discord { id, .. } => if let Some(user) = User::from_discord(&mut **transaction, *id).await? {
             vec![RunnerTimezone {
                 name: user.display_name().to_owned(),
-                profile: Some(user.id),
                 timezone: user.timezone,
             }]
         } else {
             let user = id.to_user(ctx).await?;
             vec![RunnerTimezone {
                 name: user.global_name.unwrap_or(user.name),
-                profile: None,
                 timezone: None,
             }]
         },
         Entrant::Named { name, .. } => vec![RunnerTimezone {
             name: name.clone(),
-            profile: None,
             timezone: None,
         }],
     })
@@ -4696,12 +4691,6 @@ fn push_runner_timezones(content: &mut MessageBuilder, runners: &[RunnerTimezone
         }
     }
     if runners.iter().any(|runner| runner.timezone.is_none()) {
-        let profile_links = runners.iter()
-            .filter(|runner| runner.timezone.is_none())
-            .filter_map(|runner| runner.profile)
-            .unique()
-            .map(|profile| format!("<{}/user/{}>", base_uri(), u64::from(profile)))
-            .collect_vec();
         if runners.iter().any(|runner| runner.timezone.is_some()) {
             content.push_line("");
         }
@@ -4709,13 +4698,9 @@ fn push_runner_timezones(content: &mut MessageBuilder, runners: &[RunnerTimezone
             French => "-# Vous pouvez définir votre fuseau horaire sur votre page de profil Hyrule Town Hall",
             English | German | Portuguese => "-# You can set your timezone on your Hyrule Town Hall profile page",
         });
-        if !profile_links.is_empty() {
-            content.push(": ");
-            content.push(profile_links.join(", "));
-        }
         content.push(match language {
-            French => ". Une fois d\u{00e9}fini, il appara\u{00ee}tra dans les futurs fils de planification et sera utilis\u{00e9} comme fuseau horaire par d\u{00e9}faut pour vos horaires de planification lorsqu'aucun fuseau horaire n'est fourni",
-            English | German | Portuguese => ". Once set, it will show up in any future scheduling thread and be used as the default for your scheduling times when no timezone is provided.",
+            French => ". Pour y accéder, connectez-vous puis cliquez sur votre nom d'utilisateur dans le coin supérieur droit. Une fois d\u{00e9}fini, il appara\u{00ee}tra dans les futurs fils de planification et sera utilis\u{00e9} comme fuseau horaire par d\u{00e9}faut pour vos horaires de planification lorsqu'aucun fuseau horaire n'est fourni",
+            English | German | Portuguese => ". You can get there by logging in and clicking your username in the top right corner. Once set, it will show up in any future scheduling thread and be used as the default for your scheduling times when no timezone is provided.",
         });
         content.push('.');
     }
