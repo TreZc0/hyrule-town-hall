@@ -260,6 +260,39 @@ pub(crate) struct SignupsTeam {
     pub(crate) is_opted_out: bool,
 }
 
+/// Whether a `Score`-kind entrant has not yet met the minimum qualifier requirement (dimmed/not qualified in the table).
+fn is_score_qualifier_dimmed(qualifier_kind: QualifierKind, qualification: &Qualification) -> bool {
+    match qualifier_kind {
+        QualifierKind::None | QualifierKind::Rank | QualifierKind::Single { .. } | QualifierKind::SongsOfHope => false,
+        QualifierKind::Score(QualifierScoreKind::Standard) => {
+            let Qualification::Multiple { num_finished, .. } = qualification else { unreachable!("qualification kind mismatch") };
+            *num_finished < 5
+        }
+        QualifierKind::Score(QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online) => {
+            let Qualification::Multiple { num_entered, .. } = qualification else { unreachable!("qualification kind mismatch") };
+            *num_entered < 3
+        }
+        QualifierKind::Score(QualifierScoreKind::Sgl2025Online) => {
+            let Qualification::Multiple { num_finished, .. } = qualification else { unreachable!("qualification kind mismatch") };
+            *num_finished < 3
+        }
+        QualifierKind::Score(QualifierScoreKind::TwwrMiniblins26 | QualifierScoreKind::TwwrMain) => {
+            let Qualification::Multiple { num_finished, .. } = qualification else { unreachable!("qualification kind mismatch") };
+            *num_finished < 2
+        }
+    }
+}
+
+/// Whether an entrant is already qualified, if the qualifier kind tracks a qualified status at all.
+fn is_qualified(qualifier_kind: QualifierKind, qualification: &Qualification) -> Option<bool> {
+    match (qualifier_kind, qualification) {
+        (QualifierKind::None | QualifierKind::Rank, _) => None,
+        (QualifierKind::Single { .. } | QualifierKind::SongsOfHope, Qualification::Single { qualified } | Qualification::TriforceBlitz { qualified, .. }) => Some(*qualified),
+        (QualifierKind::Score(_), qualification @ Qualification::Multiple { .. }) => Some(!is_score_qualifier_dimmed(qualifier_kind, qualification)),
+        _ => None,
+    }
+}
+
 pub(crate) struct Cache {
     http_client: reqwest::Client,
     race_data: HashMap<Url, RaceData>,
@@ -1094,6 +1127,13 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
     let teams_label = if let TeamConfig::Solo = data.team_config { "Entrants" } else { "Teams" };
     let has_opt_outs = signups.iter().any(|signup| signup.is_opted_out);
     let has_racetime_only = signups.iter().any(|signup| signup.members.iter().any(|m| matches!(m.user, MemberUser::RaceTime { .. })));
+    let entrant_word = if let TeamConfig::Solo = data.team_config { "player" } else { "team" };
+    let total_entrants = signups.len();
+    let opted_out_count = signups.iter().filter(|signup| signup.is_opted_out).count();
+    let qualifier_results_visible = is_organizer || all_qualifiers_ended || data.qualifier_score_hiding == QualifierScoreHiding::None;
+    let qualified_count = qualifier_results_visible.then(|| {
+        signups.iter().filter(|signup| is_qualified(qualifier_kind, &signup.qualification) == Some(true)).count()
+    }).filter(|_| !matches!(qualifier_kind, QualifierKind::None | QualifierKind::Rank));
     let mut rank = 0usize;
     let signups: Vec<(Option<usize>, SignupsTeam)> = signups.into_iter().map(|s| {
         let pos = if s.is_opted_out { None } else { rank += 1; Some(rank) };
@@ -1207,6 +1247,27 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
     }
     let content = html! {
         : header;
+        div(class = "entrants-stats") {
+            p {
+                : total_entrants;
+                : " ";
+                : entrant_word;
+                @if total_entrants != 1 {
+                    : "s";
+                }
+                : " entered";
+                @if let Some(qualified_count) = qualified_count {
+                    : " | ";
+                    : qualified_count;
+                    : " qualified";
+                }
+                @if opted_out_count > 0 {
+                    : " | ";
+                    : opted_out_count;
+                    : " opted out";
+                }
+            }
+        }
         // Organizer info box showing what's hidden for regular users
         @if is_organizer && !all_qualifiers_ended {
             @match data.qualifier_score_hiding {
@@ -1300,28 +1361,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                     }
                 } else {
                     @for (display_pos, SignupsTeam { team, members, qualification, custom_choices, is_opted_out }) in signups {
-                        @let is_dimmed = match qualifier_kind {
-                            QualifierKind::None => false,
-                            QualifierKind::Rank => false, // unknown cutoff
-                            QualifierKind::Single { .. } => false, // need to be qualified to be listed
-                            QualifierKind::Score(QualifierScoreKind::Standard) => {
-                                let Qualification::Multiple { num_finished, .. } = qualification else { unreachable!("qualification kind mismatch") };
-                                num_finished < 5
-                            }
-                            QualifierKind::Score(QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online) => {
-                                let Qualification::Multiple { num_entered, .. } = qualification else { unreachable!("qualification kind mismatch") };
-                                num_entered < 3
-                            }
-                            QualifierKind::Score(QualifierScoreKind::Sgl2025Online) => {
-                                let Qualification::Multiple { num_finished, .. } = qualification else { unreachable!("qualification kind mismatch") };
-                                num_finished < 3
-                            }
-                            QualifierKind::Score(QualifierScoreKind::TwwrMiniblins26 | QualifierScoreKind::TwwrMain) => {
-                                let Qualification::Multiple { num_finished, .. } = qualification else { unreachable!("qualification kind mismatch") };
-                                num_finished < 2
-                            }
-                            QualifierKind::SongsOfHope => false, //TODO
-                        };
+                        @let is_dimmed = is_score_qualifier_dimmed(qualifier_kind, &qualification);
                         tr(class? = is_dimmed.then_some("dimmed")) {
                             @match qualifier_kind {
                                 QualifierKind::Rank => td {
