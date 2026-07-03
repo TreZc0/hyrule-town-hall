@@ -501,6 +501,7 @@ enum ArchiveSortKey {
     #[default]
     EndTime,
     Series,
+    Game,
 }
 
 impl ArchiveSortKey {
@@ -508,6 +509,7 @@ impl ArchiveSortKey {
         match self {
             Self::EndTime => "End Time",
             Self::Series => "Series",
+            Self::Game => "Game",
         }
     }
 }
@@ -540,18 +542,37 @@ async fn archive(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, sort: 
             i : "(none currently)";
         } else {
             @let past_events = match sort {
-                ArchiveSortKey::EndTime => Either::Left(
-                    past_events.into_iter().into_group_map_by(|event| event.end.expect("checked above").year())
-                        .into_iter()
-                        .sorted_unstable_by_key(|(year, _)| Reverse(*year))
-                        .map(|(year, events)| (Cow::Owned(year.to_string()), events))
-                ),
-                ArchiveSortKey::Series => Either::Right(
-                    past_events.into_iter().into_group_map_by(|event| event.series)
-                        .into_iter()
-                        .sorted_unstable_by_key(|(series, _)| series.display_name())
-                        .map(|(series, events)| (Cow::Borrowed(series.display_name()), events))
-                ),
+                ArchiveSortKey::EndTime => past_events.into_iter().into_group_map_by(|event| event.end.expect("checked above").year())
+                    .into_iter()
+                    .sorted_unstable_by_key(|(year, _)| Reverse(*year))
+                    .map(|(year, events)| (Cow::Owned(year.to_string()), events))
+                    .collect::<Vec<(Cow<'_, str>, Vec<event::Data<'_>>)>>(),
+                ArchiveSortKey::Series => past_events.into_iter().into_group_map_by(|event| event.series)
+                    .into_iter()
+                    .sorted_unstable_by_key(|(series, _)| series.display_name())
+                    .map(|(series, events)| (Cow::Borrowed(series.display_name()), events))
+                    .collect::<Vec<(Cow<'_, str>, Vec<event::Data<'_>>)>>(),
+                ArchiveSortKey::Game => {
+                    let mut groups: Vec<(Option<game::Game>, Vec<event::Data<'_>>)> = Vec::new();
+                    for event in past_events {
+                        let game = event.game(&mut transaction).await.map_err(event::Error::from)?;
+                        let key = game.as_ref().map(|g| g.id);
+                        if let Some(pos) = groups.iter().position(|(g, _)| g.as_ref().map(|g| g.id) == key) {
+                            groups[pos].1.push(event);
+                        } else {
+                            groups.push((game, vec![event]));
+                        }
+                    }
+                    groups.sort_by(|(a, _), (b, _)| match (a.as_ref(), b.as_ref()) {
+                        (None, None) => Equal,
+                        (None, Some(_)) => Greater,
+                        (Some(_), None) => Less,
+                        (Some(ga), Some(gb)) => ga.display_name.cmp(&gb.display_name),
+                    });
+                    groups.into_iter()
+                        .map(|(game, events)| (Cow::Owned(game.map(|g| g.display_name).unwrap_or_else(|| "Other".to_string())), events))
+                        .collect::<Vec<(Cow<'_, str>, Vec<event::Data<'_>>)>>()
+                },
             };
             @for (heading, events) in past_events {
                 h2 : heading;
