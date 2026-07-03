@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO restreamers (series, event, restreamer, language) SELECT $1, $2, restreamer, language FROM restreamers WHERE series = $3 AND event = $4 AND language = $5 ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Text",
+        {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ba2ee0c24e1fb2b686c32d72d77739dbe995d13220984394292f1e07fd1d1315"
+}

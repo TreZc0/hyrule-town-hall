@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE races SET ignored = true, end_time = start + INTERVAL '8 hours' WHERE custom_title IS NOT NULL AND NOT custom_create_room AND start IS NOT NULL AND start < $1 AND end_time IS NULL AND NOT ignored",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "da2aa19a0711a72280ac067d03d55be5a502e657ac15127b3b7332ab72ddf677"
+}

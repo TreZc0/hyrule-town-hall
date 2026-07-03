@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT companion_race_id AS \"companion_race_id: Id<Races>\", room\n            FROM races\n            WHERE companion_race_id = ANY($1)\n              AND room IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "companion_race_id: Id<Races>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "room",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "9448091a8a38f40b6e6559a09169dfc1d16e4d05b7765619eef18836b94e99cf"
+}

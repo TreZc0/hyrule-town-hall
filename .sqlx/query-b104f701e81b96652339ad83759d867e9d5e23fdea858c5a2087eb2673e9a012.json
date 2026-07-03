@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO organizers (series, event, organizer) SELECT $1, $2, organizer FROM organizers WHERE series = $3 AND event = $4 ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b104f701e81b96652339ad83759d867e9d5e23fdea858c5a2087eb2673e9a012"
+}

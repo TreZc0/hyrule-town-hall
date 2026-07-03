@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT discord_guild AS \"discord_guild: PgSnowflake<GuildId>\" FROM games WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "discord_guild: PgSnowflake<GuildId>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "c37222863bc3eb550d25286d6ee587320aa640f1daee61efb8502ad00ba47350"
+}

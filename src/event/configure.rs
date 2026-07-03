@@ -73,7 +73,7 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, http_client:
         if is_organizer_or_global {
             let startgg_bulk_add: Option<(String, Vec<(String, String)>)> = if let MatchSource::StartGG(event_slug) = event.match_source() {
                 let tournament_slug = event_slug.split('/').nth(1).map(str::to_string).unwrap_or_default();
-                let qualifier_kind = event.qualifier_kind(&mut transaction).await?;
+                let qualifier_kind = event.qualifier_kind(&mut transaction, Some(me)).await?;
                 let mut cache = super::teams::Cache::new(http_client.clone());
                 let signups = super::teams::signups_sorted(
                     &mut transaction, &mut cache, None, &event,

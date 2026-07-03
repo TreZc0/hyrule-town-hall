@@ -297,7 +297,7 @@ fn is_score_qualifier_dimmed(qualifier_kind: QualifierKind, qualification: &Qual
             let Qualification::Multiple { num_finished, .. } = qualification else { unreachable!("qualification kind mismatch") };
             *num_finished < 3
         }
-        QualifierKind::Score(QualifierScoreKind::TwwrMiniblins26 | QualifierScoreKind::TwwrMain) => {
+        QualifierKind::Score(QualifierScoreKind::TwwrMiniblins26) => {
             let Qualification::Multiple { num_finished, .. } = qualification else { unreachable!("qualification kind mismatch") };
             *num_finished < 2
         }

@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id: Id<Races>\"\n                FROM races\n                WHERE series = $1\n                  AND event = $2\n                  AND id != $3\n                  AND start IS NOT NULL\n                  AND async_start1 IS NULL\n                  AND start BETWEEN $4::timestamptz - INTERVAL '30 minutes' AND $4::timestamptz + INTERVAL '30 minutes'\n                  AND companion_race_id IS NULL\n                  AND NOT EXISTS (SELECT 1 FROM races r2 WHERE r2.companion_race_id = races.id)\n                  AND NOT ignored\n                ORDER BY start ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Races>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1b409301670bec83bafb3c0330d73d01d75b27fcb4e67109a0e26dc76edbc061"
+}

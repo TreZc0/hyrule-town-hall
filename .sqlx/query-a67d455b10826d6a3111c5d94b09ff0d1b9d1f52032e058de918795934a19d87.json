@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id: Id<Races>\" FROM races WHERE NOT ignored AND room IS NULL AND async_room1 IS NULL AND async_room2 IS NULL AND async_room3 IS NULL AND seed_data IS NULL AND NOT EXISTS (SELECT 1 FROM races r2 WHERE r2.companion_race_id = races.id)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Races>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a67d455b10826d6a3111c5d94b09ff0d1b9d1f52032e058de918795934a19d87"
+}

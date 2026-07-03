@@ -891,54 +891,27 @@ impl Handler {
                 let room = Url::parse(&format!("https://{}{}", racetime_host(), data.url)).to_racetime()?;
                 match event.team_config {
                     TeamConfig::Solo => {
-                        if let Some(mut tfb_scores) = tfb_scores {
-                            let mut entries = Vec::with_capacity(data.entrants.len());
-                            for entrant in &data.entrants {
-                                if let Some(rt_user) = &entrant.user {
-                                    let mapped = if_chain! {
-                                        if let Some(user) = User::from_racetime(&mut *transaction, &rt_user.id).await.to_racetime()?;
-                                        if let Some(team) = Team::from_event_and_member(&mut transaction, event.series, &event.event, user.id).await.to_racetime()?;
-                                        then {
-                                            Entrant::MidosHouseTeam(team)
-                                        } else {
-                                            Entrant::Named {
-                                                name: rt_user.full_name.clone(),
-                                                racetime_id: Some(rt_user.id.clone()),
-                                                twitch_username: rt_user.twitch_name.clone(),
-                                            }
+                        let mut entries = Vec::with_capacity(data.entrants.len());
+                        for entrant in &data.entrants {
+                            if let Some(rt_user) = &entrant.user {
+                                entries.push((if_chain! {
+                                    if let Some(user) = User::from_racetime(&mut *transaction, &rt_user.id).await.to_racetime()?;
+                                    if let Some(team) = Team::from_event_and_member(&mut transaction, event.series, &event.event, user.id).await.to_racetime()?;
+                                    then {
+                                        Entrant::MidosHouseTeam(team)
+                                    } else {
+                                        Entrant::Named {
+                                            name: rt_user.full_name.clone(),
+                                            racetime_id: Some(rt_user.id.clone()),
+                                            twitch_username: rt_user.twitch_name.clone(),
                                         }
-                                    };
-                                    if let Some(score) = tfb_scores.remove(&rt_user.id) {
-                                        entries.push((mapped, score, room.clone()));
                                     }
-                                }
+                                }, entrant.finish_time, room.clone()));
                             }
-                            let (t, ids) = report_partitioned_companion_results(transaction, ctx, cal_event, &companion_event, event, entries).await?;
-                            transaction = t;
-                            ignored_race_ids = ids;
-                        } else {
-                            let mut entries = Vec::with_capacity(data.entrants.len());
-                            for entrant in &data.entrants {
-                                if let Some(rt_user) = &entrant.user {
-                                    entries.push((if_chain! {
-                                        if let Some(user) = User::from_racetime(&mut *transaction, &rt_user.id).await.to_racetime()?;
-                                        if let Some(team) = Team::from_event_and_member(&mut transaction, event.series, &event.event, user.id).await.to_racetime()?;
-                                        then {
-                                            Entrant::MidosHouseTeam(team)
-                                        } else {
-                                            Entrant::Named {
-                                                name: rt_user.full_name.clone(),
-                                                racetime_id: Some(rt_user.id.clone()),
-                                                twitch_username: rt_user.twitch_name.clone(),
-                                            }
-                                        }
-                                    }, entrant.finish_time, room.clone()));
-                                }
-                            }
-                            let (t, ids) = report_partitioned_companion_results(transaction, ctx, cal_event, &companion_event, event, entries).await?;
-                            transaction = t;
-                            ignored_race_ids = ids;
                         }
+                        let (t, ids) = report_partitioned_companion_results(transaction, ctx, cal_event, &companion_event, event, entries).await?;
+                        transaction = t;
+                        ignored_race_ids = ids;
                     }
                     TeamConfig::Pictionary => unimplemented!(),
                     _ => {
@@ -952,46 +925,25 @@ impl Handler {
                                 team_times.entry(team.slug.clone()).or_default().push(entrant.finish_time);
                             }
                         }
-                        if let Some(mut tfb_scores) = tfb_scores {
-                            let mut entries = Vec::with_capacity(team_times.len());
-                            let mut all_teams_found = true;
-                            for team_slug in team_times.keys() {
-                                if let Some(team) = Team::from_racetime(&mut transaction, event.series, &event.event, team_slug).await.to_racetime()? {
-                                    if let Some(score) = tfb_scores.remove(team_slug) {
-                                        entries.push((Entrant::MidosHouseTeam(team), score, team_rooms.remove(team_slug).expect("each team should have a room")));
-                                    }
-                                } else {
-                                    all_teams_found = false;
-                                }
-                            }
-                            if all_teams_found {
-                                let (t, ids) = report_partitioned_companion_results(transaction, ctx, cal_event, &companion_event, event, entries).await?;
-                                transaction = t;
-                                ignored_race_ids = ids;
+                        let mut entries = Vec::with_capacity(team_times.len());
+                        let mut all_teams_found = true;
+                        for (team_slug, times) in team_times {
+                            if let Some(team) = Team::from_racetime(&mut transaction, event.series, &event.event, &team_slug).await.to_racetime()? {
+                                entries.push((
+                                    Entrant::MidosHouseTeam(team),
+                                    times.iter().try_fold(Duration::default(), |acc, &time| Some(acc + time?)).map(|total| total / u32::try_from(times.len()).expect("too many team members")),
+                                    team_rooms.remove(&team_slug).expect("each team should have a room"),
+                                ));
                             } else {
-                                warn_companion_result_partition(ctx, event, "could not map every racetime team to a Hyrule Town Hall team").await?;
+                                all_teams_found = false;
                             }
+                        }
+                        if all_teams_found {
+                            let (t, ids) = report_partitioned_companion_results(transaction, ctx, cal_event, &companion_event, event, entries).await?;
+                            transaction = t;
+                            ignored_race_ids = ids;
                         } else {
-                            let mut entries = Vec::with_capacity(team_times.len());
-                            let mut all_teams_found = true;
-                            for (team_slug, times) in team_times {
-                                if let Some(team) = Team::from_racetime(&mut transaction, event.series, &event.event, &team_slug).await.to_racetime()? {
-                                    entries.push((
-                                        Entrant::MidosHouseTeam(team),
-                                        times.iter().try_fold(Duration::default(), |acc, &time| Some(acc + time?)).map(|total| total / u32::try_from(times.len()).expect("too many team members")),
-                                        team_rooms.remove(&team_slug).expect("each team should have a room"),
-                                    ));
-                                } else {
-                                    all_teams_found = false;
-                                }
-                            }
-                            if all_teams_found {
-                                let (t, ids) = report_partitioned_companion_results(transaction, ctx, cal_event, &companion_event, event, entries).await?;
-                                transaction = t;
-                                ignored_race_ids = ids;
-                            } else {
-                                warn_companion_result_partition(ctx, event, "could not map every racetime team to a Hyrule Town Hall team").await?;
-                            }
+                            warn_companion_result_partition(ctx, event, "could not map every racetime team to a Hyrule Town Hall team").await?;
                         }
                     }
                 }
