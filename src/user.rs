@@ -406,6 +406,40 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
     } else {
         return Err(StatusOrError::Status(Status::NotFound))
     };
+    let owns_profile = me.as_ref().is_some_and(|me| me.id == user.id);
+    let api_keys = if owns_profile {
+        let api_keys = sqlx::query_scalar::<_, String>("SELECT key::text FROM api_keys WHERE user_id = $1 ORDER BY key")
+            .bind(i64::from(user.id))
+            .fetch_all(&mut *transaction)
+            .await?;
+        match api_keys.as_slice() {
+            [] => html! {},
+            [api_key] => html! {
+                p {
+                    : "API key: ";
+                    span(class = "api-key-reveal", tabindex = "0") {
+                        span(class = "api-key-placeholder") : "hover to reveal";
+                        code(class = "api-key-value") : api_key;
+                    }
+                }
+            },
+            _ => html! {
+                p : "API keys:";
+                ul {
+                    @for api_key in &api_keys {
+                        li {
+                            span(class = "api-key-reveal", tabindex = "0") {
+                                span(class = "api-key-placeholder") : "hover to reveal";
+                                code(class = "api-key-value") : api_key;
+                            }
+                        }
+                    }
+                }
+            },
+        }
+    } else {
+        html! {}
+    };
     let racetime = if let Some(ref racetime) = user.racetime {
         html! {
             p {
@@ -643,7 +677,7 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
     } else {
         html! {}
     };
-    Ok(page(transaction, &me, &uri, PageStyle { kind: if me.as_ref().is_some_and(|me| *me == user) { PageKind::MyProfile } else { PageKind::Other }, ..PageStyle::default() }, &format!("{} — Hyrule Town Hall", user.display_name()), html! {
+    Ok(page(transaction, &me, &uri, PageStyle { kind: if owns_profile { PageKind::MyProfile } else { PageKind::Other }, ..PageStyle::default() }, &format!("{} — Hyrule Town Hall", user.display_name()), html! {
         h1 {
             bdi : user.display_name();
         }
@@ -651,6 +685,7 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
             : "Hyrule Town Hall user ID: ";
             code : user.id.to_string();
         }
+        : api_keys;
         : racetime;
         : discord;
         : startgg;

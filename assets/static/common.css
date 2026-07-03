@@ -669,6 +669,42 @@ p.error {
   word-break: break-all;
 }
 
+.api-key-reveal {
+  cursor: default;
+  display: inline-grid;
+  grid-template-areas: "value";
+  max-width: 100%;
+  vertical-align: baseline;
+}
+
+.api-key-placeholder,
+.api-key-value {
+  grid-area: value;
+}
+
+.api-key-placeholder {
+  color: var(--text-muted);
+  font-style: oblique;
+}
+
+.api-key-value {
+  overflow-wrap: anywhere;
+  user-select: all;
+  visibility: hidden;
+}
+
+.api-key-reveal:hover .api-key-placeholder,
+.api-key-reveal:focus .api-key-placeholder,
+.api-key-reveal:focus-within .api-key-placeholder {
+  visibility: hidden;
+}
+
+.api-key-reveal:hover .api-key-value,
+.api-key-reveal:focus .api-key-value,
+.api-key-reveal:focus-within .api-key-value {
+  visibility: visible;
+}
+
 .help {
   margin-left: 5px;
   font-style: oblique

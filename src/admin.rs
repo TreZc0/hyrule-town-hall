@@ -12,6 +12,10 @@ use rocket_util::{
     html,
 };
 use crate::http::page;
+use rand::distr::{
+    Alphanumeric,
+    SampleString as _,
+};
 use sqlx::{Postgres, Transaction};
 use crate::{
     game::{Game, GameError},
@@ -164,6 +168,11 @@ pub(crate) async fn index(
                 a(href = uri!(list_restream_channels)) : "Manage Restream Channels";
             }
 
+            h2 : "API Keys";
+            p {
+                a(href = uri!(api_keys)) : "Manage API Keys";
+            }
+
             script(src = static_url!("game-edit.js")) {}
         }
     };
@@ -176,6 +185,343 @@ pub(crate) async fn index(
         "Admin Panel — Hyrule Town Hall",
         content,
     ).await.map_err(Error::from)?)
+}
+
+#[derive(sqlx::FromRow)]
+struct ApiKeyAdminRow {
+    user_id: Id<Users>,
+    entrants_read: bool,
+    mw_admin: bool,
+    user_search: bool,
+    write: bool,
+    key_count: i64,
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct AddApiKeyForm {
+    #[field(default = String::new())]
+    csrf: String,
+    user_id: String,
+    #[field(default = false)]
+    entrants_read: bool,
+    #[field(default = false)]
+    mw_admin: bool,
+    #[field(default = false)]
+    user_search: bool,
+    #[field(default = false)]
+    write: bool,
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct UpdateApiKeyForm {
+    #[field(default = String::new())]
+    csrf: String,
+    user_id: String,
+    #[field(default = false)]
+    entrants_read: bool,
+    #[field(default = false)]
+    mw_admin: bool,
+    #[field(default = false)]
+    user_search: bool,
+    #[field(default = false)]
+    write: bool,
+}
+
+#[derive(FromForm, CsrfForm)]
+pub(crate) struct DeleteApiKeyForm {
+    #[field(default = String::new())]
+    csrf: String,
+    user_id: String,
+}
+
+#[rocket::get("/admin/api-keys")]
+pub(crate) async fn api_keys(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+) -> Result<RawHtml<String>, StatusOrError<Error>> {
+    let me = me.ok_or(Error::Unauthorized)?;
+    if !me.is_global_admin() {
+        return Err(Error::Unauthorized.into());
+    }
+
+    let mut transaction = pool.begin().await.map_err(Error::from)?;
+    let rows = sqlx::query_as::<_, ApiKeyAdminRow>(
+        r#"SELECT
+            user_id,
+            bool_or(entrants_read) AS entrants_read,
+            bool_or(mw_admin) AS mw_admin,
+            bool_or(user_search) AS user_search,
+            bool_or(write) AS write,
+            COUNT(*) AS key_count
+        FROM api_keys
+        GROUP BY user_id
+        ORDER BY user_id"#,
+    )
+    .fetch_all(&mut *transaction)
+    .await
+    .map_err(Error::from)?;
+    let mut keys = Vec::with_capacity(rows.len());
+    for row in rows {
+        let user = User::from_id(&mut *transaction, row.user_id)
+            .await
+            .map_err(Error::from)?
+            .expect("database constraint validated: API keys belong to existing users");
+        keys.push((row, user));
+    }
+
+    let content = html! {
+        article {
+            h1 : "Manage API Keys";
+
+            @if keys.is_empty() {
+                p : "No API keys configured.";
+            } else {
+                table {
+                    thead {
+                        tr {
+                            th : "User";
+                            th : "Keys";
+                            th : "Scopes";
+                            th : "Actions";
+                        }
+                    }
+                    tbody {
+                        @for (row, user) in &keys {
+                            @let user_id = row.user_id.to_string();
+                            @let form_id = format!("api-key-update-{user_id}");
+                            tr(data_api_key_user_id = &user_id) {
+                                td : user;
+                                td {
+                                    : row.key_count;
+                                }
+                                td {
+                                    label {
+                                        input(class = "api-key-scope-control", type = "checkbox", name = "entrants_read", value = "true", checked? = row.entrants_read, disabled, form = &form_id);
+                                        : " entrants_read";
+                                    }
+                                    br;
+                                    label {
+                                        input(class = "api-key-scope-control", type = "checkbox", name = "user_search", value = "true", checked? = row.user_search, disabled, form = &form_id);
+                                        : " user_search";
+                                    }
+                                    br;
+                                    label {
+                                        input(class = "api-key-scope-control", type = "checkbox", name = "write", value = "true", checked? = row.write, disabled, form = &form_id);
+                                        : " write";
+                                    }
+                                    br;
+                                    label {
+                                        input(class = "api-key-scope-control", type = "checkbox", name = "mw_admin", value = "true", checked? = row.mw_admin, disabled, form = &form_id);
+                                        : " mw_admin";
+                                    }
+                                }
+                                td {
+                                    form(id = &form_id, method = "post", action = uri!(update_api_key_scopes), style = "display: inline;") {
+                                        : csrf;
+                                        input(type = "hidden", name = "user_id", value = &user_id);
+                                    }
+                                    div(class = "actions", style = "display: flex; gap: 8px; align-items: center;") {
+                                        button(type = "button", class = "button api-key-edit", onclick = format!("editApiKeyScopes('{user_id}')")) : "Edit";
+                                        button(type = "submit", class = "button api-key-save", form = &form_id, style = "display: none;") : "Save";
+                                        button(type = "button", class = "button api-key-cancel", style = "display: none;", onclick = format!("cancelApiKeyScopes('{user_id}')")) : "Cancel";
+                                        form(method = "post", action = uri!(delete_api_key), style = "display: inline;", onsubmit = "return confirm('Delete this user\\'s API key access?')") {
+                                            : csrf;
+                                            input(type = "hidden", name = "user_id", value = &user_id);
+                                            button(type = "submit") : "Delete";
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            h2 : "Add API Key";
+            form(method = "post", action = uri!(add_api_key)) {
+                : csrf;
+                fieldset {
+                    label(for = "admin") : "User";
+                    div(class = "autocomplete-container") {
+                        input(type = "text", id = "admin", name = "user_id", autocomplete = "off", placeholder = "Type a username...", required);
+                        div(id = "user-suggestions", class = "suggestions", style = "display: none;") {}
+                    }
+                    p(class = "help") : "Start typing a username to search for users. Selecting a result fills in the user's Hyrule Town Hall ID.";
+                }
+                fieldset {
+                    legend : "Scopes";
+                    label {
+                        input(type = "checkbox", name = "entrants_read", value = "true");
+                        : " entrants_read";
+                    }
+                    br;
+                    label {
+                        input(type = "checkbox", name = "user_search", value = "true");
+                        : " user_search";
+                    }
+                    br;
+                    label {
+                        input(type = "checkbox", name = "write", value = "true");
+                        : " write";
+                    }
+                    br;
+                    label {
+                        input(type = "checkbox", name = "mw_admin", value = "true");
+                        : " mw_admin";
+                    }
+                }
+                fieldset {
+                    input(type = "submit", value = "Add API Key");
+                }
+            }
+            script(src = static_url!("user-search.js")) {}
+            script(src = static_url!("api-key-admin.js")) {}
+            p {
+                a(href = uri!(index)) : "Back to Admin Panel";
+            }
+        }
+    };
+
+    Ok(page(
+        transaction,
+        &Some(me),
+        &uri,
+        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        "Manage API Keys — Hyrule Town Hall",
+        content,
+    ).await.map_err(Error::from)?)
+}
+
+#[rocket::post("/admin/api-keys", data = "<form>")]
+pub(crate) async fn add_api_key(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, AddApiKeyForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(Error::Unauthorized)?;
+    if !me.is_global_admin() {
+        return Err(Error::Unauthorized.into());
+    }
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if let Some(ref value) = form.value {
+        let user_id = value.user_id.trim().parse::<Id<Users>>()
+            .map_err(|_| StatusOrError::Status(Status::BadRequest))?;
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        if User::from_id(&mut *transaction, user_id).await.map_err(Error::from)?.is_none() {
+            return Err(StatusOrError::Status(Status::BadRequest));
+        }
+        if sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM api_keys WHERE user_id = $1)")
+            .bind(i64::from(user_id))
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(Error::from)?
+        {
+            return Ok(Redirect::to(uri!(api_keys)));
+        }
+        loop {
+            let key = Alphanumeric.sample_string(&mut rng(), 32);
+            let rows_affected = sqlx::query(
+                r#"INSERT INTO api_keys (key, user_id, entrants_read, mw_admin, user_search, write)
+                   VALUES ($1, $2, $3, $4, $5, $6)
+                   ON CONFLICT (key) DO NOTHING"#,
+            )
+            .bind(&key)
+            .bind(i64::from(user_id))
+            .bind(value.entrants_read)
+            .bind(value.mw_admin)
+            .bind(value.user_search)
+            .bind(value.write)
+            .execute(&mut *transaction)
+            .await
+            .map_err(Error::from)?
+            .rows_affected();
+            if rows_affected == 1 {
+                break;
+            }
+        }
+        transaction.commit().await.map_err(Error::from)?;
+    }
+    Ok(Redirect::to(uri!(api_keys)))
+}
+
+#[rocket::post("/admin/api-keys/update", data = "<form>")]
+pub(crate) async fn update_api_key_scopes(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, UpdateApiKeyForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(Error::Unauthorized)?;
+    if !me.is_global_admin() {
+        return Err(Error::Unauthorized.into());
+    }
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if let Some(ref value) = form.value {
+        let user_id = value.user_id.trim().parse::<Id<Users>>()
+            .map_err(|_| StatusOrError::Status(Status::BadRequest))?;
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        let rows_affected = sqlx::query(
+            r#"UPDATE api_keys
+               SET entrants_read = $1,
+                   mw_admin = $2,
+                   user_search = $3,
+                   write = $4
+               WHERE user_id = $5"#,
+        )
+        .bind(value.entrants_read)
+        .bind(value.mw_admin)
+        .bind(value.user_search)
+        .bind(value.write)
+        .bind(i64::from(user_id))
+        .execute(&mut *transaction)
+        .await
+        .map_err(Error::from)?
+        .rows_affected();
+        if rows_affected == 0 {
+            return Err(StatusOrError::Status(Status::NotFound));
+        }
+        transaction.commit().await.map_err(Error::from)?;
+    }
+    Ok(Redirect::to(uri!(api_keys)))
+}
+
+#[rocket::post("/admin/api-keys/delete", data = "<form>")]
+pub(crate) async fn delete_api_key(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, DeleteApiKeyForm>>,
+) -> Result<Redirect, StatusOrError<Error>> {
+    let me = me.ok_or(Error::Unauthorized)?;
+    if !me.is_global_admin() {
+        return Err(Error::Unauthorized.into());
+    }
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+
+    if let Some(ref value) = form.value {
+        let user_id = value.user_id.trim().parse::<Id<Users>>()
+            .map_err(|_| StatusOrError::Status(Status::BadRequest))?;
+        let mut transaction = pool.begin().await.map_err(Error::from)?;
+        let rows_affected = sqlx::query("DELETE FROM api_keys WHERE user_id = $1")
+            .bind(i64::from(user_id))
+            .execute(&mut *transaction)
+            .await
+            .map_err(Error::from)?
+            .rows_affected();
+        if rows_affected == 0 {
+            return Err(StatusOrError::Status(Status::NotFound));
+        }
+        transaction.commit().await.map_err(Error::from)?;
+    }
+    Ok(Redirect::to(uri!(api_keys)))
 }
 
 
