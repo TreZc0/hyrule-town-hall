@@ -297,28 +297,43 @@ pub(crate) async fn api_keys(
                                     : row.key_count;
                                 }
                                 td {
-                                    label {
-                                        input(class = "api-key-scope-control", type = "checkbox", name = "entrants_read", value = "true", checked? = row.entrants_read, disabled, form = &form_id);
-                                        : " entrants_read";
+                                    @let scope_names = [
+                                        row.entrants_read.then_some("entrants_read"),
+                                        row.user_search.then_some("user_search"),
+                                        row.write.then_some("write"),
+                                        row.mw_admin.then_some("mw_admin"),
+                                    ].into_iter().flatten().format(", ").to_string();
+                                    span(class = if scope_names.is_empty() { "api-key-scope-state api-key-scope-empty" } else { "api-key-scope-state" }) {
+                                        @if scope_names.is_empty() {
+                                            : "No scopes";
+                                        } else {
+                                            : scope_names;
+                                        }
                                     }
-                                    br;
-                                    label {
-                                        input(class = "api-key-scope-control", type = "checkbox", name = "user_search", value = "true", checked? = row.user_search, disabled, form = &form_id);
-                                        : " user_search";
-                                    }
-                                    br;
-                                    label {
-                                        input(class = "api-key-scope-control", type = "checkbox", name = "write", value = "true", checked? = row.write, disabled, form = &form_id);
-                                        : " write";
-                                    }
-                                    br;
-                                    label {
-                                        input(class = "api-key-scope-control", type = "checkbox", name = "mw_admin", value = "true", checked? = row.mw_admin, disabled, form = &form_id);
-                                        : " mw_admin";
+                                    div(class = "api-key-scope-edit-controls", style = "display: none;") {
+                                        label {
+                                            input(class = "api-key-scope-control", type = "checkbox", name = "entrants_read", value = "true", checked? = row.entrants_read, disabled, form = &form_id);
+                                            : " entrants_read";
+                                        }
+                                        br;
+                                        label {
+                                            input(class = "api-key-scope-control", type = "checkbox", name = "user_search", value = "true", checked? = row.user_search, disabled, form = &form_id);
+                                            : " user_search";
+                                        }
+                                        br;
+                                        label {
+                                            input(class = "api-key-scope-control", type = "checkbox", name = "write", value = "true", checked? = row.write, disabled, form = &form_id);
+                                            : " write";
+                                        }
+                                        br;
+                                        label {
+                                            input(class = "api-key-scope-control", type = "checkbox", name = "mw_admin", value = "true", checked? = row.mw_admin, disabled, form = &form_id);
+                                            : " mw_admin";
+                                        }
                                     }
                                 }
                                 td {
-                                    form(id = &form_id, method = "post", action = uri!(update_api_key_scopes), style = "display: inline;") {
+                                    form(id = &form_id, method = "post", action = uri!(update_api_key_scopes), style = "display: none;") {
                                         : csrf;
                                         input(type = "hidden", name = "user_id", value = &user_id);
                                     }

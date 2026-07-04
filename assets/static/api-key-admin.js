@@ -16,6 +16,12 @@ function editApiKeyScopes(userId) {
         input.dataset.originalChecked = input.checked ? 'true' : 'false';
         input.disabled = false;
     });
+    row.querySelectorAll('.api-key-scope-edit-controls').forEach(controls => {
+        controls.style.display = '';
+    });
+    row.querySelectorAll('.api-key-scope-state').forEach(state => {
+        state.style.display = 'none';
+    });
     setApiKeyButtons(row, true);
 }
 
@@ -26,6 +32,12 @@ function cancelApiKeyScopes(userId) {
     row.querySelectorAll('.api-key-scope-control').forEach(input => {
         input.checked = input.dataset.originalChecked === 'true';
         input.disabled = true;
+    });
+    row.querySelectorAll('.api-key-scope-edit-controls').forEach(controls => {
+        controls.style.display = 'none';
+    });
+    row.querySelectorAll('.api-key-scope-state').forEach(state => {
+        state.style.display = '';
     });
     setApiKeyButtons(row, false);
 }

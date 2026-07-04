@@ -705,6 +705,10 @@ p.error {
   visibility: visible;
 }
 
+.api-key-scope-empty {
+  color: var(--text-muted);
+}
+
 .help {
   margin-left: 5px;
   font-style: oblique
