@@ -4981,6 +4981,26 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
     };
 
+    let already_notified = match cal_event.kind {
+        cal::EventKind::Async1 => sqlx::query_scalar::<_, bool>("SELECT async_notified_1 FROM races WHERE id = $1")
+            .bind(i64::from(cal_event.race.id))
+            .fetch_one(&mut *transaction)
+            .await?,
+        cal::EventKind::Async2 => sqlx::query_scalar::<_, bool>("SELECT async_notified_2 FROM races WHERE id = $1")
+            .bind(i64::from(cal_event.race.id))
+            .fetch_one(&mut *transaction)
+            .await?,
+        cal::EventKind::Async3 => sqlx::query_scalar::<_, bool>("SELECT async_notified_3 FROM races WHERE id = $1")
+            .bind(i64::from(cal_event.race.id))
+            .fetch_one(&mut *transaction)
+            .await?,
+        cal::EventKind::Normal => panic!("Why are we having a normal race in an async"),
+    };
+    if already_notified {
+        transaction.commit().await?;
+        return Ok(())
+    }
+
     // Check if this is the second part of an async (seed already exists)
     let is_second_part = cal_event.race.seed.files.is_some();
 
