@@ -3152,14 +3152,18 @@ pub(crate) async fn race_table(
                                                                 @let pending_binding_signups = pending_signups.iter().copied().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
                                                                 @if pending_binding_signups.is_empty() {
                                                                     : binding.role_type_name;
+                                                                    : " (";
+                                                                    : language.short_code();
+                                                                    : ")";
                                                                 } else {
-                                                                    span(class = "settings-link pending-link", data_tooltip = format!("Still pending: {}", volunteer_signup_names(&pending_binding_signups, &user_cache))) {
+                                                                    span(class = "settings-link pending-link volunteer-role-link", data_tooltip = format!("Still pending: {}", volunteer_signup_names(&pending_binding_signups, &user_cache))) {
                                                                         : binding.role_type_name;
+                                                                        : " (";
+                                                                        : language.short_code();
+                                                                        : ")";
                                                                     }
                                                                 }
-                                                                : " (";
-                                                                : language.short_code();
-                                                                : "): ";
+                                                                : ": ";
                                                                 @for (i, signup) in binding_signups.iter().enumerate() {
                                                                     @if i > 0 { : ", "; }
                                                                     : user_cache.get(&signup.user_id)
@@ -3265,14 +3269,18 @@ pub(crate) async fn race_table(
                                                                 @let pending_binding_signups = pending_signups.iter().copied().filter(|s| s.role_binding_id == binding.id).collect::<Vec<_>>();
                                                                 @if pending_binding_signups.is_empty() {
                                                                     : binding.role_type_name;
+                                                                    : " (";
+                                                                    : language.short_code();
+                                                                    : ")";
                                                                 } else {
-                                                                    span(class = "settings-link pending-link", data_tooltip = format!("Still pending: {}", volunteer_signup_names(&pending_binding_signups, &user_cache))) {
+                                                                    span(class = "settings-link pending-link volunteer-role-link", data_tooltip = format!("Still pending: {}", volunteer_signup_names(&pending_binding_signups, &user_cache))) {
                                                                         : binding.role_type_name;
+                                                                        : " (";
+                                                                        : language.short_code();
+                                                                        : ")";
                                                                     }
                                                                 }
-                                                                : " (";
-                                                                : language.short_code();
-                                                                : "): ";
+                                                                : ": ";
                                                                 @for (i, signup) in binding_signups.iter().enumerate() {
                                                                     @if i > 0 { : ", "; }
                                                                     : user_cache.get(&signup.user_id)

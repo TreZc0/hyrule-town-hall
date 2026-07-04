@@ -631,6 +631,10 @@ p.error {
   text-decoration: underline dotted;
 }
 
+.settings-link.volunteer-role-link {
+  font-size: inherit;
+}
+
 .tooltip-content {
   display: none;
   position: absolute;
