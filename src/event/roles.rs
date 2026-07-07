@@ -3032,6 +3032,9 @@ async fn volunteer_page(
 
                     @if has_approved_roles {
                         p : "You have been approved for the following roles. You can now sign up for specific matches:";
+                        p {
+                            small(class = "dimmed") : "(times in your local timezone)";
+                        }
                         @for role_request in my_approved_roles {
                             @let binding = effective_role_bindings.iter().find(|b| b.id == role_request.role_binding_id);
                             @if let Some(binding) = binding {
@@ -3127,6 +3130,9 @@ async fn volunteer_page(
                     @if !auto_approve_eligible.is_empty() {
                         h4 : "Open Roles (No Application Required)";
                         p : "The following roles are open to all volunteers. Click a race to sign up directly:";
+                        p {
+                            small(class = "dimmed") : "(times in your local timezone)";
+                        }
                         @for binding in auto_approve_eligible {
                             h5 {
                                 : binding.role_type_name;
