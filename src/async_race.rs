@@ -912,6 +912,7 @@ pub(crate) enum Error {
     #[error("event error: {0}")]
     Event(event::Error),
     #[error(transparent)] Cal(#[from] cal::Error),
+    #[error(transparent)] DiscordBot(#[from] crate::discord_bot::Error),
     #[error("event not found")]
     EventNotFound,
     #[error("no team found")]
@@ -1265,24 +1266,16 @@ pub(crate) async fn send_completion_message(
         msg.push("• A screenshot of your final time and indication of seed completion\n\n");
     }
 
-    match run {
-        AsyncRun::Qualifier { .. } => {
-            msg.push("Staff: click the **Confirm Result** button below to record the official time.");
-            let confirm_button = CreateActionRow::Buttons(vec![
-                CreateButton::new(run.button_id("org_result"))
-                    .label("Confirm Result")
-                    .style(ButtonStyle::Primary),
-            ]);
-            channel_id.send_message(http, CreateMessage::new()
-                .content(msg.build())
-                .components(vec![confirm_button])
-            ).await?;
-        }
-        AsyncRun::BracketRace { .. } => {
-            msg.push("Staff will verify and record your official time using `/result-async`.");
-            channel_id.say(http, msg.build()).await?;
-        }
-    }
+    msg.push("Staff: click the **Confirm Result** button below to record the official time.");
+    let confirm_button = CreateActionRow::Buttons(vec![
+        CreateButton::new(run.button_id("org_result"))
+            .label("Confirm Result")
+            .style(ButtonStyle::Primary),
+    ]);
+    channel_id.send_message(http, CreateMessage::new()
+        .content(msg.build())
+        .components(vec![confirm_button])
+    ).await?;
     Ok(())
 }
 
@@ -1815,13 +1808,38 @@ pub(crate) async fn handle_org_forfeit_yes(
             clear_message_with_button(ctx, interaction.channel_id, &run.button_id("org_forfeit")).await;
             interaction.channel_id.say(ctx, format!("Forfeit confirmed for {}.", team_name)).await?;
         }
-        AsyncRun::BracketRace { .. } => {
+        AsyncRun::BracketRace { race_id, async_part } => {
             interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                 CreateInteractionResponseMessage::new()
-                    .content("Please use `/forfeit-async` in this thread to record this forfeit.")
+                    .content("Recording forfeit...")
                     .components(vec![])
             )).await?;
+
+            let mut transaction = pool.begin().await?;
+            let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(*race_id as u64)).await?;
+            let user = User::from_discord(&mut *transaction, interaction.user.id).await?.ok_or(Error::UnauthorizedUser)?;
+
+            sqlx::query!(
+                r#"
+                INSERT INTO async_times (race_id, async_part, finish_time, recorded_by, link)
+                VALUES ($1, $2, NULL, $3, NULL)
+                ON CONFLICT (race_id, async_part) DO UPDATE SET
+                    finish_time = NULL,
+                    recorded_at = NOW(),
+                    recorded_by = EXCLUDED.recorded_by,
+                    link = NULL
+                "#,
+                *race_id,
+                *async_part as i32,
+                user.id as _,
+            ).execute(&mut *transaction).await?;
+
+            crate::discord_bot::finalize_async_if_complete(ctx, &mut transaction, *race_id, &race).await?;
+
+            transaction.commit().await?;
+
             clear_message_with_button(ctx, interaction.channel_id, &run.button_id("org_forfeit")).await;
+            interaction.channel_id.say(ctx, "Forfeit confirmed.").await?;
         }
     }
     Ok(())
