@@ -2827,6 +2827,13 @@ async fn volunteer_page(
                     upcoming_races.push(race);
                 }
             }
+            upcoming_races.sort_unstable_by(|a, b| {
+                let start_of = |r: &Race| match r.schedule {
+                    RaceSchedule::Live { start, .. } => Some(start),
+                    _ => None,
+                };
+                start_of(a).cmp(&start_of(b))
+            });
 
             // Get active languages and determine selected language
             let active_languages = EffectiveRoleBinding::active_languages(&effective_role_bindings, data.default_volunteer_language);
@@ -3047,6 +3054,36 @@ async fn volunteer_page(
                                 } else {
                                     ul {
                                         @for race in available_races {
+                                            @let race_start = match &race.schedule {
+                                                RaceSchedule::Live { start, .. } => Some(*start),
+                                                _ => None,
+                                            };
+                                            @let (signup_count, signup_tooltip) = {
+                                                let signups = Signup::for_race(&mut transaction, race.id).await?;
+                                                let active: Vec<_> = signups.iter()
+                                                    .filter(|s| matches!(s.status, VolunteerSignupStatus::Pending | VolunteerSignupStatus::Confirmed))
+                                                    .collect();
+                                                if active.is_empty() {
+                                                    (0usize, String::new())
+                                                } else {
+                                                    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+                                                    for signup in &active {
+                                                        let name = User::from_id(&mut *transaction, signup.user_id).await
+                                                            .ok().flatten()
+                                                            .map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                                        if let Some(group) = groups.iter_mut().find(|(r, _)| r == &signup.role_type_name) {
+                                                            group.1.push(name);
+                                                        } else {
+                                                            groups.push((signup.role_type_name.clone(), vec![name]));
+                                                        }
+                                                    }
+                                                    let tooltip = groups.iter()
+                                                        .map(|(role, names)| format!("{}: {}", role, names.join(", ")))
+                                                        .collect::<Vec<_>>()
+                                                        .join("\n");
+                                                    (active.len(), tooltip)
+                                                }
+                                            };
                                             li {
                                                 a(href = uri!(match_signup_page_get(data.series, &*data.event, race.id, _))) : {
                                                     if race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
@@ -3069,6 +3106,16 @@ async fn volunteer_page(
                                                         }
                                                     }
                                                 };
+                                                @if let Some(start) = race_start {
+                                                    : " — ";
+                                                    : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                                }
+                                                @if signup_count > 0 {
+                                                    : " ";
+                                                    span(class = "settings-link", data_tooltip = signup_tooltip) {
+                                                        : format!("{} signed up", signup_count);
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -3100,6 +3147,36 @@ async fn volunteer_page(
                             } else {
                                 ul {
                                     @for race in available_races {
+                                        @let race_start = match &race.schedule {
+                                            RaceSchedule::Live { start, .. } => Some(*start),
+                                            _ => None,
+                                        };
+                                        @let (signup_count, signup_tooltip) = {
+                                            let signups = Signup::for_race(&mut transaction, race.id).await?;
+                                            let active: Vec<_> = signups.iter()
+                                                .filter(|s| matches!(s.status, VolunteerSignupStatus::Pending | VolunteerSignupStatus::Confirmed))
+                                                .collect();
+                                            if active.is_empty() {
+                                                (0usize, String::new())
+                                            } else {
+                                                let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+                                                for signup in &active {
+                                                    let name = User::from_id(&mut *transaction, signup.user_id).await
+                                                        .ok().flatten()
+                                                        .map_or_else(|| signup.user_id.to_string(), |u| u.to_string());
+                                                    if let Some(group) = groups.iter_mut().find(|(r, _)| r == &signup.role_type_name) {
+                                                        group.1.push(name);
+                                                    } else {
+                                                        groups.push((signup.role_type_name.clone(), vec![name]));
+                                                    }
+                                                }
+                                                let tooltip = groups.iter()
+                                                    .map(|(role, names)| format!("{}: {}", role, names.join(", ")))
+                                                    .collect::<Vec<_>>()
+                                                    .join("\n");
+                                                (active.len(), tooltip)
+                                            }
+                                        };
                                         li {
                                             a(href = uri!(match_signup_page_get(data.series, &*data.event, race.id, _))) : {
                                                 if race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
@@ -3122,6 +3199,16 @@ async fn volunteer_page(
                                                     }
                                                 }
                                             };
+                                            @if let Some(start) = race_start {
+                                                : " — ";
+                                                : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                            }
+                                            @if signup_count > 0 {
+                                                : " ";
+                                                span(class = "settings-link", data_tooltip = signup_tooltip) {
+                                                    : format!("{} signed up", signup_count);
+                                                }
+                                            }
                                         }
                                     }
                                 }
