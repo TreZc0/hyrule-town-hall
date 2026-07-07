@@ -4554,6 +4554,79 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     ).await?;
                                 }
                             }
+                        } else if let Some(bracket_params) = params.strip_prefix("bracket_") {
+                            let mut parts = bracket_params.rsplitn(2, '_');
+                            let async_part: i64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(-1);
+                            let race_id: i64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(-1);
+
+                            let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
+                                let pool = ctx.data.read().await.get::<DbPool>().expect("db pool missing").clone();
+                                let mut transaction = pool.begin().await?;
+
+                                let is_organizer = sqlx::query!(
+                                    r#"SELECT EXISTS(SELECT 1 FROM organizers eo JOIN users u ON eo.organizer = u.id WHERE u.discord_id = $1) AS "exists!""#,
+                                    interaction.user.id.get() as i64
+                                ).fetch_one(&mut *transaction).await?.exists;
+
+                                if !is_organizer {
+                                    transaction.rollback().await?;
+                                    return Err("You must be an event organizer to use this.".into());
+                                }
+
+                                let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await
+                                    .map_err(|_| "Race not found.")?;
+
+                                let already_submitted = sqlx::query!(
+                                    "SELECT finish_time FROM async_times WHERE race_id = $1 AND async_part = $2 AND recorded_at IS NOT NULL",
+                                    race_id,
+                                    async_part as i32,
+                                ).fetch_optional(&mut *transaction).await?.is_some();
+
+                                if already_submitted {
+                                    transaction.rollback().await?;
+                                    return Err("A result already exists for this half of the async. Use `/result-async` with race_id/async_part to override.".into());
+                                }
+
+                                let user = User::from_discord(&mut *transaction, interaction.user.id).await?
+                                    .ok_or("User not found.")?;
+
+                                sqlx::query!(
+                                    r#"
+                                    INSERT INTO async_times (race_id, async_part, finish_time, recorded_by, link)
+                                    VALUES ($1, $2, $3, $4, $5)
+                                    ON CONFLICT (race_id, async_part) DO UPDATE SET
+                                        finish_time = EXCLUDED.finish_time,
+                                        recorded_at = NOW(),
+                                        recorded_by = EXCLUDED.recorded_by,
+                                        link = EXCLUDED.link
+                                    "#,
+                                    race_id,
+                                    async_part as i32,
+                                    pg_interval,
+                                    user.id as _,
+                                    link_str.as_deref(),
+                                ).execute(&mut *transaction).await?;
+
+                                finalize_async_if_complete(ctx, &mut transaction, race_id, &race).await?;
+
+                                transaction.commit().await?;
+                                Ok(())
+                            }.await;
+
+                            match result {
+                                Ok(()) => {
+                                    let run = async_race::AsyncRun::BracketRace { race_id, async_part: async_part as u8 };
+                                    async_race::clear_message_with_button(ctx, interaction.channel_id, &run.button_id("org_result")).await;
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
+                                        .content(format!("Time recorded: {}", time_str))
+                                    ).await?;
+                                }
+                                Err(e) => {
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
+                                        .content(format!("Error: {e}"))
+                                    ).await?;
+                                }
+                            }
                         }
                     }
                 },
@@ -5613,7 +5686,7 @@ async fn handle_async_command(
     Ok(())
 }
 
-async fn finalize_async_if_complete(
+pub(crate) async fn finalize_async_if_complete(
     ctx: &DiscordCtx,
     transaction: &mut Transaction<'_, Postgres>,
     race_id: i64,
