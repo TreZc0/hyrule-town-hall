@@ -1040,6 +1040,7 @@ fn build_signup_row_updates(
     trackers: &str,
     export_id: &str,
     restream_channel: Option<&str>,
+    notes: Option<&str>,
 ) -> Vec<(String, Vec<Vec<String>>)> {
     let mut updates = vec![
         (format!("'Restream Signups'!A{}", row), vec![vec![utc_date.to_owned()]]),
@@ -1056,7 +1057,106 @@ fn build_signup_row_updates(
     if let (Some(restream_channel_col), Some(alias)) = (&backend.restream_channel_col, restream_channel) {
         updates.push((format!("'Restream Signups'!{}{}", restream_channel_col, row), vec![vec![alias.to_owned()]]));
     }
+    if let Some(notes) = notes {
+        updates.push((format!("'Restream Signups'!{}{}", backend.notes_col, row), vec![vec![notes.to_owned()]]));
+    }
     updates
+}
+
+fn race_team_ids(race: &Race) -> Option<Vec<Id<Teams>>> {
+    race.teams_opt().map(|teams| teams.map(|team| team.id).collect())
+}
+
+fn custom_choice_disables_delay(value: Option<&serde_json::Value>) -> bool {
+    value.and_then(|value| value.as_str())
+        .is_some_and(|value| matches!(value, "yes" | "always"))
+}
+
+async fn disables_export_delay(
+    transaction: &mut Transaction<'_, Postgres>,
+    race: &Race,
+    companion: Option<&Race>,
+    event_data: &event::Data<'_>,
+) -> Result<bool, Error> {
+    if !event_data.has_custom_choice("no_delay") {
+        return Ok(false);
+    }
+
+    let Some(mut team_ids) = race_team_ids(race) else {
+        return Ok(false);
+    };
+    if let Some(companion) = companion {
+        let Some(companion_team_ids) = race_team_ids(companion) else {
+            return Ok(false);
+        };
+        team_ids.extend(companion_team_ids);
+    }
+    if team_ids.is_empty() {
+        return Ok(false);
+    }
+
+    let team_count = team_ids.len();
+    let rows = sqlx::query!(
+        "SELECT custom_choices FROM teams WHERE id = ANY($1)",
+        team_ids as _,
+    )
+    .fetch_all(&mut **transaction)
+    .await?;
+
+    Ok(rows.len() == team_count
+        && rows.iter().all(|row| custom_choice_disables_delay(row.custom_choices.get("no_delay"))))
+}
+
+async fn effective_delay_minutes(
+    transaction: &mut Transaction<'_, Postgres>,
+    race: &Race,
+    companion: Option<&Race>,
+    export: &ExportConfig,
+    event_data: &event::Data<'_>,
+) -> Result<i32, Error> {
+    if export.delay_minutes > 0 && disables_export_delay(transaction, race, companion, event_data).await? {
+        Ok(0)
+    } else {
+        Ok(export.delay_minutes)
+    }
+}
+
+fn delay_note(delay_minutes: i32) -> Option<String> {
+    match delay_minutes {
+        1 => Some("1 min delay".to_owned()),
+        minutes if minutes > 1 => Some(format!("{minutes} mins delay")),
+        _ => None,
+    }
+}
+
+fn delay_notes_update(existing_notes: &str, delay_minutes: i32) -> Option<String> {
+    let note = delay_note(delay_minutes)?;
+    if existing_notes.split(',').any(|part| part.trim() == note) {
+        None
+    } else if existing_notes.is_empty() {
+        Some(note)
+    } else {
+        Some(format!("{existing_notes}, {note}"))
+    }
+}
+
+async fn delay_notes_update_for_row(
+    http_client: &reqwest::Client,
+    backend: &RestreamingBackend,
+    row: usize,
+    delay_minutes: i32,
+) -> Result<Option<String>, Error> {
+    if delay_minutes <= 0 {
+        return Ok(None);
+    }
+
+    let notes_range = format!("'Restream Signups'!{}{}", backend.notes_col, row);
+    let notes_values = sheets::read_values_uncached(http_client, &backend.google_sheet_id, &notes_range).await?;
+    let existing_notes = notes_values.first()
+        .and_then(|row| row.first())
+        .map(String::as_str)
+        .unwrap_or_default();
+    Ok(delay_notes_update(existing_notes, delay_minutes))
 }
 
 async fn dedupe_export_rows(
@@ -1103,7 +1203,7 @@ pub(crate) async fn export_race(
     race: &Race,
     export: &ExportConfig,
     backend: &RestreamingBackend,
-    event_display_name: &str,
+    event_data: &event::Data<'_>,
 ) -> Result<bool, Error> {
     let RaceSchedule::Live { start, .. } = race.schedule else {
         return Err(Error::NotLive);
@@ -1117,14 +1217,21 @@ pub(crate) async fn export_race(
     // Generate export ID
     let export_id = generate_export_id(race, export);
 
-    // Calculate start time with delay
-    let delayed_start = start + chrono::Duration::minutes(export.delay_minutes as i64);
+    // Calculate the exported start time, respecting a race-specific no_delay opt-out.
+    let delay_minutes = effective_delay_minutes(
+        transaction,
+        race,
+        companion.as_ref(),
+        export,
+        event_data,
+    ).await?;
+    let export_start = start + chrono::Duration::minutes(delay_minutes as i64);
 
     // Format UTC date with zero-padded hour
-    let utc_date = delayed_start.format("%b %d, %I:%M%p").to_string();
+    let utc_date = export_start.format("%b %d, %I:%M%p").to_string();
 
     // Build title
-    let title = build_race_title(transaction, race, companion.as_ref(), export, event_display_name).await;
+    let title = build_race_title(transaction, race, companion.as_ref(), export, &event_data.display_name).await;
 
     // Get estimate
     let estimate = export.estimate_override.clone()
@@ -1152,13 +1259,13 @@ pub(crate) async fn export_race(
 
     // Determine which DST formula to use
     let dst_formula = if backend.language == German {
-        if is_german_dst(delayed_start) {
+        if is_german_dst(export_start) {
             &backend.dst_formula_dst
         } else {
             &backend.dst_formula_standard
         }
     } else {
-        if is_us_eastern_dst(delayed_start) {
+        if is_us_eastern_dst(export_start) {
             &backend.dst_formula_dst
         } else {
             &backend.dst_formula_standard
@@ -1181,6 +1288,7 @@ pub(crate) async fn export_race(
         // Row found in the sheet - update it in place.
         // This handles both the normal update path and orphaned rows from previously
         // failed inserts that never got a DB record written.
+        let notes = delay_notes_update_for_row(http_client, backend, row, delay_minutes).await?;
         let updates = build_signup_row_updates(
             backend,
             row,
@@ -1193,6 +1301,7 @@ pub(crate) async fn export_race(
             &trackers_joined,
             &export_id,
             restream_channel.as_deref(),
+            notes.as_deref(),
         );
         sheets::batch_update_values(http_client, &backend.google_sheet_id, updates).await?;
     } else if existing_export.is_none() {
@@ -1220,6 +1329,7 @@ pub(crate) async fn export_race(
             }
         };
 
+        let notes = delay_notes_update("", delay_minutes);
         let updates = build_signup_row_updates(
             backend,
             row,
@@ -1232,6 +1342,7 @@ pub(crate) async fn export_race(
             &trackers_joined,
             &export_id,
             restream_channel.as_deref(),
+            notes.as_deref(),
         );
         sheets::batch_update_values(http_client, &backend.google_sheet_id, updates).await?;
         inserted_new_row = true;
@@ -1338,7 +1449,7 @@ pub(crate) async fn sync_all_races(
         // Check if race should be exported
         match should_export_race(transaction, &race, export, &backend).await {
             Ok(true) => {
-                match export_race(transaction, http_client, &race, export, &backend, &event_data.display_name).await {
+                match export_race(transaction, http_client, &race, export, &backend, &event_data).await {
                     Ok(inserted_new_row) => {
                         if inserted_new_row {
                             needs_sort = true;

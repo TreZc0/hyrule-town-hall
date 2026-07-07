@@ -500,6 +500,16 @@ impl<'a> Data<'a> {
             .collect()
     }
 
+    pub(crate) fn has_custom_choice(&self, choice_key: &str) -> bool {
+        self.enter_flow.as_ref().is_some_and(|flow| {
+            flow.requirements.iter().any(|req| match req {
+                enter::Requirement::BooleanChoice { key, .. }
+                | enter::Requirement::RadioChoice { key, .. } => key == choice_key,
+                _ => false,
+            })
+        })
+    }
+
     pub(crate) fn is_single_race(&self) -> bool {
         match self.series {
             Series::AlttprDe => false,
