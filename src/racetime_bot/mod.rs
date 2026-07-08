@@ -1704,6 +1704,7 @@ impl GlobalState {
                                 rsl_preset: None,
                                 version: version.clone(),
                                 unlock_spoiler_log,
+                                resolved_randoms: None,
                             }).await.allow_unreceived();
                         }
                         Err(e) => {
@@ -1774,6 +1775,7 @@ impl GlobalState {
                             rsl_preset: None,
                             version: Some(version),
                             unlock_spoiler_log,
+                            resolved_randoms: None,
                         }).await?,
                         Err(e) => update_tx.send(SeedRollUpdate::Error(e.into())).await?, //TODO fall back to rolling locally for network errors
                     }
@@ -1797,6 +1799,7 @@ impl GlobalState {
                                     rsl_preset: None,
                                     version: Some(version),
                                     unlock_spoiler_log,
+                                    resolved_randoms: None,
                                 },
                                 None => SeedRollUpdate::Error(RollError::PatchPath),
                             },
@@ -1827,16 +1830,19 @@ impl GlobalState {
                 rsl_preset: None,
                 version: None,
                 unlock_spoiler_log,
+                resolved_randoms: None,
             }).await.allow_unreceived();
         });
         update_rx
     }
 
-    pub(crate) fn roll_crosskeys_seed(self: Arc<Self>, crosskeys_options: CrosskeysRaceOptions) -> mpsc::Receiver<SeedRollUpdate> {
+    pub(crate) fn roll_crosskeys_seed(self: Arc<Self>, crosskeys_options: CrosskeysRaceOptions, labels: Vec<(String, String)>) -> mpsc::Receiver<SeedRollUpdate> {
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
         tokio::spawn(async move {
             let uuid = Uuid::new_v4();
+            let resolved = crosskeys_options.resolve();
+            let resolved_randoms_str = resolved.reveal_str(&labels);
             let crosskeys_meta = AlttprDoorRandoMeta {
                 bps: true,
                 name: uuid.to_string(),
@@ -1852,22 +1858,18 @@ impl GlobalState {
                 meta: crosskeys_meta,
             };
 
-            let keydrop_ok = match crosskeys_options.keydrop { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
-            let flute_ok = match crosskeys_options.flute { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
-            let all_dungeons_ok = match crosskeys_options.all_dungeons { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
-            let completionist_ok = match crosskeys_options.completionist { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
-            let inverted_ok = match crosskeys_options.inverted { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
-            let pb_ok = match crosskeys_options.pb { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
-            let zw_ok = match crosskeys_options.zw { RadioChoiceValue::Always => true, RadioChoiceValue::Never => false, RadioChoiceValue::Random => rand::random::<bool>() };
+            let keydrop_ok = resolved.keydrop_ok;
+            let flute_ok = resolved.flute_ok;
+            let all_dungeons_ok = resolved.all_dungeons_ok;
+            let completionist_ok = resolved.completionist_ok;
+            let inverted_ok = resolved.inverted_ok;
+            let pb_ok = resolved.pb_ok;
+            let zw_ok = resolved.zw_ok;
             let keydrop_mode = if keydrop_ok { "keys" } else { "none" };
             let pottery_mode = if keydrop_ok { "keys" } else { "none" };
             let flute_mode = if flute_ok { "active" } else { "normal" };
             let goal = if completionist_ok { "completionist" } else if all_dungeons_ok { "dungeons" } else { "crystals" };
-            let mirrorscroll = match crosskeys_options.mirror_scroll {
-                RadioChoiceValue::Never => 0,
-                RadioChoiceValue::Always => 1,
-                RadioChoiceValue::Random => rand::random::<bool>() as u8,
-            };
+            let mirrorscroll = resolved.mirror_scroll_ok as u8;
             let world_state = if inverted_ok { "inverted" } else { "open" };
             let pseudoboots = if pb_ok { 1 } else { 0 };
             let skullwoods = if zw_ok { "followlinked" } else { "original" };
@@ -1975,7 +1977,8 @@ impl GlobalState {
                 },
                 rsl_preset: None,
                 version: None,
-                unlock_spoiler_log: UnlockSpoilerLog::Never
+                unlock_spoiler_log: UnlockSpoilerLog::Never,
+                resolved_randoms: resolved_randoms_str,
             }).await.allow_unreceived();
             Ok(())
         }.then(|res| async move {
@@ -2085,7 +2088,8 @@ impl GlobalState {
                 },
                 rsl_preset: None,
                 version: None,
-                unlock_spoiler_log: UnlockSpoilerLog::Never
+                unlock_spoiler_log: UnlockSpoilerLog::Never,
+                resolved_randoms: None,
             }).await.allow_unreceived();
             Ok(())
         }.then(|res| async move {
@@ -2195,6 +2199,7 @@ impl GlobalState {
                 rsl_preset: None,
                 version: None,
                 unlock_spoiler_log: UnlockSpoilerLog::Never,
+                resolved_randoms: None,
             }).await.allow_unreceived();
             Ok(())
         }.then(|res: Result<(), RollError>| async move {
@@ -2235,6 +2240,7 @@ impl GlobalState {
                 rsl_preset: None,
                 version: None,
                 unlock_spoiler_log: UnlockSpoilerLog::Never,
+                resolved_randoms: None,
             }).await.allow_unreceived();
             Ok::<_, RollError>(())
         }.then(|res| async move {
@@ -2345,7 +2351,8 @@ impl GlobalState {
                 },
                 rsl_preset: None,
                 version: None,
-                unlock_spoiler_log: UnlockSpoilerLog::Never
+                unlock_spoiler_log: UnlockSpoilerLog::Never,
+                resolved_randoms: None,
             }).await.allow_unreceived();
             Ok(())
         }.then(|res| async move {
@@ -2496,6 +2503,7 @@ impl GlobalState {
                         rsl_preset: if let rsl::VersionedPreset::Xopar { preset, .. } = preset { Some(preset) } else { None },
                         version: None,
                         unlock_spoiler_log,
+                        resolved_randoms: None,
                     }).await.allow_unreceived();
                     return Ok(())
                 } else {
@@ -2525,6 +2533,7 @@ impl GlobalState {
                             rsl_preset: if let rsl::VersionedPreset::Xopar { preset, .. } = preset { Some(preset) } else { None },
                             version: None,
                             unlock_spoiler_log,
+                            resolved_randoms: None,
                         },
                         None => SeedRollUpdate::Error(RollError::PatchPath),
                     }).await.allow_unreceived();
@@ -2608,6 +2617,7 @@ impl GlobalState {
                 rsl_preset: None,
                 version: None,
                 unlock_spoiler_log,
+                resolved_randoms: None,
             }).await.allow_unreceived();
             Ok(())
         }.then(|res| async move {
@@ -2690,6 +2700,7 @@ impl GlobalState {
                 rsl_preset: None,
                 version: None,
                 unlock_spoiler_log,
+                resolved_randoms: None,
             }).await.allow_unreceived();
             Ok(())
         }.then(|res| async move {
@@ -2960,6 +2971,9 @@ pub(crate) enum SeedRollUpdate {
         rsl_preset: Option<rsl::Preset>,
         version: Option<VersionedBranch>,
         unlock_spoiler_log: UnlockSpoilerLog,
+        /// Announcement of what any `Random` radio choice (e.g. crosskeys keydrop/flute/etc.)
+        /// resolved to, to be posted alongside the seed link. `None` for goals without such choices.
+        resolved_randoms: Option<String>,
     },
     /// Seed rolling failed.
     Error(RollError),
@@ -2982,7 +2996,7 @@ impl SeedRollUpdate {
             } else {
                 format!("Rolling {article} {description}…")
             }).await?,
-            Self::Done { mut seed, rsl_preset, version, unlock_spoiler_log } => {
+            Self::Done { mut seed, rsl_preset, version, unlock_spoiler_log, resolved_randoms } => {
                 if let Some(seed::Files::MidosHouse { ref file_stem, ref mut locked_spoiler_log_path }) = seed.files {
                     lock!(@write seed_metadata = ctx.global_state.seed_metadata; seed_metadata.insert(file_stem.to_string(), SeedMetadata {
                         locked_spoiler_log_path: locked_spoiler_log_path.clone(),
@@ -3148,6 +3162,10 @@ impl SeedRollUpdate {
                             format!("Seed Hash: {seed_hash}")
                         }).await?;
                     }
+                }
+
+                if let Some(resolved_randoms) = resolved_randoms {
+                    ctx.say(format!("Random settings resolved to: {resolved_randoms}")).await?;
                 }
 
                 if let Some(VersionedBranch::Tww { identifier, github_url, .. }) = version {
@@ -3521,6 +3539,22 @@ impl RadioChoiceValue {
     }
 }
 
+/// Single source of truth for crosskeys' radio-choice fields: the struct-field key, whether it
+/// affects seed generation (vs. being a rules-only choice like hovering/no_delay), and a fallback
+/// display label used when the event's own `enter_flow` config doesn't provide one.
+const RADIO_CHOICE_FIELDS: &[(&str, bool, &str)] = &[
+    ("all_dungeons", true, "All Dungeons"),
+    ("completionist", true, "Completionist"),
+    ("flute", true, "Starting Flute"),
+    ("inverted", true, "Inverted"),
+    ("keydrop", true, "Keydrop"),
+    ("mirror_scroll", true, "Mirror Scroll"),
+    ("pseudoboots", true, "Pseudoboots"),
+    ("zw", true, "ZW"),
+    ("hovering", false, "Hovering"),
+    ("no_delay", false, "No Delay"),
+];
+
 #[derive(Clone, Copy)]
 pub(crate) struct CrosskeysRaceOptions {
     all_dungeons: RadioChoiceValue,
@@ -3535,22 +3569,110 @@ pub(crate) struct CrosskeysRaceOptions {
     zw: RadioChoiceValue,
 }
 
+/// The resolved (post-dice-roll) form of [`CrosskeysRaceOptions`], where every `Random` choice
+/// has been settled to a concrete boolean.
+pub(crate) struct ResolvedCrosskeysOptions {
+    pub(crate) all_dungeons_ok: bool,
+    pub(crate) completionist_ok: bool,
+    pub(crate) flute_ok: bool,
+    pub(crate) inverted_ok: bool,
+    pub(crate) keydrop_ok: bool,
+    pub(crate) mirror_scroll_ok: bool,
+    pub(crate) pb_ok: bool,
+    pub(crate) zw_ok: bool,
+    /// The keys (matching [`RADIO_CHOICE_FIELDS`]) that were originally `Random`, with their
+    /// resolved value. Always/Never choices are already known to racers ahead of the roll, so
+    /// they're excluded here.
+    resolved_randoms: Vec<(&'static str, bool)>,
+}
+
+/// Rule-only choices (no seed impact) get their own wording instead of generic "Enabled"/"Disabled"
+/// — a rule is followed or not, it isn't "enabled". Shared between the pre-roll rules reminder
+/// (`as_race_options_str`) and the post-roll reveal, so the phrasing can't drift between the two.
+fn rule_choice_phrase(key: &str, ok: bool) -> &'static str {
+    match key {
+        "hovering" => if ok { "hovering and moldorm bouncing ALLOWED" } else { "hovering and moldorm bouncing BANNED" },
+        "no_delay" => if ok { "no stream delay" } else { "stream delay(10m)" },
+        _ => unreachable!("not a rule-only crosskeys radio choice: {key}"),
+    }
+}
+
+impl ResolvedCrosskeysOptions {
+    /// Human-readable announcement of what every `Random` radio choice resolved to, using the
+    /// event's own configured labels for seed-affecting choices, and rule-specific wording for
+    /// rules-only choices (hovering/no_delay) since those aren't meaningfully "enabled"/"disabled".
+    /// Returns `None` if nothing was random.
+    pub(crate) fn reveal_str(&self, labels: &[(String, String)]) -> Option<String> {
+        let lbl = |key: &str| labels.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+            .unwrap_or_else(|| RADIO_CHOICE_FIELDS.iter().find(|(k, _, _)| *k == key).map(|(_, _, fallback)| fallback.to_string()).unwrap_or_else(|| key.to_owned()));
+        let affects_seed = |key: &str| RADIO_CHOICE_FIELDS.iter().find(|(k, _, _)| *k == key).is_some_and(|(_, affects_seed, _)| *affects_seed);
+        let parts = self.resolved_randoms.iter()
+            .map(|(key, ok)| if affects_seed(key) {
+                format!("{}: {}", lbl(key), if *ok { "Enabled" } else { "Disabled" })
+            } else {
+                rule_choice_phrase(key, *ok).to_owned()
+            })
+            .collect_vec();
+        English.join_str_opt(parts)
+    }
+}
+
 impl CrosskeysRaceOptions {
-    pub(crate) fn as_seed_options_str(&self, labels: &[(&str, String)]) -> String {
-        let lbl = |key: &str, fallback: &'static str| labels.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_str()).unwrap_or(fallback).to_owned();
-        let seed_fields = [
-            ("all_dungeons", self.all_dungeons, "All Dungeons"),
-            ("completionist", self.completionist, "Completionist"),
-            ("flute", self.flute, "Starting Flute"),
-            ("inverted", self.inverted, "Inverted"),
-            ("keydrop", self.keydrop, "Keydrop"),
-            ("mirror_scroll", self.mirror_scroll, "Mirror Scroll"),
-            ("pseudoboots", self.pb, "Pseudoboots"),
-            ("zw", self.zw, "ZW"),
-        ];
+    fn get(&self, key: &str) -> RadioChoiceValue {
+        match key {
+            "all_dungeons" => self.all_dungeons,
+            "completionist" => self.completionist,
+            "flute" => self.flute,
+            "hovering" => self.hovering,
+            "inverted" => self.inverted,
+            "keydrop" => self.keydrop,
+            "mirror_scroll" => self.mirror_scroll,
+            "no_delay" => self.no_delay,
+            "pseudoboots" => self.pb,
+            "zw" => self.zw,
+            _ => unreachable!("unknown crosskeys radio choice key: {key}"),
+        }
+    }
+
+    /// Resolves every `Random` choice to a concrete boolean, once, so downstream consumers (seed
+    /// generation, chat announcements) always agree on the outcome.
+    pub(crate) fn resolve(&self) -> ResolvedCrosskeysOptions {
+        let mut resolved_randoms = Vec::new();
+        let mut resolve_one = |key: &'static str| -> bool {
+            match self.get(key) {
+                RadioChoiceValue::Always => true,
+                RadioChoiceValue::Never => false,
+                RadioChoiceValue::Random => {
+                    let ok = rand::random::<bool>();
+                    resolved_randoms.push((key, ok));
+                    ok
+                }
+            }
+        };
+        let all_dungeons_ok = resolve_one("all_dungeons");
+        let completionist_ok = resolve_one("completionist");
+        let flute_ok = resolve_one("flute");
+        let inverted_ok = resolve_one("inverted");
+        let keydrop_ok = resolve_one("keydrop");
+        let mirror_scroll_ok = resolve_one("mirror_scroll");
+        let pb_ok = resolve_one("pseudoboots");
+        let zw_ok = resolve_one("zw");
+        // hovering/no_delay are rules-only (don't feed seed generation); resolve them purely to
+        // populate `resolved_randoms` for the chat reveal.
+        resolve_one("hovering");
+        resolve_one("no_delay");
+        ResolvedCrosskeysOptions {
+            all_dungeons_ok, completionist_ok, flute_ok, inverted_ok,
+            keydrop_ok, mirror_scroll_ok, pb_ok, zw_ok, resolved_randoms,
+        }
+    }
+
+    pub(crate) fn as_seed_options_str(&self, labels: &[(String, String)]) -> String {
+        let lbl = |key: &str, fallback: &'static str| labels.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str()).unwrap_or(fallback).to_owned();
         let mut res = Vec::new();
-        for (key, value, fallback) in seed_fields {
-            match value {
+        for &(key, affects_seed, fallback) in RADIO_CHOICE_FIELDS {
+            if !affects_seed { continue }
+            match self.get(key) {
                 RadioChoiceValue::Always => res.push(lbl(key, fallback)),
                 RadioChoiceValue::Random => res.push(format!("randomly assigned {}", lbl(key, fallback))),
                 RadioChoiceValue::Never => {}
@@ -3562,13 +3684,13 @@ impl CrosskeysRaceOptions {
     pub(crate) fn as_race_options_str(&self) -> String {
         let mut res = Vec::new();
         match self.hovering {
-            RadioChoiceValue::Always => res.push("hovering and moldorm bouncing ALLOWED"),
-            RadioChoiceValue::Never => res.push("hovering and moldorm bouncing BANNED"),
+            RadioChoiceValue::Always => res.push(rule_choice_phrase("hovering", true)),
+            RadioChoiceValue::Never => res.push(rule_choice_phrase("hovering", false)),
             RadioChoiceValue::Random => res.push("hovering and moldorm bouncing: random"),
         }
         match self.no_delay {
-            RadioChoiceValue::Always => res.push("no stream delay"),
-            RadioChoiceValue::Never => res.push("stream delay(10m)"),
+            RadioChoiceValue::Always => res.push(rule_choice_phrase("no_delay", true)),
+            RadioChoiceValue::Never => res.push(rule_choice_phrase("no_delay", false)),
             RadioChoiceValue::Random => res.push("stream delay: random"),
         }
         English.join_str_opt(res).unwrap()
@@ -3576,8 +3698,8 @@ impl CrosskeysRaceOptions {
 
     pub(crate) fn as_race_options_str_no_delay(&self) -> String {
         match self.hovering {
-            RadioChoiceValue::Always => "hovering and moldorm bouncing ALLOWED".to_string(),
-            RadioChoiceValue::Never => "hovering and moldorm bouncing BANNED".to_string(),
+            RadioChoiceValue::Always => rule_choice_phrase("hovering", true).to_string(),
+            RadioChoiceValue::Never => rule_choice_phrase("hovering", false).to_string(),
             RadioChoiceValue::Random => "hovering and moldorm bouncing: random".to_string(),
         }
     }
@@ -4281,10 +4403,10 @@ impl Handler {
         let mut transaction = ctx.global_state.db_pool.begin().await.expect("failed to start transaction");
         let event = event::Data::new(&mut transaction, cal_event.race.series, &*cal_event.race.event).await.expect("failed to load event").expect("event not found");
         transaction.commit().await.expect("failed to commit transaction");
-        let labels = event.radio_choice_requirements();
+        let labels: Vec<(String, String)> = event.radio_choice_requirements().into_iter().map(|(key, label)| (key.to_owned(), label)).collect();
 
         let crosskeys_options = CrosskeysRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race).await;
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys_seed(crosskeys_options), language, article, format!("seed with {}", crosskeys_options.as_seed_options_str(&labels)), false).await;
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys_seed(crosskeys_options, labels.clone()), language, article, format!("seed with {}", crosskeys_options.as_seed_options_str(&labels)), false).await;
         ctx.send_message(format!("@entrants Remember: this race will be played with {}!",
                                     crosskeys_options.as_race_options_str()
                                 ), true, Vec::default()).await.expect("failed to send race options");
@@ -4354,7 +4476,7 @@ impl Handler {
         };
         let unlock_spoiler_log = goal.unlock_spoiler_log(self.is_official(), false);
         let (tx, rx) = mpsc::channel(1);
-        tx.send(SeedRollUpdate::Done { rsl_preset: None, version, unlock_spoiler_log, seed }).await.unwrap();
+        tx.send(SeedRollUpdate::Done { rsl_preset: None, version, unlock_spoiler_log, seed, resolved_randoms: None }).await.unwrap();
         self.roll_seed_inner(ctx, delay_until, rx, language, article, description, suppress_preamble).await;
     }
 

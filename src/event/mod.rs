@@ -3900,7 +3900,7 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
         racetime_bot::Goal::Crosskeys2025 | racetime_bot::Goal::Crosskeys2026 => {
             let choices: HashSet<&str> = form.choices.iter().map(|s| s.as_str()).collect();
             let crosskeys_options = racetime_bot::CrosskeysRaceOptions::from_always_set(&choices);
-            let rx = Arc::clone(&*global_state).roll_crosskeys_seed(crosskeys_options);
+            let rx = Arc::clone(&*global_state).roll_crosskeys_seed(crosskeys_options, Vec::new());
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         },
         racetime_bot::Goal::AlttprDeRivalsCupBrackets | racetime_bot::Goal::AlttprDeRivalsCupGroups => {
