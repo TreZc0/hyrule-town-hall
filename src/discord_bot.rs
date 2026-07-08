@@ -4916,6 +4916,11 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
         }
     };
     push_runner_timezones(&mut content, &runner_timezones, event.language);
+    let goal = racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event");
+    let is_crosskeys = matches!(goal, racetime_bot::Goal::Crosskeys2025 | racetime_bot::Goal::Crosskeys2026);
+    let mut agreed_choice_labels = Vec::new();
+    let mut rule_only_effective = Vec::new();
+    let mut random_labels = Vec::new();
     // Show any custom choices that both players agreed on when entering the event.
     let boolean_choices = event.boolean_choice_requirements();
     if !boolean_choices.is_empty() {
@@ -4924,22 +4929,21 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             let rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", team_ids as _)
                 .fetch_all(&mut *transaction).await?;
             let num_teams = rows.len();
-            let agreed = boolean_choices.into_iter()
-                .filter(|(key, _)| {
-                    rows.iter().filter(|r| {
-                        r.custom_choices.as_object()
-                            .and_then(|obj| obj.get(*key))
-                            .is_some_and(|v| v == "yes")
-                    }).count() >= num_teams
-                })
-                .map(|(_, label)| label)
-                .collect_vec();
-            if !agreed.is_empty() {
-                content.push_line("");
-                content.push_line("");
-                content.push("Both players agreed on: ");
-                content.push_safe(agreed.join(", "));
-                content.push('.');
+            for (key, label) in boolean_choices {
+                let enabled = rows.iter().filter(|r| {
+                    r.custom_choices.as_object()
+                        .and_then(|obj| obj.get(key))
+                        .is_some_and(|v| v == "yes")
+                    }).count() >= num_teams;
+                if enabled {
+                    agreed_choice_labels.push(label);
+                } else if is_crosskeys {
+                    match key {
+                        "hovering" => rule_only_effective.push(format!("{label}: banned")),
+                        "no_delay" => rule_only_effective.push("Stream Delay: 10m".to_owned()),
+                        _ => {}
+                    }
+                }
             }
         }
     }
@@ -4950,31 +4954,44 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
         if team_ids.len() > 1 {
             let rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", team_ids as _)
                 .fetch_all(&mut *transaction).await?;
-            let mut always_labels = Vec::new();
-            let mut random_labels = Vec::new();
             for (key, label) in radio_choices {
                 let aggregated = rows.iter()
                     .filter_map(|r| r.custom_choices.as_object().and_then(|obj| obj.get(key)).and_then(RadioChoiceValue::from_json_value))
                     .min()
                     .unwrap_or(RadioChoiceValue::Never);
                 match aggregated {
-                    RadioChoiceValue::Always => always_labels.push(label),
+                    RadioChoiceValue::Always => agreed_choice_labels.push(label),
                     RadioChoiceValue::Random => random_labels.push(label),
                     RadioChoiceValue::Never => {}
                 }
             }
-            if !always_labels.is_empty() {
+        }
+    }
+    if !agreed_choice_labels.is_empty() {
+        content.push_line("");
+        content.push_line("");
+        content.push("Both players agreed on: ");
+        content.push_safe(agreed_choice_labels.join(", "));
+        content.push('.');
+    }
+    if !rule_only_effective.is_empty() {
+        content.push_line("");
+        content.push_line("");
+        for (idx, line) in rule_only_effective.into_iter().enumerate() {
+            if idx > 0 {
                 content.push_line("");
-                content.push_line("");
-                content.push("Both players agreed on: ");
-                content.push_safe(always_labels.join(", "));
-                content.push('.');
             }
-            for label in random_labels {
+            content.push_safe(line);
+        }
+    }
+    if !random_labels.is_empty() {
+        content.push_line("");
+        content.push_line("");
+        for (idx, label) in random_labels.into_iter().enumerate() {
+            if idx > 0 {
                 content.push_line("");
-                content.push_line("");
-                content.push_safe(format!("{label}: random."));
             }
+            content.push_safe(format!("{label}: random"));
         }
     }
     if let Some(deadline) = race.scheduling_deadline {
@@ -5004,7 +5021,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             }
         }
     }
-    if matches!(racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event"), racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB) {
+    if matches!(goal, racetime_bot::Goal::AlttprDe9Bracket | racetime_bot::Goal::AlttprDe9SwissA | racetime_bot::Goal::AlttprDe9SwissB) {
         let alttprde_options = AlttprDeRaceOptions::for_race(ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"), race, event.round_modes.as_ref()).await;
         content.push_line("");
         content.push_line("");
@@ -5012,12 +5029,6 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             content.push(format!("This race will be played in {} mode.", mode_display));
         }
         // Mode not yet determined - draft will show separately
-    }
-    if matches!(racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event"), racetime_bot::Goal::Crosskeys2025 | racetime_bot::Goal::Crosskeys2026) {
-        let crosskeys_options = CrosskeysRaceOptions::for_race(ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context"), race).await;
-        content.push_line("");
-        content.push_line("");
-        content.push(format!("This race will be played with {} as settings.\n\nThis race will be played with {}.", crosskeys_options.as_seed_options_str(&[]), crosskeys_options.as_race_options_str()));
     }
     let thread_id = if let Some(ChannelType::Forum) = scheduling_channel.to_channel(ctx).await?.guild().map(|c| c.kind) {
         scheduling_channel.create_forum_post(ctx, CreateForumPost::new(
