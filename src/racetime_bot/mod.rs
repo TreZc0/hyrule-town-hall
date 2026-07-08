@@ -3165,7 +3165,7 @@ impl SeedRollUpdate {
                 }
 
                 if let Some(resolved_randoms) = resolved_randoms {
-                    ctx.say(format!("Random settings resolved to: {resolved_randoms}")).await?;
+                    ctx.say(format!("Final settings - {resolved_randoms}")).await?;
                 }
 
                 if let Some(VersionedBranch::Tww { identifier, github_url, .. }) = version {
