@@ -963,8 +963,38 @@ fn timezone_utc_offset(tz: Tz, at: DateTime<Utc>) -> String {
     format_utc_offset(tz.from_utc_datetime(&at.naive_utc()).offset().fix().local_minus_utc())
 }
 
+fn normalize_bare_meridiem_times(s: &str) -> Cow<'_, str> {
+    lazy_regex::regex_replace_all!(
+        r"\b(0?[1-9]|1[0-2])\s*([ap])m\b"i,
+        s,
+        |_: &str, hour: &str, meridiem: &str| {
+            let mut hour = hour.parse::<u32>().expect("regex only matches valid hours");
+            match meridiem.to_ascii_lowercase().as_str() {
+                "a" if hour == 12 => hour = 0,
+                "p" if hour != 12 => hour += 12,
+                _ => {}
+            }
+            format!("{hour:02}:00")
+        }
+    )
+}
+
 fn parse_datetime_in_timezone(s: &str, tz: Tz) -> Option<DateTime<Utc>> {
-    let as_utc = interim::parse_date_string(&s.to_lowercase(), Utc::now(), interim::Dialect::Us).ok()?;
+    parse_datetime_in_timezone_at(s, tz, Utc::now())
+}
+
+fn parse_datetime_in_timezone_at(s: &str, tz: Tz, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let local_now = now.with_timezone(&tz);
+    let parser_now = Utc.with_ymd_and_hms(
+        local_now.year(),
+        local_now.month(),
+        local_now.day(),
+        local_now.hour(),
+        local_now.minute(),
+        local_now.second(),
+    ).single()?;
+    let normalized = normalize_bare_meridiem_times(s);
+    let as_utc = interim::parse_date_string(&normalized.to_lowercase(), parser_now, interim::Dialect::Us).ok()?;
     let naive = as_utc.naive_utc();
     tz.from_local_datetime(&naive)
         .single()
@@ -979,12 +1009,16 @@ struct ParsedNaturalLanguageTimestamp {
 }
 
 fn parse_natural_language_timestamp(s: &str, default_timezone: Option<Tz>) -> Option<ParsedNaturalLanguageTimestamp> {
+    parse_natural_language_timestamp_at(s, default_timezone, Utc::now())
+}
+
+fn parse_natural_language_timestamp_at(s: &str, default_timezone: Option<Tz>, now: DateTime<Utc>) -> Option<ParsedNaturalLanguageTimestamp> {
     // If the string ends with a known timezone abbreviation or IANA timezone,
     // strip it, parse the naive date/time with interim, then apply the zone so DST is handled correctly.
     if let Some((_, s_without_tz, tz_name)) = regex_captures!(r"^(.*\S)\s+(\S+)\s*$", s) {
-        if let Some(tz) = tz_name.parse::<Tz>().ok().or_else(|| tz_from_abbr(&tz_name.to_ascii_uppercase())) {
+        if let Some(tz) = tz_from_abbr(&tz_name.to_ascii_uppercase()).or_else(|| tz_name.parse::<Tz>().ok()) {
             return Some(ParsedNaturalLanguageTimestamp {
-                start: parse_datetime_in_timezone(s_without_tz, tz)?,
+                start: parse_datetime_in_timezone_at(s_without_tz, tz, now)?,
                 timezone: Some(tz),
                 used_default_timezone: false,
             });
@@ -992,17 +1026,74 @@ fn parse_natural_language_timestamp(s: &str, default_timezone: Option<Tz>) -> Op
     }
     if let Some(tz) = default_timezone {
         Some(ParsedNaturalLanguageTimestamp {
-            start: parse_datetime_in_timezone(s, tz)?,
+            start: parse_datetime_in_timezone_at(s, tz, now)?,
             timezone: Some(tz),
             used_default_timezone: true,
         })
     } else {
         // No recognized timezone; let interim handle it (supports Z and numeric offsets).
-        interim::parse_date_string(&s.to_lowercase(), Utc::now(), interim::Dialect::Us).ok().map(|start| ParsedNaturalLanguageTimestamp {
+        let normalized = normalize_bare_meridiem_times(s);
+        interim::parse_date_string(&normalized.to_lowercase(), now, interim::Dialect::Us).ok().map(|start| ParsedNaturalLanguageTimestamp {
             start,
             timezone: None,
             used_default_timezone: false,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixed_now() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 7, 8, 12, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn natural_language_normalizes_eastern_standard_abbreviation_in_summer() {
+        let parsed = parse_natural_language_timestamp_at("friday 3pm EST", None, fixed_now()).unwrap();
+
+        assert_eq!(parsed.timezone, Some(America::New_York));
+        assert_eq!(parsed.start, Utc.with_ymd_and_hms(2026, 7, 10, 19, 0, 0).unwrap());
+        let tz = parsed.timezone.unwrap();
+        assert_eq!(tz.from_utc_datetime(&parsed.start.naive_utc()).format("%Z").to_string(), "EDT");
+        assert_eq!(timezone_utc_offset(tz, parsed.start), "UTC-4");
+    }
+
+    #[test]
+    fn natural_language_handles_bare_noon_with_pacific_abbreviation() {
+        let parsed = parse_natural_language_timestamp_at("friday 12pm PST", None, fixed_now()).unwrap();
+
+        assert_eq!(parsed.timezone, Some(America::Los_Angeles));
+        assert_eq!(parsed.start, Utc.with_ymd_and_hms(2026, 7, 10, 19, 0, 0).unwrap());
+        let tz = parsed.timezone.unwrap();
+        assert_eq!(tz.from_utc_datetime(&parsed.start.naive_utc()).format("%Z").to_string(), "PDT");
+        assert_eq!(timezone_utc_offset(tz, parsed.start), "UTC-7");
+    }
+
+    #[test]
+    fn natural_language_handles_bare_noon_without_rolling_to_next_day() {
+        let parsed = parse_natural_language_timestamp_at("Sunday 12pm EDT", None, fixed_now()).unwrap();
+
+        assert_eq!(parsed.timezone, Some(America::New_York));
+        assert_eq!(parsed.start, Utc.with_ymd_and_hms(2026, 7, 12, 16, 0, 0).unwrap());
+    }
+
+    #[test]
+    fn natural_language_handles_bare_midnight() {
+        let parsed = parse_natural_language_timestamp_at("friday 12am PT", None, fixed_now()).unwrap();
+
+        assert_eq!(parsed.timezone, Some(America::Los_Angeles));
+        assert_eq!(parsed.start, Utc.with_ymd_and_hms(2026, 7, 10, 7, 0, 0).unwrap());
+    }
+
+    #[test]
+    fn natural_language_handles_default_timezone_with_bare_meridiem() {
+        let parsed = parse_natural_language_timestamp_at("friday 12 pm", Some(America::Los_Angeles), fixed_now()).unwrap();
+
+        assert_eq!(parsed.timezone, Some(America::Los_Angeles));
+        assert!(parsed.used_default_timezone);
+        assert_eq!(parsed.start, Utc.with_ymd_and_hms(2026, 7, 10, 19, 0, 0).unwrap());
     }
 }
 
