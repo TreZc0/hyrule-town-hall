@@ -4706,7 +4706,7 @@ fn push_runner_timezones(content: &mut MessageBuilder, runners: &[RunnerTimezone
         });
         content.push(match language {
             French => ". Pour y accéder, connectez-vous puis cliquez sur votre nom d'utilisateur dans le coin supérieur droit. Une fois d\u{00e9}fini, il appara\u{00ee}tra dans les futurs fils de planification et sera utilis\u{00e9} comme fuseau horaire par d\u{00e9}faut pour vos horaires de planification lorsqu'aucun fuseau horaire n'est fourni",
-            English | German | Portuguese => ". You can get there by logging in and clicking your username in the top right corner. Once set, it will show up in any future scheduling thread and be used as the default for your scheduling times when no timezone is provided.",
+            English | German | Portuguese => ". You can get there by logging in and clicking your username in the top right corner. Once set, it will show up in any future scheduling thread and be used as the default for your scheduling times when no timezone is provided",
         });
         content.push('.');
     }
