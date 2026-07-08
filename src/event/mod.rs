@@ -3805,7 +3805,8 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
             let choices: HashMap<String, racetime_bot::ChoiceValue> = form.choices.iter()
                 .map(|k| (k.clone(), racetime_bot::ChoiceValue::Always))
                 .collect();
-            let rx = Arc::clone(&*global_state).roll_owr_seed(choices, config);
+            let resolved = racetime_bot::resolve_all_choices(&choices, &config);
+            let rx = Arc::clone(&*global_state).roll_owr_seed(resolved, config, None);
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, choice_labels);
         },
         SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, .. } => {
@@ -3813,7 +3814,8 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
             let choices: HashMap<String, racetime_bot::ChoiceValue> = form.choices.iter()
                 .map(|k| (k.clone(), racetime_bot::ChoiceValue::Always))
                 .collect();
-            let rx = Arc::clone(&*global_state).roll_mutual_choices_dr_seed(config.clone(), choices);
+            let resolved = racetime_bot::resolve_all_choices(&choices, &config);
+            let rx = Arc::clone(&*global_state).roll_mutual_choices_dr_seed(config.clone(), resolved, None);
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         },
         SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman, .. } => {

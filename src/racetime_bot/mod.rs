@@ -669,6 +669,7 @@ impl GlobalState {
                                 rsl_preset: None,
                                 version: version.clone(),
                                 unlock_spoiler_log,
+                                resolved_randoms: None,
                             }).await.allow_unreceived();
                         }
                         Err(e) => {
@@ -739,6 +740,7 @@ impl GlobalState {
                             rsl_preset: None,
                             version: Some(version),
                             unlock_spoiler_log,
+                            resolved_randoms: None,
                         }).await?,
                         Err(e) => update_tx.send(SeedRollUpdate::Error(e.into())).await?, //TODO fall back to rolling locally for network errors
                     }
@@ -762,6 +764,7 @@ impl GlobalState {
                                     rsl_preset: None,
                                     version: Some(version),
                                     unlock_spoiler_log,
+                                    resolved_randoms: None,
                                 },
                                 None => SeedRollUpdate::Error(RollError::PatchPath),
                             },
@@ -792,6 +795,7 @@ impl GlobalState {
                 rsl_preset: None,
                 version: None,
                 unlock_spoiler_log,
+                resolved_randoms: None,
             }).await.allow_unreceived();
         });
         update_rx
@@ -825,6 +829,7 @@ impl GlobalState {
                 rsl_preset: None,
                 version: None,
                 unlock_spoiler_log: UnlockSpoilerLog::Never,
+                resolved_randoms: None,
             }).await.allow_unreceived();
             Ok::<_, RollError>(())
         }.then(|res| async move {
@@ -932,7 +937,8 @@ impl GlobalState {
                 },
                 rsl_preset: None,
                 version: None,
-                unlock_spoiler_log: UnlockSpoilerLog::Never
+                unlock_spoiler_log: UnlockSpoilerLog::Never,
+                resolved_randoms: None,
             }).await.allow_unreceived();
             Ok(())
         }.then(|res| async move {
@@ -949,7 +955,7 @@ impl GlobalState {
     /// Shared implementation for both Boothisman (AlttprDe9) and MutualChoices (Crosskeys) sources.
     /// `working_dir` is `"../ALttPDoorRandomizer"` for Boothisman or `"../alttpr"` for MutualChoices.
     /// `with_output_name` enables `--outputname uuid` and patch-file verification (AlttprDe9 only).
-    pub(crate) fn roll_alttpr_dr_seed(self: Arc<Self>, yaml_content: String, uuid: Uuid, working_dir: &'static str, with_output_name: bool, seed_prefix: &'static str) -> mpsc::Receiver<SeedRollUpdate> {
+    pub(crate) fn roll_alttpr_dr_seed(self: Arc<Self>, yaml_content: String, uuid: Uuid, working_dir: &'static str, with_output_name: bool, seed_prefix: &'static str, resolved_randoms: Option<String>) -> mpsc::Receiver<SeedRollUpdate> {
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
         tokio::spawn(async move {
@@ -979,6 +985,7 @@ impl GlobalState {
                 rsl_preset: None,
                 version: None,
                 unlock_spoiler_log: UnlockSpoilerLog::Never,
+                resolved_randoms,
             }).await.allow_unreceived();
             Ok(())
         }.then(|res: Result<(), RollError>| async move {
@@ -990,19 +997,20 @@ impl GlobalState {
         update_rx
     }
 
-    /// Roll an OWR (Open World Randomizer) seed by applying player choices to the event config.
-    pub(crate) fn roll_owr_seed(self: Arc<Self>, choices: HashMap<String, ChoiceValue>, config: seed_gen_type::OwrEventConfig) -> mpsc::Receiver<SeedRollUpdate> {
+    /// Roll an OWR (Open World Randomizer) seed from an already-resolved choice map (see
+    /// `resolve_all_choices`) plus its matching reveal announcement.
+    pub(crate) fn roll_owr_seed(self: Arc<Self>, resolved: HashMap<String, bool>, config: seed_gen_type::OwrEventConfig, resolved_randoms: Option<String>) -> mpsc::Receiver<SeedRollUpdate> {
         let uuid = Uuid::new_v4();
-        match build_dr_yaml_from_config(&config, &choices, uuid) {
-            Ok(yaml_content) => self.roll_alttpr_dr_seed(yaml_content, uuid, "/opt/owr", false, "OR_"),
+        match build_dr_yaml_from_config(&config, &resolved, uuid) {
+            Ok(yaml_content) => self.roll_alttpr_dr_seed(yaml_content, uuid, "/opt/owr", false, "OR_", resolved_randoms),
             Err(e) => alttpr_dr_error_receiver(e.into()),
         }
     }
 
-    pub(crate) fn roll_mutual_choices_dr_seed(self: Arc<Self>, config: seed_gen_type::OwrEventConfig, choices: HashMap<String, ChoiceValue>) -> mpsc::Receiver<SeedRollUpdate> {
+    pub(crate) fn roll_mutual_choices_dr_seed(self: Arc<Self>, config: seed_gen_type::OwrEventConfig, resolved: HashMap<String, bool>, resolved_randoms: Option<String>) -> mpsc::Receiver<SeedRollUpdate> {
         let uuid = Uuid::new_v4();
-        match build_dr_yaml_from_config(&config, &choices, uuid) {
-            Ok(yaml_content) => self.roll_alttpr_dr_seed(yaml_content, uuid, "../alttpr", false, "DR_"),
+        match build_dr_yaml_from_config(&config, &resolved, uuid) {
+            Ok(yaml_content) => self.roll_alttpr_dr_seed(yaml_content, uuid, "../alttpr", false, "DR_", resolved_randoms),
             Err(e) => alttpr_dr_error_receiver(e.into()),
         }
     }
@@ -1083,6 +1091,7 @@ impl GlobalState {
                 rsl_preset: None,
                 version: None,
                 unlock_spoiler_log: UnlockSpoilerLog::Never,
+                resolved_randoms: None,
             }).await.allow_unreceived();
             Ok(())
         }.then(|res: Result<(), RollError>| async move {
@@ -1125,13 +1134,16 @@ impl GlobalState {
                     Err(e) => return alttpr_dr_error_receiver(e.into()),
                 };
                 match inject_alttpr_dr_meta(&yaml_content, uuid) {
-                    Ok(yaml) => self.roll_alttpr_dr_seed(yaml, uuid, "../ALttPDoorRandomizer", true, "DR_"),
+                    Ok(yaml) => self.roll_alttpr_dr_seed(yaml, uuid, "../ALttPDoorRandomizer", true, "DR_", None),
                     Err(e) => alttpr_dr_error_receiver(e.into()),
                 }
             }
             SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, .. } => {
                 let choices = owr_choices_for_race(&self.db_pool, &cal_event.race).await;
-                self.roll_mutual_choices_dr_seed(config.clone(), choices)
+                let labels: Vec<(String, String)> = event.choice_requirements().into_iter().map(|(key, label)| (key.to_owned(), label)).collect();
+                let resolved = resolve_all_choices(&choices, config);
+                let resolved_randoms_str = reveal_resolved_randoms_str(&choices, &resolved, config, &labels);
+                self.roll_mutual_choices_dr_seed(config.clone(), resolved, resolved_randoms_str)
             }
             SeedGenType::AlttprDoorRando { source: AlttprDrSource::MysteryPool { .. }, .. } => {
                 self.roll_mysteryd20_seed()
@@ -1147,7 +1159,10 @@ impl GlobalState {
             }
             SeedGenType::Owr { config } => {
                 let choices = owr_choices_for_race(&self.db_pool, &cal_event.race).await;
-                self.roll_owr_seed(choices, config.clone())
+                let labels: Vec<(String, String)> = event.choice_requirements().into_iter().map(|(key, label)| (key.to_owned(), label)).collect();
+                let resolved = resolve_all_choices(&choices, config);
+                let resolved_randoms_str = reveal_resolved_randoms_str(&choices, &resolved, config, &labels);
+                self.roll_owr_seed(resolved, config.clone(), resolved_randoms_str)
             }
             SeedGenType::TWWR { permalink } => {
                 let version = event.rando_version.clone();
@@ -1296,6 +1311,7 @@ impl GlobalState {
                         rsl_preset: if let rsl::VersionedPreset::Xopar { preset, .. } = preset { Some(preset) } else { None },
                         version: None,
                         unlock_spoiler_log,
+                        resolved_randoms: None,
                     }).await.allow_unreceived();
                     return Ok(())
                 } else {
@@ -1325,6 +1341,7 @@ impl GlobalState {
                             rsl_preset: if let rsl::VersionedPreset::Xopar { preset, .. } = preset { Some(preset) } else { None },
                             version: None,
                             unlock_spoiler_log,
+                            resolved_randoms: None,
                         },
                         None => SeedRollUpdate::Error(RollError::PatchPath),
                     }).await.allow_unreceived();
@@ -1408,6 +1425,7 @@ impl GlobalState {
                 rsl_preset: None,
                 version: None,
                 unlock_spoiler_log,
+                resolved_randoms: None,
             }).await.allow_unreceived();
             Ok(())
         }.then(|res| async move {
@@ -1490,6 +1508,7 @@ impl GlobalState {
                 rsl_preset: None,
                 version: None,
                 unlock_spoiler_log,
+                resolved_randoms: None,
             }).await.allow_unreceived();
             Ok(())
         }.then(|res| async move {
@@ -1808,6 +1827,9 @@ pub(crate) enum SeedRollUpdate {
         rsl_preset: Option<rsl::Preset>,
         version: Option<VersionedBranch>,
         unlock_spoiler_log: UnlockSpoilerLog,
+        /// Announcement of what any `Random` choice (e.g. MutualChoices/OWR keydrop/flute/etc.)
+        /// resolved to, posted alongside the seed link. `None` for goals without such choices.
+        resolved_randoms: Option<String>,
     },
     /// Seed rolling failed.
     Error(RollError),
@@ -1830,7 +1852,7 @@ impl SeedRollUpdate {
             } else {
                 format!("Rolling {article} {description}…")
             }).await?,
-            Self::Done { mut seed, rsl_preset, version, unlock_spoiler_log } => {
+            Self::Done { mut seed, rsl_preset, version, unlock_spoiler_log, resolved_randoms } => {
                 if let Some(seed::Files::MidosHouse { file_stem, locked_spoiler_log_path }) = seed.files() {
                     lock!(@write seed_metadata = ctx.global_state.seed_metadata; seed_metadata.insert(file_stem.to_string(), SeedMetadata {
                         locked_spoiler_log_path: locked_spoiler_log_path.clone(),
@@ -1952,6 +1974,10 @@ impl SeedRollUpdate {
                             format!("Seed Hash: {seed_hash}")
                         }).await?;
                     }
+                }
+
+                if let Some(resolved_randoms) = resolved_randoms {
+                    ctx.say(format!("Random settings resolved to: {resolved_randoms}")).await?;
                 }
 
                 if let Some(VersionedBranch::Tww { identifier, github_url, .. }) = version {
@@ -2395,39 +2421,45 @@ fn apply_owr_patch(
     }
 }
 
+/// Resolves every choice key defined in `config.choices` to a concrete boolean, exactly once —
+/// including rule-only choices (no seed impact), which `apply_patches_with_supercedes` never
+/// evaluates on its own. Callers use this single resolution for both seed generation and any
+/// chat-facing reveal of what a `Random` choice landed on, so the two can never disagree.
+pub(crate) fn resolve_all_choices(choices: &HashMap<String, ChoiceValue>, config: &seed_gen_type::OwrEventConfig) -> HashMap<String, bool> {
+    let Some(patches) = config.choices.as_object() else { return HashMap::default() };
+    patches.keys()
+        .map(|key| (key.clone(), choices.get(key).copied().unwrap_or_default().roll_enabled()))
+        .collect()
+}
+
 fn apply_patches_with_supercedes(
-    choices: &HashMap<String, ChoiceValue>,
+    resolved: &HashMap<String, bool>,
     patches_val: &serde_json::Value,
     settings: &mut serde_json::Map<String, serde_json::Value>,
     placements: &mut serde_json::Map<String, serde_json::Value>,
     start_inventory: &mut Vec<String>,
 ) {
     let Some(patches) = patches_val.as_object() else { return };
-    // Evaluate roll_enabled once per key — Random calls rand::random() and must not be called twice.
-    let enabled: HashMap<&str, bool> = patches.iter()
-        .filter(|(_, patch)| choice_entry_affects_seed(Some(patch)))
-        .map(|(k, _)| (k.as_str(), choices.get(k).copied().unwrap_or_default().roll_enabled()))
-        .collect();
     let mut suppressed: HashSet<&str> = HashSet::default();
     for (key, patch) in patches {
-        if choice_entry_affects_seed(Some(patch)) && *enabled.get(key.as_str()).unwrap_or(&false) {
+        if choice_entry_affects_seed(Some(patch)) && *resolved.get(key.as_str()).unwrap_or(&false) {
             if let Some(arr) = patch.get("supercedes").and_then(|v| v.as_array()) {
                 suppressed.extend(arr.iter().filter_map(|v| v.as_str()));
             }
         }
     }
     for (key, patch) in patches {
-        if choice_entry_affects_seed(Some(patch)) && !suppressed.contains(key.as_str()) && *enabled.get(key.as_str()).unwrap_or(&false) {
+        if choice_entry_affects_seed(Some(patch)) && !suppressed.contains(key.as_str()) && *resolved.get(key.as_str()).unwrap_or(&false) {
             apply_owr_patch(settings, placements, start_inventory, patch);
         }
     }
 }
 
-fn build_dr_yaml_from_config(config: &seed_gen_type::OwrEventConfig, choices: &HashMap<String, ChoiceValue>, uuid: Uuid) -> Result<String, serde_yml::Error> {
+fn build_dr_yaml_from_config(config: &seed_gen_type::OwrEventConfig, resolved: &HashMap<String, bool>, uuid: Uuid) -> Result<String, serde_yml::Error> {
     let mut settings = config.base_settings.as_object().cloned().unwrap_or_default();
     let mut placements = config.base_placements.as_object().cloned().unwrap_or_default();
     let mut start_inventory = config.start_inventory.clone();
-    apply_patches_with_supercedes(choices, &config.choices, &mut settings, &mut placements, &mut start_inventory);
+    apply_patches_with_supercedes(resolved, &config.choices, &mut settings, &mut placements, &mut start_inventory);
     let meta = AlttprDoorRandoMeta { bps: true, name: uuid.to_string(), race: true, skip_playthrough: true, spoiler: "full", suppress_rom: true };
     let player_key = serde_yml::Value::from(1_i64);
     let mut yaml_map = serde_yml::Mapping::new();
@@ -2550,6 +2582,45 @@ pub(crate) fn alttpr_dr_player_rules_str(choices: &HashMap<String, ChoiceValue>,
         })
         .collect_vec();
     English.join_str_opt(player_rules)
+}
+
+/// Announcement of what every `Random` choice resolved to, for chat once the seed is published.
+/// Always/Never choices are already known to racers ahead of the roll (shown via
+/// `owr_choices_description`/`alttpr_dr_player_rules_str`), so only `Random` ones are included.
+///
+/// Uses `config.choices[key].value_labels.always`/`.never` verbatim when configured (same field
+/// `configured_choice_label` reads for the pre-roll display); otherwise falls back to generic
+/// wording, distinguished by `choice_entry_affects_seed`: seed-affecting choices aren't
+/// meaningfully "allowed", and rule-only choices (no seed impact) aren't meaningfully "enabled".
+pub(crate) fn reveal_resolved_randoms_str(
+    choices: &HashMap<String, ChoiceValue>,
+    resolved: &HashMap<String, bool>,
+    config: &seed_gen_type::OwrEventConfig,
+    labels: &[(String, String)],
+) -> Option<String> {
+    let entries = config.choices.as_object()?;
+    let parts = entries.iter()
+        .sorted_by_key(|(key, _)| key.as_str())
+        .filter(|(key, _)| choices.get(key.as_str()).copied().unwrap_or_default() == ChoiceValue::Random)
+        .filter_map(|(key, entry)| {
+            let ok = *resolved.get(key.as_str())?;
+            let value_key = if ok { "always" } else { "never" };
+            if let Some(label) = entry.get("value_labels").and_then(|vl| vl.get(value_key)).and_then(|l| l.as_str()) {
+                if !label.is_empty() {
+                    return Some(label.to_owned())
+                }
+            }
+            let fallback_label = entry.get("label").and_then(|l| l.as_str()).map(ToOwned::to_owned)
+                .or_else(|| labels.iter().find(|(label_key, _)| label_key == key).map(|(_, label)| label.clone()))
+                .unwrap_or_else(|| key.clone());
+            Some(if choice_entry_affects_seed(Some(entry)) {
+                format!("{fallback_label}: {}", if ok { "Enabled" } else { "Disabled" })
+            } else {
+                format!("{fallback_label}: {}", if ok { "Allowed" } else { "Not Allowed" })
+            })
+        })
+        .collect_vec();
+    English.join_str_opt(parts)
 }
 
 #[derive(Clone)]
@@ -3142,7 +3213,7 @@ impl Handler {
                 .ok_or_else(|| RollError::AlttprDe("Mode not yet drafted - cannot roll seed".to_owned()))?;
             let yaml = ctx.global_state.http_client.get(&url).send().await?.text().await?;
             let yaml = inject_alttpr_dr_meta(&yaml, uuid)?;
-            Ok::<_, RollError>(ctx.global_state.clone().roll_alttpr_dr_seed(yaml, uuid, "../ALttPDoorRandomizer", true, "DR_"))
+            Ok::<_, RollError>(ctx.global_state.clone().roll_alttpr_dr_seed(yaml, uuid, "../ALttPDoorRandomizer", true, "DR_", None))
         }.await;
         let receiver = match receiver {
             Ok(rx) => rx,
@@ -3180,7 +3251,12 @@ impl Handler {
         let choices = owr_choices_for_race(&ctx.global_state.db_pool, &cal_event.race).await;
         let seed_options_str = owr_choices_description(&choices, &config);
         let race_options_str = alttpr_dr_player_rules_str(&choices, &config);
-        let receiver = ctx.global_state.clone().roll_mutual_choices_dr_seed(config, choices);
+        let labels: Vec<(String, String)> = self.official_data.as_ref()
+            .map(|d| d.event.choice_requirements().into_iter().map(|(key, label)| (key.to_owned(), label)).collect())
+            .unwrap_or_default();
+        let resolved = resolve_all_choices(&choices, &config);
+        let resolved_randoms_str = reveal_resolved_randoms_str(&choices, &resolved, &config, &labels);
+        let receiver = ctx.global_state.clone().roll_mutual_choices_dr_seed(config, resolved, resolved_randoms_str);
         self.roll_seed_inner(ctx, Some(delay_until), receiver, language, article, format!("seed with {}", seed_options_str), false).await;
         if let Some(race_options_str) = race_options_str {
             ctx.send_message(format!("@entrants Remember: this race will be played with {}!", race_options_str), true, Vec::default()).await.expect("failed to send race options");
@@ -3196,7 +3272,12 @@ impl Handler {
             .expect("OWR seed roll triggered for event with no OWR seed config");
         let choices = owr_choices_for_race(&ctx.global_state.db_pool, &cal_event.race).await;
         let description = owr_choices_description(&choices, &config);
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_owr_seed(choices, config), language, article, format!("seed with {description}"), false).await;
+        let labels: Vec<(String, String)> = self.official_data.as_ref()
+            .map(|d| d.event.choice_requirements().into_iter().map(|(key, label)| (key.to_owned(), label)).collect())
+            .unwrap_or_default();
+        let resolved = resolve_all_choices(&choices, &config);
+        let resolved_randoms_str = reveal_resolved_randoms_str(&choices, &resolved, &config, &labels);
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_owr_seed(resolved, config, resolved_randoms_str), language, article, format!("seed with {description}"), false).await;
     }
 
     async fn roll_mysteryd20_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
@@ -3252,7 +3333,7 @@ impl Handler {
         };
         let unlock_spoiler_log = self.effective_unlock_spoiler_log(false);
         let (tx, rx) = mpsc::channel(1);
-        tx.send(SeedRollUpdate::Done { rsl_preset: None, version, unlock_spoiler_log, seed }).await.unwrap();
+        tx.send(SeedRollUpdate::Done { rsl_preset: None, version, unlock_spoiler_log, seed, resolved_randoms: None }).await.unwrap();
         self.roll_seed_inner(ctx, delay_until, rx, language, article, description, suppress_preamble).await;
     }
 
