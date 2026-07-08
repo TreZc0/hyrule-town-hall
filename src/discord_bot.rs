@@ -923,7 +923,7 @@ async fn draft_action(ctx: &DiscordCtx, interaction: &impl GenericInteraction, a
 }
 
 fn parse_timestamp(timestamp: &str) -> Option<DateTime<Utc>> {
-    regex_captures!("^<t:(-?[0-9]+)(?::[tTdDfFR])?>$", timestamp)
+    regex_captures!("^<t:(-?[0-9]+)(?::[stTdDfFR])?>$", timestamp)
         .and_then(|(_, timestamp)| timestamp.parse().ok())
         .and_then(|timestamp| Utc.timestamp_opt(timestamp, 0).single())
 }
@@ -977,10 +977,6 @@ fn normalize_bare_meridiem_times(s: &str) -> Cow<'_, str> {
             format!("{hour:02}:00")
         }
     )
-}
-
-fn parse_datetime_in_timezone(s: &str, tz: Tz) -> Option<DateTime<Utc>> {
-    parse_datetime_in_timezone_at(s, tz, Utc::now())
 }
 
 fn parse_datetime_in_timezone_at(s: &str, tz: Tz, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
@@ -1047,6 +1043,14 @@ mod tests {
 
     fn fixed_now() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 7, 8, 12, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn discord_timestamp_accepts_hammertime_short_suffix() {
+        assert_eq!(
+            parse_timestamp("<t:1784005200:s>"),
+            Some(Utc.with_ymd_and_hms(2026, 7, 14, 5, 0, 0).unwrap()),
+        );
     }
 
     #[test]
@@ -2430,9 +2434,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     } else {
                                             interaction.edit_response(ctx, EditInteractionResponse::new()
                                                 .content(if let French = event.language {
-                                                    "Désolé, cela n'est pas un timestamp au format de Discord. Vous pouvez utiliser <https://hammertime.cyou/> pour en générer un, ou entrer directement la date — par exemple `vendredi 20h UTC`, `demain 15h EST` ou `vendredi 20h Europe/Paris`."
+                                                    "Désolé, cela n'est pas un timestamp au format de Discord. Vous pouvez utiliser <https://hammertime.cyou/> pour en générer un, ou entrer directement la date — par exemple `March 2nd 8PM UTC`, `tomorrow 15:00 EST` ou `friday 20h Europe/Paris`."
                                                 } else {
-                                                    "Sorry, I couldn't parse that time. Try natural language like `friday 8pm UTC`, `tomorrow 15:00 EST`, or `friday 20:00 CET`, or use <https://hammertime.cyou/> to generate a Discord timestamp."
+                                                    "Sorry, I couldn't parse that time. Try natural english language like `friday 8pm UTC`, `tomorrow 15:00 EST`, or `friday 20:00 CET`, or use <https://hammertime.cyou/> to generate a Discord timestamp."
                                                 })
                                         ).await?;
                                         transaction.rollback().await?;
@@ -4932,7 +4936,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
                 content.push(" — cancel scheduling");
                 content.push_line("");
                 content.push_line("");
-                content.push("You can enter a time naturally (e.g. `friday 8pm UTC`, `tomorrow 15:00 EST`, or `friday 20:00 Europe/Berlin`) or use <https://hammertime.cyou/> to generate a Discord timestamp. If no timezone is provided, your profile timezone is used if set; otherwise UTC is assumed.");
+                content.push("You can enter a time in natural english language (e.g. `friday 8pm UTC`, `tomorrow 15:00 EST`, or `friday 20:00 Europe/Berlin`) or use <https://hammertime.cyou/> to generate a Discord timestamp. If no timezone is provided, your profile timezone is used if set; otherwise UTC is assumed.");
                 if game_count > 1 {
                     content.push(" You can use the ");
                     content.push_mono("game:");
