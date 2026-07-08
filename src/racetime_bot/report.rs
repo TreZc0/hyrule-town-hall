@@ -7,6 +7,7 @@ use {
         CreateMessage,
     },
     crate::{
+        discord_bot::ADMIN_USER,
         prelude::*,
         racetime_bot::*,
     },
@@ -123,12 +124,55 @@ fn determine_overall_winner(game_results: &[startgg::GameResult]) -> startgg::ID
         .expect("No games completed")
 }
 
+async fn dm_admin_about_result_announcement_failure(discord_ctx: &DiscordCtx, message: String) {
+    match ADMIN_USER.create_dm_channel(discord_ctx).await {
+        Ok(dm) => if let Err(e) = dm.say(discord_ctx, message).await {
+            eprintln!("failed to DM admin about result announcement failure: {e}");
+        },
+        Err(e) => eprintln!("failed to open admin DM about result announcement failure: {e}"),
+    }
+}
+
+async fn post_result_announcement(discord_ctx: &DiscordCtx, event: &event::Data<'_>, msg: String) {
+    let Some(primary_channel) = event.discord_race_results_channel.or(event.discord_organizer_channel) else {
+        return
+    };
+
+    if let Err(primary_error) = primary_channel.say(discord_ctx, &msg).await {
+        eprintln!("failed to post race result announcement to {primary_channel}: {primary_error}");
+
+        if let Some(organizer_channel) = event.discord_organizer_channel.filter(|&channel| channel != primary_channel) {
+            if let Err(fallback_error) = organizer_channel.say(
+                discord_ctx,
+                format!(
+                    "Failed to post the race result announcement in <#{}>: {}\n\nIntended announcement:\n{}",
+                    primary_channel.get(),
+                    primary_error,
+                    msg,
+                ),
+            ).await {
+                eprintln!("failed to post race result announcement fallback to {organizer_channel}: {fallback_error}");
+            }
+        }
+
+        dm_admin_about_result_announcement_failure(
+            discord_ctx,
+            format!(
+                "Failed to post race result announcement in <#{}>: {}\n\nThe final reporting flow is continuing.\n\nIntended announcement:\n{}",
+                primary_channel.get(),
+                primary_error,
+                msg,
+            ),
+        ).await;
+    }
+}
+
 async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ctx: &RaceContext<GlobalState>, cal_event: &cal::Event, event: &event::Data<'_>, mut entrants: [(Entrant, S, Url); 2]) -> Result<(Transaction<'a, Postgres>, Vec<Id<Races>>), Error> {
     entrants.sort_unstable_by_key(|(_, time, _)| time.sort_key());
     let [(winner, winning_time, winning_room), (loser, losing_time, losing_room)] = entrants;
     let ignored_race_ids: Vec<Id<Races>> = vec![];
     if winning_time.is_dnf() && losing_time.is_dnf() {
-        if let Some(results_channel) = event.discord_race_results_channel.or(event.discord_organizer_channel) {
+        if event.discord_race_results_channel.is_some() || event.discord_organizer_channel.is_some() {
             let msg = if_chain! {
                 if let French = event.language;
                 if let Some(phase_round) = match (&cal_event.race.phase, &cal_event.race.round) {
@@ -216,7 +260,7 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                     builder.build()
                 }
             };
-            results_channel.say(&*ctx.global_state.discord_ctx.read().await, msg).await.to_racetime()?;
+            post_result_announcement(&*ctx.global_state.discord_ctx.read().await, event, msg).await;
         }
     } else if losing_time.time_window(&winning_time).is_some_and(|time_window| time_window <= event.retime_window) {
         if let Some(organizer_channel) = event.discord_organizer_channel {
@@ -293,7 +337,7 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
         return complete_1v1_result(transaction, &*ctx.global_state, &cal_event.race, event, winner, winner_time, winning_room, loser, loser_time, losing_room).await;
     } else {
         // Non-duration score (e.g. TFB piece count): announce result and report to start.gg/draft as applicable.
-        if let Some(results_channel) = event.discord_race_results_channel.or(event.discord_organizer_channel) {
+        if event.discord_race_results_channel.is_some() || event.discord_organizer_channel.is_some() {
             let msg = if_chain! {
                 if let French = event.language;
                 if let Some(phase_round) = match (&cal_event.race.phase, &cal_event.race.round) {
@@ -374,7 +418,7 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                     builder.build()
                 }
             };
-            results_channel.say(&*ctx.global_state.discord_ctx.read().await, msg).await.to_racetime()?;
+            post_result_announcement(&*ctx.global_state.discord_ctx.read().await, event, msg).await;
         }
         return report_external_and_init_draft(transaction, &*ctx.global_state, &cal_event.race, event, winner, None, winning_room, loser, None).await;
     }
@@ -401,7 +445,7 @@ pub(crate) async fn complete_1v1_result<'a>(
     };
 
     // 1. Post Discord announcement
-    if let Some(results_channel) = event.discord_race_results_channel.or(event.discord_organizer_channel) {
+    if event.discord_race_results_channel.is_some() || event.discord_organizer_channel.is_some() {
         let msg = if_chain! {
             if let French = event.language;
             if let Some(phase_round) = match (&race.phase, &race.round) {
@@ -482,7 +526,7 @@ pub(crate) async fn complete_1v1_result<'a>(
                 builder.build()
             }
         };
-        results_channel.say(&*global_state.discord_ctx.read().await, msg).await.to_racetime()?;
+        post_result_announcement(&*global_state.discord_ctx.read().await, event, msg).await;
     }
 
     report_external_and_init_draft(transaction, global_state, race, event, winner, winner_time, winning_room, loser, loser_time).await
@@ -744,7 +788,7 @@ async fn report_external_and_init_draft<'a>(
 }
 
 async fn report_ffa(ctx: &RaceContext<GlobalState>, cal_event: &cal::Event, event: &event::Data<'_>, room: Url) -> Result<(), Error> {
-    if let Some(results_channel) = event.discord_race_results_channel.or(event.discord_organizer_channel) {
+    if event.discord_race_results_channel.is_some() || event.discord_organizer_channel.is_some() {
         let mut builder = MessageBuilder::default();
         let info_prefix = match (&cal_event.race.phase, &cal_event.race.round) {
             (Some(phase), Some(round)) => Some(format!("{phase} {round}")),
@@ -773,7 +817,7 @@ async fn report_ffa(ctx: &RaceContext<GlobalState>, cal_event: &cal::Event, even
         builder.push("race finished: <");
         builder.push(room.to_string());
         builder.push('>');
-        results_channel.say(&*ctx.global_state.discord_ctx.read().await, builder.build()).await.to_racetime()?;
+        post_result_announcement(&*ctx.global_state.discord_ctx.read().await, event, builder.build()).await;
     }
     Ok(())
 }

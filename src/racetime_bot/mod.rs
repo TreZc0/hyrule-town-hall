@@ -4571,7 +4571,17 @@ impl RaceHandler<GlobalState> for Handler {
                                         cleaned_up: cleaned_up.clone(),
                                                                     finish_timeout: None,
                                     };
-                                    let _ = dummy_handler.official_race_finished(&ctx_clone, data, cal_event, event, fpa_invoked, official_breaks_used || breaks_used).await;
+                                    let room_url = format!("https://{}{}", racetime_host(), data.url);
+                                    if let Err(e) = dummy_handler.official_race_finished(&ctx_clone, data, cal_event, event, fpa_invoked, official_breaks_used || breaks_used).await {
+                                        eprintln!("failed to finalize race result reporting for {room_url}: {e}");
+                                        let discord_ctx = ctx_clone.global_state.discord_ctx.read().await;
+                                        match ADMIN_USER.create_dm_channel(&*discord_ctx).await {
+                                            Ok(dm) => if let Err(dm_error) = dm.say(&*discord_ctx, format!("Failed to finalize race result reporting for <{room_url}>: {e}")).await {
+                                                eprintln!("failed to DM admin about final race result reporting failure: {dm_error}");
+                                            },
+                                            Err(dm_error) => eprintln!("failed to open admin DM about final race result reporting failure: {dm_error}"),
+                                        }
+                                    }
                                     cleaned_up.store(true, atomic::Ordering::SeqCst);
                                 }
                             }
