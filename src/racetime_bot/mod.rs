@@ -3674,11 +3674,23 @@ impl CrosskeysRaceOptions {
             if !affects_seed { continue }
             match self.get(key) {
                 RadioChoiceValue::Always => res.push(lbl(key, fallback)),
-                RadioChoiceValue::Random => res.push(format!("randomly assigned {}", lbl(key, fallback))),
-                RadioChoiceValue::Never => {}
+                RadioChoiceValue::Random | RadioChoiceValue::Never => {}
             }
         }
         English.join_str_opt(res).unwrap_or_else(|| format!("base settings"))
+    }
+
+    pub(crate) fn random_seed_options_str(&self, labels: &[(String, String)]) -> Option<String> {
+        let lbl = |key: &str, fallback: &'static str| labels.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str()).unwrap_or(fallback).to_owned();
+        let mut res = Vec::new();
+        for &(key, affects_seed, fallback) in RADIO_CHOICE_FIELDS {
+            if !affects_seed { continue }
+            match self.get(key) {
+                RadioChoiceValue::Random => res.push(lbl(key, fallback)),
+                RadioChoiceValue::Always | RadioChoiceValue::Never => {}
+            }
+        }
+        English.join_str_opt(res)
     }
 
     pub(crate) fn as_race_options_str(&self) -> String {
@@ -4406,7 +4418,13 @@ impl Handler {
         let labels: Vec<(String, String)> = event.radio_choice_requirements().into_iter().map(|(key, label)| (key.to_owned(), label)).collect();
 
         let crosskeys_options = CrosskeysRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race).await;
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys_seed(crosskeys_options, labels.clone()), language, article, format!("seed with {}", crosskeys_options.as_seed_options_str(&labels)), false).await;
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_crosskeys_seed(crosskeys_options, labels.clone()), language, article, format!("seed"), false).await;
+        ctx.send_message(format!("@entrants Seed Settings: {}",
+                                    crosskeys_options.as_seed_options_str(&labels)
+                                ), true, Vec::default()).await.expect("failed to send seed options");
+        if let Some(random_seed_options_str) = crosskeys_options.random_seed_options_str(&labels) {
+            ctx.send_message(format!("@entrants Random settings to be revealed at seed rolling: {random_seed_options_str}"), true, Vec::default()).await.expect("failed to send random seed options");
+        }
         ctx.send_message(format!("@entrants Remember: this race will be played with {}!",
                                     crosskeys_options.as_race_options_str()
                                 ), true, Vec::default()).await.expect("failed to send race options");

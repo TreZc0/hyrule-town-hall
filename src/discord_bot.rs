@@ -5184,6 +5184,8 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
     let is_second_part = cal_event.race.seed.files.is_some();
 
     // If no seed exists, roll a new one
+    let mut resolved_randoms = None;
+
     if !is_second_part {
         let discord_data = discord_ctx.data.read().await;
         let global_state = discord_data.get::<GlobalState>().expect("Global State missing from Discord context");
@@ -5224,7 +5226,10 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         // Loop until we get an update saying the seed data is done rolling.
         let seed = loop {
             match updates.recv().await {
-                Some(racetime_bot::SeedRollUpdate::Done { seed, .. }) => break seed,
+                Some(racetime_bot::SeedRollUpdate::Done { seed, resolved_randoms: seed_resolved_randoms, .. }) => {
+                    resolved_randoms = seed_resolved_randoms;
+                    break seed
+                }
                 Some(racetime_bot::SeedRollUpdate::Error(e)) => panic!("error rolling seed: {e} ({e:?})"),
                 None => panic!(),
                 _ => {}
@@ -5238,9 +5243,14 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
                     None => (None, None, None, None, None)
                 };
                 if is_owr {
-                    sqlx::query!("UPDATE races SET seed_data = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7", serde_json::json!({"type": "alttpr_owr", "uuid": uuid.to_string()}), hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,).execute(&mut *transaction).await?;
+                    let mut seed_data = serde_json::json!({"type": "alttpr_owr", "uuid": uuid.to_string()});
+                    if let Some(resolved_randoms) = &resolved_randoms {
+                        seed_data["resolved_randoms"] = serde_json::json!(resolved_randoms);
+                    }
+                    sqlx::query!("UPDATE races SET seed_data = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7", seed_data, hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,).execute(&mut *transaction).await?;
                 } else {
-                    sqlx::query!("UPDATE races SET xkeys_uuid = $1, hash1 = $2, hash2 = $3, hash3 = $4, hash4 = $5, hash5 = $6 WHERE id = $7", uuid, hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,).execute(&mut *transaction).await?;
+                    let seed_data = resolved_randoms.as_ref().map(|resolved_randoms| serde_json::json!({ "resolved_randoms": resolved_randoms }));
+                    sqlx::query!("UPDATE races SET xkeys_uuid = $1, seed_data = $2, hash1 = $3, hash2 = $4, hash3 = $5, hash4 = $6, hash5 = $7 WHERE id = $8", uuid, seed_data, hash1 as _, hash2 as _, hash3 as _, hash4 as _, hash5 as _, cal_event.race.id as _,).execute(&mut *transaction).await?;
                 }
             }
             Some(seed::Files::TwwrPermalink { ref permalink, ref seed_hash }) => {
@@ -5253,6 +5263,14 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         }
     }
 
+    if resolved_randoms.is_none() {
+        resolved_randoms = sqlx::query_scalar::<_, Option<String>>("SELECT seed_data->>'resolved_randoms' FROM races WHERE id = $1")
+            .bind(i64::from(cal_event.race.id))
+            .fetch_optional(&mut *transaction)
+            .await?
+            .flatten();
+    }
+
     for team in cal_event.active_teams() {
         let mut content = MessageBuilder::default();
         content.push("Async starting for ");
@@ -5262,6 +5280,11 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
             content.push(". **This is the second part of the async.** The runner will receive the previously generated seed as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
         } else {
             content.push(". A Seed has been generated and will be distributed to the runner as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
+        }
+
+        if let Some(resolved_randoms) = &resolved_randoms {
+            content.push_line("");
+            content.push(format!("Final settings - {resolved_randoms}"));
         }
 
         let msg = content.build();

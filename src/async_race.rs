@@ -257,6 +257,10 @@ impl AsyncRaceManager {
             content.push_line("");
             content.push(format!("**Seed Settings:** {}", crosskeys_options.as_seed_options_str(&[])));
             content.push_line("");
+            if let Some(random_seed_options_str) = crosskeys_options.random_seed_options_str(&[]) {
+                content.push(format!("**Random settings to be revealed at seed rolling:** {random_seed_options_str}"));
+                content.push_line("");
+            }
 
             let race_options_str = crosskeys_options.as_race_options_str_no_delay();
 
@@ -414,6 +418,16 @@ impl AsyncRaceManager {
                         file_hash[0], file_hash[1], file_hash[2], file_hash[3], file_hash[4]));
                 }
             }
+        }
+
+        if let Some(resolved_randoms) = sqlx::query_scalar::<_, Option<String>>("SELECT seed_data->>'resolved_randoms' FROM races WHERE id = $1")
+            .bind(i64::from(race.id))
+            .fetch_optional(&mut **transaction)
+            .await?
+            .flatten()
+        {
+            content.push_line("");
+            content.push(format!("Final settings - {resolved_randoms}"));
         }
         
         let thread_id = match async_part {
@@ -1429,6 +1443,11 @@ pub(crate) async fn handle_ready_qualifier(
     }
 
     if let Some(ref seed_data) = seed.seed_data {
+        if let Some(resolved_randoms) = seed_data.get("resolved_randoms").and_then(|v| v.as_str()) {
+            if !resolved_randoms.is_empty() {
+                seed_msg.push(format!("Final settings - {}\n", resolved_randoms));
+            }
+        }
         if seed_data.get("type").and_then(|v| v.as_str()) == Some("alttpr_owr") {
             if let Some(uuid) = seed_data.get("uuid").and_then(|v| v.as_str()) {
                 let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").unwrap();

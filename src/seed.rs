@@ -118,7 +118,7 @@ impl Data {
                     Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }
                 }),
                 (Some(file_stem), locked_spoiler_log_path, None, _, None, None, None) => Some(Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }),
-                (_, _, _, _, _, Some(uuid), None) => Some(Files::AlttprDoorRando { uuid, is_owr: false }),
+                (_, _, _, _, _, Some(uuid), _) => Some(Files::AlttprDoorRando { uuid, is_owr: false }),
                 (_, _, _, _, _, _, Some(ref seed_data)) => (|| {
                     if seed_data.get("type").and_then(|v| v.as_str()) == Some("alttpr_owr") {
                         let uuid = seed_data.get("uuid").and_then(|v| v.as_str()).and_then(|s| s.parse().ok())?;
