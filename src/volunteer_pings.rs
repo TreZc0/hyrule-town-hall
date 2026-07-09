@@ -16,6 +16,8 @@ use {
     },
 };
 
+const MAX_RACES_PER_SCHEDULED_PING: usize = 5;
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
     #[error(transparent)] Cal(#[from] cal::Error),
@@ -552,33 +554,36 @@ async fn check_scheduled_workflow(
         return Ok(());
     }
 
-    let message = build_scheduled_ping_message(
-        &role_ids_to_ping,
-        &race_summaries,
-        display_name,
-        workflow.language,
-        guild_id,
-        series,
-        event,
-        volunteer_page_url,
-    );
+    let no_role_ids = HashSet::new();
+    for (chunk_idx, chunk) in race_summaries.chunks(MAX_RACES_PER_SCHEDULED_PING).enumerate() {
+        let message = build_scheduled_ping_message(
+            if chunk_idx == 0 { &role_ids_to_ping } else { &no_role_ids },
+            chunk,
+            display_name,
+            workflow.language,
+            guild_id,
+            series,
+            event,
+            volunteer_page_url,
+        );
 
-    let posted = match channel_id.send_message(discord_ctx, message).await {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("Failed to send scheduled ping for workflow {}: {}", workflow.id, e);
-            return Ok(());
-        }
-    };
+        let posted = match channel_id.send_message(discord_ctx, message).await {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("Failed to send scheduled ping for workflow {}: {}", workflow.id, e);
+                return Ok(());
+            }
+        };
 
-    sqlx::query!(
-        "INSERT INTO volunteer_ping_messages (workflow_id, race_id, lead_time_hours, message_id, channel_id) VALUES ($1, NULL, NULL, $2, $3)",
-        workflow.id,
-        posted.id.get() as i64,
-        channel_id.get() as i64,
-    )
-    .execute(pool)
-    .await?;
+        sqlx::query!(
+            "INSERT INTO volunteer_ping_messages (workflow_id, race_id, lead_time_hours, message_id, channel_id) VALUES ($1, NULL, NULL, $2, $3)",
+            workflow.id,
+            posted.id.get() as i64,
+            channel_id.get() as i64,
+        )
+        .execute(pool)
+        .await?;
+    }
 
     Ok(())
 }
