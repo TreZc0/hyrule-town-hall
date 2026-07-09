@@ -1159,19 +1159,32 @@ async fn delay_notes_update_for_row(
     Ok(delay_notes_update(existing_notes, delay_minutes))
 }
 
+/// Convert a single-letter column reference (A-Z) to a 0-based index.
+fn column_letter_to_index(col: &str) -> Option<usize> {
+    let c = col.chars().exactly_one().ok()?;
+    if c.is_ascii_uppercase() {
+        Some((c as usize) - ('A' as usize))
+    } else {
+        None
+    }
+}
+
 async fn dedupe_export_rows(
     http_client: &reqwest::Client,
     backend: &RestreamingBackend,
     export: &ExportConfig,
 ) -> Result<usize, Error> {
     let export_id_prefix = format!("HTH-{}-{}-", export.series.slug(), export.event);
-    let id_col_range = format!("'Restream Signups'!{}:{}", backend.hth_export_id_col, backend.hth_export_id_col);
-    let id_values = sheets::read_values_uncached(http_client, &backend.google_sheet_id, &id_col_range).await?;
+    let full_range = "'Restream Signups'!A:Z".to_owned();
+    let rows = sheets::read_values_uncached(http_client, &backend.google_sheet_id, &full_range).await?;
+    let Some(id_col_idx) = column_letter_to_index(&backend.hth_export_id_col) else {
+        return Ok(0);
+    };
 
     let mut rows_by_id: HashMap<String, Vec<usize>> = HashMap::default();
-    for (idx, row) in id_values.iter().enumerate() {
+    for (idx, row) in rows.iter().enumerate() {
         let row_num = idx + 1;
-        if let Some(cell) = row.first() {
+        if let Some(cell) = row.get(id_col_idx) {
             if row_num >= 4 && cell.starts_with(&export_id_prefix) {
                 rows_by_id.entry(cell.clone()).or_default().push(row_num);
             }
@@ -1180,11 +1193,39 @@ async fn dedupe_export_rows(
 
     let mut updates = Vec::new();
     let mut cleared_rows = 0usize;
-    for rows in rows_by_id.into_values() {
-        if rows.len() > 1 {
-            for row in rows.into_iter().skip(1) {
-                updates.push((format!("'Restream Signups'!A{}:Z{}", row, row), vec![vec![String::new(); 26]]));
+    for row_nums in rows_by_id.into_values() {
+        if row_nums.len() <= 1 { continue }
+        let survivor = row_nums[0];
+        let survivor_row = &rows[survivor - 1];
+        // Column A (date) and E (title) are fixed regardless of backend column layout;
+        // see build_signup_row_updates. Only clear a duplicate row if these actually
+        // match the surviving row - a shared export ID with different content means a
+        // human copied an old row (and its ID) by accident, not a genuine artifact
+        // duplicate, and must be left alone for manual review instead of destroyed.
+        for &row_num in &row_nums[1..] {
+            let candidate_row = &rows[row_num - 1];
+            let date_matches = candidate_row.get(0) == survivor_row.get(0);
+            let title_matches = candidate_row.get(4) == survivor_row.get(4);
+            if date_matches && title_matches {
+                // Genuine artifact duplicate - safe to clear entirely.
+                updates.push((format!("'Restream Signups'!A{}:Z{}", row_num, row_num), vec![vec![String::new(); 26]]));
                 cleared_rows += 1;
+            } else if !date_matches && !title_matches {
+                // Both differ - unambiguously a different race that happens to carry a
+                // copy-pasted export ID. Leave the human-entered content untouched, only
+                // strip the stray ID so it stops being tracked as this race's row.
+                updates.push((format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row_num), vec![vec![String::new()]]));
+                eprintln!(
+                    "ZSR dedupe {}/{}: row {} shares export id with row {} but content differs entirely - stripped stray export ID, left content in place",
+                    export.series.slug(), export.event, row_num, survivor,
+                );
+            } else {
+                // Only one of date/title differs - ambiguous, could be a legitimate
+                // update in flight. Leave everything alone for manual review.
+                eprintln!(
+                    "ZSR dedupe {}/{}: row {} shares export id with row {} but content partially differs - leaving in place for manual review",
+                    export.series.slug(), export.event, row_num, survivor,
+                );
             }
         }
     }
@@ -1272,9 +1313,6 @@ pub(crate) async fn export_race(
         }
     };
 
-    // Check whether this race already has a DB tracking record.
-    let existing_export = RaceExport::find(transaction, race.id, export.id).await?;
-
     // Always read the sheet to find the current row position. We use the sheet as
     // the authoritative source for whether a row exists, which handles the case where
     // the DB tracking record was lost (e.g. a transaction rollback after a transient
@@ -1304,10 +1342,12 @@ pub(crate) async fn export_race(
             notes.as_deref(),
         );
         sheets::batch_update_values(http_client, &backend.google_sheet_id, updates).await?;
-    } else if existing_export.is_none() {
-        // Row not in sheet and no DB record - this is a genuinely new race.
-        // (If the DB record exists but the row is gone, the row was intentionally
-        // deleted from the sheet after the race ended - don't re-insert it.)
+    } else {
+        // Row not in sheet. Callers only reach export_race for races that haven't been
+        // running for more than 30 minutes (see sync_all_races), so a missing row here
+        // is never a legitimate "row removed after the race ended" cleanup - it's either
+        // a genuinely new race, or a DB tracking record whose row was lost (manual edit,
+        // dedupe, a failed previous insert). Always re-insert.
         // Append using a column that is required for every row to avoid mid-sheet
         // inserts when the export-id column has blanks in manually managed rows.
         let append_range = "'Restream Signups'!A:A".to_owned();
