@@ -1842,7 +1842,7 @@ impl GlobalState {
         tokio::spawn(async move {
             let uuid = Uuid::new_v4();
             let resolved = crosskeys_options.resolve();
-            let resolved_randoms_str = resolved.reveal_str(&labels);
+            let final_settings_str = resolved.final_settings_str(&crosskeys_options, &labels);
             let crosskeys_meta = AlttprDoorRandoMeta {
                 bps: true,
                 name: uuid.to_string(),
@@ -1978,7 +1978,7 @@ impl GlobalState {
                 rsl_preset: None,
                 version: None,
                 unlock_spoiler_log: UnlockSpoilerLog::Never,
-                resolved_randoms: resolved_randoms_str,
+                resolved_randoms: final_settings_str,
             }).await.allow_unreceived();
             Ok(())
         }.then(|res| async move {
@@ -2971,8 +2971,8 @@ pub(crate) enum SeedRollUpdate {
         rsl_preset: Option<rsl::Preset>,
         version: Option<VersionedBranch>,
         unlock_spoiler_log: UnlockSpoilerLog,
-        /// Announcement of what any `Random` radio choice (e.g. crosskeys keydrop/flute/etc.)
-        /// resolved to, to be posted alongside the seed link. `None` for goals without such choices.
+        /// Final settings announcement for goals with radio choices that resolve at seed rolling.
+        /// `None` for goals without such choices.
         resolved_randoms: Option<String>,
     },
     /// Seed rolling failed.
@@ -3598,22 +3598,54 @@ fn rule_choice_phrase(key: &str, ok: bool) -> &'static str {
 }
 
 impl ResolvedCrosskeysOptions {
-    /// Human-readable announcement of what every `Random` radio choice resolved to, using the
-    /// event's own configured labels for seed-affecting choices, and rule-specific wording for
-    /// rules-only choices (hovering/no_delay) since those aren't meaningfully "enabled"/"disabled".
-    /// Returns `None` if nothing was random.
-    pub(crate) fn reveal_str(&self, labels: &[(String, String)]) -> Option<String> {
+    fn get(&self, key: &str) -> bool {
+        match key {
+            "all_dungeons" => self.all_dungeons_ok,
+            "completionist" => self.completionist_ok,
+            "flute" => self.flute_ok,
+            "inverted" => self.inverted_ok,
+            "keydrop" => self.keydrop_ok,
+            "mirror_scroll" => self.mirror_scroll_ok,
+            "pseudoboots" => self.pb_ok,
+            "zw" => self.zw_ok,
+            key @ ("hovering" | "no_delay") => self.resolved_randoms.iter()
+                .find(|(resolved_key, _)| *resolved_key == key)
+                .map(|(_, ok)| *ok)
+                .expect("missing resolved rule-only random radio choice"),
+            _ => unreachable!("unknown crosskeys radio choice key: {key}"),
+        }
+    }
+
+    /// Human-readable announcement of the complete final seed-affecting radio-choice settings.
+    /// This includes choices known before rolling and choices that were randomly resolved while
+    /// rolling. Returns `None` if no seed-affecting choice needed to be revealed at seed rolling.
+    pub(crate) fn final_settings_str(&self, source: &CrosskeysRaceOptions, labels: &[(String, String)]) -> Option<String> {
         let lbl = |key: &str| labels.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
             .unwrap_or_else(|| RADIO_CHOICE_FIELDS.iter().find(|(k, _, _)| *k == key).map(|(_, _, fallback)| fallback.to_string()).unwrap_or_else(|| key.to_owned()));
-        let affects_seed = |key: &str| RADIO_CHOICE_FIELDS.iter().find(|(k, _, _)| *k == key).is_some_and(|(_, affects_seed, _)| *affects_seed);
-        let parts = self.resolved_randoms.iter()
-            .map(|(key, ok)| if affects_seed(key) {
-                format!("{}: {}", lbl(key), if *ok { "Enabled" } else { "Disabled" })
+        let mut seed_parts = Vec::new();
+        let mut has_random = false;
+        for &(key, affects_seed, _) in RADIO_CHOICE_FIELDS {
+            if !affects_seed { continue }
+            match source.get(key) {
+                RadioChoiceValue::Always => seed_parts.push(format!("{}: Enabled", lbl(key))),
+                RadioChoiceValue::Random => {
+                    has_random = true;
+                    let ok = self.get(key);
+                    seed_parts.push(format!("{}: {}", lbl(key), if ok { "Enabled" } else { "Disabled" }));
+                }
+                RadioChoiceValue::Never => {}
+            }
+        }
+        if has_random {
+            let parts = if seed_parts.is_empty() {
+                vec![format!("base settings")]
             } else {
-                rule_choice_phrase(key, *ok).to_owned()
-            })
-            .collect_vec();
-        English.join_str_opt(parts)
+                seed_parts
+            };
+            English.join_str_opt(parts)
+        } else {
+            None
+        }
     }
 }
 

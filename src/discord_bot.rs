@@ -5019,6 +5019,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
     push_runner_timezones(&mut content, &runner_timezones, event.language);
     let goal = racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event");
     let is_crosskeys = matches!(goal, racetime_bot::Goal::Crosskeys2025 | racetime_bot::Goal::Crosskeys2026);
+    let hide_no_delay = is_crosskeys && (event.automated_asyncs || matches!(race.schedule, RaceSchedule::Async { .. }));
     let mut agreed_choice_labels = Vec::new();
     let mut rule_only_effective = Vec::new();
     let mut random_labels = Vec::new();
@@ -5031,6 +5032,9 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
                 .fetch_all(&mut *transaction).await?;
             let num_teams = rows.len();
             for (key, label) in boolean_choices {
+                if hide_no_delay && key == "no_delay" {
+                    continue
+                }
                 let enabled = rows.iter().filter(|r| {
                     r.custom_choices.as_object()
                         .and_then(|obj| obj.get(key))
@@ -5056,6 +5060,9 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             let rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", team_ids as _)
                 .fetch_all(&mut *transaction).await?;
             for (key, label) in radio_choices {
+                if hide_no_delay && key == "no_delay" {
+                    continue
+                }
                 let aggregated = rows.iter()
                     .filter_map(|r| r.custom_choices.as_object().and_then(|obj| obj.get(key)).and_then(RadioChoiceValue::from_json_value))
                     .min()
