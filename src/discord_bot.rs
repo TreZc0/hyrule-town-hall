@@ -2058,6 +2058,12 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             // Delete async_times records when resetting schedule
                                             sqlx::query!("DELETE FROM async_times WHERE race_id = $1", race.id as _)
                                                 .execute(&mut *transaction).await?;
+
+                                            // Delete Discord scheduled event
+                                            let mut race_mut = race.clone();
+                                            if let Err(e) = crate::discord_scheduled_events::delete_discord_scheduled_event(ctx, &mut transaction, &mut race_mut, &event).await {
+                                                eprintln!("Failed to delete Discord scheduled event for race {}: {}", race.id, e);
+                                            }
                                         }
 
                                         // Send "race unscheduled" DMs to pending+confirmed volunteers if schedule was reset
@@ -2346,7 +2352,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                 note.push(".\n");
                                                 note.build()
                                         });
-                                        if (start - Utc::now()).to_std().map_or(true, |schedule_notice| schedule_notice > Duration::from_secs(365 * 24 * 60 * 60)) {
+                                        if (start - Utc::now()).to_std().map_or(false, |schedule_notice| schedule_notice > Duration::from_secs(365 * 24 * 60 * 60)) {
                                             interaction.edit_response(ctx, EditInteractionResponse::new()
                                                 .content(if let French = event.language {
                                                     format!("Désolé, les races ne peuvent pas être planifiées plus d'un an à l'avance.")
@@ -2503,7 +2509,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                 note.push(".\n");
                                                 note.build()
                                         });
-                                        if (start - Utc::now()).to_std().map_or(true, |schedule_notice| schedule_notice > Duration::from_secs(365 * 24 * 60 * 60)) {
+                                        if (start - Utc::now()).to_std().map_or(false, |schedule_notice| schedule_notice > Duration::from_secs(365 * 24 * 60 * 60)) {
                                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                                 .ephemeral(true)
                                                 .content(if let French = event.language {
