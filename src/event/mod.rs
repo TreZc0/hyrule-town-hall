@@ -1035,6 +1035,7 @@ pub(crate) enum Tab {
     Teams,
     Races,
     MyStatus,
+    Practice,
     Enter,
     FindTeam,
     Volunteer,
@@ -3637,7 +3638,7 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, global_state: &State<Arc
     let is_ootr = matches!(data.seed_gen_type, Some(SeedGenType::OoTR));
 
     let me_opt = Some(me);
-    let header = data.header(&mut transaction, me_opt.as_ref(), Tab::MyStatus, false).await?;
+    let header = data.header(&mut transaction, me_opt.as_ref(), Tab::Practice, false).await?;
     let form_uri = uri!(practice_seed_post(series, event));
     let title = format!("Practice Seed — {}", data.display_name);
     let chests = data.chests().await?;
@@ -3879,7 +3880,7 @@ pub(crate) async fn practice_seed_status(pool: &State<PgPool>, practice_seeds: &
             Some(PracticeSeedStatus::Done(PracticeSeedResult::Permalink { permalink, seed_hash })) => {
                 let mut transaction = pool.begin().await?;
                 let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-                let header = data.header(&mut transaction, me.as_ref(), Tab::MyStatus, false).await?;
+                let header = data.header(&mut transaction, me.as_ref(), Tab::Practice, false).await?;
                 let chests = data.chests().await?;
                 let content = html! {
                     : header;
@@ -3902,7 +3903,7 @@ pub(crate) async fn practice_seed_status(pool: &State<PgPool>, practice_seeds: &
             Some(PracticeSeedStatus::Done(PracticeSeedResult::PatcherLink { url, seed_hash, selected_choices })) => {
                 let mut transaction = pool.begin().await?;
                 let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-                let header = data.header(&mut transaction, me.as_ref(), Tab::MyStatus, false).await?;
+                let header = data.header(&mut transaction, me.as_ref(), Tab::Practice, false).await?;
                 let chests = data.chests().await?;
                 let content = html! {
                     : header;
@@ -3930,7 +3931,7 @@ pub(crate) async fn practice_seed_status(pool: &State<PgPool>, practice_seeds: &
             Some(PracticeSeedStatus::Done(PracticeSeedResult::SeedLink { url, label, seed_hash })) => {
                 let mut transaction = pool.begin().await?;
                 let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-                let header = data.header(&mut transaction, me.as_ref(), Tab::MyStatus, false).await?;
+                let header = data.header(&mut transaction, me.as_ref(), Tab::Practice, false).await?;
                 let chests = data.chests().await?;
                 let content = html! {
                     : header;
@@ -3955,7 +3956,7 @@ pub(crate) async fn practice_seed_status(pool: &State<PgPool>, practice_seeds: &
 
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    let header = data.header(&mut transaction, me.as_ref(), Tab::MyStatus, false).await?;
+    let header = data.header(&mut transaction, me.as_ref(), Tab::Practice, false).await?;
     let chests = data.chests().await?;
 
     let content = if status_tag == 2 {
