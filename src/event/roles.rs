@@ -2112,7 +2112,7 @@ pub(crate) async fn delete_role_binding(
                 "This event has ended and can no longer be configured",
             ));
         }
-        if !data.organizers(&mut transaction).await?.contains(&me) {
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
             form.context.push_error(form::Error::validation(
                 "You must be an organizer to manage roles for this event.",
             ));
@@ -2181,7 +2181,7 @@ pub(crate) async fn edit_role_binding(
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-    if !data.organizers(&mut transaction).await?.contains(&me) {
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
 
@@ -2355,7 +2355,7 @@ pub(crate) async fn approve_role_request(
                 "This event has ended and can no longer be configured",
             ));
         }
-        if !data.organizers(&mut transaction).await?.contains(&me) {
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
             form.context.push_error(form::Error::validation(
                 "You must be an organizer to manage roles for this event.",
             ));
@@ -2460,7 +2460,7 @@ pub(crate) async fn reject_role_request(
                 "This event has ended and can no longer be configured",
             ));
         }
-        if !data.organizers(&mut transaction).await?.contains(&me) {
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
             form.context.push_error(form::Error::validation(
                 "You must be an organizer to manage roles for this event.",
             ));
@@ -4617,7 +4617,7 @@ pub(crate) async fn revoke_role_request(
         ));
     }
 
-    if !data.organizers(&mut transaction).await?.contains(&me) {
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
         form.context.push_error(form::Error::validation(
             "You must be an organizer to revoke role requests",
         ));
@@ -5085,7 +5085,7 @@ pub(crate) async fn disable_role_binding(
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-    if !data.organizers(&mut transaction).await?.contains(&me) {
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
 
@@ -5138,7 +5138,7 @@ pub(crate) async fn enable_role_binding(
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-    if !data.organizers(&mut transaction).await?.contains(&me) {
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
 
@@ -5193,7 +5193,7 @@ pub(crate) async fn upsert_role_binding_override(
     form.verify(&csrf);
 
     Ok(if let Some(ref value) = form.value {
-        if !data.organizers(&mut transaction).await?.contains(&me) {
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
             form.context.push_error(form::Error::validation(
                 "You must be an organizer to manage roles for this event.",
             ));
@@ -5345,7 +5345,7 @@ pub(crate) async fn delete_role_binding_override(
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-    if !data.organizers(&mut transaction).await?.contains(&me) {
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
 
@@ -5386,7 +5386,7 @@ pub(crate) async fn copy_volunteers_from_event(
                 "This event has ended and can no longer be configured",
             ));
         }
-        if !data.organizers(&mut transaction).await?.contains(&me) {
+        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
             form.context.push_error(form::Error::validation(
                 "You must be an organizer to manage roles for this event.",
             ));

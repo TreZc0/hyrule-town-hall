@@ -398,7 +398,6 @@ impl Goal {
             | Self::TwwrMainS9
             | Self::BotwAny2026
             | Self::BotwMsr2026
-            | Self::Casboots2026
             | Self::Crosskeys2026
             | Self::WolfdashS5
                 => false,
@@ -408,6 +407,7 @@ impl Goal {
             | Self::AlttprDeRivalsCupBrackets
             | Self::AlttprDeRivalsCupGroups
             | Self::Cabookey2026
+            | Self::Casboots2026
             | Self::Cc7
             | Self::CoOpS3
             | Self::CopaDoBrasil
@@ -446,7 +446,7 @@ impl Goal {
             Self::BotwAny2026 => "Any%",
             Self::BotwMsr2026 => "Master Sword",
             Self::Cabookey2026 => "Cabookey Tournament 2026",
-            Self::Casboots2026 => "Beat the game - Tournament (Solo)",
+            Self::Casboots2026 => "Casual Boots",
             Self::Cc7 => "Standard Tournament Season 7 Challenge Cup",
             Self::CoOpS3 => "Co-op Tournament Season 3",
             Self::CopaDoBrasil => "Copa do Brasil",
