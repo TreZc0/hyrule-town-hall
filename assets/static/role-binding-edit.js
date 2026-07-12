@@ -177,7 +177,10 @@ function saveOverrideEdit(bindingId) {
 
     fetch(savePath, { method: 'POST', body: formData })
         .then(response => {
-            if (response.ok) {
+            // On success the server sends a redirect (which fetch follows); on
+            // validation failure it re-renders the form as a plain 200 response,
+            // so response.ok alone can't tell the two apart.
+            if (response.ok && response.redirected) {
                 // Update override data attributes then reload to reflect effective values
                 row.setAttribute('data-override-discord-role-id', discordRole);
                 row.setAttribute('data-override-min-count', minCount);
