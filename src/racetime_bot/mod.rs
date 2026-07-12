@@ -4628,10 +4628,10 @@ impl RaceHandler<GlobalState> for Handler {
 
     async fn new(ctx: &RaceContext<GlobalState>) -> Result<Self, Error> {
         let data = ctx.data().await;
-        let goal = Goal::from_race_data(&data).ok_or(GoalFromStrError).to_racetime()?;
-        let (existing_seed, official_data, race_state, high_seed_name, low_seed_name, fpa_enabled) = lock!(new_room_lock = ctx.global_state.new_room_lock; { // make sure a new room isn't handled before it's added to the database
+        let (existing_seed, official_data, race_state, high_seed_name, low_seed_name, fpa_enabled, goal) = lock!(new_room_lock = ctx.global_state.new_room_lock; { // make sure a new room isn't handled before it's added to the database
             let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
             let new_data = if let Some(cal_event) = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, format!("https://{}{}", racetime_host(), ctx.data().await.url).parse()?).await.to_racetime()? {
+                let goal = Goal::for_event(cal_event.race.series, &cal_event.race.event).ok_or(GoalFromStrError).to_racetime()?;
                 let event = cal_event.race.event(&mut transaction).await.to_racetime()?;
                 let mut entrants = Vec::default();
                 for member in cal_event.racetime_users_to_invite(&mut transaction, &*ctx.global_state.discord_ctx.read().await, &event).await.to_racetime()? {
@@ -4867,8 +4867,10 @@ impl RaceHandler<GlobalState> for Handler {
                     high_seed_name,
                     low_seed_name,
                     fpa_enabled,
+                    goal,
                 )
             } else {
+                let goal = Goal::from_race_data(&data).ok_or(GoalFromStrError).to_racetime()?;
                 let mut race_state = RaceState::Init;
                 if let Some(ref info_bot) = data.info_bot {
                     for section in info_bot.split(" | ") {
@@ -5663,6 +5665,7 @@ impl RaceHandler<GlobalState> for Handler {
                     format!("Team A"),
                     format!("Team B"),
                     false,
+                    goal,
                 )
             };
             transaction.commit().await.to_racetime()?;
@@ -6711,7 +6714,7 @@ impl RaceHandler<GlobalState> for Handler {
                     self.finish_timeout = Some(tokio::spawn(async move {
                         sleep(Duration::from_secs(30)).await;
                         if !cleaned_up.load(atomic::Ordering::SeqCst) {
-                            if let Some(OfficialRaceData { ref cal_event, ref event, fpa_invoked, breaks_used: official_breaks_used, .. }) = official_data {
+                            if let Some(OfficialRaceData { ref cal_event, ref event, goal, fpa_invoked, breaks_used: official_breaks_used, .. }) = official_data {
                                 let data = ctx_clone.data().await;
                                 // Re-check that race is still finished after the 30 second delay
                                 if let RaceStatusValue::Finished = data.status.value {
@@ -6721,7 +6724,7 @@ impl RaceHandler<GlobalState> for Handler {
                                         official_data: Some(OfficialRaceData {
                                             cal_event: cal_event.clone(),
                                             event: event.clone(),
-                                            goal: Goal::from_race_data(&*data).unwrap_or(Goal::StandardRuleset),
+                                            goal,
                                             restreams: HashMap::new(),
                                             entrants: Vec::new(),
                                             fpa_invoked,
@@ -6968,29 +6971,29 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                             custom_title
                         } else {
                             let info_prefix = match (&cal_event.race.phase, &cal_event.race.round) {
-                                (Some(phase), Some(round)) => Some(format!("{phase} {round}")),
-                                (Some(phase), None) => Some(phase.clone()),
-                                (None, Some(round)) => Some(round.clone()),
+                                (Some(phase), Some(round)) => Some(format!("{}: {phase} {round}", event.display_name)),
+                                (Some(phase), None) => Some(format!("{}: {phase}", event.display_name)),
+                                (None, Some(round)) => Some(format!("{}: {round}", event.display_name)),
                                 (None, None) => None,
                             };
                             match cal_event.race.entrants {
                                 Entrants::Open | Entrants::Count { .. } => info_prefix.clone().unwrap_or_default(),
-                                Entrants::Named(ref entrants) => format!("{}{entrants}", info_prefix.as_ref().map(|prefix| format!("{prefix}: ")).unwrap_or_default()),
+                                Entrants::Named(ref entrants) => format!("{}{entrants}", info_prefix.as_ref().map(|prefix| format!("{prefix} - ")).unwrap_or_default()),
                                 Entrants::Two([ref team1, ref team2]) => match cal_event.kind {
                                     cal::EventKind::Normal => format!(
                                         "{}{} vs {}",
-                                        info_prefix.as_ref().map(|prefix| format!("{prefix}: ")).unwrap_or_default(),
+                                        info_prefix.as_ref().map(|prefix| format!("{prefix} - ")).unwrap_or_default(),
                                         team1.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team2.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                     ),
                                     cal::EventKind::Async1 => format!(
-                                        "{} (async): {} vs {}",
+                                        "{} (async) - {} vs {}",
                                         info_prefix.clone().unwrap_or_default(),
                                         team1.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team2.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                     ),
                                     cal::EventKind::Async2 => format!(
-                                        "{} (async): {} vs {}",
+                                        "{} (async) - {} vs {}",
                                         info_prefix.clone().unwrap_or_default(),
                                         team2.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team1.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
@@ -7000,27 +7003,27 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                                 Entrants::Three([ref team1, ref team2, ref team3]) => match cal_event.kind {
                                     cal::EventKind::Normal => format!(
                                         "{}{} vs {} vs {}",
-                                        info_prefix.as_ref().map(|prefix| format!("{prefix}: ")).unwrap_or_default(),
+                                        info_prefix.as_ref().map(|prefix| format!("{prefix} - ")).unwrap_or_default(),
                                         team1.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team2.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team3.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                     ),
                                     cal::EventKind::Async1 => format!(
-                                        "{} (async): {} vs {} vs {}",
+                                        "{} (async) - {} vs {} vs {}",
                                         info_prefix.clone().unwrap_or_default(),
                                         team1.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team2.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team3.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                     ),
                                     cal::EventKind::Async2 => format!(
-                                        "{} (async): {} vs {} vs {}",
+                                        "{} (async) - {} vs {} vs {}",
                                         info_prefix.clone().unwrap_or_default(),
                                         team2.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team1.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team3.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                     ),
                                     cal::EventKind::Async3 => format!(
-                                        "{} (async): {} vs {} vs {}",
+                                        "{} (async) - {} vs {} vs {}",
                                         info_prefix.clone().unwrap_or_default(),
                                         team3.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team1.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
