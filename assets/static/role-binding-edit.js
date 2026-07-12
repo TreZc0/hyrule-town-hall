@@ -122,17 +122,38 @@ function startOverrideEdit(bindingId) {
     const overrideDiscordRole = row.getAttribute('data-override-discord-role-id') || '';
     const overrideMinCount    = row.getAttribute('data-override-min-count') || '';
     const overrideMaxCount    = row.getAttribute('data-override-max-count') || '';
+    const savePath = row.getAttribute('data-override-save-path');
+    const formId = `override-form-${bindingId}`;
 
+    // Inputs live in separate <td>s, so a wrapping <form> won't reach them all;
+    // associate them with a hidden <form> elsewhere via the HTML5 form="" attribute
+    // instead, same as every other server-rendered form on this page.
     row.querySelector('.discord-role').innerHTML =
-        `<input type="text" name="override_discord_role_id" value="${overrideDiscordRole}" placeholder="leave blank to inherit" style="width: 200px;">`;
+        `<input type="text" name="discord_role_id" form="${formId}" value="${overrideDiscordRole}" placeholder="leave blank to inherit" style="width: 200px;">`;
     row.querySelector('.min-count').innerHTML =
-        `<input type="number" name="override_min_count" value="${overrideMinCount}" min="1" placeholder="inherit" style="width: 70px;">`;
+        `<input type="number" name="min_count" form="${formId}" value="${overrideMinCount}" min="1" placeholder="inherit" style="width: 70px;">`;
     row.querySelector('.max-count').innerHTML =
-        `<input type="number" name="override_max_count" value="${overrideMaxCount}" min="1" placeholder="inherit" style="width: 70px;">`;
+        `<input type="number" name="max_count" form="${formId}" value="${overrideMaxCount}" min="1" placeholder="inherit" style="width: 70px;">`;
 
     actionsDiv.innerHTML =
-        `<button class="button save-btn" onclick="saveOverrideEdit(${bindingId})">Save Override</button>` +
-        `<button class="button cancel-btn" onclick="cancelOverrideEdit(${bindingId})">Cancel</button>`;
+        `<form id="${formId}" action="${savePath}" method="post" style="display: inline;" onsubmit="return validateOverrideForm('${formId}')">` +
+        `<input type="hidden" name="csrf" value="${getCsrf()}">` +
+        `<input type="hidden" name="role_binding_id" value="${bindingId}">` +
+        `</form>` +
+        `<button type="submit" form="${formId}" class="button save-btn">Save Override</button>` +
+        `<button type="button" class="button cancel-btn" onclick="cancelOverrideEdit(${bindingId})">Cancel</button>`;
+}
+
+function validateOverrideForm(formId) {
+    const form = document.getElementById(formId);
+    const discordRole = form.elements['discord_role_id'].value.trim();
+    const minCount    = form.elements['min_count'].value.trim();
+    const maxCount    = form.elements['max_count'].value.trim();
+    if (!discordRole && !minCount && !maxCount) {
+        alert('At least one of Discord role ID, minimum count, or maximum count must be provided.');
+        return false;
+    }
+    return true;
 }
 
 function cancelOverrideEdit(bindingId) {
@@ -154,41 +175,3 @@ function cancelOverrideEdit(bindingId) {
     }
 }
 
-function saveOverrideEdit(bindingId) {
-    const row = document.querySelector(`tr[data-binding-id="${bindingId}"]`);
-    if (!row) return;
-
-    const savePath    = row.getAttribute('data-override-save-path');
-    const discordRole = row.querySelector('input[name="override_discord_role_id"]').value.trim();
-    const minCount    = row.querySelector('input[name="override_min_count"]').value.trim();
-    const maxCount    = row.querySelector('input[name="override_max_count"]').value.trim();
-
-    if (!discordRole && !minCount && !maxCount) {
-        alert('At least one of Discord role ID, minimum count, or maximum count must be provided.');
-        return;
-    }
-
-    const formData = new FormData();
-    formData.append('csrf', getCsrf());
-    formData.append('role_binding_id', bindingId);
-    if (discordRole) formData.append('discord_role_id', discordRole);
-    if (minCount)    formData.append('min_count', minCount);
-    if (maxCount)    formData.append('max_count', maxCount);
-
-    fetch(savePath, { method: 'POST', body: formData })
-        .then(response => {
-            // On success the server sends a redirect (which fetch follows); on
-            // validation failure it re-renders the form as a plain 200 response,
-            // so response.ok alone can't tell the two apart.
-            if (response.ok && response.redirected) {
-                // Update override data attributes then reload to reflect effective values
-                row.setAttribute('data-override-discord-role-id', discordRole);
-                row.setAttribute('data-override-min-count', minCount);
-                row.setAttribute('data-override-max-count', maxCount);
-                window.location.reload();
-            } else {
-                alert('Failed to save override. Please try again.');
-            }
-        })
-        .catch(() => alert('Failed to save override. Please try again.'));
-}
