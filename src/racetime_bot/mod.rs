@@ -286,6 +286,7 @@ pub(crate) enum Goal {
     AlttprDeRivalsCupBrackets,
     AlttprDeRivalsCupGroups,
     Cabookey2026,
+    Casboots2026,
     Cc7,
     CoOpS3,
     CopaDoBrasil,
@@ -347,6 +348,7 @@ impl Goal {
             Self::AlttprDeRivalsCupBrackets => series == Series::AlttprDe && event == "rival26br",
             Self::AlttprDeRivalsCupGroups => series == Series::AlttprDe && event == "rival26gr",
             Self::Cabookey2026 => series == Series::Cabookey && event == "2026",
+            Self::Casboots2026 => series == Series::Casboots && event == "2026",
             Self::Cc7 => series == Series::Standard && event == "7cc",
             Self::CoOpS3 => series == Series::CoOp && event == "3",
             Self::CopaDoBrasil => series == Series::CopaDoBrasil && event == "1",
@@ -396,6 +398,7 @@ impl Goal {
             | Self::TwwrMainS9
             | Self::BotwAny2026
             | Self::BotwMsr2026
+            | Self::Casboots2026
             | Self::Crosskeys2026
             | Self::WolfdashS5
                 => false,
@@ -443,6 +446,7 @@ impl Goal {
             Self::BotwAny2026 => "Any%",
             Self::BotwMsr2026 => "Master Sword",
             Self::Cabookey2026 => "Cabookey Tournament 2026",
+            Self::Casboots2026 => "Beat the game - Tournament (Solo)",
             Self::Cc7 => "Standard Tournament Season 7 Challenge Cup",
             Self::CoOpS3 => "Co-op Tournament Season 3",
             Self::CopaDoBrasil => "Copa do Brasil",
@@ -487,6 +491,7 @@ impl Goal {
             | Self::AlttprDeRivalsCupBrackets
             | Self::AlttprDeRivalsCupGroups
             | Self::Cabookey2026
+            | Self::Casboots2026
             | Self::Cc7
             | Self::CoOpS3
             | Self::Crosskeys2025
@@ -557,6 +562,7 @@ impl Goal {
             Self::TournoiFrancoS4 => Some(draft::Kind::TournoiFrancoS4),
             Self::TournoiFrancoS5 => Some(draft::Kind::TournoiFrancoS5),
             | Self::Cabookey2026
+            | Self::Casboots2026
             | Self::CoOpS3
             | Self::CopaDoBrasil
             | Self::Crosskeys2025
@@ -597,6 +603,7 @@ impl Goal {
             | Self::AlttprDeRivalsCupBrackets
             | Self::AlttprDeRivalsCupGroups
             | Self::Cabookey2026
+            | Self::Casboots2026
             | Self::Crosskeys2025
             | Self::Crosskeys2026
             | Self::Sgl2023
@@ -700,6 +707,7 @@ impl Goal {
                 | Self::AlttprDeRivalsCupBrackets
                 | Self::AlttprDeRivalsCupGroups
                 | Self::Cabookey2026
+                | Self::Casboots2026
                 | Self::Crosskeys2025
                 | Self::Crosskeys2026
                 | Self::MysteryD20
@@ -755,6 +763,7 @@ impl Goal {
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => panic!("randomizer version for this goal is unused"),
             Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups => panic!("randomizer version for this goal is unused"),
             Self::Cabookey2026 => panic!("randomizer version for this goal is unused"),
+            Self::Casboots2026 => panic!("randomizer version for this goal is unused"),
             Self::Crosskeys2025 => panic!("randomizer version for this goal is unused"),
             Self::Crosskeys2026 => panic!("randomizer version for this goal is unused"),
             Self::MysteryD20 => panic!("randomizer version for this goal is unused"),
@@ -785,6 +794,7 @@ impl Goal {
             Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB => None, // per-race settings
             Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups => None, // per-race settings
             Self::Cabookey2026 => None, // per-race settings
+            Self::Casboots2026 => None, // fixed preset rolled via avianart
             Self::Cc7 => None, // settings draft
             Self::CoOpS3 => Some(coop::s3_settings()),
             Self::CopaDoBrasil => Some(br::s1_settings()),
@@ -854,6 +864,7 @@ impl Goal {
             | Self::AlttprDeRivalsCupBrackets
             | Self::AlttprDeRivalsCupGroups
             | Self::Cabookey2026
+            | Self::Casboots2026
             | Self::Crosskeys2025
             | Self::Crosskeys2026
                 => ctx.say("!seed base: The tournament's base settings.").await?,
@@ -1108,7 +1119,7 @@ impl Goal {
                 };
                 SeedCommandParseResult::Regular { settings: s::resolve_s7_draft_settings(&settings), unlock_spoiler_log, language: English, article: "a", description: format!("seed with {}", s::display_s7_draft_picks(&settings)) }
             }
-            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB | Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups | Self::Cabookey2026 | Self::Crosskeys2025 | Self::Crosskeys2026 | Self::MysteryD20 => match args {
+            Self::AlttprDe9Bracket | Self::AlttprDe9SwissA | Self::AlttprDe9SwissB | Self::AlttprDeRivalsCupBrackets | Self::AlttprDeRivalsCupGroups | Self::Cabookey2026 | Self::Casboots2026 | Self::Crosskeys2025 | Self::Crosskeys2026 | Self::MysteryD20 => match args {
                 [] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "the preset is required" }),
                 [arg] if arg == "base" => SeedCommandParseResult::Alttpr,
                 [_] => return Ok(SeedCommandParseResult::SendPresets { language: English, msg: "I don't recognize that preset" }),
@@ -4254,6 +4265,10 @@ impl Handler {
                         let cal_event = self.official_data.as_ref().expect("Cabookey2026 goal must have official_data").cal_event.clone();
                         self.roll_owr_seed(ctx, cal_event, goal.language(), article).await;
                     }
+                    Goal::Casboots2026 => {
+                        let cal_event = self.official_data.as_ref().expect("Casboots2026 goal must have official_data").cal_event.clone();
+                        self.roll_casboots_seed(ctx, cal_event, goal.language(), article).await;
+                    }
                     Goal::Crosskeys2025 | Goal::Crosskeys2026 => {
                         let cal_event = self.official_data.as_ref().expect("Crosskeys goal must have official_data").cal_event.clone();
                         self.roll_crosskeys_seed(ctx, cal_event, goal.language(), article).await;
@@ -4438,6 +4453,12 @@ impl Handler {
             .map(|p| p.display_name.to_owned())
             .unwrap_or_else(|| preset.clone());
         self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_avianart_seed(preset), language, article, format!("{preset_display} seed"), false).await;
+    }
+
+    async fn roll_casboots_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
+        let official_start = cal_event.start().expect("handling room for official race without start time");
+        let delay_until = official_start - TimeDelta::minutes(10);
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_avianart_seed("casualboots".to_string()), language, article, format!("seed"), false).await;
     }
 
     async fn roll_crosskeys_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
@@ -4708,7 +4729,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 )
                             }
                         }
-                    }, !matches!(goal, Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Cabookey2026 | Goal::Crosskeys2025 | Goal::Crosskeys2026), Vec::default()).await?;
+                    }, !matches!(goal, Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Cabookey2026 | Goal::Casboots2026 | Goal::Crosskeys2025 | Goal::Crosskeys2026), Vec::default()).await?;
                     // Announce mode for events with round_modes set
                     match goal {
                         Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB => {
@@ -4960,6 +4981,7 @@ impl RaceHandler<GlobalState> for Handler {
                             Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB => unreachable!("attempted to handle a user-opened AlttprDe9 room"),
                             Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups => unreachable!("attempted to handle a user-opened RivalsCup room"),
                             Goal::Cabookey2026 => unreachable!("attempted to handle a user-opened Cabookey2026 room"),
+                            Goal::Casboots2026 => unreachable!("attempted to handle a user-opened Casboots2026 room"),
                             Goal::Crosskeys2025 => unreachable!("attempted to handle a user-opened Crosskeys2025 room"),
                             Goal::Crosskeys2026 => unreachable!("attempted to handle a user-opened Crosskeys2026 room"),
                             Goal::MysteryD20 => unreachable!("attempted to handle a user-opened MysteryD20 room"),
@@ -5774,6 +5796,8 @@ impl RaceHandler<GlobalState> for Handler {
                             }
                             | Goal::Cabookey2026
                                 => this.roll_owr_seed(ctx, cal_event.clone(), English, "a").await,
+                            Goal::Casboots2026
+                                => this.roll_casboots_seed(ctx, cal_event.clone(), English, "a").await,
                             Goal::Crosskeys2025 | Goal::Crosskeys2026
                                 => this.roll_crosskeys_seed(ctx, cal_event.clone(), English, "a").await,
                             Goal::TwwrMainWeekly
@@ -6589,6 +6613,7 @@ impl RaceHandler<GlobalState> for Handler {
                     | Goal::AlttprDeRivalsCupBrackets
                     | Goal::AlttprDeRivalsCupGroups
                     | Goal::Cabookey2026
+                    | Goal::Casboots2026
                     | Goal::Cc7
                     | Goal::CoOpS3
                     | Goal::CopaDoBrasil

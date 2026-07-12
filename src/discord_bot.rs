@@ -5220,6 +5220,9 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
                 let choices = racetime_bot::owr_choices_for_race(&global_state.db_pool, &cal_event.race).await;
                 global_state.clone().roll_owr_seed(choices, cabookey::OWR_CONFIG)
             }
+            racetime_bot::Goal::Casboots2026 => {
+                global_state.clone().roll_avianart_seed("casualboots".to_string())
+            }
             racetime_bot::Goal::Crosskeys2025 | racetime_bot::Goal::Crosskeys2026 => {
                 let crosskeys_options = CrosskeysRaceOptions::for_race(&global_state.db_pool, &cal_event.race).await;
                 let labels = event.radio_choice_requirements().into_iter().map(|(key, label)| (key.to_owned(), label)).collect();

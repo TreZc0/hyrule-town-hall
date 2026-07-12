@@ -26,6 +26,7 @@ use {
 pub(crate) mod alttprde;
 pub(crate) mod br;
 pub(crate) mod cabookey;
+pub(crate) mod casboots;
 pub(crate) mod coop;
 pub(crate) mod fr;
 pub(crate) mod league;
@@ -57,6 +58,7 @@ pub(crate) enum Series {
     AlttprSpecials,
     BattleRoyale,
     Cabookey,
+    Casboots,
     CoOp,
     CopaDoBrasil,
     Crosskeys,
@@ -88,6 +90,7 @@ impl Series {
             Self::AlttprSpecials => "alttprspecials",
             Self::BattleRoyale => "ohko",
             Self::Cabookey => "cabookey",
+            Self::Casboots => "casboots",
             Self::CoOp => "coop",
             Self::CopaDoBrasil => "br",
             Self::Crosskeys => "xkeys",
@@ -119,6 +122,7 @@ impl Series {
             Self::AlttprSpecials => "ALTTPR Specials",
             Self::BattleRoyale => "Battle Royale",
             Self::Cabookey => "Cabookey Tournaments",
+            Self::Casboots => "Casual Boots Tournaments",
             Self::CoOp => "Co-op Tournaments",
             Self::CopaDoBrasil => "Copa do Brasil",
             Self::Crosskeys => "Crosskeys Tournaments",
@@ -145,7 +149,7 @@ impl Series {
     pub(crate) fn default_race_duration(&self) -> TimeDelta {
         match self {
             Self::TriforceBlitz => TimeDelta::hours(2),
-            Self::AlttprDe | Self::AlttprSpecials | Self::BattleRoyale | Self::Cabookey | Self::Crosskeys | Self::MysteryD | Self::TwwrMain => TimeDelta::hours(2) + TimeDelta::minutes(30),
+            Self::AlttprDe | Self::AlttprSpecials | Self::BattleRoyale | Self::Cabookey | Self::Casboots | Self::Crosskeys | Self::MysteryD | Self::TwwrMain => TimeDelta::hours(2) + TimeDelta::minutes(30),
             Self::CoOp | Self::MixedPools | Self::Scrubs | Self::SpeedGaming | Self::WeTryToBeBetter => TimeDelta::hours(3),
             Self::CopaDoBrasil | Self::League | Self::NineDaysOfSaws | Self::SongsOfHope | Self::Standard | Self::TournoiFrancophone | Self::Wolfdash => TimeDelta::hours(3) + TimeDelta::minutes(30),
             Self::Mq | Self::Multiworld | Self::Pictionary => TimeDelta::hours(4),

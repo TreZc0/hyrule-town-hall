@@ -934,6 +934,7 @@ impl Race {
             | Series::AlttprDe
             | Series::AlttprSpecials
             | Series::Cabookey
+            | Series::Casboots
             | Series::CoOp //TODO add archives of seasons 1 and 2?
             | Series::CopaDoBrasil
             | Series::Crosskeys
