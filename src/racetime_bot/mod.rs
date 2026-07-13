@@ -4786,29 +4786,29 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                             custom_title
                         } else {
                             let info_prefix = match (&cal_event.race.phase, &cal_event.race.round) {
-                                (Some(phase), Some(round)) => Some(format!("{phase} {round}")),
-                                (Some(phase), None) => Some(phase.clone()),
-                                (None, Some(round)) => Some(round.clone()),
+                                (Some(phase), Some(round)) => Some(format!("{}: {phase} {round}", event.display_name)),
+                                (Some(phase), None) => Some(format!("{}: {phase}", event.display_name)),
+                                (None, Some(round)) => Some(format!("{}: {round}", event.display_name)),
                                 (None, None) => None,
                             };
                             match cal_event.race.entrants {
                                 Entrants::Open | Entrants::Count { .. } => info_prefix.clone().unwrap_or_default(),
-                                Entrants::Named(ref entrants) => format!("{}{entrants}", info_prefix.as_ref().map(|prefix| format!("{prefix}: ")).unwrap_or_default()),
+                                Entrants::Named(ref entrants) => format!("{}{entrants}", info_prefix.as_ref().map(|prefix| format!("{prefix} - ")).unwrap_or_default()),
                                 Entrants::Two([ref team1, ref team2]) => match cal_event.kind {
                                     cal::EventKind::Normal => format!(
                                         "{}{} vs {}",
-                                        info_prefix.as_ref().map(|prefix| format!("{prefix}: ")).unwrap_or_default(),
+                                        info_prefix.as_ref().map(|prefix| format!("{prefix} - ")).unwrap_or_default(),
                                         team1.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team2.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                     ),
                                     cal::EventKind::Async1 => format!(
-                                        "{} (async): {} vs {}",
+                                        "{} (async) - {} vs {}",
                                         info_prefix.clone().unwrap_or_default(),
                                         team1.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team2.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                     ),
                                     cal::EventKind::Async2 => format!(
-                                        "{} (async): {} vs {}",
+                                        "{} (async) - {} vs {}",
                                         info_prefix.clone().unwrap_or_default(),
                                         team2.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team1.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
@@ -4818,27 +4818,27 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                                 Entrants::Three([ref team1, ref team2, ref team3]) => match cal_event.kind {
                                     cal::EventKind::Normal => format!(
                                         "{}{} vs {} vs {}",
-                                        info_prefix.as_ref().map(|prefix| format!("{prefix}: ")).unwrap_or_default(),
+                                        info_prefix.as_ref().map(|prefix| format!("{prefix} - ")).unwrap_or_default(),
                                         team1.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team2.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team3.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                     ),
                                     cal::EventKind::Async1 => format!(
-                                        "{} (async): {} vs {} vs {}",
+                                        "{} (async) - {} vs {} vs {}",
                                         info_prefix.clone().unwrap_or_default(),
                                         team1.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team2.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team3.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                     ),
                                     cal::EventKind::Async2 => format!(
-                                        "{} (async): {} vs {} vs {}",
+                                        "{} (async) - {} vs {} vs {}",
                                         info_prefix.clone().unwrap_or_default(),
                                         team2.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team1.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team3.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                     ),
                                     cal::EventKind::Async3 => format!(
-                                        "{} (async): {} vs {} vs {}",
+                                        "{} (async) - {} vs {} vs {}",
                                         info_prefix.clone().unwrap_or_default(),
                                         team3.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                         team1.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
