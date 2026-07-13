@@ -1156,6 +1156,7 @@ pub(crate) async fn info(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
         Series::AlttprSpecials => None,
         Series::BattleRoyale => ohko::info(&mut transaction, &data).await?,
         Series::Cabookey => cabookey::info(&mut transaction, &data).await?,
+        Series::Casboots => casboots::info(&mut transaction, &data).await?,
         Series::CoOp => coop::info(&mut transaction, &data).await?,
         Series::CopaDoBrasil => br::info(&mut transaction, &data).await?,
         Series::Crosskeys => xkeys::info(&mut transaction, &data).await?,
@@ -1874,6 +1875,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             | Series::AlttprDe
                             | Series::AlttprSpecials
                             | Series::Cabookey
+                            | Series::Casboots
                             | Series::CoOp
                             | Series::CopaDoBrasil
                             | Series::Crosskeys

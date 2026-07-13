@@ -427,7 +427,15 @@ impl AsyncRaceManager {
                 }
             }
         }
-        
+
+        if let Some(resolved_randoms) = race.seed.seed_data.as_ref()
+            .and_then(|data| data.get("resolved_randoms"))
+            .and_then(|v| v.as_str())
+        {
+            content.push_line("");
+            content.push(format!("Final settings - {resolved_randoms}"));
+        }
+
         let thread_id = match async_part {
             1 => sqlx::query_scalar!("SELECT async_thread1 FROM races WHERE id = $1", race.id as _).fetch_one(&mut **transaction).await?,
             2 => sqlx::query_scalar!("SELECT async_thread2 FROM races WHERE id = $1", race.id as _).fetch_one(&mut **transaction).await?,

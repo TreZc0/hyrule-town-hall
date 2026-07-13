@@ -4997,7 +4997,8 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
     }
     if let Some(ref sgt) = event.seed_gen_type {
         let db_pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-        if let Some(display_str) = sgt.scheduling_thread_str(&db_pool, race, event.round_modes.as_ref()).await {
+        let is_async = event.automated_asyncs || matches!(race.schedule, RaceSchedule::Async { .. });
+        if let Some(display_str) = sgt.scheduling_thread_str(&db_pool, race, event.round_modes.as_ref(), is_async).await {
             content.push_line("");
             content.push_line("");
             content.push(display_str);
@@ -5040,6 +5041,17 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
     
     let is_second_part = cal_event.race.seed.files().is_some();
 
+    // For the second part, the seed (and any resolved randoms) was already rolled and persisted
+    // during the first part; read it back from the already-loaded seed data instead of re-rolling.
+    let mut resolved_randoms = if is_second_part {
+        cal_event.race.seed.seed_data.as_ref()
+            .and_then(|data| data.get("resolved_randoms"))
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+    } else {
+        None
+    };
+
     if !is_second_part {
         let discord_data = discord_ctx.data.read().await;
         let global_state = discord_data.get::<GlobalState>().expect("Global State missing from Discord context");
@@ -5049,7 +5061,10 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         // Loop until we get an update saying the seed data is done rolling.
         let seed = loop {
             match updates.recv().await {
-                Some(racetime_bot::SeedRollUpdate::Done { seed, .. }) => break seed,
+                Some(racetime_bot::SeedRollUpdate::Done { seed, resolved_randoms: seed_resolved_randoms, .. }) => {
+                    resolved_randoms = seed_resolved_randoms;
+                    break seed
+                }
                 Some(racetime_bot::SeedRollUpdate::Error(e)) => panic!("error rolling seed: {e} ({e:?})"),
                 None => panic!(),
                 _ => {}
@@ -5057,7 +5072,10 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         };
 
         // Write seed to unified seed_data JSONB column
-        if let Some(seed_data_json) = seed.to_seed_data() {
+        if let Some(mut seed_data_json) = seed.to_seed_data() {
+            if let Some(ref resolved_randoms) = resolved_randoms {
+                seed_data_json["resolved_randoms"] = serde_json::json!(resolved_randoms);
+            }
             sqlx::query!("UPDATE races SET seed_data = $1 WHERE id = $2", seed_data_json, cal_event.race.id as _,).execute(&mut *transaction).await?;
         }
         // Also keep hash1..5 columns in sync (still present for display compatibility)
@@ -5075,6 +5093,11 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
             content.push(". **This is the second part of the async.** The runner will receive the previously generated seed as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
         } else {
             content.push(". A Seed has been generated and will be distributed to the runner as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
+        }
+
+        if let Some(ref resolved_randoms) = resolved_randoms {
+            content.push_line("");
+            content.push(format!("Final settings - {resolved_randoms}"));
         }
 
         let msg = content.build();

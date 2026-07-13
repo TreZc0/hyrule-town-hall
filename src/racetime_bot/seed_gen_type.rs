@@ -31,6 +31,8 @@ pub(crate) struct OwrEventConfig {
     /// - `settings`, `placements`, `start_inventory`: patch applied when the choice is enabled.
     ///   Legacy flat patches (bare key→value object, no section keys) are also accepted.
     /// - `supercedes`: list of choice keys whose patches are suppressed when this choice is enabled.
+    /// - `hidden_for_async`: if `true`, this choice is omitted from the scheduling thread display
+    ///   for async races (e.g. a rule that only makes sense for a live, streamed race).
     #[serde(default)]
     pub(crate) choices: serde_json::Value,
 }
@@ -170,11 +172,15 @@ impl SeedGenType {
 
     /// Returns the display string to append to a scheduling thread for this seed gen type,
     /// or `None` if no extra information needs to be shown.
+    ///
+    /// `is_async` hides choices configured with `hidden_for_async` (e.g. rules that only make
+    /// sense for a live, streamed race).
     pub(crate) async fn scheduling_thread_str(
         &self,
         db_pool: &PgPool,
         race: &Race,
         round_modes: Option<&HashMap<String, String>>,
+        is_async: bool,
     ) -> Option<String> {
         match self {
             Self::AlttprDoorRando { source: AlttprDrSource::Boothisman, .. } => {
@@ -182,7 +188,10 @@ impl SeedGenType {
                 opts.mode_display().map(|mode| format!("This race will be played in {} mode.", mode))
             }
             Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, .. } => {
-                let choices = super::owr_choices_for_race(db_pool, race).await;
+                let mut choices = super::owr_choices_for_race(db_pool, race).await;
+                if is_async {
+                    choices.retain(|key, _| !super::choice_entry_hidden_for_async(super::choice_entry(config, key)));
+                }
                 let seed_settings = super::owr_choices_description(&choices, config);
                 if let Some(player_rules) = super::alttpr_dr_player_rules_str(&choices, config) {
                     Some(format!(
@@ -195,7 +204,10 @@ impl SeedGenType {
                 }
             }
             Self::Owr { config } => {
-                let choices = super::owr_choices_for_race(db_pool, race).await;
+                let mut choices = super::owr_choices_for_race(db_pool, race).await;
+                if is_async {
+                    choices.retain(|key, _| !super::choice_entry_hidden_for_async(super::choice_entry(config, key)));
+                }
                 Some(format!(
                     "This race will be played with {} as settings.",
                     super::owr_choices_description(&choices, config),

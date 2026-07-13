@@ -2500,6 +2500,10 @@ fn choice_entry_label_with_labels(entry: Option<&serde_json::Value>, key: &str, 
         .unwrap_or_else(|| key.to_owned())
 }
 
+fn choice_entry_hidden_for_async(entry: Option<&serde_json::Value>) -> bool {
+    entry.and_then(|entry| entry.get("hidden_for_async")).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
 fn choice_entry_affects_seed(entry: Option<&serde_json::Value>) -> bool {
     let Some(entry) = entry else { return true };
     let Some(obj) = entry.as_object() else { return false };
@@ -2584,9 +2588,15 @@ pub(crate) fn alttpr_dr_player_rules_str(choices: &HashMap<String, ChoiceValue>,
     English.join_str_opt(player_rules)
 }
 
-/// Announcement of what every `Random` choice resolved to, for chat once the seed is published.
-/// Always/Never choices are already known to racers ahead of the roll (shown via
-/// `owr_choices_description`/`alttpr_dr_player_rules_str`), so only `Random` ones are included.
+/// Announcement of the final seed-affecting settings, for chat once the seed is published.
+/// Returns `None` if no choice resolved randomly (nothing new to reveal).
+///
+/// Once at least one choice is `Random`, this shows the complete seed-affecting picture — both
+/// choices fixed at `Always` and the ones that resolved from `Random` — so racers see everything
+/// that determines the seed, not just the part that happened to be random. Rule-only choices
+/// (no seed impact) fixed at `Always` are omitted since they're already shown ahead of the roll
+/// via `alttpr_dr_player_rules_str`; a rule-only choice that resolved randomly is still included,
+/// since that's genuinely new information.
 ///
 /// Uses `config.choices[key].value_labels.always`/`.never` verbatim when configured (same field
 /// `configured_choice_label` reads for the pre-roll display); otherwise falls back to generic
@@ -2599,25 +2609,37 @@ pub(crate) fn reveal_resolved_randoms_str(
     labels: &[(String, String)],
 ) -> Option<String> {
     let entries = config.choices.as_object()?;
+    let has_random = entries.keys()
+        .any(|key| choices.get(key.as_str()).copied().unwrap_or_default() == ChoiceValue::Random);
+    if !has_random {
+        return None
+    }
+    let label_for = |key: &str, entry: &serde_json::Value, ok: bool| -> String {
+        let value_key = if ok { "always" } else { "never" };
+        if let Some(label) = entry.get("value_labels").and_then(|vl| vl.get(value_key)).and_then(|l| l.as_str()) {
+            if !label.is_empty() {
+                return label.to_owned()
+            }
+        }
+        let fallback_label = entry.get("label").and_then(|l| l.as_str()).map(ToOwned::to_owned)
+            .or_else(|| labels.iter().find(|(label_key, _)| label_key == key).map(|(_, label)| label.clone()))
+            .unwrap_or_else(|| key.to_owned());
+        if choice_entry_affects_seed(Some(entry)) {
+            format!("{fallback_label}: {}", if ok { "Enabled" } else { "Disabled" })
+        } else {
+            format!("{fallback_label}: {}", if ok { "Allowed" } else { "Not Allowed" })
+        }
+    };
     let parts = entries.iter()
         .sorted_by_key(|(key, _)| key.as_str())
-        .filter(|(key, _)| choices.get(key.as_str()).copied().unwrap_or_default() == ChoiceValue::Random)
-        .filter_map(|(key, entry)| {
-            let ok = *resolved.get(key.as_str())?;
-            let value_key = if ok { "always" } else { "never" };
-            if let Some(label) = entry.get("value_labels").and_then(|vl| vl.get(value_key)).and_then(|l| l.as_str()) {
-                if !label.is_empty() {
-                    return Some(label.to_owned())
-                }
+        .filter_map(|(key, entry)| match choices.get(key.as_str()).copied().unwrap_or_default() {
+            ChoiceValue::Never => None,
+            ChoiceValue::Always if !choice_entry_affects_seed(Some(entry)) => None,
+            ChoiceValue::Always => Some(label_for(key, entry, true)),
+            ChoiceValue::Random => {
+                let ok = *resolved.get(key.as_str())?;
+                Some(label_for(key, entry, ok))
             }
-            let fallback_label = entry.get("label").and_then(|l| l.as_str()).map(ToOwned::to_owned)
-                .or_else(|| labels.iter().find(|(label_key, _)| label_key == key).map(|(_, label)| label.clone()))
-                .unwrap_or_else(|| key.clone());
-            Some(if choice_entry_affects_seed(Some(entry)) {
-                format!("{fallback_label}: {}", if ok { "Enabled" } else { "Disabled" })
-            } else {
-                format!("{fallback_label}: {}", if ok { "Allowed" } else { "Not Allowed" })
-            })
         })
         .collect_vec();
     English.join_str_opt(parts)
