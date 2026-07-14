@@ -158,7 +158,7 @@ async fn asyncs_form(
                                         Series::Cabookey | Series::Crosskeys => {
                                             th : "ALTTPR UUID";
                                         }
-                                        Series::AlttprDe => {
+                                        Series::AlttprDe | Series::Casboots => {
                                             th : "Avianart Seed";
                                         }
                                         _ => {
@@ -236,7 +236,7 @@ async fn asyncs_form(
                                                     }
                                                 }
                                             }
-                                            Series::AlttprDe => {
+                                            Series::AlttprDe | Series::Casboots => {
                                                 td {
                                                     @let avianart_hash = row.seed_data.as_ref().and_then(|d| d.get("avianart_hash")).and_then(|v| v.as_str()).unwrap_or("");
                                                     @if !avianart_hash.is_empty() {
@@ -284,7 +284,7 @@ async fn asyncs_form(
                         Series::TwwrMain => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
                         Series::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
                         Series::Cabookey | Series::Crosskeys => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "avianart_hash", "avianart_seed_hash"].as_slice(),
-                        Series::AlttprDe => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
+                        Series::AlttprDe | Series::Casboots => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
                         _ => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
                     };
                     @let mut errors = ctx.errors().filter(|e| !hidden_fields.iter().any(|f| e.is_for(f))).collect_vec();
@@ -345,7 +345,7 @@ async fn asyncs_form(
                                     });
                                 }
                             }
-                            Series::AlttprDe => {
+                            Series::AlttprDe | Series::Casboots => {
                                 : form_field("avianart_hash", &mut errors, html! {
                                     label(for = "avianart_hash") : "Avianart Hash";
                                     input(type = "text", name = "avianart_hash", id = "avianart_hash", value = ctx.field_value("avianart_hash").unwrap_or(&default_avianart_hash), style = "width: 100%; max-width: 600px;");
@@ -602,7 +602,7 @@ pub(crate) async fn post(
                 } else {
                     None
                 }
-            } else if matches!(event_data.series, Series::AlttprDe) {
+            } else if matches!(event_data.series, Series::AlttprDe | Series::Casboots) {
                 let avianart_hash = value.avianart_hash.as_deref().unwrap_or("").trim();
                 let avianart_seed_hash = value.avianart_seed_hash.as_deref().unwrap_or("").trim();
                 if !avianart_hash.is_empty() {
