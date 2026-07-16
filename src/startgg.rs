@@ -32,7 +32,7 @@ where T::Variables: Send + Sync, T::ResponseData: Send + Sync {
 pub(crate) enum Error {
     #[error(transparent)] Reqwest(#[from] reqwest::Error),
     #[error(transparent)] Wheel(#[from] wheel::Error),
-    #[error("{} GraphQL errors", .0.len())]
+    #[error("{} GraphQL errors: {}", .0.len(), .0.iter().map(|e| e.message.clone()).collect::<Vec<_>>().join("; "))]
     GraphQL(Vec<graphql_client::Error>),
     #[error("GraphQL response returned neither `data` nor `errors`")]
     NoDataNoErrors,
