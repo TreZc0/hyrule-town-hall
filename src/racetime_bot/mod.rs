@@ -4586,6 +4586,15 @@ impl Handler {
     }
 }
 
+/// A racetime.gg API call to make once `new_room_lock` (see `Handler::new`) has been released,
+/// so a stalled websocket send can't block every other room from starting.
+enum PendingSend {
+    Accept(String),
+    Invite(String),
+    Say(String),
+    Message(String, bool),
+}
+
 #[async_trait]
 impl RaceHandler<GlobalState> for Handler {
     async fn should_handle(race_data: &RaceData, global_state: Arc<GlobalState>) -> Result<bool, Error> {
@@ -4628,9 +4637,13 @@ impl RaceHandler<GlobalState> for Handler {
 
     async fn new(ctx: &RaceContext<GlobalState>) -> Result<Self, Error> {
         let data = ctx.data().await;
-        let (existing_seed, official_data, race_state, high_seed_name, low_seed_name, fpa_enabled, goal) = lock!(new_room_lock = ctx.global_state.new_room_lock; { // make sure a new room isn't handled before it's added to the database
+        // Resolve DB state and collect racetime.gg API calls to perform, but defer actually
+        // sending them until after new_room_lock is released, so a stalled websocket send
+        // (e.g. due to a degraded connection) can't block every other room from starting.
+        let official_result = lock!(new_room_lock = ctx.global_state.new_room_lock; { // make sure a new room isn't handled before it's added to the database
             let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
-            let new_data = if let Some(cal_event) = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, format!("https://{}{}", racetime_host(), ctx.data().await.url).parse()?).await.to_racetime()? {
+            let result = if let Some(cal_event) = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, format!("https://{}{}", racetime_host(), ctx.data().await.url).parse()?).await.to_racetime()? {
+                let mut pending_sends = Vec::default();
                 let goal = Goal::for_event(cal_event.race.series, &cal_event.race.event).ok_or(GoalFromStrError).to_racetime()?;
                 let event = cal_event.race.event(&mut transaction).await.to_racetime()?;
                 let mut entrants = Vec::default();
@@ -4639,7 +4652,7 @@ impl RaceHandler<GlobalState> for Handler {
                         Ok(member) => {
                             if let Some(entrant) = data.entrants.iter().find(|entrant| entrant.user.as_ref().is_some_and(|user| user.id == member)) {
                                 match entrant.status.value {
-                                    EntrantStatusValue::Requested => ctx.accept_request(&member).await?,
+                                    EntrantStatusValue::Requested => pending_sends.push(PendingSend::Accept(member.clone())),
                                     EntrantStatusValue::Invited |
                                     EntrantStatusValue::Declined |
                                     EntrantStatusValue::Ready |
@@ -4650,11 +4663,11 @@ impl RaceHandler<GlobalState> for Handler {
                                     EntrantStatusValue::Dq => {}
                                 }
                             } else {
-                                ctx.invite_user(&member).await?;
+                                pending_sends.push(PendingSend::Invite(member.clone()));
                             }
                             entrants.push(member);
                         }
-                        Err(msg) => ctx.say(msg).await?,
+                        Err(msg) => pending_sends.push(PendingSend::Say(msg)),
                     }
                 }
                 if let Some(companion_race_id) = cal_event.race.companion_race_id {
@@ -4668,7 +4681,7 @@ impl RaceHandler<GlobalState> for Handler {
                             Ok(member) => {
                                 if let Some(entrant) = data.entrants.iter().find(|entrant| entrant.user.as_ref().is_some_and(|user| user.id == member)) {
                                     match entrant.status.value {
-                                        EntrantStatusValue::Requested => ctx.accept_request(&member).await?,
+                                        EntrantStatusValue::Requested => pending_sends.push(PendingSend::Accept(member.clone())),
                                         EntrantStatusValue::Invited |
                                         EntrantStatusValue::Declined |
                                         EntrantStatusValue::Ready |
@@ -4679,16 +4692,16 @@ impl RaceHandler<GlobalState> for Handler {
                                         EntrantStatusValue::Dq => {}
                                     }
                                 } else {
-                                    ctx.invite_user(&member).await?;
+                                    pending_sends.push(PendingSend::Invite(member.clone()));
                                 }
                                 entrants.push(member);
                             }
-                            Err(msg) => ctx.say(msg).await?,
+                            Err(msg) => pending_sends.push(PendingSend::Say(msg)),
                         }
                     }
                 }
                 if !matches!(data.status.value, RaceStatusValue::Pending | RaceStatusValue::InProgress) {
-                    ctx.send_message(&if_chain! {
+                    let welcome_message = if_chain! {
                         if let French = goal.language();
                         if !event.is_single_race();
                         if let (Some(phase), Some(round)) = (cal_event.race.phase.as_ref(), cal_event.race.round.as_ref());
@@ -4729,14 +4742,16 @@ impl RaceHandler<GlobalState> for Handler {
                                 )
                             }
                         }
-                    }, !matches!(goal, Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Cabookey2026 | Goal::Casboots2026 | Goal::Crosskeys2025 | Goal::Crosskeys2026), Vec::default()).await?;
+                    };
+                    let welcome_message_allow_ping = !matches!(goal, Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB | Goal::AlttprDeRivalsCupBrackets | Goal::AlttprDeRivalsCupGroups | Goal::Cabookey2026 | Goal::Casboots2026 | Goal::Crosskeys2025 | Goal::Crosskeys2026);
+                    pending_sends.push(PendingSend::Message(welcome_message, welcome_message_allow_ping));
                     // Announce mode for events with round_modes set
                     match goal {
                         Goal::AlttprDe9Bracket | Goal::AlttprDe9SwissA | Goal::AlttprDe9SwissB => {
                             if event.round_modes.is_some() {
                                 let alttprde_options = AlttprDeRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race, event.round_modes.as_ref()).await;
                                 if let Some(mode_display) = alttprde_options.mode_display() {
-                                    ctx.say(format!("This race will be played in {} mode.", mode_display)).await?;
+                                    pending_sends.push(PendingSend::Say(format!("This race will be played in {} mode.", mode_display)));
                                 }
                             }
                         }
@@ -4795,7 +4810,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 let _ = dm.say(&*discord_ctx, &notif).await;
                             }
                         }
-                        ctx.say("Error: no draft state found for this race. A global admin has been notified. Use !reroll once the issue has been fixed.").await?;
+                        pending_sends.push(PendingSend::Say(format!("Error: no draft state found for this race. A global admin has been notified. Use !reroll once the issue has been fixed.")));
                         (RaceState::Init, format!("Team A"), format!("Team B"))
                     }
                 } else {
@@ -4844,17 +4859,18 @@ impl RaceHandler<GlobalState> for Handler {
                 } else {
                     match data.status.value {
                         RaceStatusValue::Invitational => {
-                            ctx.say(if let French = goal.language() {
+                            pending_sends.push(PendingSend::Say(if let French = goal.language() {
                                 "Le FPA est activé pour cette race. Les joueurs pourront utiliser !fpa pendant la race pour signaler d'un problème technique de leur côté. Les race monitors doivent activer les notifications en cliquant sur l'icône de cloche 🔔 sous le chat."
                             } else {
                                 "Fair play agreement is active for this official race. Entrants may use the !fpa command during the race to notify of a crash. Race monitors (if any) should enable notifications using the bell 🔔 icon below chat."
-                            }).await?; //TODO different message for monitorless FPA?
+                            }.to_string())); //TODO different message for monitorless FPA?
                             true
                         }
                         RaceStatusValue::Open => false,
                         _ => data.entrants.len() < 10, // guess based on entrant count, assuming an open race for 10 or more
                     }
                 };
+                Some((
                 (
                     cal_event.race.seed.clone(),
                     Some(OfficialRaceData {
@@ -4868,8 +4884,24 @@ impl RaceHandler<GlobalState> for Handler {
                     low_seed_name,
                     fpa_enabled,
                     goal,
-                )
+                ), pending_sends))
             } else {
+                None
+            };
+            transaction.commit().await.to_racetime()?;
+            result
+        });
+        let (existing_seed, official_data, race_state, high_seed_name, low_seed_name, fpa_enabled, goal) = if let Some((new_data, pending_sends)) = official_result {
+            for pending_send in pending_sends {
+                match pending_send {
+                    PendingSend::Accept(member) => { ctx.accept_request(&member).await?; }
+                    PendingSend::Invite(member) => { ctx.invite_user(&member).await?; }
+                    PendingSend::Say(msg) => { ctx.say(msg).await?; }
+                    PendingSend::Message(msg, allow_ping) => { ctx.send_message(&msg, allow_ping, Vec::default()).await?; }
+                }
+            }
+            new_data
+        } else {
                 let goal = Goal::from_race_data(&data).ok_or(GoalFromStrError).to_racetime()?;
                 let mut race_state = RaceState::Init;
                 if let Some(ref info_bot) = data.info_bot {
@@ -5667,10 +5699,7 @@ impl RaceHandler<GlobalState> for Handler {
                     false,
                     goal,
                 )
-            };
-            transaction.commit().await.to_racetime()?;
-            new_data
-        });
+        };
         let this = Self {
             breaks: None, //TODO default breaks for restreamed matches?
             break_notifications: None,
