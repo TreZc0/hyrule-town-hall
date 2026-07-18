@@ -3719,6 +3719,12 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         }
                     } else if let Some(race_id_str) = custom_id.strip_prefix("volunteer_signup_") {
                         // Handle volunteer signup button - shows available roles for the user
+                        // Defer immediately: the DB queries and possible racetime.gg call below
+                        // can exceed Discord's 3-second ack window, causing "Unknown interaction".
+                        interaction.create_response(ctx, CreateInteractionResponse::Defer(
+                            CreateInteractionResponseMessage::new().ephemeral(true)
+                        )).await?;
+
                         let (pool, http_client) = {
                             let data = ctx.data.read().await;
                             (
@@ -3731,11 +3737,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let race_id: Id<Races> = match race_id_str.parse::<u64>() {
                             Ok(id) => Id::from(id),
                             Err(_) => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Invalid race ID.")
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Invalid race ID.")
+                                ).await?;
                                 return Ok(());
                             }
                         };
@@ -3744,11 +3748,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let user = match User::from_discord(&mut *transaction, interaction.user.id).await? {
                             Some(u) => u,
                             None => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content(format!("You need to link your Discord account on the website first.\nVisit: <{}>", base_uri()))
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content(format!("You need to link your Discord account on the website first.\nVisit: <{}>", base_uri()))
+                                ).await?;
                                 return Ok(());
                             }
                         };
@@ -3757,11 +3759,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let race = match Race::from_id(&mut transaction, &http_client, race_id).await {
                             Ok(r) => r,
                             Err(_) => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Could not find this race.")
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Could not find this race.")
+                                ).await?;
                                 return Ok(());
                             }
                         };
@@ -3833,14 +3833,12 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 format!("{}/games", base_uri())
                             };
 
-                            interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content(format!(
-                                        "You don't have any confirmed volunteer roles for this event.\nApply at: <{}>",
-                                        apply_url
-                                    ))
-                            )).await?;
+                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                .content(format!(
+                                    "You don't have any confirmed volunteer roles for this event.\nApply at: <{}>",
+                                    apply_url
+                                ))
+                            ).await?;
                             return Ok(());
                         }
 
@@ -3896,11 +3894,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         }
 
                         if buttons.is_empty() {
-                            interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content("All roles you're qualified for are either full or you're already signed up.")
-                            )).await?;
+                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                .content("All roles you're qualified for are either full or you're already signed up.")
+                            ).await?;
                             return Ok(());
                         }
 
@@ -3911,16 +3907,20 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             "Select the role you want to sign up for. Roles marked ✦ will automatically enroll you:".to_string()
                         };
 
-                        interaction.create_response(ctx, CreateInteractionResponse::Message(
-                            CreateInteractionResponseMessage::new()
-                                .ephemeral(true)
-                                .content(prompt)
-                                .components(vec![CreateActionRow::Buttons(buttons)])
-                        )).await?;
+                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                            .content(prompt)
+                            .components(vec![CreateActionRow::Buttons(buttons)])
+                        ).await?;
 
                         transaction.commit().await?;
                     } else if let Some(params) = custom_id.strip_prefix("volunteer_role_") {
                         // Handle volunteer role selection - creates the signup
+                        // Defer immediately: the DB queries and possible racetime.gg call below
+                        // can exceed Discord's 3-second ack window, causing "Unknown interaction".
+                        interaction.create_response(ctx, CreateInteractionResponse::Defer(
+                            CreateInteractionResponseMessage::new().ephemeral(true)
+                        )).await?;
+
                         let (pool, http_client) = {
                             let data = ctx.data.read().await;
                             (
@@ -3934,11 +3934,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let (race_id_str, binding_id_str) = match params.split_once('_') {
                             Some((r, b)) => (r, b),
                             None => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Invalid button format.")
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Invalid button format.")
+                                ).await?;
                                 return Ok(());
                             }
                         };
@@ -3946,11 +3944,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let race_id: Id<Races> = match race_id_str.parse::<u64>() {
                             Ok(id) => Id::from(id),
                             Err(_) => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Invalid race ID.")
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Invalid race ID.")
+                                ).await?;
                                 return Ok(());
                             }
                         };
@@ -3958,11 +3954,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let binding_id: Id<RoleBindings> = match binding_id_str.parse::<u64>() {
                             Ok(id) => Id::from(id),
                             Err(_) => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Invalid role binding ID.")
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Invalid role binding ID.")
+                                ).await?;
                                 return Ok(());
                             }
                         };
@@ -3971,11 +3965,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let user = match User::from_discord(&mut *transaction, interaction.user.id).await? {
                             Some(u) => u,
                             None => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("You need to link your Discord account on the website first.")
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("You need to link your Discord account on the website first.")
+                                ).await?;
                                 return Ok(());
                             }
                         };
@@ -3984,11 +3976,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let _race = match Race::from_id(&mut transaction, &http_client, race_id).await {
                             Ok(r) => r,
                             Err(_) => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Could not find this race.")
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Could not find this race.")
+                                ).await?;
                                 return Ok(());
                             }
                         };
@@ -4010,11 +4000,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             ).await?;
 
                             if auto_approved.is_none() {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("You don't have permission for this role.")
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("You don't have permission for this role.")
+                                ).await?;
                                 return Ok(());
                             }
                         }
@@ -4028,11 +4016,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         ).await?;
 
                         if already_signed {
-                            interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content("You're already signed up for this role on this race.")
-                            )).await?;
+                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                .content("You're already signed up for this role on this race.")
+                            ).await?;
                             return Ok(());
                         }
 
@@ -4055,11 +4041,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         ).await;
 
                         // Confirm success - update the original message to remove buttons
-                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                            CreateInteractionResponseMessage::new()
-                                .content("Thank you for signing up. You will be informed once your signup has been processed by the team.")
-                                .components(vec![])
-                        )).await?;
+                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                            .content("Thank you for signing up. You will be informed once your signup has been processed by the team.")
+                            .components(vec![])
+                        ).await?;
                     } else if let Some(signup_id_str) = custom_id.strip_prefix("volunteer_withdraw_") {
                         if let Some(signup_id_str) = signup_id_str.strip_prefix("confirm_") {
                             // Confirmed withdrawal — perform the actual withdrawal
