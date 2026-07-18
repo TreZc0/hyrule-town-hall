@@ -450,6 +450,23 @@ p.error {
     font-size: 0.9em;
 }
 
+.signup-section-divider {
+    border: none;
+    border-top: 2px solid var(--bg-surface);
+    margin: 24px 0;
+}
+
+.signup-overview {
+    background: var(--bg-surface);
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin: 8px 0 16px 0;
+}
+
+.signup-overview p {
+    margin: 2px 0;
+}
+
 .signup-actions {
     display: flex;
     gap: 4px;

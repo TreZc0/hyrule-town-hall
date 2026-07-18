@@ -176,6 +176,7 @@ pub(crate) struct Signup {
     pub(crate) min_count: i32,
     pub(crate) max_count: i32,
     pub(crate) role_type_name: String,
+    pub(crate) language: Language,
 }
 
 #[allow(unused)]
@@ -898,7 +899,8 @@ impl Signup {
                     rb.event,
                     rb.min_count,
                     rb.max_count,
-                    rt.name AS "role_type_name"
+                    rt.name AS "role_type_name",
+                    rb.language AS "language: Language"
                 FROM signups s
                 JOIN role_bindings rb ON s.role_binding_id = rb.id
                 JOIN role_types rt ON rb.role_type_id = rt.id
@@ -984,7 +986,8 @@ impl Signup {
                     rb.event,
                     rb.min_count,
                     rb.max_count,
-                    rt.name AS "role_type_name"
+                    rt.name AS "role_type_name",
+                    rb.language AS "language: Language"
                 FROM signups s
                 JOIN role_bindings rb ON s.role_binding_id = rb.id
                 JOIN role_types rt ON rb.role_type_id = rt.id
@@ -3464,7 +3467,7 @@ pub(crate) async fn manage_roster(
             }
         }
 
-        if !is_organizer && !is_restreamer {
+        if !is_organizer && !is_restreamer && !me.is_global_admin() {
             form.context.push_error(form::Error::validation(
                 "You must be an organizer or restreamer to manage rosters",
             ));
@@ -3708,6 +3711,14 @@ async fn match_signup_page(
         None
     };
 
+    // Build an overview of active signups per language and role, for languages/roles with at least one signup
+    let mut signup_overview: std::collections::BTreeMap<Language, std::collections::BTreeMap<String, usize>> = std::collections::BTreeMap::default();
+    for signup in &signups {
+        if !matches!(signup.status, VolunteerSignupStatus::Declined | VolunteerSignupStatus::Aborted) {
+            *signup_overview.entry(signup.language).or_default().entry(signup.role_type_name.clone()).or_insert(0) += 1;
+        }
+    }
+
     let content = if let Some(ref me) = me {
         let is_organizer = data.organizers(&mut transaction).await?.contains(me);
         let mut is_restreamer = data.restreamers(&mut transaction).await?.contains(me);
@@ -3716,7 +3727,7 @@ async fn match_signup_page(
                 is_restreamer = game.is_restreamer_any_language(&mut transaction, me).await.map_err(Error::from)?;
             }
         }
-        let can_manage = is_organizer || is_restreamer;
+        let can_manage = is_organizer || is_restreamer || me.is_global_admin();
 
         html! {
             h2 : "Match Volunteer Signups";
@@ -3796,6 +3807,26 @@ async fn match_signup_page(
                 : timezone_info_html();
             }
 
+            @if !signup_overview.is_empty() {
+                div(class = "signup-overview") {
+                    @for (language, role_counts) in &signup_overview {
+                        p {
+                            strong : language.to_string();
+                            : ": ";
+                            @for (i, (role_type_name, count)) in role_counts.iter().enumerate() {
+                                @if i > 0 {
+                                    : ", ";
+                                }
+                                : role_type_name;
+                                : " (";
+                                : count;
+                                : ")";
+                            }
+                        }
+                    }
+                }
+            }
+
             // Language tabs (only shown if multiple languages)
             : render_language_tabs(&active_languages, current_language, &base_url);
 
@@ -3807,10 +3838,10 @@ async fn match_signup_page(
             @if can_manage {
                 h3 : "Manage Signups";
                 @let inactive_signups = signups.iter()
-                    .filter(|s| matches!(s.status, VolunteerSignupStatus::Declined | VolunteerSignupStatus::Aborted))
+                    .filter(|s| s.language == current_language && matches!(s.status, VolunteerSignupStatus::Declined | VolunteerSignupStatus::Aborted))
                     .collect::<Vec<_>>();
                 @let active_signups = signups.iter()
-                    .filter(|s| !matches!(s.status, VolunteerSignupStatus::Declined | VolunteerSignupStatus::Aborted))
+                    .filter(|s| s.language == current_language && !matches!(s.status, VolunteerSignupStatus::Declined | VolunteerSignupStatus::Aborted))
                     .collect::<Vec<_>>();
 
                 @for signup in &active_signups {
@@ -3933,6 +3964,8 @@ async fn match_signup_page(
                         }
                     }
                 }
+
+                hr(class = "signup-section-divider");
             }
 
             h3 {
@@ -4437,7 +4470,7 @@ pub(crate) async fn revoke_signup(
             }
         }
 
-        if !is_organizer && !is_restreamer {
+        if !is_organizer && !is_restreamer && !me.is_global_admin() {
             form.context.push_error(form::Error::validation(
                 "You must be an organizer or restreamer to revoke signups",
             ));
