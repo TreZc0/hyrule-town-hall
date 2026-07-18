@@ -6907,7 +6907,13 @@ impl RaceHandler<GlobalState> for Handler {
         Ok(())
     }
 
-    async fn error(&mut self, _: &RaceContext<GlobalState>, mut errors: Vec<String>) -> Result<(), Error> {
+    async fn error(&mut self, ctx: &RaceContext<GlobalState>, mut errors: Vec<String>) -> Result<(), Error> {
+        for error in &errors {
+            // racetime.gg rejects invites (e.g. runner already in another race room, or no stream configured) with "<runner> is not allowed to join this race."
+            if let Some(runner) = error.strip_suffix(" is not allowed to join this race.") {
+                ctx.say(format!("Sorry {runner}, I could not invite you automatically — you may already be in another race room or may not have a stream configured on racetime.gg. Please use the “Request to join” button to join manually.")).await?;
+            }
+        }
         errors.retain(|error|
             !error.ends_with(" is not allowed to join this race.") // failing to invite a user should not crash the race handler
             && !error.ends_with(" is already an entrant.") // failing to invite a user should not crash the race handler

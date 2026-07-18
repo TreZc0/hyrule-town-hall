@@ -566,6 +566,31 @@ impl AsyncRaceManager {
         Ok(races)
     }
 
+    /// Returns `false` if the event has a participant role configured and any team member does
+    /// not (yet) hold it in the Discord guild — used to defer thread creation so the bot doesn't
+    /// ping members into a role-gated channel they can't actually see.
+    async fn team_has_participant_role(
+        transaction: &mut Transaction<'_, Postgres>,
+        discord_ctx: &DiscordCtx,
+        event: &EventData<'_>,
+        team: &Team,
+    ) -> Result<bool, Error> {
+        let Some(discord_guild) = event.discord_guild else { return Ok(true) };
+        let Some(PgSnowflake(participant_role)) = sqlx::query_scalar!(
+            r#"SELECT id AS "id: PgSnowflake<RoleId>" FROM discord_roles WHERE guild = $1 AND series = $2 AND event = $3"#,
+            PgSnowflake(discord_guild) as _, event.series as _, &*event.event,
+        ).fetch_optional(&mut **transaction).await? else { return Ok(true) };
+
+        for member in &team.members(transaction).await? {
+            let Some(discord) = &member.discord else { return Ok(false) };
+            match discord_guild.member(discord_ctx, discord.id).await {
+                Ok(guild_member) => if !guild_member.roles.contains(&participant_role) { return Ok(false) },
+                Err(_) => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
     async fn create_qualifier_threads(
         transaction: &mut Transaction<'_, Postgres>,
         discord_ctx: &DiscordCtx,
@@ -601,6 +626,14 @@ impl AsyncRaceManager {
             // Load team
             let team = Team::from_id(transaction, row.team_id).await?
                 .ok_or(Error::NoTeamFound)?;
+
+            if !Self::team_has_participant_role(transaction, discord_ctx, &event, &team).await? {
+                // Participant role not (yet) assigned to all members — the async channel may be
+                // role-gated, so creating the thread now would ping members without giving them
+                // access. Skip for now; retried on the next sweep once the role is assigned.
+                log::debug!("Skipping qualifier thread for team {} pending participant role assignment", row.team_id);
+                continue;
+            }
 
             if let Some(async_channel) = event.discord_async_channel {
                 if let Err(e) = Self::create_qualifier_thread(
