@@ -188,6 +188,15 @@ impl TypeMapKey for NewRoomLock {
     type Value = Arc<Mutex<()>>;
 }
 
+/// Holds the `link`/vod value from a `/result-async` invocation while the organizer
+/// confirms an override via button click, since the vod URL can't be safely encoded
+/// into the button's `custom_id` (which is parsed by splitting on `_`).
+enum PendingAsyncVod {}
+
+impl TypeMapKey for PendingAsyncVod {
+    type Value = HashMap<String, Option<String>>;
+}
+
 
 
 #[derive(Clone, Copy)]
@@ -3551,11 +3560,15 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         return Ok(());
                                     };
                                     let pg_interval = PgInterval { months: 0, days: 0, microseconds: total_seconds * 1_000_000 };
+                                    let link = ctx.data.write().await.get_mut::<PendingAsyncVod>()
+                                        .and_then(|cache| cache.remove(&format!("bracket_{}_{}", race_id, async_part)))
+                                        .flatten();
 
                                     sqlx::query!(
-                                        "UPDATE async_times SET finish_time = $1, recorded_at = NOW(), recorded_by = $2 WHERE race_id = $3 AND async_part = $4",
+                                        "UPDATE async_times SET finish_time = $1, recorded_at = NOW(), recorded_by = $2, link = $3 WHERE race_id = $4 AND async_part = $5",
                                         pg_interval,
                                         user.id as _,
+                                        link,
                                         race_id,
                                         async_part,
                                     ).execute(&mut *transaction).await?;
@@ -3594,9 +3607,14 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     return Ok(());
                                 };
 
+                                let link = ctx.data.write().await.get_mut::<PendingAsyncVod>()
+                                    .and_then(|cache| cache.remove(&format!("bracket_{}_{}", race_id, async_part)))
+                                    .flatten();
+
                                 sqlx::query!(
-                                    "UPDATE async_times SET finish_time = NULL, recorded_at = NOW(), recorded_by = $1 WHERE race_id = $2 AND async_part = $3",
+                                    "UPDATE async_times SET finish_time = NULL, recorded_at = NOW(), recorded_by = $1, link = $2 WHERE race_id = $3 AND async_part = $4",
                                     user.id as _,
+                                    link,
                                     race_id,
                                     async_part,
                                 ).execute(&mut *transaction).await?;
@@ -3637,6 +3655,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             return Ok(());
                                         };
                                         let pg_interval = PgInterval { months: 0, days: 0, microseconds: total_seconds * 1_000_000 };
+                                        let link = ctx.data.write().await.get_mut::<PendingAsyncVod>()
+                                            .and_then(|cache| cache.remove(&format!("qualifier_{}_{}", team_id, kind_int)))
+                                            .flatten();
                                         sqlx::query!(
                                             "UPDATE async_teams SET submitted = NOW(), finish_time = $1 WHERE team = $2 AND kind = $3",
                                             pg_interval,
@@ -3648,12 +3669,13 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         let members = team.members(&mut transaction).await?;
                                         for member in &members {
                                             sqlx::query!(
-                                                "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, $5, NULL) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
+                                                "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
                                                 team.series as _,
                                                 team.event,
                                                 member.id as _,
                                                 async_kind as _,
                                                 pg_interval,
+                                                link,
                                             ).execute(&mut *transaction).await?;
                                         }
 
@@ -5611,6 +5633,11 @@ async fn handle_async_command(
                             format!("async_override_qualifier_result_{}_{}_{}", team_id, async_kind as i32, qual_total_seconds.unwrap())
                         };
 
+                        // Stash the vod link so the override-confirmation button click can persist it
+                        // (it can't be safely encoded into the button's custom_id, see PendingAsyncVod)
+                        ctx.data.write().await.entry::<PendingAsyncVod>().or_default()
+                            .insert(format!("qualifier_{}_{}", team_id, async_kind as i32), link);
+
                         // Clean up any stale override buttons from previous command invocations
                         async_race::clear_messages_with_button_prefix(ctx, interaction.channel_id, &format!("async_override_qualifier_forfeit_{}_{}", team_id, async_kind as i32)).await;
                         async_race::clear_messages_with_button_prefix(ctx, interaction.channel_id, &format!("async_override_qualifier_result_{}_{}_{}", team_id, async_kind as i32, "")).await;
@@ -5742,6 +5769,11 @@ async fn handle_async_command(
         } else {
             format!("async_override_result_{}_{}_{}", race_id, async_part, total_seconds.unwrap())
         };
+
+        // Stash the vod link so the override-confirmation button click can persist it
+        // (it can't be safely encoded into the button's custom_id, see PendingAsyncVod)
+        ctx.data.write().await.entry::<PendingAsyncVod>().or_default()
+            .insert(format!("bracket_{}_{}", race_id, async_part), link);
 
         // Clean up any stale override buttons from previous command invocations
         async_race::clear_messages_with_button_prefix(ctx, interaction.channel_id, &format!("async_override_forfeit_{}_{}", race_id, async_part)).await;
