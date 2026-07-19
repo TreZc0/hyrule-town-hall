@@ -37,6 +37,32 @@ fn is_message_too_long(e: &serenity::Error) -> bool {
     matches!(e, serenity::Error::Model(ModelError::MessageTooLong(_)))
 }
 
+/// A group of existing Open Races posts that should be consolidated into a single message.
+/// `absorbed` is empty when a post doesn't need to merge with any other.
+struct MergeGroup {
+    survivor: MessageId,
+    absorbed: Vec<MessageId>,
+    total_count: i64,
+}
+
+/// Packs existing posts (message_id, race_count) into as few groups as possible via
+/// first-fit-decreasing bin packing, so under-filled posts can be merged together.
+fn plan_message_merges(existing: &[(MessageId, i64)], max: i64) -> Vec<MergeGroup> {
+    let mut sorted: Vec<_> = existing.to_vec();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let mut groups: Vec<MergeGroup> = Vec::new();
+    for (message_id, count) in sorted {
+        if let Some(group) = groups.iter_mut().find(|g| g.total_count + count <= max) {
+            group.absorbed.push(message_id);
+            group.total_count += count;
+        } else {
+            groups.push(MergeGroup { survivor: message_id, absorbed: Vec::new(), total_count: count });
+        }
+    }
+    groups
+}
+
 /// Details about a volunteer role that needs filling.
 #[allow(dead_code)]
 struct RoleNeed {
@@ -245,22 +271,31 @@ async fn post_volunteer_requests_for_event(
         add_race_ids: Vec<Id<Races>>,
         content: String,
         components: Vec<CreateActionRow>,
+        /// Posts being merged into this one; deleted from Discord once the edit succeeds.
+        absorbed_message_ids: Vec<MessageId>,
     }
 
     let http_client = reqwest::Client::new();
     let mut existing_post_plans = Vec::new();
     let mut remaining = races_needing_volunteers.as_slice();
 
-    // Plan updates for existing posts while the transaction is open.
-    for existing in &existing_messages {
-        let existing_id = match existing.message_id {
-            Some(PgSnowflake(id)) => id,
-            None => continue,
-        };
+    // Existing posts (message_id, race_count) in earliest-race-first order.
+    let existing_counts: Vec<(MessageId, i64)> = existing_messages.iter()
+        .filter_map(|existing| existing.message_id.map(|PgSnowflake(id)| (id, existing.race_count)))
+        .collect();
 
+    // Repack under-filled posts together so fewer messages remain, then restore
+    // earliest-race-first order so existing behavior is unchanged when nothing merges.
+    let mut merge_groups = plan_message_merges(&existing_counts, MAX_RACES_PER_POST as i64);
+    merge_groups.sort_by_key(|group| {
+        existing_counts.iter().position(|(id, _)| *id == group.survivor).unwrap_or(usize::MAX)
+    });
+
+    // Plan updates for existing posts while the transaction is open.
+    for group in &merge_groups {
         let mut add_race_ids = Vec::new();
         if !remaining.is_empty() {
-            let current_count = existing.race_count as usize;
+            let current_count = group.total_count as usize;
             if current_count < MAX_RACES_PER_POST {
                 let slots = MAX_RACES_PER_POST - current_count;
                 let to_add = remaining.len().min(slots);
@@ -270,19 +305,28 @@ async fn post_volunteer_requests_for_event(
             }
         }
 
-        let mut all_race_ids = sqlx::query_scalar!(
-            r#"SELECT id AS "id: Id<Races>"
-            FROM races
-            WHERE volunteer_request_message_id = $1
-              AND ignored = false
-              AND (start IS NULL OR start > $2)
-            ORDER BY start ASC NULLS LAST"#,
-            PgSnowflake(existing_id) as _,
-            grace_cutoff,
-        )
-        .fetch_all(&mut *transaction)
-        .await?;
-        all_race_ids.extend(add_race_ids.iter().copied());
+        let mut all_race_ids = Vec::new();
+        for (i, message_id) in iter::once(group.survivor).chain(group.absorbed.iter().copied()).enumerate() {
+            let ids = sqlx::query_scalar!(
+                r#"SELECT id AS "id: Id<Races>"
+                FROM races
+                WHERE volunteer_request_message_id = $1
+                  AND ignored = false
+                  AND (start IS NULL OR start > $2)
+                ORDER BY start ASC NULLS LAST"#,
+                PgSnowflake(message_id) as _,
+                grace_cutoff,
+            )
+            .fetch_all(&mut *transaction)
+            .await?;
+            // Races merging in from an absorbed post need their message_id reassigned to the survivor.
+            if i > 0 {
+                add_race_ids.extend(ids.iter().copied());
+            }
+            all_race_ids.extend(ids);
+        }
+        let new_race_ids: Vec<_> = add_race_ids.iter().copied().filter(|id| !all_race_ids.contains(id)).collect();
+        all_race_ids.extend(new_race_ids);
 
         let all_needs = build_volunteer_needs_for_race_ids(
             &mut transaction,
@@ -293,10 +337,11 @@ async fn post_volunteer_requests_for_event(
 
         let (content, components) = build_announcement_content(&all_needs, event_data, now, cutoff);
         existing_post_plans.push(ExistingPostPlan {
-            message_id: existing_id,
+            message_id: group.survivor,
             add_race_ids,
             content,
             components,
+            absorbed_message_ids: group.absorbed.clone(),
         });
     }
 
@@ -345,6 +390,12 @@ async fn post_volunteer_requests_for_event(
                 .await?;
             }
             update_tx.commit().await?;
+        }
+
+        for absorbed_id in plan.absorbed_message_ids {
+            if let Err(e) = channel_id.delete_message(discord_ctx, absorbed_id).await {
+                eprintln!("volunteer post merge: failed to delete absorbed message {absorbed_id}: {e}");
+            }
         }
     }
 
@@ -505,6 +556,15 @@ async fn get_races_needing_announcements(
     Ok(needs)
 }
 
+/// Joins round, phase, and game number (in that order) for display, e.g. "Round 1, Winners, Game 2".
+pub(crate) fn format_round_phase_game(round: Option<&str>, phase: Option<&str>, game: Option<i16>) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(r) = round { parts.push(r.to_string()); }
+    if let Some(p) = phase { parts.push(p.to_string()); }
+    if let Some(g) = game { parts.push(format!("Game {g}")); }
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
 /// Gets a human-readable matchup description for a race.
 async fn get_matchup_description(
     transaction: &mut Transaction<'_, Postgres>,
@@ -548,12 +608,10 @@ async fn get_matchup_description(
             .and_then(|kind: draft::Kind| kind.preset_display_name(preset.as_ref()))
     });
 
-    // Add round and/or phase info if available, then draft mode
-    let mut result = match (&race.round, &race.phase) {
-        (Some(round), Some(phase)) => format!("{} ({}, {})", matchup, round, phase),
-        (Some(round), None) => format!("{} ({})", matchup, round),
-        (None, Some(phase)) => format!("{} ({})", matchup, phase),
-        (None, None) => matchup,
+    // Add round/phase/game info if available, then draft mode
+    let mut result = match format_round_phase_game(race.round.as_deref(), race.phase.as_deref(), race.game) {
+        Some(suffix) => format!("{matchup} ({suffix})"),
+        None => matchup,
     };
 
     // Append draft mode if present
@@ -578,11 +636,9 @@ async fn get_matchup_description(
             Entrants::Open => "Open Signup Race".to_string(),
             _ => "Unknown matchup".to_string(),
         };
-        let companion_matchup = match (&companion.round, &companion.phase) {
-            (Some(round), Some(phase)) => format!("{} ({}, {})", companion_matchup, round, phase),
-            (Some(round), None) => format!("{} ({})", companion_matchup, round),
-            (None, Some(phase)) => format!("{} ({})", companion_matchup, phase),
-            (None, None) => companion_matchup,
+        let companion_matchup = match format_round_phase_game(companion.round.as_deref(), companion.phase.as_deref(), companion.game) {
+            Some(suffix) => format!("{companion_matchup} ({suffix})"),
+            None => companion_matchup,
         };
         result = format!("{result} / {companion_matchup}");
     }
@@ -1176,4 +1232,40 @@ pub(crate) async fn update_volunteer_post_by_message_id(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn msg(n: u64) -> MessageId { MessageId::new(n) }
+
+    #[test]
+    fn merges_small_posts_together() {
+        let groups = plan_message_merges(&[(msg(1), 1), (msg(2), 1), (msg(3), 1)], 5);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].total_count, 3);
+    }
+
+    #[test]
+    fn leaves_full_posts_unmerged() {
+        let groups = plan_message_merges(&[(msg(1), 4), (msg(2), 4)], 5);
+        assert_eq!(groups.len(), 2);
+        assert!(groups.iter().all(|g| g.absorbed.is_empty()));
+    }
+
+    #[test]
+    fn packs_partial_posts_when_they_fit() {
+        let groups = plan_message_merges(&[(msg(1), 3), (msg(2), 2)], 5);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].survivor, msg(1));
+        assert_eq!(groups[0].absorbed, vec![msg(2)]);
+    }
+
+    #[test]
+    fn format_round_phase_game_orders_parts() {
+        assert_eq!(format_round_phase_game(Some("Round 1"), Some("Winners"), Some(2)), Some("Round 1, Winners, Game 2".to_string()));
+        assert_eq!(format_round_phase_game(None, None, None), None);
+        assert_eq!(format_round_phase_game(None, None, Some(2)), Some("Game 2".to_string()));
+    }
 }
