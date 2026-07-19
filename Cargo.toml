@@ -32,7 +32,7 @@ thiserror = "2"
 anyhow = "1"
 async-graphql = { git = "https://github.com/fenhl/async-graphql", branch = "forms" }
 async-graphql-rocket = { git = "https://github.com/fenhl/async-graphql", branch = "forms" }
-async-proto = { version = "0.26", features = ["semver"] }
+async-proto = { version = "0.26.16", features = ["semver"] }
 async-trait = "0.1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
@@ -65,11 +65,11 @@ mhstatus = { git = "https://github.com/midoshouse/status.midos.house" }
 noisy_float = "0.2"
 nonempty-collections = "1"
 ootr-utils = { git = "https://github.com/midoshouse/rust-ootr-utils", features = ["sqlx"] }
-racetime = "0.32"
+racetime = "0.35"
 rand = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["charset", "form", "gzip", "hickory-dns", "http2", "json", "query", "rustls-no-provider", "stream", "system-proxy", "zstd"] }
 rocket = { git = "https://github.com/fenhl/Rocket", branch = "forms", features = ["json"] }
-rocket-util = { git = "https://github.com/fenhl/rocket-util", branch = "forms", features = ["ics", "image", "rocket_csrf"] }
+rocket-util = { git = "https://github.com/fenhl/rocket-util", features = ["ics", "image", "rocket_csrf"] }
 rocket_csrf = { git = "https://github.com/fenhl/rocket_csrf", branch = "forms" }
 rocket_oauth2 = { git = "https://github.com/fenhl/rocket_oauth2", branch = "forms" }
 rustls = { version = "0.23.36", default-features = false, features = ["ring"] }
@@ -94,12 +94,12 @@ tokio-util = { version = "0.7", features = ["io"] }
 typemap_rev = "0.3" # transitive dependency of serenity
 url = { version = "2", features = ["serde"] }
 uuid = {version = "1.17.0", features = ["v4"]}
-wheel = { git = "https://github.com/fenhl/wheel", branch = "rocket-forms", features = ["chrono", "racetime", "reqwest", "rocket", "serde_json"] }
+wheel = { git = "https://github.com/fenhl/wheel", features = ["chrono", "racetime", "reqwest", "rocket", "serde_json"] }
 yup-oauth2 = "12"
 urlencoding = "2"
 
 [target.'cfg(unix)'.dependencies]
-async-proto = { version = "0.26", features = ["chrono", "serde_json", "serenity", "uuid"] }
+async-proto = { version = "0.26.16", features = ["chrono", "serde_json", "serenity", "uuid"] }
 openssl = { version = "0.10", features = ["vendored"] }
 xdg = "3"
 

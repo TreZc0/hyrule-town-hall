@@ -654,7 +654,7 @@ async fn report_external_and_init_draft<'a>(
                 .bearer_auth(&global_state.league_api_key)
                 .form(&form);
             println!("reporting draw-resolved result to League website: {:?}", serde_urlencoded::to_string(&form));
-            request.send().await?.detailed_error_for_status().await.to_racetime()?;
+            request.send().await.to_racetime()?.detailed_error_for_status().await.to_racetime()?;
         },
         cal::Source::StartGG { ref set, .. } => {
             if let Entrant::MidosHouseTeam(Team { startgg_id: Some(winner_entrant_id), .. }) = &winner {
@@ -1196,7 +1196,7 @@ impl Handler {
                                 if let Some(ref room) = private_async_part.room() {
                                     let nonactive_team = private_async_part.active_teams().exactly_one().map_err(|_| Error::Custom(Box::new(ExactlyOneError)))?;
                                     let data = ctx.global_state.http_client.get(format!("{}/data", room.to_string()))
-                                        .send().await?
+                                        .send().await.to_racetime()?
                                         .detailed_error_for_status().await.to_racetime()?
                                         .json_with_text_in_error::<RaceData>().await.to_racetime()?;
                                     team_rooms.insert(nonactive_team.racetime_slug.clone().expect("non-racetime.gg team"), Url::clone(room));

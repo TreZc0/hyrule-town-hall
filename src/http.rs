@@ -33,7 +33,7 @@ use {
 
 include!(concat!(env!("OUT_DIR"), "/static_files.rs"));
 
-pub(crate) use static_url;
+pub(crate) use static_url_impl as static_url;
 
 #[derive(Responder)]
 pub(crate) enum RedirectOrContent {

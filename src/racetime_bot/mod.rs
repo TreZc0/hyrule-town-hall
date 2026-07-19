@@ -17,8 +17,6 @@ use {
     ootr_utils as rando,
     ootr_utils::spoiler::OcarinaNote,
     racetime::{
-        Error,
-        ResultExt as _,
         handler::{
             RaceContext,
             RaceHandler,
@@ -63,6 +61,31 @@ use {
 #[cfg(windows)] use directories::UserDirs;
 
 pub(crate) mod report;
+
+/// racetime 0.35 removed its own catch-all `Error`/`ResultExt`, since `RaceHandler` now has an
+/// associated `Error` type instead of a single crate-wide one. This reimplements the same
+/// catch-all boxing behavior locally so the ~200 existing `.to_racetime()?` call sites keep working.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum Error {
+    #[error(transparent)] Auth(#[from] racetime::AuthError),
+    #[error(transparent)] Custom(#[from] Box<dyn std::error::Error + Send + Sync>),
+    #[error(transparent)] SendError(#[from] racetime::handler::SendError),
+    #[error(transparent)] ServerErrors(#[from] racetime::handler::ServerErrors),
+}
+
+pub(crate) trait ResultExt {
+    type Ok;
+
+    fn to_racetime(self) -> Result<Self::Ok, Error>;
+}
+
+impl<T, E: std::error::Error + Send + Sync + 'static> ResultExt for Result<T, E> {
+    type Ok = T;
+
+    fn to_racetime(self) -> Result<T, Error> {
+        self.map_err(|e| Error::Custom(Box::new(e)))
+    }
+}
 
 #[cfg(unix)] const PYTHON: &str = "python3";
 #[cfg(windows)] const PYTHON: &str = "py";
@@ -1454,9 +1477,9 @@ impl Goal {
                     let (date, ordinal, file_hash) = {
                         let response = global_state.http_client
                             .get("https://www.triforceblitz.com/seed/daily/all")
-                            .send().await?
+                            .send().await.to_racetime()?
                             .detailed_error_for_status().await.to_racetime()?;
-                        let response_body = response.text().await?;
+                        let response_body = response.text().await.to_racetime()?;
                         let latest = kuchiki::parse_html().one(response_body)
                             .select_first("main > section > div > div").map_err(|()| RollError::TfbHtml).to_racetime()?;
                         let latest = latest.as_node();
@@ -3488,7 +3511,7 @@ async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl
             },
             seed::Files::AvianartSeed { hash, .. } => format!("https://avianart.games/perm/{hash}"),
         },
-    )).await
+    )).await.to_racetime()
 }
 
 #[derive(Clone, Copy)]
@@ -4597,6 +4620,8 @@ enum PendingSend {
 
 #[async_trait]
 impl RaceHandler<GlobalState> for Handler {
+    type Error = Error;
+
     async fn should_handle(race_data: &RaceData, global_state: Arc<GlobalState>) -> Result<bool, Error> {
         Ok(Self::should_handle_inner(race_data, global_state, None).await)
     }
@@ -4605,7 +4630,7 @@ impl RaceHandler<GlobalState> for Handler {
         Ok(!Self::should_handle_inner(&*ctx.data().await, ctx.global_state.clone(), Some(Some(self))).await)
     }
 
-    async fn task(global_state: Arc<GlobalState>, race_data: Arc<tokio::sync::RwLock<RaceData>>, join_handle: tokio::task::JoinHandle<()>) -> Result<(), Error> {
+    async fn task(global_state: Arc<GlobalState>, race_data: Arc<tokio::sync::RwLock<RaceData>>, join_handle: tokio::task::JoinHandle<Result<(), racetime::bot::HandleError<Error>>>) -> Result<(), Error> {
         let race_data = ArcRwLock::from(race_data);
         tokio::spawn(async move {
             lock!(@read data = race_data; println!("race handler for https://{}{} started", racetime_host(), data.url));
@@ -4622,12 +4647,19 @@ impl RaceHandler<GlobalState> for Handler {
                         clean_shutdown.updates.send(CleanShutdownUpdate::Empty).allow_unreceived();
                     }
                 });
-                if let Ok(()) = res {
-                    println!("race handler for https://{}{} stopped", racetime_host(), data.url);
-                } else {
-                    eprintln!("race handler for https://{}{} panicked", racetime_host(), data.url);
-                    if let Environment::Production = Environment::default() {
-                        log::error!("race handler for https://{}{} panicked", racetime_host(), data.url);
+                match res {
+                    Ok(Ok(())) => println!("race handler for https://{}{} stopped", racetime_host(), data.url),
+                    Ok(Err(e)) => {
+                        eprintln!("race handler for https://{}{} errored: {e}", racetime_host(), data.url);
+                        if let Environment::Production = Environment::default() {
+                            log::error!("race handler for https://{}{} errored: {e}", racetime_host(), data.url);
+                        }
+                    }
+                    Err(_) => {
+                        eprintln!("race handler for https://{}{} panicked", racetime_host(), data.url);
+                        if let Environment::Production = Environment::default() {
+                            log::error!("race handler for https://{}{} panicked", racetime_host(), data.url);
+                        }
                     }
                 }
             });
@@ -4642,7 +4674,7 @@ impl RaceHandler<GlobalState> for Handler {
         // (e.g. due to a degraded connection) can't block every other room from starting.
         let official_result = lock!(new_room_lock = ctx.global_state.new_room_lock; { // make sure a new room isn't handled before it's added to the database
             let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
-            let result = if let Some(cal_event) = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, format!("https://{}{}", racetime_host(), ctx.data().await.url).parse()?).await.to_racetime()? {
+            let result = if let Some(cal_event) = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, format!("https://{}{}", racetime_host(), ctx.data().await.url).parse().to_racetime()?).await.to_racetime()? {
                 let mut pending_sends = Vec::default();
                 let goal = Goal::for_event(cal_event.race.series, &cal_event.race.event).ok_or(GoalFromStrError).to_racetime()?;
                 let event = cal_event.race.event(&mut transaction).await.to_racetime()?;
@@ -6162,13 +6194,13 @@ impl RaceHandler<GlobalState> for Handler {
                         || (ctx.global_state.racetime_config.client_id.clone(), ctx.global_state.racetime_config.client_secret.clone()),
                         |row| (row.client_id, row.client_secret),
                     );
-                    let (access_token, _) = racetime::authorize_with_host(&ctx.global_state.host_info, &client_id, &client_secret, &ctx.global_state.http_client).await?;
+                    let (access_token, _) = racetime::authorize_with_host(&ctx.global_state.host_info, &client_id, &client_secret, &ctx.global_state.http_client).await.to_racetime()?;
                     room_options(
                         goal.as_str().to_owned(), goal.is_custom(), event, cal_event,
                         ctx.data().await.info_user.clone().unwrap_or_default(),
                         ctx.data().await.info_bot.clone().unwrap_or_default(),
                         true,
-                    ).await.edit_with_host(&ctx.global_state.host_info, &access_token, &ctx.global_state.http_client, &category_slug, &ctx.data().await.slug).await?;
+                    ).await.edit_with_host(&ctx.global_state.host_info, &access_token, &ctx.global_state.http_client, &category_slug, &ctx.data().await.slug).await.to_racetime()?;
                 } else {
                     ctx.say(format!("Restream ready, still waiting for other restreams.")).await?;
                 }
@@ -6200,13 +6232,13 @@ impl RaceHandler<GlobalState> for Handler {
                                             || (ctx.global_state.racetime_config.client_id.clone(), ctx.global_state.racetime_config.client_secret.clone()),
                                             |row| (row.client_id, row.client_secret),
                                         );
-                                        let (access_token, _) = racetime::authorize_with_host(&ctx.global_state.host_info, &client_id, &client_secret, &ctx.global_state.http_client).await?;
+                                        let (access_token, _) = racetime::authorize_with_host(&ctx.global_state.host_info, &client_id, &client_secret, &ctx.global_state.http_client).await.to_racetime()?;
                                         room_options(
                                             goal.as_str().to_owned(), goal.is_custom(), event, cal_event,
                                             ctx.data().await.info_user.clone().unwrap_or_default(),
                                             ctx.data().await.info_bot.clone().unwrap_or_default(),
                                             false,
-                                        ).await.edit_with_host(&ctx.global_state.host_info, &access_token, &ctx.global_state.http_client, &category_slug, &ctx.data().await.slug).await?;
+                                        ).await.edit_with_host(&ctx.global_state.host_info, &access_token, &ctx.global_state.http_client, &category_slug, &ctx.data().await.slug).await.to_racetime()?;
                                     }
                                     restreams.entry(restream_url).or_default().restreamer_racetime_id = Some(restreamer_racetime_id.clone());
                                     ctx.say("Restreamer assigned. Use “!ready” once the restream is ready. Auto-start will be unlocked once all restreams are ready.").await?; //TODO mention restreamer
@@ -6238,7 +6270,8 @@ impl RaceHandler<GlobalState> for Handler {
                 if let Goal::TriforceBlitz | Goal::TriforceBlitzProgressionSpoiler = goal;
                 if let Some(OfficialRaceData { ref event, ref mut scores, .. }) = self.official_data;
                 then {
-                    if let Some(UserData { mut ref id, .. }) = msg.user {
+                    if let Some(UserData { ref id, .. }) = msg.user {
+                        let mut id = id;
                         let data = ctx.data().await;
                         if let Some(entrant) = data.entrants.iter().find(|entrant| entrant.user.as_ref().is_some_and(|user| user.id == *id)) {
                             if let Some(ref team) = entrant.team {
@@ -6826,7 +6859,7 @@ impl RaceHandler<GlobalState> for Handler {
                             .bearer_auth(&ctx.global_state.league_api_key)
                             .form(&form);
                         println!("reporting cancel to League website: {:?}", serde_urlencoded::to_string(&form));
-                        request.send().await?.detailed_error_for_status().await.to_racetime()?;
+                        request.send().await.to_racetime()?.detailed_error_for_status().await.to_racetime()?;
                     } else {
                         if let Some(organizer_channel) = event.discord_organizer_channel {
                             organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, MessageBuilder::default()
@@ -6924,7 +6957,7 @@ impl RaceHandler<GlobalState> for Handler {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(Error::Server(errors))
+            Err(racetime::handler::ServerErrors(errors).into())
         }
     }
 }
@@ -7096,8 +7129,8 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                     info_user,
                     String::default(),
                     cal_event.is_private_async_part() || cal_event.race.video_urls.is_empty(),
-                ).await.start_with_host(host_info, &access_token, &http_client, &category_slug).await?;
-                let room_url = Url::parse(&format!("https://{}/{}/{}", host_info.hostname, category_slug, race_slug))?;
+                ).await.start_with_host(host_info, &access_token, &http_client, &category_slug).await.to_racetime()?;
+                let room_url = Url::parse(&format!("https://{}/{}/{}", host_info.hostname, category_slug, race_slug)).to_racetime()?;
                 match cal_event.kind {
                     cal::EventKind::Normal => { sqlx::query!("UPDATE races SET room = $1 WHERE id = $2", room_url.to_string(), cal_event.race.id as _).execute(&mut **transaction).await.to_racetime()?; }
                     cal::EventKind::Async1 => { sqlx::query!("UPDATE races SET async_room1 = $1 WHERE id = $2", room_url.to_string(), cal_event.race.id as _).execute(&mut **transaction).await.to_racetime()?; }
@@ -7124,12 +7157,12 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                 });
                 Ok(room_url)
             }
-            Err(Error::Reqwest(e)) if e.status().is_some_and(|status| status.is_server_error()) => {
+            Err(racetime::AuthError::Http(e)) if e.status().is_some_and(|status| status.is_server_error()) => {
                 // racetime.gg's auth endpoint has been known to return server errors intermittently.
                 // In that case, we simply try again in the next iteration of the sleep loop.
                 return Ok(None)
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err(e.into()),
         },
         RaceHandleMode::Discord => {
             let task_clean_shutdown = clean_shutdown.clone();
@@ -7737,6 +7770,7 @@ async fn handle_rooms(global_state: Arc<GlobalState>, shutdown: rocket::Shutdown
                 .host(global_state.host_info.clone())
                 .user_agent(concat!("HyruleTownHall/", env!("CARGO_PKG_VERSION"), " (https://github.com/TreZc0/hyrule-town-hall)"))
                 .scan_races_every(Duration::from_secs(5))
+                .network_timeout(Some(Duration::from_secs(30)))
                 .build().await
             {
                 Ok(bot) => {

@@ -87,7 +87,7 @@ fn main() -> Result<(), Error> {
         }
     }
     // Write normal static_url! macro
-    writeln!(&mut out_f, "macro_rules! static_url {{")?;
+    writeln!(&mut out_f, "macro_rules! static_url_impl {{")?;
     for (unix_path, commit_id) in &normal_entries {
         let uri = format!("/static/{unix_path}?v={commit_id}");
         writeln!(&mut out_f, "    ({unix_path:?}) => {{")?;
