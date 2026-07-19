@@ -1723,6 +1723,42 @@ pub(crate) async fn handle_forfeit_cancel(
     Ok(())
 }
 
+/// Looks for a twitch.tv/youtube.com/youtu.be link posted by the async player in the last 20
+/// thread messages, so the org_result modal can be pre-filled with it. Any lookup failure
+/// (DB error, Discord API error, no linked Discord account, no link found) just yields `None`
+/// rather than blocking the modal from opening.
+async fn find_recent_vod_link(
+    ctx: &DiscordCtx,
+    pool: &PgPool,
+    interaction: &ComponentInteraction,
+    run: &AsyncRun,
+) -> Option<String> {
+    let mut transaction = pool.begin().await.ok()?;
+    let player_ids: Vec<UserId> = match run {
+        AsyncRun::Qualifier { team_id, .. } => {
+            let team = Team::from_id(&mut transaction, Id::from(*team_id as u64)).await.ok()??;
+            team.members(&mut transaction).await.ok()?
+        }
+        AsyncRun::BracketRace { race_id, async_part } => {
+            let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(*race_id as u64)).await.ok()?;
+            let team = AsyncRaceManager::get_team_for_async_part(&race, *async_part).ok()?;
+            team.members(&mut transaction).await.ok()?
+        }
+    }.into_iter().filter_map(|u| u.discord.map(|d| d.id)).collect();
+
+    if player_ids.is_empty() { return None }
+
+    let messages = interaction.channel_id.messages(ctx, serenity::all::GetMessages::new().limit(20)).await.ok()?;
+    messages.into_iter()
+        .filter(|message| player_ids.contains(&message.author.id))
+        .find_map(|message| message.content.split_whitespace().find_map(|token| {
+            let url = Url::parse(token).ok()?;
+            let host = url.host_str()?;
+            (host.contains("twitch.tv") || host.contains("youtube.com") || host.contains("youtu.be"))
+                .then(|| token.to_string())
+        }))
+}
+
 pub(crate) async fn handle_org_result(
     ctx: &DiscordCtx,
     interaction: &ComponentInteraction,
@@ -1751,6 +1787,13 @@ pub(crate) async fn handle_org_result(
         }
     };
 
+    let mut link_input = CreateInputText::new(InputTextStyle::Short, "VOD link (optional)", "link")
+        .placeholder("https://...")
+        .required(false);
+    if let Some(vod) = find_recent_vod_link(ctx, pool, interaction, run).await {
+        link_input = link_input.value(vod);
+    }
+
     interaction.create_response(ctx, CreateInteractionResponse::Modal(
         CreateModal::new(modal_id, "Confirm Result")
             .components(vec![
@@ -1759,11 +1802,7 @@ pub(crate) async fn handle_org_result(
                         .placeholder("H:MM:SS or HH:MM:SS")
                         .required(true)
                 ),
-                CreateActionRow::InputText(
-                    CreateInputText::new(InputTextStyle::Short, "VOD link (optional)", "link")
-                        .placeholder("https://...")
-                        .required(false)
-                ),
+                CreateActionRow::InputText(link_input),
             ])
     )).await?;
     Ok(())

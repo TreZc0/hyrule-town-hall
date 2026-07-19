@@ -2473,7 +2473,17 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
-                                if let Some(speedgaming_slug) = &event.speedgaming_slug {
+                                if event.automated_asyncs && event.discord_async_channel.is_none() {
+                                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content(if let French = event.language {
+                                            format!("Désolé, la planification automatique des asyncs est mal configurée pour cet événement (canal Discord manquant). Merci de contacter un organisateur du tournoi.")
+                                        } else {
+                                            format!("Sorry, automated async scheduling is misconfigured for this event (missing Discord channel). Please contact a tournament organizer.")
+                                        })
+                                    )).await?;
+                                    transaction.rollback().await?;
+                                } else if let Some(speedgaming_slug) = &event.speedgaming_slug {
                                     let response_content = if was_scheduled {
                                         format!("Please contact a tournament organizer to reschedule this race.")
                                     } else {
