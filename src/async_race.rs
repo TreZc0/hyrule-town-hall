@@ -1223,20 +1223,6 @@ pub(crate) async fn clear_message_with_button(http: impl CacheHttp, channel_id: 
     }
 }
 
-pub(crate) async fn clear_messages_with_button_prefix(http: impl CacheHttp, channel_id: ChannelId, prefix: &str) {
-    if let Ok(messages) = channel_id.messages(&http, serenity::all::GetMessages::new().limit(20)).await {
-        for message in messages {
-            let has_button = message.components.iter().any(|row| row.components.iter().any(|c| {
-                matches!(c, ActionRowComponent::Button(b)
-                    if matches!(&b.data, ButtonKind::NonLink { custom_id, .. } if custom_id.starts_with(prefix)))
-            }));
-            if has_button {
-                let _ = channel_id.edit_message(&http, message.id, EditMessage::new().components(vec![])).await;
-            }
-        }
-    }
-}
-
 pub(crate) fn create_finish_forfeit_buttons(run: &AsyncRun) -> CreateActionRow {
     CreateActionRow::Buttons(vec![
         CreateButton::new(run.button_id("finish"))
