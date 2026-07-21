@@ -7574,13 +7574,23 @@ pub(crate) enum CreateRoomsError {
     #[error(transparent)] Sql(#[from] sqlx::Error),
 }
 
+/// How long to wait for a single Discord API call before treating it as failed.
+///
+/// Without this, a stalled Discord HTTP call (e.g. during a network blip) can hang forever
+/// without ever reaching the retry/error-logging logic below.
+const DISCORD_SEND_TIMEOUT: Duration = Duration::from_secs(15);
+
 async fn try_discord_send<T, F, Fut>(make_request: F, context: &str)
 where
     F: Fn() -> Fut,
     Fut: Future<Output = serenity::Result<T>>,
 {
     for attempt in 0..3u8 {
-        match make_request().await {
+        let result = match timeout(DISCORD_SEND_TIMEOUT, make_request()).await {
+            Ok(result) => result.map_err(|e| e.to_string()),
+            Err(_) => Err(format!("timed out after {DISCORD_SEND_TIMEOUT:?}")),
+        };
+        match result {
             Ok(_) => return,
             Err(e) => {
                 if attempt < 2 {

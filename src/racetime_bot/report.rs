@@ -1,6 +1,9 @@
 use {
     std::collections::HashMap,
-    tokio::sync::RwLockReadGuard,
+    tokio::{
+        sync::RwLockReadGuard,
+        time::timeout,
+    },
     serenity::all::{
         CreateActionRow,
         CreateButton,
@@ -12,6 +15,18 @@ use {
         racetime_bot::*,
     },
 };
+
+/// Sends a Discord channel message with a timeout (`DISCORD_SEND_TIMEOUT`, defined alongside
+/// `try_discord_send` in the parent module), retrying once on timeout or failure.
+async fn say_with_retry(discord_ctx: &DiscordCtx, channel: ChannelId, msg: impl Into<String>) -> Result<(), Error> {
+    let msg = msg.into();
+    let mut result = timeout(DISCORD_SEND_TIMEOUT, channel.say(discord_ctx, &msg)).await.to_racetime().and_then(|res| res.to_racetime());
+    if let Err(e) = &result {
+        eprintln!("failed to send Discord message to {channel}, retrying once: {e}");
+        result = timeout(DISCORD_SEND_TIMEOUT, channel.say(discord_ctx, &msg)).await.to_racetime().and_then(|res| res.to_racetime());
+    }
+    result.map(|_| ())
+}
 
 trait Score {
     type SortKey: Ord;
@@ -152,7 +167,7 @@ fn determine_overall_winner(game_results: &[startgg::GameResult]) -> startgg::ID
 
 async fn dm_admin_about_result_announcement_failure(discord_ctx: &DiscordCtx, message: String) {
     match ADMIN_USER.create_dm_channel(discord_ctx).await {
-        Ok(dm) => if let Err(e) = dm.say(discord_ctx, message).await {
+        Ok(dm) => if let Err(e) = say_with_retry(discord_ctx, dm.id, message).await {
             eprintln!("failed to DM admin about result announcement failure: {e}");
         },
         Err(e) => eprintln!("failed to open admin DM about result announcement failure: {e}"),
@@ -164,12 +179,13 @@ async fn post_result_announcement(discord_ctx: &DiscordCtx, event: &event::Data<
         return
     };
 
-    if let Err(primary_error) = primary_channel.say(discord_ctx, &msg).await {
+    if let Err(primary_error) = say_with_retry(discord_ctx, primary_channel, &msg).await {
         eprintln!("failed to post race result announcement to {primary_channel}: {primary_error}");
 
         if let Some(organizer_channel) = event.discord_organizer_channel.filter(|&channel| channel != primary_channel) {
-            if let Err(fallback_error) = organizer_channel.say(
+            if let Err(fallback_error) = say_with_retry(
                 discord_ctx,
+                organizer_channel,
                 format!(
                     "Failed to post the race result announcement in <#{}>: {}\n\nIntended announcement:\n{}",
                     primary_channel.get(),
@@ -356,7 +372,7 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                     }
                     msg.push(" after adjusting the times");
                 }
-                organizer_channel.say(&*discord_ctx, msg.build()).await.to_racetime()?;
+                say_with_retry(&*discord_ctx, organizer_channel, msg.build()).await?;
             }
         }
     } else if let (Some(winner_time), Some(loser_time)) = (winning_time.as_duration(), losing_time.as_duration()) {
@@ -580,10 +596,11 @@ async fn warn_companion_result_partition(
 ) -> Result<(), Error> {
     ctx.say(format!("Automatic result reporting for this shared race room needs organizer review: {message}")).await?;
     if let Some(organizer_channel) = event.discord_organizer_channel {
-        organizer_channel.say(
+        say_with_retry(
             &*ctx.global_state.discord_ctx.read().await,
+            organizer_channel,
             format!("Shared race room result reporting needs organizer review: {message}"),
-        ).await.to_racetime()?;
+        ).await?;
     }
     Ok(())
 }
@@ -761,7 +778,7 @@ async fn report_external_and_init_draft<'a>(
                 msg.push("failed to report race result to start.gg: <");
                 msg.push(winning_room.to_string());
                 msg.push("> (winner has no start.gg entrant ID)");
-                organizer_channel.say(&*global_state.discord_ctx.read().await, msg.build()).await.to_racetime()?;
+                say_with_retry(&*global_state.discord_ctx.read().await, organizer_channel, msg.build()).await?;
             }
         },
         cal::Source::SpeedGaming { .. } => {}
@@ -802,7 +819,7 @@ async fn report_external_and_init_draft<'a>(
                     };
                     let step = draft.next_step(draft_kind, next_game.game, &mut msg_ctx).await.to_racetime()?;
                     if !step.message.is_empty() {
-                        scheduling_thread.say(&*discord_ctx, step.message).await.to_racetime()?;
+                        say_with_retry(&*discord_ctx, scheduling_thread, step.message).await?;
                     }
                     transaction = msg_ctx.into_transaction();
                 }
@@ -908,7 +925,7 @@ impl Handler {
                 sqlx::query!("UPDATE races SET breaks_used = TRUE WHERE id = $1", cal_event.race.id as _).execute(&mut *transaction).await.to_racetime()?;
             }
             if let Some(organizer_channel) = event.discord_organizer_channel {
-                organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, MessageBuilder::default()
+                say_with_retry(&*ctx.global_state.discord_ctx.read().await, organizer_channel, MessageBuilder::default()
                     .push("first half of async finished")
                     .push(if fpa_invoked { " with FPA call" } else if event.manual_reporting_with_breaks && breaks_used { " with breaks" } else { "" })
                     .push(": <https://")
@@ -916,7 +933,7 @@ impl Handler {
                     .push(&ctx.data().await.url)
                     .push('>')
                     .build()
-                ).await.to_racetime()?;
+                ).await?;
             }
         } else if fpa_invoked {
             if let Some(organizer_channel) = event.discord_organizer_channel {
@@ -940,7 +957,7 @@ impl Handler {
                     msg.push(" after adjusting the times");
                 }
                 //TODO note to manually initialize high seed for next game's draft (if any) and use `/post-status`
-                organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, msg.build()).await.to_racetime()?;
+                say_with_retry(&*ctx.global_state.discord_ctx.read().await, organizer_channel, msg.build()).await?;
             }
         } else if event.manual_reporting_with_breaks && breaks_used {
             if let Some(organizer_channel) = event.discord_organizer_channel {
@@ -964,7 +981,7 @@ impl Handler {
                     msg.push(" after adjusting the times");
                 }
                 //TODO note to manually initialize high seed for next game's draft (if any) and use `/post-status`
-                organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, msg.build()).await.to_racetime()?;
+                say_with_retry(&*ctx.global_state.discord_ctx.read().await, organizer_channel, msg.build()).await?;
             }
         } else if cal_event.race.phase.as_deref() == Some("Seeding") {
             // Seeding race: assign qualifier_rank based on finish order
@@ -982,7 +999,7 @@ impl Handler {
             }
             if let Some(organizer_channel) = event.discord_organizer_channel {
                 let room = Url::parse(&format!("https://{}{}", racetime_host(), data.url)).to_racetime()?;
-                organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, format!("Seeding race finished — qualifier ranks assigned: <{room}>")).await.to_racetime()?;
+                say_with_retry(&*ctx.global_state.discord_ctx.read().await, organizer_channel, format!("Seeding race finished — qualifier ranks assigned: <{room}>")).await?;
             }
             transaction.commit().await.to_racetime()?;
             return Ok(());
