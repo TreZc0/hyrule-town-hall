@@ -1790,7 +1790,12 @@ pub(crate) async fn handle_org_result(
     let mut link_input = CreateInputText::new(InputTextStyle::Short, "VOD link (optional)", "link")
         .placeholder("https://...")
         .required(false);
-    if let Some(vod) = find_recent_vod_link(ctx, pool, interaction, run).await {
+    // A modal must be the initial response to its button interaction. Keep the optional
+    // Discord history lookup from consuming Discord's three-second response window.
+    if let Some(vod) = tokio::time::timeout(
+        Duration::from_secs(2),
+        find_recent_vod_link(ctx, pool, interaction, run),
+    ).await.ok().flatten() {
         link_input = link_input.value(vod);
     }
 

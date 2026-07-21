@@ -5648,10 +5648,6 @@ async fn handle_async_command(
                         ctx.data.write().await.entry::<PendingAsyncVod>().or_default()
                             .insert(format!("qualifier_{}_{}", team_id, async_kind as i32), link);
 
-                        // Clean up any stale override buttons from previous command invocations
-                        async_race::clear_messages_with_button_prefix(ctx, interaction.channel_id, &format!("async_override_qualifier_forfeit_{}_{}", team_id, async_kind as i32)).await;
-                        async_race::clear_messages_with_button_prefix(ctx, interaction.channel_id, &format!("async_override_qualifier_result_{}_{}_{}", team_id, async_kind as i32, "")).await;
-
                         interaction.edit_response(ctx, EditInteractionResponse::new()
                             .content(format!(
                                 "A result already exists for **{}**. Override with **{}**?",
@@ -5784,10 +5780,6 @@ async fn handle_async_command(
         // (it can't be safely encoded into the button's custom_id, see PendingAsyncVod)
         ctx.data.write().await.entry::<PendingAsyncVod>().or_default()
             .insert(format!("bracket_{}_{}", race_id, async_part), link);
-
-        // Clean up any stale override buttons from previous command invocations
-        async_race::clear_messages_with_button_prefix(ctx, interaction.channel_id, &format!("async_override_forfeit_{}_{}", race_id, async_part)).await;
-        async_race::clear_messages_with_button_prefix(ctx, interaction.channel_id, &format!("async_override_result_{}_{}_{}", race_id, async_part, "")).await;
 
         interaction.edit_response(ctx, EditInteractionResponse::new()
             .content(format!(
