@@ -5550,7 +5550,11 @@ async fn handle_async_command(
         .ephemeral(false)
     )).await?;
 
-    let mut transaction = ctx.data.read().await.get::<DbPool>().as_ref().expect("database connection pool missing from Discord context").begin().await?;
+    let pool = ctx.data.read().await
+        .get::<DbPool>()
+        .expect("database connection pool missing from Discord context")
+        .clone();
+    let mut transaction = pool.begin().await?;
 
     // Check if user is an organizer
     let user_id = interaction.user.id;
