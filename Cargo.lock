@@ -5635,8 +5635,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 [[package]]
 name = "racetime"
 version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3aa5eb0cbd3f656bae970483bb761d5de4606a01ae1b895387d8d63bac5f1a45"
+source = "git+https://github.com/TreZc0/rust-racetime.git?branch=fix-elapsed-endless-loop#5f7ad8eaa1e7f53704412ec2300077bd16b8d7b5"
 dependencies = [
  "async-trait",
  "chrono",
