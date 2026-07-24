@@ -107,5 +107,4 @@ xdg = "3"
 directories = "6"
 
 [patch.crates-io]
-racetime = { git = "https://github.com/TreZc0/rust-racetime.git", branch = "fix-elapsed-endless-loop" }
 serenity = { git = "https://github.com/TreZc0/serenity.git", branch = "fix-permission-removal" }
