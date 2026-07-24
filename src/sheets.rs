@@ -137,6 +137,8 @@ pub(crate) enum WriteError {
     TokenExpired,
     #[error("sheet not found: {0}")]
     SheetNotFound(String),
+    #[error("sheets write to range {range} failed: {source}")]
+    Range { range: String, #[source] source: Box<WriteError> },
 }
 
 impl IsNetworkError for WriteError {
@@ -145,6 +147,7 @@ impl IsNetworkError for WriteError {
             Self::OAuth(_) => false,
             Self::Reqwest(e) => e.is_network_error(),
             Self::Wheel(e) => e.is_network_error(),
+            Self::Range { source, .. } => source.is_network_error(),
             Self::EmptyToken => false,
             Self::TokenExpired => false,
             Self::SheetNotFound(_) => false,
@@ -284,6 +287,36 @@ pub(crate) async fn read_values_uncached(
     })
 }
 
+/// Returns true if `err` is a 400 caused by writing to a protected cell/range,
+/// as opposed to a transient or programming error that should propagate.
+fn is_protected_cell_error(err: &WriteError) -> bool {
+    matches!(err, WriteError::Wheel(wheel::Error::ResponseStatus { inner, text, .. })
+        if inner.status() == Some(reqwest::StatusCode::BAD_REQUEST)
+            && text.as_deref().is_ok_and(|text| text.contains("protected cell")))
+}
+
+fn response_text(err: &WriteError) -> Option<&str> {
+    match err {
+        WriteError::Wheel(wheel::Error::ResponseStatus { text, .. }) => text.as_deref().ok(),
+        _ => None,
+    }
+}
+
+/// Google's batch error body names the failing entry as `data[N]`; best-effort
+/// parse that index back out so it can be reported as the actual range.
+fn extract_data_index(text: &str) -> Option<usize> {
+    let after = text.split_once("data[")?.1;
+    let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+fn with_range_context(err: WriteError, data: &[(String, Vec<Vec<String>>)]) -> WriteError {
+    match response_text(&err).and_then(extract_data_index).and_then(|idx| data.get(idx)) {
+        Some((range, _)) => WriteError::Range { range: range.clone(), source: Box::new(err) },
+        None => err,
+    }
+}
+
 /// Batch update multiple ranges at once
 pub(crate) async fn batch_update_values(
     http_client: &reqwest::Client,
@@ -294,6 +327,32 @@ pub(crate) async fn batch_update_values(
         return Ok(());
     }
 
+    match batch_update_values_raw(http_client, sheet_id, data.clone()).await {
+        Ok(()) => Ok(()),
+        // Sheets rejects the whole batch if any single range in it is protected.
+        // Retry range-by-range so the rest of the batch still gets written, and
+        // just skip whichever individual range is protected.
+        Err(err) if is_protected_cell_error(&err) => {
+            for (range, values) in data {
+                match batch_update_values_raw(http_client, sheet_id, vec![(range.clone(), values)]).await {
+                    Ok(()) => {}
+                    Err(err) if is_protected_cell_error(&err) => {
+                        eprintln!("Sheets: skipping write to protected range {sheet_id} {range}");
+                    }
+                    Err(err) => return Err(WriteError::Range { range, source: Box::new(err) }),
+                }
+            }
+            Ok(())
+        }
+        Err(err) => Err(with_range_context(err, &data)),
+    }
+}
+
+async fn batch_update_values_raw(
+    http_client: &reqwest::Client,
+    sheet_id: &str,
+    data: Vec<(String, Vec<Vec<String>>)>,
+) -> Result<(), WriteError> {
     lock!(next_write = WRITE_RATE_LIMIT; {
         sleep_until(*next_write).await;
 
