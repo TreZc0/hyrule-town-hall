@@ -194,7 +194,7 @@ impl TypeMapKey for NewRoomLock {
 enum PendingAsyncVod {}
 
 impl TypeMapKey for PendingAsyncVod {
-    type Value = HashMap<String, Option<String>>;
+    type Value = Arc<tokio::sync::Mutex<HashMap<u64, Option<String>>>>;
 }
 
 
@@ -1124,6 +1124,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
         .data::<StartggToken>(config.startgg)
         .data::<ChallongeApiKey>(config.challonge_api_key.clone())
         .data::<NewRoomLock>(new_room_lock)
+        .data::<PendingAsyncVod>(Arc::new(tokio::sync::Mutex::new(HashMap::new())))
         .data::<CleanShutdown>(clean_shutdown)
         .on_guild_create(false, |ctx, guild, _| Box::pin(async move {
             let mut transaction = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?;
@@ -1656,7 +1657,14 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             match interaction {
                 Interaction::Command(interaction) => {
                     let guild_id = interaction.guild_id.expect("Discord slash command called outside of a guild");
-                    if let Some(&Some(command_ids)) = ctx.data.read().await.get::<CommandIds>().and_then(|command_ids| command_ids.get(&guild_id)) {
+                    let command_ids = {
+                        let data = ctx.data.read().await;
+                        data.get::<CommandIds>()
+                            .and_then(|command_ids| command_ids.get(&guild_id))
+                            .copied()
+                            .flatten()
+                    };
+                    if let Some(command_ids) = command_ids {
                         if Some(interaction.data.id) == command_ids.ban {
                             send_draft_settings_page(ctx, interaction, "ban", 0).await?;
                         } else if interaction.data.id == command_ids.delete_after {
@@ -3544,21 +3552,26 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 )).await;
                             }
                         }
-                    } else if custom_id == "async_override_cancel" {
+                    } else if custom_id == "async_override_cancel" || custom_id.starts_with("async_override_cancel_") {
+                        if let Some(nonce) = custom_id.strip_prefix("async_override_cancel_").and_then(|nonce| nonce.parse().ok()) {
+                            pending_async_vods(ctx).await.lock().await.remove(&nonce);
+                        }
                         interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                             CreateInteractionResponseMessage::new()
                                 .content("Override cancelled.")
                                 .components(vec![])
                         )).await?;
                     } else if let Some(params) = custom_id.strip_prefix("async_override_result_") {
-                        // Confirm override of an existing async result: params = {race_id}_{async_part}_{total_seconds}
-                        if let Some((race_part_str, seconds_str)) = params.rsplit_once('_') {
-                            if let Some((race_id_str, async_part_str)) = race_part_str.rsplit_once('_') {
-                                if let (Ok(race_id), Ok(async_part), Ok(total_seconds)) = (
-                                    race_id_str.parse::<i64>(),
-                                    async_part_str.parse::<i32>(),
-                                    seconds_str.parse::<i64>(),
-                                ) {
+                        // Confirm override of an existing async result: params = {race_id}_{async_part}_{total_seconds}_{nonce}
+                        if let Some((result_params, nonce_str)) = params.rsplit_once('_') {
+                            if let Some((race_part_str, seconds_str)) = result_params.rsplit_once('_') {
+                                if let Some((race_id_str, async_part_str)) = race_part_str.rsplit_once('_') {
+                                    if let (Ok(race_id), Ok(async_part), Ok(total_seconds), Ok(nonce)) = (
+                                        race_id_str.parse::<i64>(),
+                                        async_part_str.parse::<i32>(),
+                                        seconds_str.parse::<i64>(),
+                                        nonce_str.parse::<u64>(),
+                                    ) {
                                     interaction.create_response(ctx, CreateInteractionResponse::Defer(
                                         CreateInteractionResponseMessage::new()
                                     )).await?;
@@ -3570,9 +3583,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         return Ok(());
                                     };
                                     let pg_interval = PgInterval { months: 0, days: 0, microseconds: total_seconds * 1_000_000 };
-                                    let link = ctx.data.write().await.get_mut::<PendingAsyncVod>()
-                                        .and_then(|cache| cache.remove(&format!("bracket_{}_{}", race_id, async_part)))
-                                        .flatten();
+                                    let link = pending_async_vods(ctx).await.lock().await.remove(&nonce).flatten();
 
                                     sqlx::query!(
                                         "UPDATE async_times SET finish_time = $1, recorded_at = NOW(), recorded_by = $2, link = $3 WHERE race_id = $4 AND async_part = $5",
@@ -3598,17 +3609,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         .content(format!("Override confirmed. Time recorded for {} half: {:02}:{:02}:{:02}", ordinal, h, m, s))
                                         .components(vec![])
                                     ).await?;
-                                    async_race::clear_message_with_button(ctx, interaction.channel_id, &format!("async_override_result_{}_{}_{}", race_id, async_part, total_seconds)).await;
+                                    async_race::clear_message_with_button(ctx, interaction.channel_id, custom_id).await;
+                                    }
                                 }
                             }
                         }
                     } else if let Some(params) = custom_id.strip_prefix("async_override_forfeit_") {
-                        // Confirm override of existing async result with a forfeit: params = {race_id}_{async_part}
-                        if let Some((race_id_str, async_part_str)) = params.rsplit_once('_') {
-                            if let (Ok(race_id), Ok(async_part)) = (race_id_str.parse::<i64>(), async_part_str.parse::<i32>()) {
-                                interaction.create_response(ctx, CreateInteractionResponse::Defer(
-                                    CreateInteractionResponseMessage::new()
-                                )).await?;
+                        // Confirm override of existing async result with a forfeit: params = {race_id}_{async_part}_{nonce}
+                        if let Some((race_part_str, nonce_str)) = params.rsplit_once('_') {
+                            if let Some((race_id_str, async_part_str)) = race_part_str.rsplit_once('_') {
+                                if let (Ok(race_id), Ok(async_part), Ok(nonce)) = (race_id_str.parse::<i64>(), async_part_str.parse::<i32>(), nonce_str.parse::<u64>()) {
+                                    interaction.create_response(ctx, CreateInteractionResponse::Defer(
+                                        CreateInteractionResponseMessage::new()
+                                    )).await?;
 
                                 let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
                                 let mut transaction = pool.begin().await?;
@@ -3617,9 +3630,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     return Ok(());
                                 };
 
-                                let link = ctx.data.write().await.get_mut::<PendingAsyncVod>()
-                                    .and_then(|cache| cache.remove(&format!("bracket_{}_{}", race_id, async_part)))
-                                    .flatten();
+                                let link = pending_async_vods(ctx).await.lock().await.remove(&nonce).flatten();
 
                                 sqlx::query!(
                                     "UPDATE async_times SET finish_time = NULL, recorded_at = NOW(), recorded_by = $1, link = $2 WHERE race_id = $3 AND async_part = $4",
@@ -3641,18 +3652,21 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     .content(format!("Override confirmed. Forfeit recorded for {} half.", ordinal))
                                     .components(vec![])
                                 ).await?;
-                                async_race::clear_message_with_button(ctx, interaction.channel_id, &format!("async_override_forfeit_{}_{}", race_id, async_part)).await;
+                                async_race::clear_message_with_button(ctx, interaction.channel_id, custom_id).await;
+                                }
                             }
                         }
                     } else if let Some(params) = custom_id.strip_prefix("async_override_qualifier_result_") {
-                        // Confirm override of existing qualifier result: params = {team_id}_{kind_int}_{total_seconds}
-                        if let Some((team_kind_str, seconds_str)) = params.rsplit_once('_') {
-                            if let Some((team_id_str, kind_str)) = team_kind_str.rsplit_once('_') {
-                                if let (Ok(team_id), Ok(kind_int), Ok(total_seconds)) = (
-                                    team_id_str.parse::<u64>(),
-                                    kind_str.parse::<i32>(),
-                                    seconds_str.parse::<i64>(),
-                                ) {
+                        // Confirm override of existing qualifier result: params = {team_id}_{kind_int}_{total_seconds}_{nonce}
+                        if let Some((result_params, nonce_str)) = params.rsplit_once('_') {
+                            if let Some((team_kind_str, seconds_str)) = result_params.rsplit_once('_') {
+                                if let Some((team_id_str, kind_str)) = team_kind_str.rsplit_once('_') {
+                                    if let (Ok(team_id), Ok(kind_int), Ok(total_seconds), Ok(nonce)) = (
+                                        team_id_str.parse::<u64>(),
+                                        kind_str.parse::<i32>(),
+                                        seconds_str.parse::<i64>(),
+                                        nonce_str.parse::<u64>(),
+                                    ) {
                                     if let Some(async_kind) = AsyncKind::from_i32(kind_int) {
                                         interaction.create_response(ctx, CreateInteractionResponse::Defer(
                                             CreateInteractionResponseMessage::new()
@@ -3665,9 +3679,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             return Ok(());
                                         };
                                         let pg_interval = PgInterval { months: 0, days: 0, microseconds: total_seconds * 1_000_000 };
-                                        let link = ctx.data.write().await.get_mut::<PendingAsyncVod>()
-                                            .and_then(|cache| cache.remove(&format!("qualifier_{}_{}", team_id, kind_int)))
-                                            .flatten();
+                                        let link = pending_async_vods(ctx).await.lock().await.remove(&nonce).flatten();
                                         sqlx::query!(
                                             "UPDATE async_teams SET submitted = NOW(), finish_time = $1 WHERE team = $2 AND kind = $3",
                                             pg_interval,
@@ -3699,16 +3711,18 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             .content(format!("Override confirmed. Time recorded for {}: {:02}:{:02}:{:02}", team_name, h, m, s))
                                             .components(vec![])
                                         ).await?;
-                                        async_race::clear_message_with_button(ctx, interaction.channel_id, &format!("async_override_qualifier_result_{}_{}_{}", team_id, kind_int, total_seconds)).await;
+                                        async_race::clear_message_with_button(ctx, interaction.channel_id, custom_id).await;
+                                        }
                                     }
                                 }
                             }
                         }
                     } else if let Some(params) = custom_id.strip_prefix("async_override_qualifier_forfeit_") {
-                        // Confirm override of existing qualifier result with a forfeit: params = {team_id}_{kind_int}
-                        if let Some((team_id_str, kind_str)) = params.rsplit_once('_') {
-                            if let (Ok(team_id), Ok(kind_int)) = (team_id_str.parse::<u64>(), kind_str.parse::<i32>()) {
-                                if let Some(async_kind) = AsyncKind::from_i32(kind_int) {
+                        // Confirm override of existing qualifier result with a forfeit: params = {team_id}_{kind_int}_{nonce}
+                        if let Some((team_kind_str, nonce_str)) = params.rsplit_once('_') {
+                            if let Some((team_id_str, kind_str)) = team_kind_str.rsplit_once('_') {
+                                if let (Ok(team_id), Ok(kind_int), Ok(nonce)) = (team_id_str.parse::<u64>(), kind_str.parse::<i32>(), nonce_str.parse::<u64>()) {
+                                    if let Some(async_kind) = AsyncKind::from_i32(kind_int) {
                                     interaction.create_response(ctx, CreateInteractionResponse::Defer(
                                         CreateInteractionResponseMessage::new()
                                     )).await?;
@@ -3719,6 +3733,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     let Some(_user) = verify_organizer_for_button(ctx, &interaction, &mut transaction).await? else {
                                         return Ok(());
                                     };
+
+                                    pending_async_vods(ctx).await.lock().await.remove(&nonce);
 
                                     sqlx::query!(
                                         "UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND kind = $2",
@@ -3745,7 +3761,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         .content(format!("Override confirmed. Forfeit recorded for {}.", team_name))
                                         .components(vec![])
                                     ).await?;
-                                    async_race::clear_message_with_button(ctx, interaction.channel_id, &format!("async_override_qualifier_forfeit_{}_{}", team_id, kind_int)).await;
+                                    async_race::clear_message_with_button(ctx, interaction.channel_id, custom_id).await;
+                                    }
                                 }
                             }
                         }
@@ -5640,26 +5657,26 @@ async fn handle_async_command(
 
                     if already_submitted {
                         let new_desc = if is_forfeit { "forfeit".to_string() } else { qual_time_str.as_ref().unwrap().clone() };
+                        let nonce = interaction.id.get();
 
                         let confirm_id = if is_forfeit {
-                            format!("async_override_qualifier_forfeit_{}_{}", team_id, async_kind as i32)
+                            format!("async_override_qualifier_forfeit_{}_{}_{}", team_id, async_kind as i32, nonce)
                         } else {
-                            format!("async_override_qualifier_result_{}_{}_{}", team_id, async_kind as i32, qual_total_seconds.unwrap())
+                            format!("async_override_qualifier_result_{}_{}_{}_{}", team_id, async_kind as i32, qual_total_seconds.unwrap(), nonce)
                         };
 
                         // Stash the vod link so the override-confirmation button click can persist it
                         // (it can't be safely encoded into the button's custom_id, see PendingAsyncVod)
-                        ctx.data.write().await.entry::<PendingAsyncVod>().or_default()
-                            .insert(format!("qualifier_{}_{}", team_id, async_kind as i32), link);
+                        transaction.rollback().await?;
+                        pending_async_vods(ctx).await.lock().await.insert(nonce, link);
 
                         interaction.edit_response(ctx, EditInteractionResponse::new()
                             .content(format!(
                                 "A result already exists for **{}**. Override with **{}**?",
                                 team_name, new_desc
                             ))
-                            .components(vec![override_confirm_buttons(confirm_id)])
+                            .components(vec![override_confirm_buttons(confirm_id, nonce)])
                         ).await?;
-                        transaction.rollback().await?;
                         return Ok(());
                     }
 
@@ -5770,29 +5787,29 @@ async fn handle_async_command(
             "forfeit".to_string()
         };
         let new_desc = if is_forfeit { "forfeit".to_string() } else { time_str.as_ref().unwrap().clone() };
+        let nonce = interaction.id.get();
 
         let display_order = get_display_order(&race, async_part as i32);
         let ordinal = match display_order { 1 => "1st", 2 => "2nd", 3 => "3rd", n => &format!("{}th", n) };
 
         let confirm_id = if is_forfeit {
-            format!("async_override_forfeit_{}_{}", race_id, async_part)
+            format!("async_override_forfeit_{}_{}_{}", race_id, async_part, nonce)
         } else {
-            format!("async_override_result_{}_{}_{}", race_id, async_part, total_seconds.unwrap())
+            format!("async_override_result_{}_{}_{}_{}", race_id, async_part, total_seconds.unwrap(), nonce)
         };
 
         // Stash the vod link so the override-confirmation button click can persist it
         // (it can't be safely encoded into the button's custom_id, see PendingAsyncVod)
-        ctx.data.write().await.entry::<PendingAsyncVod>().or_default()
-            .insert(format!("bracket_{}_{}", race_id, async_part), link);
+        transaction.rollback().await?;
+        pending_async_vods(ctx).await.lock().await.insert(nonce, link);
 
         interaction.edit_response(ctx, EditInteractionResponse::new()
             .content(format!(
                 "A result already exists for the {} half of this async: **{}**. Override with **{}**?",
                 ordinal, existing_desc, new_desc
             ))
-            .components(vec![override_confirm_buttons(confirm_id)])
+            .components(vec![override_confirm_buttons(confirm_id, nonce)])
         ).await?;
-        transaction.rollback().await?;
         return Ok(());
     }
 
@@ -6083,9 +6100,16 @@ async fn verify_organizer_for_button(
     Ok(Some(user))
 }
 
-fn override_confirm_buttons(confirm_id: impl Into<String>) -> CreateActionRow {
+async fn pending_async_vods(ctx: &DiscordCtx) -> Arc<tokio::sync::Mutex<HashMap<u64, Option<String>>>> {
+    let data = ctx.data.read().await;
+    data.get::<PendingAsyncVod>()
+        .expect("pending async VOD cache missing from Discord context")
+        .clone()
+}
+
+fn override_confirm_buttons(confirm_id: impl Into<String>, nonce: u64) -> CreateActionRow {
     CreateActionRow::Buttons(vec![
         CreateButton::new(confirm_id.into()).label("Yes, override").style(ButtonStyle::Danger),
-        CreateButton::new("async_override_cancel").label("Cancel").style(ButtonStyle::Secondary),
+        CreateButton::new(format!("async_override_cancel_{nonce}")).label("Cancel").style(ButtonStyle::Secondary),
     ])
 }

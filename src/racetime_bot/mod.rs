@@ -89,6 +89,10 @@ impl<T, E: std::error::Error + Send + Sync + 'static> ResultExt for Result<T, E>
 
 #[cfg(unix)] const PYTHON: &str = "python3";
 #[cfg(windows)] const PYTHON: &str = "py";
+#[cfg(unix)] const ALTTPR_PYTHON: &str = "/opt/alttpr/.venv/bin/python";
+#[cfg(windows)] const ALTTPR_PYTHON: &str = "/opt/alttpr/.venv/Scripts/python.exe";
+#[cfg(unix)] const OWR_PYTHON: &str = "/opt/owr/.venv/bin/python";
+#[cfg(windows)] const OWR_PYTHON: &str = "/opt/owr/.venv/Scripts/python.exe";
 
 pub(crate) const CATEGORY: &str = "alttpr";
 
@@ -1959,8 +1963,8 @@ impl GlobalState {
             const MAX_RETRIES: u8 = 4;
 
             for attempt in 0..=MAX_RETRIES {
-                let output = Command::new(PYTHON)
-                    .current_dir("../alttpr")
+                let output = Command::new(ALTTPR_PYTHON)
+                    .current_dir("/opt/alttpr")
                     .arg("DungeonRandomizer.py")
                     .arg("--customizer")
                     .arg(yaml_path)
@@ -2068,7 +2072,7 @@ impl GlobalState {
             const MAX_RETRIES: u8 = 4;
 
             for attempt in 0..=MAX_RETRIES {
-                let output = Command::new(PYTHON)
+                let output = Command::new(OWR_PYTHON)
                     .current_dir("/opt/owr")
                     .arg("DungeonRandomizer.py")
                     .arg("--customizer")
@@ -2305,8 +2309,8 @@ impl GlobalState {
             
             for attempt in 0..=MAX_RETRIES {
                 let output = match timeout(Duration::from_secs(180), async {
-                    Command::new(PYTHON)
-                        .current_dir("../alttpr")
+                    Command::new(ALTTPR_PYTHON)
+                        .current_dir("/opt/alttpr")
                         .arg("Mystery.py")
                         .arg("--weights")
                         .arg(yaml_path)
