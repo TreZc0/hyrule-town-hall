@@ -935,6 +935,10 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 .then_with(|| team1.cmp(&team2))
             }
             QualifierKind::Single { show_times: true } => {
+                // While an async window is still open, times are hidden from non-organizers
+                // (rendered as "—"), so the sort must not leak them via row order either.
+                let hide_time = !is_organizer && data.qualifier_score_hiding == QualifierScoreHiding::AsyncOnly && !all_qualifiers_ended;
+
                 #[derive(PartialEq, Eq, PartialOrd, Ord)]
                 enum QualificationOrder {
                     Finished(Option<i16>, Duration),
@@ -943,9 +947,13 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                 }
 
                 impl QualificationOrder {
-                    fn new(qualification: Qualification, members: &[SignupsMember]) -> Self {
+                    fn new(qualification: Qualification, members: &[SignupsMember], hide_time: bool) -> Self {
                         match qualification {
                             Qualification::Single { qualified: false } | Qualification::TriforceBlitz { qualified: false, .. } => Self::NotYetQualified,
+                            // Displayed time/pieces-tiebreaker are masked while hidden, so DNF vs finished
+                            // (indistinguishable as "—" to the viewer) must not affect ordering either.
+                            Qualification::Single { qualified: true } if hide_time => Self::Finished(None, Duration::default()),
+                            Qualification::TriforceBlitz { qualified: true, pieces } if hide_time => Self::Finished(Some(-pieces), Duration::default()),
                             Qualification::Single { qualified: true } => if let Some(time) = members.iter().try_fold(Duration::default(), |acc, member| Some(acc + member.qualifier_time?)) {
                                 Self::Finished(None, time)
                             } else {
@@ -964,7 +972,7 @@ pub(crate) async fn signups_sorted(transaction: &mut Transaction<'_, Postgres>, 
                     }
                 }
 
-                QualificationOrder::new(qualification1.clone(), members1).cmp(&QualificationOrder::new(qualification2.clone(), members2))
+                QualificationOrder::new(qualification1.clone(), members1, hide_time).cmp(&QualificationOrder::new(qualification2.clone(), members2, hide_time))
                 .then_with(|| team1.cmp(&team2))
             }
             QualifierKind::Score(score_kind) => {
