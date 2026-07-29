@@ -141,7 +141,7 @@ fn confirmed_volunteer_signup_tooltip(confirmed_signups: &[&Signup], pending_sig
         .join("\n")
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Source {
     Manual,
     Challonge {
@@ -3315,6 +3315,19 @@ pub(crate) async fn race_table(
     })
 }
 
+/// Progress of a race-import job started via [`import_races_post`], tracked in [`RaceImportJobs`]
+/// so the triggering request can return immediately instead of blocking on the whole batch (which
+/// can involve many sequential Discord API calls, one per match) and the client can poll for status.
+pub(crate) enum RaceImportStatus {
+    Running { total: usize, completed: usize, failed: Vec<(String, String)> },
+    Done { total: usize, completed: usize, failed: Vec<(String, String)> },
+}
+
+/// In-memory job map for background race imports, analogous to `event::PracticeSeeds`. Entries are
+/// intentionally never removed by the status page itself (only overwritten by a later import job),
+/// so repeated status-page reloads after completion stay safe instead of 404ing.
+pub(crate) type RaceImportJobs = Arc<tokio::sync::RwLock<HashMap<Uuid, RaceImportStatus>>>;
+
 pub(crate) async fn import_races_form(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &DiscordCtx, config: &Config, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: event::Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
     let header = event.header(&mut transaction, me.as_ref(), Tab::Races, true).await?;
     let form = match event.match_source() {
@@ -3486,7 +3499,7 @@ pub(crate) struct ImportRacesForm {
 }
 
 #[rocket::post("/event/<series>/<event>/races/import", data = "<form>")]
-pub(crate) async fn import_races_post(discord_ctx: &State<RwFuture<DiscordCtx>>, config: &State<Config>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, ImportRacesForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn import_races_post(discord_ctx: &State<RwFuture<DiscordCtx>>, config: &State<Config>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, global_state: &State<Arc<racetime_bot::GlobalState>>, race_import_jobs: &State<RaceImportJobs>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, ImportRacesForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let event = event::Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
@@ -3554,18 +3567,94 @@ pub(crate) async fn import_races_post(discord_ctx: &State<RwFuture<DiscordCtx>>,
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(import_races_form(transaction, http_client, &*discord_ctx.read().await, config, Some(me), uri, csrf.as_ref(), event, form.context).await?)
         } else {
-            for race in races {
-                transaction = import_race(transaction, &*discord_ctx.read().await, race).await?;
-            }
+            // Nothing written to `transaction` beyond this point, so release it before starting
+            // the (potentially long-running, one-Discord-call-per-match) import work below.
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(event::races(event.series, &*event.event))))
+            let job_id = Uuid::new_v4();
+            race_import_jobs.write().await.insert(job_id, RaceImportStatus::Running { total: races.len(), completed: 0, failed: Vec::default() });
+            let pool = pool.inner().clone();
+            let discord_ctx = discord_ctx.inner().clone();
+            let new_room_lock = global_state.new_room_lock();
+            let jobs = Arc::clone(race_import_jobs.inner());
+            tokio::spawn(async move {
+                lock!(new_room_lock = new_room_lock; {
+                    for race in races {
+                        let label = format!("{:?}", race.source);
+                        let result = import_race(&pool, &*discord_ctx.read().await, race).await;
+                        let mut jobs = jobs.write().await;
+                        if let Some(RaceImportStatus::Running { completed, failed, .. }) = jobs.get_mut(&job_id) {
+                            match result {
+                                Ok(()) => *completed += 1,
+                                Err(e) => failed.push((label, e.to_string())),
+                            }
+                        }
+                    }
+                });
+                let mut jobs = jobs.write().await;
+                if let Some(RaceImportStatus::Running { total, completed, failed }) = jobs.remove(&job_id) {
+                    jobs.insert(job_id, RaceImportStatus::Done { total, completed, failed });
+                }
+            });
+            let job_id = job_id.to_string();
+            RedirectOrContent::Redirect(Redirect::to(uri!(import_races_status(event.series, &*event.event, job_id.as_str()))))
         }
     } else {
         RedirectOrContent::Content(import_races_form(transaction, http_client, &*discord_ctx.read().await, config, Some(me), uri, csrf.as_ref(), event, form.context).await?)
     })
 }
 
-async fn import_race<'a>(mut transaction: Transaction<'a, Postgres>, discord_ctx: &DiscordCtx, race: Race) -> Result<Transaction<'a, Postgres>, event::Error> {
+#[rocket::get("/event/<series>/<event>/races/import/<job_id>")]
+pub(crate) async fn import_races_status(pool: &State<PgPool>, race_import_jobs: &State<RaceImportJobs>, me: Option<User>, uri: Origin<'_>, series: Series, event: &str, job_id: &str) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+    let job_id = Uuid::parse_str(job_id).map_err(|_| StatusOrError::Status(Status::NotFound))?;
+    let status = race_import_jobs.read().await.get(&job_id).map(|status| match status {
+        RaceImportStatus::Running { total, completed, failed } => (false, *total, *completed, failed.clone()),
+        RaceImportStatus::Done { total, completed, failed } => (true, *total, *completed, failed.clone()),
+    });
+    let (done, total, completed, failed) = status.ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    let mut transaction = pool.begin().await?;
+    let data = event::Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let header = data.header(&mut transaction, me.as_ref(), Tab::Races, true).await?;
+    let chests = data.chests().await?;
+    let content = if done {
+        html! {
+            : header;
+            article {
+                h2 : "Race Import Complete";
+                p : format!("{completed} of {total} races imported.");
+                @if !failed.is_empty() {
+                    p : "The following matches could not be imported:";
+                    ul {
+                        @for (label, error) in &failed {
+                            li : format!("{label}: {error}");
+                        }
+                    }
+                    p : "You can try importing again — matches that already imported successfully will be skipped.";
+                }
+                a(href = uri!(event::races(series, event)).to_string()) : "Back to races";
+            }
+        }
+    } else {
+        html! {
+            : header;
+            script {
+                : "setTimeout(function(){ location.reload(); }, 2000);";
+            }
+            article {
+                h2 : "Importing Races…";
+                p : format!("{completed} of {total} races imported so far. This page will refresh automatically.");
+            }
+        }
+    };
+    Ok(page(transaction, &me, &uri, PageStyle { chests, ..PageStyle::default() }, "Import Races", content).await?)
+}
+
+/// Imports a single match (and all of its games) in its own transaction, committing as soon as
+/// this match is saved. This keeps a failure partway through a larger batch from rolling back
+/// matches that already imported successfully, and lets already-imported matches be visible
+/// (and usable by race room commands) without waiting for the rest of the batch.
+async fn import_race(pool: &PgPool, discord_ctx: &DiscordCtx, race: Race) -> Result<(), event::Error> {
+    let mut transaction = pool.begin().await?;
     let game_count = race.game.unwrap_or(1);
     let mut scheduling_thread = None;
     for game in 1..=game_count {
@@ -3582,7 +3671,8 @@ async fn import_race<'a>(mut transaction: Transaction<'a, Postgres>, discord_ctx
         }
         race.save(&mut transaction).await?;
     }
-    Ok(transaction)
+    transaction.commit().await?;
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -3730,7 +3820,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                             match startgg::races_to_import(&mut transaction, &http_client, &config, &event, event_slug).await {
                                 Ok((races, _)) => {
                                     for race in races {
-                                        transaction = import_race(transaction, &*discord_ctx.read().await, race).await?;
+                                        import_race(&db_pool, &*discord_ctx.read().await, race).await?;
                                     }
                                     break
                                 }

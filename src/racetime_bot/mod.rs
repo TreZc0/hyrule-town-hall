@@ -1709,6 +1709,13 @@ impl GlobalState {
         }
     }
 
+    /// Locked while event rooms are being created. Also used to serialize manual race
+    /// imports against the automatic import loop, and against each other, so they don't
+    /// race to create duplicate Discord scheduling threads for the same match.
+    pub(crate) fn new_room_lock(&self) -> Arc<Mutex<()>> {
+        Arc::clone(&self.new_room_lock)
+    }
+
     pub(crate) fn roll_twwr_seed(self: Arc<Self>, version: Option<VersionedBranch>, settings_string: String, unlock_spoiler_log: UnlockSpoilerLog) -> mpsc::Receiver<SeedRollUpdate> {
         let (update_tx, update_rx) = mpsc::channel(128);
         tokio::spawn(async move {

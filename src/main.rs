@@ -269,6 +269,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             .await?;
         let seed_metadata = Arc::default();
         let practice_seeds: event::PracticeSeeds = Arc::new(tokio::sync::RwLock::new(HashMap::default()));
+        let race_import_jobs: cal::RaceImportJobs = Arc::new(tokio::sync::RwLock::new(HashMap::default()));
         let ootr_api_client = Arc::new(ootr_web::ApiClient::new(http_client.clone(), config.ootr_api_key.clone(), config.ootr_api_key_encryption.clone()));
         let rocket_builder = http::rocket(
             db_pool.clone(),
@@ -305,6 +306,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
         let rocket = rocket_builder
             .manage(Arc::clone(&global_state))
             .manage(Arc::clone(&practice_seeds))
+            .manage(Arc::clone(&race_import_jobs))
             .ignite().await?;
         let discord_builder = discord_bot::configure_builder(discord_builder, global_state.clone(), db_pool.clone(), http_client.clone(), config.clone(), Arc::clone(&new_room_lock), Arc::clone(&clean_shutdown), rocket.shutdown());
         #[cfg(unix)] let unix_listener = unix_socket::listen(rocket.shutdown(), clean_shutdown, global_state.clone());
