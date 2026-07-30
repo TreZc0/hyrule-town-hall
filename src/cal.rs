@@ -3603,7 +3603,7 @@ pub(crate) async fn import_races_post(discord_ctx: &State<RwFuture<DiscordCtx>>,
     })
 }
 
-#[rocket::get("/event/<series>/<event>/races/import/<job_id>")]
+#[rocket::get("/event/<series>/<event>/races/import/status/<job_id>")]
 pub(crate) async fn import_races_status(pool: &State<PgPool>, race_import_jobs: &State<RaceImportJobs>, me: Option<User>, uri: Origin<'_>, series: Series, event: &str, job_id: &str) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let job_id = Uuid::parse_str(job_id).map_err(|_| StatusOrError::Status(Status::NotFound))?;
     let status = race_import_jobs.read().await.get(&job_id).map(|status| match status {
