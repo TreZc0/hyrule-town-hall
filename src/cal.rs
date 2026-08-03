@@ -2688,7 +2688,7 @@ pub(crate) async fn race_table(
         }
         false
     };
-    let has_buttons = options.can_edit;
+    let has_buttons = options.can_edit || user.is_some_and(|user| user.is_global_admin());
     let now = Utc::now();
     let displayed_race_ids = races.iter().map(|race| i64::from(race.id)).collect::<Vec<_>>();
     let shared_rooms = if displayed_race_ids.is_empty() {
@@ -3093,7 +3093,7 @@ pub(crate) async fn race_table(
                         @if has_buttons {
                             td {
                                 @if let Some(user) = user {
-                                    @let is_admin = u64::from(user.id) == User::GLOBAL_ADMIN_USER_IDS[0];
+                                    @let is_admin = user.is_global_admin();
                                     @let is_organizer = event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(user));
                                     @if is_admin || is_organizer {
                                         a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
@@ -4256,7 +4256,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
     let mut errors = ctx.as_ref().map(|ctx| ctx.errors().collect()).unwrap_or_default();
     let form = if me.is_some() {
         full_form(uri!(edit_race_post(event.series, &*event.event, race.id, redirect_to)), csrf, html! {
-            @if is_organizer && race.is_custom() {
+            @if (is_organizer || is_admin) && race.is_custom() {
                 fieldset {
                     legend : "Custom race";
                     : form_field("custom_title", &mut errors, html! {
@@ -4579,9 +4579,9 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
             }
         }
         @if let Some(ref me) = me {
-            @if is_organizer {
+            @if is_organizer || is_admin {
                 fieldset {
-                    legend : "Race Schedule (Organizers Only)";
+                    legend : "Race Schedule";
                     @match race.schedule {
                         RaceSchedule::Unscheduled => {
                             p : "Not yet scheduled";
@@ -4917,7 +4917,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
         let can_edit_race_room = is_organizer || is_admin;
         let uses_primary_restream_settings = race.companion_primary_id(&mut transaction).await?.is_some();
 
-        if is_organizer && race.is_custom() && value.custom_title.trim().is_empty() {
+        if (is_organizer || is_admin) && race.is_custom() && value.custom_title.trim().is_empty() {
             form.context.push_error(form::Error::validation("Custom races need a title.").with_name("custom_title"));
         }
 
@@ -4988,13 +4988,13 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
             }
         }
         
-        // Parse and validate start dates if user is an organizer
+        // Parse and validate start dates if user is an organizer or global admin
         let mut new_start_date = None;
         let mut new_async_start1_date = None;
         let mut new_async_start2_date = None;
         let mut new_async_start3_date = None;
-        
-        if is_organizer {
+
+        if is_organizer || is_admin {
             // Parse live race start date
             if !value.start_date.is_empty() {
                 if let Ok(naive_datetime) = NaiveDateTime::parse_from_str(&value.start_date, "%Y-%m-%d %H:%M") {
@@ -5370,8 +5370,8 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 _ => None,
             };
 
-            // Update race schedule with new start dates if organizer
-            if is_organizer {
+            // Update race schedule with new start dates if organizer or global admin
+            if is_organizer || is_admin {
                 match &mut race.schedule {
                     RaceSchedule::Unscheduled => {
                         if let Some(new_start) = new_start_date {
@@ -5408,16 +5408,6 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                         *room3 = (!value.async_room3.is_empty()).then(|| Url::parse(&value.async_room3).expect("validated"));
                     }
                 }
-            } else if is_admin {
-                match &mut race.schedule {
-                    RaceSchedule::Unscheduled => {}
-                    RaceSchedule::Live { room, .. } => *room = (!value.room.is_empty()).then(|| Url::parse(&value.room).expect("validated")),
-                    RaceSchedule::Async { room1, room2, room3, .. } => {
-                        *room1 = (!value.async_room1.is_empty()).then(|| Url::parse(&value.async_room1).expect("validated"));
-                        *room2 = (!value.async_room2.is_empty()).then(|| Url::parse(&value.async_room2).expect("validated"));
-                        *room3 = (!value.async_room3.is_empty()).then(|| Url::parse(&value.async_room3).expect("validated"));
-                    }
-                }
             }
             race.last_edited_by = Some(me.id);
             race.last_edited_at = Some(Utc::now());
@@ -5426,7 +5416,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 race.ignored = value.is_canceled;
             }
             let original_custom_title = race.custom_title.clone();
-            if is_organizer && race.is_custom() {
+            if (is_organizer || is_admin) && race.is_custom() {
                 race.custom_title = Some(value.custom_title.trim().to_owned());
                 race.custom_create_room = value.custom_create_room;
             }
@@ -5481,7 +5471,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 RaceSchedule::Live { start, .. } => Some(*start),
                 _ => None,
             };
-            if is_organizer && !race.ignored
+            if (is_organizer || is_admin) && !race.ignored
                 && new_schedule_start.is_some()
                 && new_schedule_start != old_schedule_start
             {

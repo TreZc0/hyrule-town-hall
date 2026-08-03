@@ -159,12 +159,20 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, http_client:
                             });
                             @if let Some((ref slug, ref chunks)) = startgg_bulk_add {
                                 : form_field("startgg_bulk_add", &mut errors, html! {
-                                    a(href = format!("https://www.start.gg/admin/tournament/{}/bulk-add", slug), target = "_blank", rel = "noopener noreferrer", class = "button") : "Open start.gg Bulk Add";
+                                    a(
+                                        href = format!("https://www.start.gg/admin/tournament/{}/bulk-add", slug),
+                                        target = "_blank",
+                                        rel = "noopener noreferrer",
+                                        class = "button",
+                                        onclick = "return confirm('Reminder: on the start.gg bulk-add page, UNCHECK \\'Link existing players\\' on tab 2, and CHECK \\'Added\\' for every event shown on tab 3.');",
+                                    ) : "Open start.gg Bulk Add";
                                     : " ";
                                     @for (label, chunk_json) in chunks {
                                         button(type = "button", class = "button startgg-bulk-add-copy", data_names = chunk_json) : label;
                                         : " ";
                                     }
+                                    br;
+                                    strong : "Reminder: on the start.gg bulk-add page, uncheck \"Link existing players\" on tab 2, and check \"Added\" for every event shown on tab 3.";
                                     label(class = "help") : "(Opens the start.gg bulk-add page in a new tab. Copy seeds and paste into the search field on that page to add in seeding order.)";
                                     script(src = static_url!("startgg-bulk-add.js")) {}
                                 });
