@@ -39,6 +39,7 @@ pub(crate) mod teams;
 pub(crate) mod roles;
 pub(crate) mod asyncs;
 pub(crate) mod qualifiers;
+pub(crate) mod speedgaming_export;
 pub(crate) mod zsr_export;
 
 #[derive(Debug, Clone, Copy, sqlx::Type)]
@@ -1058,6 +1059,11 @@ impl<'a> Data<'a> {
                                 a(class = "button", href = uri!(zsr_export::get(self.series, &*self.event))) : "ZSR Export";
                             }
                         }
+                        @if let Tab::SpeedGamingExport = tab {
+                            a(class = "button selected", href? = is_subpage.then(|| uri!(speedgaming_export::get(self.series, &*self.event)))) : "SG Export";
+                        } else {
+                            a(class = "button", href = uri!(speedgaming_export::get(self.series, &*self.event))) : "SG Export";
+                        }
                     }
                 }
             }
@@ -1090,6 +1096,7 @@ pub(crate) enum Tab {
     Setup,
     Asyncs,
     Qualifiers,
+    SpeedGamingExport,
     ZsrExport,
 }
 

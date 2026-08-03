@@ -3,6 +3,7 @@ use {
         config::ConfigRaceTime,
         prelude::*,
         racetime_bot::{AlttprDeRaceOptions, CleanShutdown, CrosskeysRaceOptions, GlobalState, RadioChoiceValue},
+        speedgaming_export,
         async_race::{self, Error as AsyncRaceError},
         volunteer_requests,
     }, serenity::all::{
@@ -2325,7 +2326,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
-                                if let Some(speedgaming_slug) = &event.speedgaming_slug {
+                                if speedgaming_export::LEGACY_IMPORT_ENABLED && let Some(speedgaming_slug) = &event.speedgaming_slug {
                                     let response_content = if was_scheduled {
                                         format!("Please contact a tournament organizer to reschedule this race.")
                                     } else {
@@ -2491,7 +2492,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         })
                                     )).await?;
                                     transaction.rollback().await?;
-                                } else if let Some(speedgaming_slug) = &event.speedgaming_slug {
+                                } else if speedgaming_export::LEGACY_IMPORT_ENABLED && let Some(speedgaming_slug) = &event.speedgaming_slug {
                                     let response_content = if was_scheduled {
                                         format!("Please contact a tournament organizer to reschedule this race.")
                                     } else {
@@ -2975,7 +2976,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None, true, false).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
-                                if event.speedgaming_slug.is_some() {
+                                if speedgaming_export::LEGACY_IMPORT_ENABLED && event.speedgaming_slug.is_some() {
                                     interaction.edit_response(ctx, EditInteractionResponse::new()
                                         .content("Please contact a tournament organizer to reschedule this race.")
                                     ).await?;
@@ -4234,7 +4235,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             let event = race.event(&mut transaction).await?;
                             let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                             let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
-                            if let Some(speedgaming_slug) = &event.speedgaming_slug {
+                            if speedgaming_export::LEGACY_IMPORT_ENABLED && let Some(speedgaming_slug) = &event.speedgaming_slug {
                                 let response_content = if was_scheduled {
                                     format!("Please contact a tournament organizer to reschedule this race.")
                                 } else {
@@ -5013,7 +5014,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
                 content.push(' ');
             }
             content.push("match.");
-            if let Some(speedgaming_slug) = &event.speedgaming_slug {
+            if speedgaming_export::LEGACY_IMPORT_ENABLED && let Some(speedgaming_slug) = &event.speedgaming_slug {
                 content.push(" Use <https://speedgaming.org/");
                 content.push(speedgaming_slug);
                 if game_count > 1 {

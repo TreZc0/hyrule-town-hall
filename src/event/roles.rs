@@ -20,6 +20,7 @@ use {
         time::format_datetime,
         user::User,
         series::Series,
+        speedgaming_export,
         game,
         cal::{Race, RaceSchedule, Entrants, Entrant},
         prelude::DiscordCtx,
@@ -1000,7 +1001,7 @@ impl Signup {
     }
 
     /// Auto-reject overlapping signups for a user when they are confirmed for a race
-    async fn auto_reject_overlapping_signups(
+    pub(crate) async fn auto_reject_overlapping_signups(
         pool: &mut Transaction<'_, Postgres>,
         confirmed_signup_id: Id<Signups>,
         user_id: Id<Users>,
@@ -3285,6 +3286,7 @@ pub(crate) struct SignupForMatchForm {
 #[rocket::post("/event/<series>/<event>/races/<race_id>/signup", data = "<form>")]
 pub(crate) async fn signup_for_match(
     pool: &State<PgPool>,
+    http_client: &State<reqwest::Client>,
     discord_ctx: &State<RwFuture<DiscordCtx>>,
     me: User,
     series: Series,
@@ -3390,6 +3392,11 @@ pub(crate) async fn signup_for_match(
                 }
             }
             transaction.commit().await?;
+
+            speedgaming_export::schedule_sync(
+                pool.inner().clone(),
+                http_client.inner().clone(),
+            );
 
             // Update the volunteer info post to reflect the new signup
             let _ = volunteer_requests::update_volunteer_post_for_race(

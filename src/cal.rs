@@ -38,6 +38,7 @@ use {
         prelude::*,
         racetime_bot,
         sheets,
+        speedgaming_export,
         weekly::{WeeklySchedule, WeeklySchedules},
     },
     crate::id::RoleBindings,
@@ -3880,7 +3881,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                         }
                     }
                 }
-                if let Some(ref speedgaming_slug) = event.speedgaming_slug {
+                if speedgaming_export::LEGACY_IMPORT_ENABLED && let Some(ref speedgaming_slug) = event.speedgaming_slug {
                     let schedule = match sgl::schedule(&http_client, speedgaming_slug).await {
                         Ok(s) => s,
                         Err(e) => {

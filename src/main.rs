@@ -65,6 +65,7 @@ mod racetime_bot;
 mod seed;
 mod series;
 mod sheets;
+mod speedgaming_export;
 mod startgg;
 mod team;
 mod time;
@@ -153,6 +154,7 @@ enum Error {
     #[error(transparent)] Rocket(#[from] rocket::Error),
     #[error(transparent)] Serenity(#[from] serenity::Error),
     #[error(transparent)] Sql(#[from] sqlx::Error),
+    #[error(transparent)] SpeedGamingExport(#[from] speedgaming_export::Error),
     #[error(transparent)] Task(#[from] tokio::task::JoinError),
     #[error(transparent)] VolunteerRequests(#[from] volunteer_requests::Error),
     #[cfg(unix)] #[error(transparent)] Wheel(#[from] wheel::Error),
@@ -330,7 +332,12 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
         });
-        let zsr_export_task = tokio::spawn(zsr_export_manager(db_pool.clone(), http_client, rocket.shutdown())).map(|res| match res {
+        let zsr_export_task = tokio::spawn(zsr_export_manager(db_pool.clone(), http_client.clone(), rocket.shutdown())).map(|res| match res {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(e),
+            Err(e) => Err(Error::Task(e)),
+        });
+        let speedgaming_export_task = tokio::spawn(speedgaming_export_manager(db_pool.clone(), http_client, rocket.shutdown())).map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
@@ -361,7 +368,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Err(e) => Err(Error::from(e)),
         });
         #[cfg(not(unix))] let unix_socket_task = future::ok(());
-        let ((), (), (), (), (), (), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, async_race_task, volunteer_request_task, zsr_export_task, weekly_race_task, deadline_task, rocket_task, unix_socket_task)?;
+        let ((), (), (), (), (), (), (), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, async_race_task, volunteer_request_task, zsr_export_task, speedgaming_export_task, weekly_race_task, deadline_task, rocket_task, unix_socket_task)?;
     }
     Ok(())
 }
@@ -432,6 +439,28 @@ async fn zsr_export_manager(
             _ = interval.tick() => {
                 if let Err(e) = zsr_export::check_and_sync_all_exports(&db_pool, &http_client).await {
                     eprintln!("Error syncing ZSR exports: {}", e);
+                }
+            }
+            _ = shutdown.clone() => break,
+        }
+    }
+
+    Ok(())
+}
+
+/// Background task for exporting races and volunteer requests to SpeedGaming.
+async fn speedgaming_export_manager(
+    db_pool: PgPool,
+    http_client: reqwest::Client,
+    shutdown: rocket::Shutdown,
+) -> Result<(), Error> {
+    let mut interval = tokio::time::interval(Duration::from_secs(5 * 60));
+
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                if let Err(error) = speedgaming_export::check_and_sync_all_exports(&db_pool, &http_client).await {
+                    eprintln!("Error syncing SpeedGaming exports: {error}");
                 }
             }
             _ = shutdown.clone() => break,

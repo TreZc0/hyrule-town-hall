@@ -910,6 +910,11 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         event::zsr_export::delete_export,
         event::zsr_export::sync_export,
         event::zsr_export::sync_all,
+        event::speedgaming_export::get,
+        event::speedgaming_export::add_export,
+        event::speedgaming_export::update_export,
+        event::speedgaming_export::delete_export,
+        event::speedgaming_export::sync_all,
     ])
     .mount("/static", FileServer::without_index("assets/static"))
     .register("/", rocket::catchers![
