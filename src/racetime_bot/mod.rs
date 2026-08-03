@@ -2269,12 +2269,10 @@ impl GlobalState {
                 .map_err(|e| RollError::Avianart(e.to_string()))?;
             let seed_data = client.wait_for_seed(&hash).await
                 .map_err(|e| RollError::Avianart(e.to_string()))?;
-            let seed_hash = if let Some(ref spoiler) = seed_data.spoiler {
-                Some(avianart::parse_file_hash(&spoiler.meta.hash)
-                    .map_err(|e| RollError::Avianart(e.to_string()))?)
-            } else {
-                None
-            };
+            let seed_hash = seed_data.file_hash()
+                .map(avianart::parse_file_hash)
+                .transpose()
+                .map_err(|e| RollError::Avianart(e.to_string()))?;
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
                     file_hash: None,

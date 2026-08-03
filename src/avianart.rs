@@ -30,6 +30,9 @@ pub(crate) struct AvianartPermlinkResponse {
     pub(crate) status: Option<String>,
     pub(crate) message: Option<String>,
     pub(crate) spoiler: Option<AvianartSpoiler>,
+    // Native Avianart seeds expose the file-select hash here, while seeds
+    // generated on other platforms may expose it in spoiler.meta.hash.
+    pub(crate) fshash: Option<String>,
     // Present when generation is complete; absence means still generating
     #[allow(dead_code)]
     patch: Option<serde_json::Value>, // present when generation is complete
@@ -42,7 +45,7 @@ pub(crate) struct AvianartSpoiler {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct SpoilerMeta {
-    pub(crate) hash: String,
+    pub(crate) hash: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -100,6 +103,15 @@ impl AvianartClient {
     }
 }
 
+impl AvianartPermlinkResponse {
+    pub(crate) fn file_hash(&self) -> Option<&str> {
+        self.spoiler
+            .as_ref()
+            .and_then(|spoiler| spoiler.meta.hash.as_deref())
+            .or(self.fshash.as_deref())
+    }
+}
+
 pub(crate) fn parse_file_hash(hash_str: &str) -> Result<[String; 5], AvianartError> {
     let parts: Vec<String> = hash_str
         .split(", ")
@@ -109,4 +121,38 @@ pub(crate) fn parse_file_hash(hash_str: &str) -> Result<[String; 5], AvianartErr
         count: v.len(),
         raw: hash_str.to_owned(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_hash_from_spoiler_meta() {
+        let envelope: AvianartEnvelope<AvianartPermlinkResponse> = serde_json_inner::from_str(r#"{
+            "status": 200,
+            "response": {
+                "status": null,
+                "message": "",
+                "spoiler": {"meta": {"hash": "Bomb, Powder, Rod, Ocarina, Bug Net"}}
+            }
+        }"#).unwrap();
+
+        assert_eq!(envelope.response.file_hash(), Some("Bomb, Powder, Rod, Ocarina, Bug Net"));
+    }
+
+    #[test]
+    fn file_hash_from_fshash_when_spoiler_meta_hash_is_null() {
+        let envelope: AvianartEnvelope<AvianartPermlinkResponse> = serde_json_inner::from_str(r#"{
+            "status": 200,
+            "response": {
+                "status": null,
+                "message": "",
+                "fshash": "Big Key, Heart, Mirror, Bugnet, Compass",
+                "spoiler": {"meta": {"hash": null}}
+            }
+        }"#).unwrap();
+
+        assert_eq!(envelope.response.file_hash(), Some("Big Key, Heart, Mirror, Bugnet, Compass"));
+    }
 }
