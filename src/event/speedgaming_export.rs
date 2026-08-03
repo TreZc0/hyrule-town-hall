@@ -99,14 +99,19 @@ pub(crate) async fn get(
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let header = event_data.header(&mut transaction, Some(&me), Tab::SpeedGamingExport, false).await?;
     let exports = ExportConfig::for_event(&mut transaction, series, &event).await?;
-    let mut stats: HashMap<i32, (i64, i64)> = HashMap::default();
+    let mut stats: HashMap<i32, (i64, i64, i64, i64)> = HashMap::default();
     for export in &exports {
-        let row = sqlx::query!(r#"
+        let race_stats = sqlx::query!(r#"
             SELECT COUNT(*) FILTER (WHERE state = 'succeeded') AS "succeeded!",
                    COUNT(*) FILTER (WHERE state IN ('failed', 'ambiguous')) AS "attention!"
             FROM speedgaming_race_exports WHERE export_id = $1
         "#, export.id).fetch_one(&mut *transaction).await?;
-        stats.insert(export.id, (row.succeeded, row.attention));
+        let volunteer_stats = sqlx::query!(r#"
+            SELECT COUNT(*) FILTER (WHERE state = 'succeeded') AS "succeeded!",
+                   COUNT(*) FILTER (WHERE state IN ('failed', 'ambiguous')) AS "attention!"
+            FROM speedgaming_volunteer_exports WHERE export_id = $1
+        "#, export.id).fetch_one(&mut *transaction).await?;
+        stats.insert(export.id, (race_stats.succeeded, race_stats.attention, volunteer_stats.succeeded, volunteer_stats.attention));
     }
 
     let content = html! {
@@ -119,10 +124,10 @@ pub(crate) async fn get(
                 p : "No SpeedGaming exports are configured for this event.";
             }
             @for export in &exports {
-                @let (succeeded, attention) = stats.get(&export.id).copied().unwrap_or_default();
+                @let (succeeded, attention, volunteer_succeeded, volunteer_attention) = stats.get(&export.id).copied().unwrap_or_default();
                 section {
                     h3 : &export.slug;
-                    p : format!("Exported races: {succeeded}; needs attention: {attention}");
+                    p : format!("Exported races: {succeeded}; race exports needing attention: {attention}; exported volunteer signups: {volunteer_succeeded}; volunteer exports needing attention: {volunteer_attention}");
                     : full_form(uri!(update_export(series, &*event, export.id)), csrf.as_ref(), html! {
                         : form_field("volunteer_languages", &mut Vec::new(), html! {
                             label : "Volunteer signup languages";

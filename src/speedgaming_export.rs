@@ -2,7 +2,7 @@
 
 use {
     lazy_regex::Regex,
-    reqwest::header::{COOKIE, SET_COOKIE},
+    reqwest::header::{COOKIE, ORIGIN, REFERER, SET_COOKIE},
     tokio::time::sleep,
     crate::{
         cal::{Entrant, Entrants, Race, RaceSchedule},
@@ -34,6 +34,11 @@ pub(crate) enum Error {
     #[error(transparent)] Wheel(#[from] wheel::Error),
     #[error("SpeedGaming form did not contain {0}")] MissingFormField(&'static str),
     #[error("SpeedGaming rejected the {0} submission")] Rejected(&'static str),
+    #[error("SpeedGaming rejected the {form} submission with HTTP {status}")]
+    HttpRejected {
+        form: &'static str,
+        status: reqwest::StatusCode,
+    },
     #[error("SpeedGaming returned an invalid episode ID")] InvalidEpisodeId,
     #[error("SpeedGaming may have accepted the submission: {0}")] AmbiguousSubmission(String),
     #[error("event not found")] EventNotFound,
@@ -584,6 +589,8 @@ async fn claim_volunteer_export(
             state = 'in_progress', attempt_count = speedgaming_volunteer_exports.attempt_count + 1,
             last_attempt_at = NOW(), last_error = NULL
         WHERE speedgaming_volunteer_exports.state IN ('pending', 'failed')
+           OR (speedgaming_volunteer_exports.state = 'ambiguous'
+               AND speedgaming_volunteer_exports.last_error LIKE '%403 Forbidden%')
         RETURNING true AS "claimed!"
     "#, signup_id as _, export_id)
     .fetch_optional(&mut **transaction)
@@ -618,9 +625,17 @@ async fn submit_volunteer(
         ("publicstream", String::new()),
         ("submit", "Submit New/Updated Info".to_owned()),
     ];
-    let response = http_client.post(&url).header(COOKIE, form.cookie).form(&fields).send().await
-        .map_err(|error| Error::AmbiguousSubmission(error.to_string()))?
-        .error_for_status()
+    let response = http_client.post(&url)
+        .header(COOKIE, form.cookie)
+        .header(ORIGIN, BASE_URL)
+        .header(REFERER, &url)
+        .form(&fields)
+        .send().await
+        .map_err(|error| Error::AmbiguousSubmission(error.to_string()))?;
+    if response.status().is_client_error() {
+        return Err(Error::HttpRejected { form: "volunteer", status: response.status() })
+    }
+    let response = response.error_for_status()
         .map_err(|error| Error::AmbiguousSubmission(error.to_string()))?;
     let html = response.text().await.map_err(|error| Error::AmbiguousSubmission(error.to_string()))?;
     if !html.contains(success_marker) {
@@ -677,6 +692,7 @@ async fn sync_volunteers_for_export(pool: &PgPool, http_client: &reqwest::Client
                 "#, candidate.signup_id as _, export.id, error.to_string())
                 .execute(pool)
                 .await?;
+                eprintln!("SpeedGaming volunteer export for signup {} failed: {error}", candidate.signup_id);
                 continue
             }
         };
@@ -705,6 +721,7 @@ async fn sync_volunteers_for_export(pool: &PgPool, http_client: &reqwest::Client
                 "#, candidate.signup_id as _, export.id, state as _, error.to_string())
                 .execute(pool)
                 .await?;
+                eprintln!("SpeedGaming volunteer export for signup {} failed: {error}", candidate.signup_id);
             }
         }
     }
@@ -717,8 +734,7 @@ pub(crate) async fn sync_export(pool: &PgPool, http_client: &reqwest::Client, ex
     Ok(())
 }
 
-pub(crate) async fn check_and_sync_all_exports(pool: &PgPool, http_client: &reqwest::Client) -> Result<(), Error> {
-    let Ok(_guard) = SYNC_LOCK.try_lock() else { return Ok(()) };
+async fn sync_outbound_exports(pool: &PgPool, http_client: &reqwest::Client) -> Result<Vec<ExportConfig>, Error> {
     sqlx::query!(r#"
         UPDATE speedgaming_race_exports SET state = 'ambiguous', last_error = 'export process stopped during submission'
         WHERE state = 'in_progress' AND last_attempt_at < NOW() - INTERVAL '15 minutes'
@@ -738,13 +754,20 @@ pub(crate) async fn check_and_sync_all_exports(pool: &PgPool, http_client: &reqw
             eprintln!("SpeedGaming export {}/{} failed: {error}", export.series.slug(), export.event);
         }
     }
+    Ok(exports)
+}
+
+pub(crate) async fn check_and_sync_all_exports(pool: &PgPool, http_client: &reqwest::Client) -> Result<(), Error> {
+    let Ok(_guard) = SYNC_LOCK.try_lock() else { return Ok(()) };
+    let exports = sync_outbound_exports(pool, http_client).await?;
     poll_all_exports(pool, http_client, &exports).await?;
     Ok(())
 }
 
 pub(crate) fn schedule_sync(pool: PgPool, http_client: reqwest::Client) {
     tokio::spawn(async move {
-        if let Err(error) = check_and_sync_all_exports(&pool, &http_client).await {
+        let _guard = SYNC_LOCK.lock().await;
+        if let Err(error) = sync_outbound_exports(&pool, &http_client).await {
             eprintln!("SpeedGaming export sync failed: {error}");
         }
     });

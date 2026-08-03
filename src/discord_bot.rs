@@ -4083,6 +4083,11 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
 
                         transaction.commit().await?;
 
+                        speedgaming_export::schedule_sync(
+                            pool.clone(),
+                            http_client.clone(),
+                        );
+
                         // Update the volunteer info post to reflect the new signup
                         let _ = volunteer_requests::update_volunteer_post_for_race(
                             &pool,
