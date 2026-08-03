@@ -1,7 +1,7 @@
 //! Per-language SpeedGaming schedule and volunteer exports.
 
 use {
-    kuchiki::traits::TendrilSink as _,
+    lazy_regex::Regex,
     reqwest::header::{COOKIE, SET_COOKIE},
     tokio::time::sleep,
     crate::{
@@ -81,22 +81,39 @@ pub(crate) struct ExportConfig {
     pub(crate) id: i32,
     pub(crate) series: Series,
     pub(crate) event: String,
-    pub(crate) language: Language,
     pub(crate) slug: String,
     pub(crate) trigger_condition: ExportTrigger,
     pub(crate) delay_minutes: i32,
     pub(crate) export_volunteers: bool,
     pub(crate) enabled: bool,
+    pub(crate) volunteer_languages: Vec<Language>,
 }
 
 impl ExportConfig {
     pub(crate) async fn from_id(transaction: &mut Transaction<'_, Postgres>, id: i32) -> sqlx::Result<Option<Self>> {
         sqlx::query_as!(Self, r#"
-            SELECT id, series AS "series: Series", event, language AS "language: Language", slug,
-                   trigger_condition AS "trigger_condition: ExportTrigger", delay_minutes,
-                   export_volunteers, enabled
-            FROM speedgaming_exports
-            WHERE id = $1
+            SELECT e.id, e.series AS "series: Series", e.event, e.slug,
+                   e.trigger_condition AS "trigger_condition: ExportTrigger", e.delay_minutes,
+                   e.export_volunteers, e.enabled,
+                   ARRAY(SELECT language FROM speedgaming_export_languages WHERE export_id = e.id ORDER BY language)
+                       AS "volunteer_languages!: Vec<Language>"
+            FROM speedgaming_exports e
+            WHERE e.id = $1 AND e.archived_at IS NULL
+        "#, id)
+        .fetch_optional(&mut **transaction)
+        .await
+    }
+
+    pub(crate) async fn from_id_for_update(transaction: &mut Transaction<'_, Postgres>, id: i32) -> sqlx::Result<Option<Self>> {
+        sqlx::query_as!(Self, r#"
+            SELECT e.id, e.series AS "series: Series", e.event, e.slug,
+                   e.trigger_condition AS "trigger_condition: ExportTrigger", e.delay_minutes,
+                   e.export_volunteers, e.enabled,
+                   ARRAY(SELECT language FROM speedgaming_export_languages WHERE export_id = e.id ORDER BY language)
+                       AS "volunteer_languages!: Vec<Language>"
+            FROM speedgaming_exports e
+            WHERE e.id = $1 AND e.archived_at IS NULL
+            FOR UPDATE
         "#, id)
         .fetch_optional(&mut **transaction)
         .await
@@ -108,12 +125,13 @@ impl ExportConfig {
         event: &str,
     ) -> sqlx::Result<Vec<Self>> {
         sqlx::query_as!(Self, r#"
-            SELECT id, series AS "series: Series", event, language AS "language: Language", slug,
-                   trigger_condition AS "trigger_condition: ExportTrigger", delay_minutes,
-                   export_volunteers, enabled
-            FROM speedgaming_exports
-            WHERE series = $1 AND event = $2
-            ORDER BY language
+            SELECT e.id, e.series AS "series: Series", e.event, e.slug,
+                   e.trigger_condition AS "trigger_condition: ExportTrigger", e.delay_minutes,
+                   e.export_volunteers, e.enabled,
+                   ARRAY(SELECT language FROM speedgaming_export_languages WHERE export_id = e.id ORDER BY language)
+                       AS "volunteer_languages!: Vec<Language>"
+            FROM speedgaming_exports e
+            WHERE e.series = $1 AND e.event = $2 AND e.archived_at IS NULL
         "#, series as _, event)
         .fetch_all(&mut **transaction)
         .await
@@ -121,12 +139,14 @@ impl ExportConfig {
 
     pub(crate) async fn all_enabled(transaction: &mut Transaction<'_, Postgres>) -> sqlx::Result<Vec<Self>> {
         sqlx::query_as!(Self, r#"
-            SELECT id, series AS "series: Series", event, language AS "language: Language", slug,
-                   trigger_condition AS "trigger_condition: ExportTrigger", delay_minutes,
-                   export_volunteers, enabled
-            FROM speedgaming_exports
-            WHERE enabled = true
-            ORDER BY series, event, language
+            SELECT e.id, e.series AS "series: Series", e.event, e.slug,
+                   e.trigger_condition AS "trigger_condition: ExportTrigger", e.delay_minutes,
+                   e.export_volunteers, e.enabled,
+                   ARRAY(SELECT language FROM speedgaming_export_languages WHERE export_id = e.id ORDER BY language)
+                       AS "volunteer_languages!: Vec<Language>"
+            FROM speedgaming_exports e
+            WHERE e.enabled = true AND e.archived_at IS NULL
+            ORDER BY e.series, e.event
         "#)
         .fetch_all(&mut **transaction)
         .await
@@ -136,45 +156,90 @@ impl ExportConfig {
         transaction: &mut Transaction<'_, Postgres>,
         series: Series,
         event: &str,
-        language: Language,
         slug: &str,
         trigger_condition: ExportTrigger,
         delay_minutes: i32,
         export_volunteers: bool,
+        volunteer_languages: &[Language],
     ) -> sqlx::Result<i32> {
-        sqlx::query_scalar!(r#"
-            INSERT INTO speedgaming_exports
-                (series, event, language, slug, trigger_condition, delay_minutes, export_volunteers)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING id
-        "#, series as _, event, language as _, slug, trigger_condition as _, delay_minutes, export_volunteers)
-        .fetch_one(&mut **transaction)
-        .await
+        let archived_id = sqlx::query_scalar!(r#"
+            SELECT id FROM speedgaming_exports
+            WHERE series = $1 AND event = $2 AND slug = $3
+              AND archived_at IS NOT NULL
+            ORDER BY archived_at DESC
+            LIMIT 1
+            FOR UPDATE
+        "#, series as _, event, slug)
+        .fetch_optional(&mut **transaction)
+        .await?;
+        let id = if let Some(id) = archived_id {
+            sqlx::query!(r#"
+                UPDATE speedgaming_exports SET
+                    trigger_condition = $2, delay_minutes = $3, export_volunteers = $4,
+                    enabled = true, archived_at = NULL, updated_at = NOW()
+                WHERE id = $1
+            "#, id, trigger_condition as _, delay_minutes, export_volunteers)
+            .execute(&mut **transaction)
+            .await?;
+            id
+        } else {
+            sqlx::query_scalar!(r#"
+                INSERT INTO speedgaming_exports
+                    (series, event, slug, trigger_condition, delay_minutes, export_volunteers)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id
+            "#, series as _, event, slug, trigger_condition as _, delay_minutes, export_volunteers)
+            .fetch_one(&mut **transaction)
+            .await?
+        };
+        Self::set_volunteer_languages(transaction, id, volunteer_languages).await?;
+        Ok(id)
     }
 
     pub(crate) async fn update(
         transaction: &mut Transaction<'_, Postgres>,
         id: i32,
-        language: Language,
         slug: &str,
         trigger_condition: ExportTrigger,
         delay_minutes: i32,
         export_volunteers: bool,
         enabled: bool,
+        volunteer_languages: &[Language],
     ) -> sqlx::Result<()> {
         sqlx::query!(r#"
             UPDATE speedgaming_exports SET
-                language = $2, slug = $3, trigger_condition = $4, delay_minutes = $5,
-                export_volunteers = $6, enabled = $7, updated_at = NOW()
-            WHERE id = $1
-        "#, id, language as _, slug, trigger_condition as _, delay_minutes, export_volunteers, enabled)
+                slug = $2, trigger_condition = $3, delay_minutes = $4,
+                export_volunteers = $5, enabled = $6, updated_at = NOW()
+            WHERE id = $1 AND archived_at IS NULL
+        "#, id, slug, trigger_condition as _, delay_minutes, export_volunteers, enabled)
         .execute(&mut **transaction)
         .await?;
+        Self::set_volunteer_languages(transaction, id, volunteer_languages).await?;
         Ok(())
     }
 
-    pub(crate) async fn delete(transaction: &mut Transaction<'_, Postgres>, id: i32) -> sqlx::Result<()> {
-        sqlx::query!("DELETE FROM speedgaming_exports WHERE id = $1", id)
+    async fn set_volunteer_languages(
+        transaction: &mut Transaction<'_, Postgres>,
+        id: i32,
+        volunteer_languages: &[Language],
+    ) -> sqlx::Result<()> {
+        sqlx::query!("DELETE FROM speedgaming_export_languages WHERE export_id = $1", id)
+            .execute(&mut **transaction)
+            .await?;
+        for language in volunteer_languages.iter().copied().unique() {
+            sqlx::query!("INSERT INTO speedgaming_export_languages (export_id, language) VALUES ($1, $2)", id, language as _)
+                .execute(&mut **transaction)
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn archive(transaction: &mut Transaction<'_, Postgres>, id: i32) -> sqlx::Result<()> {
+        sqlx::query!(r#"
+            UPDATE speedgaming_exports
+            SET enabled = false, archived_at = NOW(), updated_at = NOW()
+            WHERE id = $1 AND archived_at IS NULL
+        "#, id)
             .execute(&mut **transaction)
             .await?;
         Ok(())
@@ -188,11 +253,20 @@ struct FormState {
 }
 
 fn input_value(html: &str, name: &'static str) -> Result<String, Error> {
-    let document = kuchiki::parse_html().one(html);
-    let selector = format!(r#"input[name="{name}"]"#);
-    let input = document.select_first(&selector).map_err(|()| Error::MissingFormField(name))?;
-    let attributes = input.attributes.borrow();
-    attributes.get("value").map(ToOwned::to_owned).ok_or(Error::MissingFormField(name))
+    static INPUT_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<input\b[^>]*>").expect("valid regex"));
+    static NAME_ATTRIBUTE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\bname\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#).expect("valid regex"));
+    static VALUE_ATTRIBUTE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\bvalue\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#).expect("valid regex"));
+
+    INPUT_TAG.find_iter(html).find_map(|tag| {
+        let tag = tag.as_str();
+        let attributes = NAME_ATTRIBUTE.captures(tag)?;
+        let input_name = attributes.get(1).or_else(|| attributes.get(2)).or_else(|| attributes.get(3))?.as_str();
+        if input_name != name {
+            return None
+        }
+        let attributes = VALUE_ATTRIBUTE.captures(tag)?;
+        Some(attributes.get(1).or_else(|| attributes.get(2)).or_else(|| attributes.get(3))?.as_str().to_owned())
+    }).ok_or(Error::MissingFormField(name))
 }
 
 fn csrf_cookie(response: &reqwest::Response) -> Result<String, Error> {
@@ -318,6 +392,15 @@ fn confirmation_episode_id(html: &str) -> Result<i64, Error> {
     episode_id.parse().map_err(|_| Error::InvalidEpisodeId)
 }
 
+fn speedgaming_form_time(start: DateTime<Utc>) -> (String, String, String) {
+    let start = start.with_timezone(&America::New_York);
+    (
+        start.format("%m/%d/%Y").to_string(),
+        start.format("%I:%M").to_string(),
+        start.format("%P").to_string(),
+    )
+}
+
 async fn build_match_submission(
     transaction: &mut Transaction<'_, Postgres>,
     http_client: &reqwest::Client,
@@ -348,6 +431,7 @@ async fn submit_match(http_client: &reqwest::Client, submission: &MatchSubmissio
     let url = format!("{BASE_URL}/{}/submit/", submission.slug);
     let form = get_form(http_client, &url, false).await?;
     let discord_username = submission.runner1.discord_username.as_deref().ok_or(Error::MissingDiscordUsername)?;
+    let (date, time, am_pm) = speedgaming_form_time(submission.start);
     let fields = [
         ("csrfmiddlewaretoken", form.csrf),
         ("eventslug", submission.slug.clone()),
@@ -357,10 +441,10 @@ async fn submit_match(http_client: &reqwest::Client, submission: &MatchSubmissio
         ("publicstream1", submission.runner1.twitch_name.clone().unwrap_or_default()),
         ("person2id", "0".to_owned()),
         ("displayname2", submission.runner2.display_name.clone()),
-        ("whendate", submission.start.format("%m/%d/%Y").to_string()),
-        ("whentime", submission.start.format("%I:%M").to_string()),
-        ("whenampm", submission.start.format("%P").to_string()),
-        ("whentimezone", "UTC".to_owned()),
+        ("whendate", date),
+        ("whentime", time),
+        ("whenampm", am_pm),
+        ("whentimezone", String::new()),
         ("note", submission.note.clone()),
         ("submit", "Submit Match".to_owned()),
     ];
@@ -393,9 +477,10 @@ async fn should_export_race(
     }
     match export.trigger_condition {
         ExportTrigger::WhenScheduled => Ok(true),
-        ExportTrigger::WhenRestreamChannelSet => Ok(race.video_urls.contains_key(&export.language)),
+        ExportTrigger::WhenRestreamChannelSet => Ok(!race.video_urls.is_empty()),
         ExportTrigger::WhenVolunteerSignedUp => Ok(Signup::for_race(transaction, race.id).await?.iter().any(|signup| {
-            signup.language == export.language && matches!(signup.status, VolunteerSignupStatus::Pending | VolunteerSignupStatus::Confirmed)
+            export.volunteer_languages.contains(&signup.language)
+                && matches!(signup.status, VolunteerSignupStatus::Pending | VolunteerSignupStatus::Confirmed)
         })),
     }
 }
@@ -405,6 +490,12 @@ async fn claim_race_export(
     race_id: Id<Races>,
     export_id: i32,
 ) -> sqlx::Result<bool> {
+    let enabled = sqlx::query_scalar!("SELECT enabled FROM speedgaming_exports WHERE id = $1 AND archived_at IS NULL FOR KEY SHARE", export_id)
+        .fetch_optional(&mut **transaction)
+        .await?;
+    if enabled != Some(true) {
+        return Ok(false)
+    }
     Ok(sqlx::query_scalar!(r#"
         INSERT INTO speedgaming_race_exports (race_id, export_id, state, attempt_count, last_attempt_at)
         VALUES ($1, $2, 'in_progress', 1, NOW())
@@ -480,6 +571,12 @@ async fn claim_volunteer_export(
     signup_id: Id<Signups>,
     export_id: i32,
 ) -> sqlx::Result<bool> {
+    let enabled = sqlx::query_scalar!("SELECT enabled FROM speedgaming_exports WHERE id = $1 AND archived_at IS NULL FOR KEY SHARE", export_id)
+        .fetch_optional(&mut **transaction)
+        .await?;
+    if enabled != Some(true) {
+        return Ok(false)
+    }
     Ok(sqlx::query_scalar!(r#"
         INSERT INTO speedgaming_volunteer_exports (signup_id, export_id, state, attempt_count, last_attempt_at)
         VALUES ($1, $2, 'in_progress', 1, NOW())
@@ -497,6 +594,7 @@ async fn claim_volunteer_export(
 async fn submit_volunteer(
     http_client: &reqwest::Client,
     episode_id: i64,
+    language: Language,
     role_type_name: &str,
     discord_username: &str,
     display_name: &str,
@@ -506,7 +604,7 @@ async fn submit_volunteer(
         "Tracking" => ("tracker", "Tracker Signup Submitted"),
         _ => return Err(Error::Rejected("unsupported volunteer role")),
     };
-    let url = format!("{BASE_URL}/{path}/signup/{episode_id}/");
+    let url = volunteer_signup_url(language, path, episode_id);
     let form = get_form(http_client, &url, true).await?;
     if form.episode_id != Some(episode_id) {
         return Err(Error::InvalidEpisodeId)
@@ -531,21 +629,25 @@ async fn submit_volunteer(
     Ok(())
 }
 
+fn volunteer_signup_url(language: Language, role_path: &str, episode_id: i64) -> String {
+    format!("{BASE_URL}/{}/{role_path}/signup/{episode_id}/", language.short_code())
+}
+
 async fn sync_volunteers_for_export(pool: &PgPool, http_client: &reqwest::Client, export: &ExportConfig) -> Result<(), Error> {
     if !export.export_volunteers {
         return Ok(())
     }
     let candidates = sqlx::query!(r#"
         SELECT s.id AS "signup_id: Id<Signups>", s.user_id AS "user_id: crate::id::Id<crate::id::Users>",
-               rt.name AS role_type_name, re.episode_id AS "episode_id!"
+               rt.name AS role_type_name, rb.language AS "language: Language", re.episode_id AS "episode_id!"
         FROM signups s
         JOIN role_bindings rb ON rb.id = s.role_binding_id
         JOIN role_types rt ON rt.id = rb.role_type_id
         JOIN speedgaming_race_exports re ON re.race_id = s.race_id AND re.export_id = $1
-        WHERE re.state = 'succeeded' AND rb.language = $2
+        WHERE re.state = 'succeeded' AND rb.language = ANY($2)
           AND s.status IN ('pending', 'confirmed') AND rt.name IN ('Commentary', 'Tracking')
         ORDER BY s.created_at, s.id
-    "#, export.id, export.language as _)
+    "#, export.id, &export.volunteer_languages as _)
     .fetch_all(pool)
     .await?;
 
@@ -581,6 +683,7 @@ async fn sync_volunteers_for_export(pool: &PgPool, http_client: &reqwest::Client
         let result = submit_volunteer(
             http_client,
             candidate.episode_id,
+            candidate.language,
             &candidate.role_type_name,
             &discord_username,
             &display_name,
@@ -632,7 +735,7 @@ pub(crate) async fn check_and_sync_all_exports(pool: &PgPool, http_client: &reqw
     };
     for export in &exports {
         if let Err(error) = sync_export(pool, http_client, export).await {
-            eprintln!("SpeedGaming export {}/{} ({}) failed: {error}", export.series.slug(), export.event, export.language);
+            eprintln!("SpeedGaming export {}/{} failed: {error}", export.series.slug(), export.event);
         }
     }
     poll_all_exports(pool, http_client, &exports).await?;
@@ -656,11 +759,12 @@ struct ScheduleVolunteer {
     discord_id: String,
     #[serde(default)]
     discord_tag: String,
+    language: String,
 }
 
 #[derive(Clone, Deserialize)]
 struct ScheduleChannel {
-    language: Language,
+    language: String,
     slug: String,
 }
 
@@ -682,9 +786,9 @@ async fn poll_export(pool: &PgPool, http_client: &reqwest::Client, export: &Expo
           AND EXISTS (
               SELECT 1 FROM signups s
               JOIN role_bindings rb ON rb.id = s.role_binding_id
-              WHERE s.race_id = r.id AND rb.language = $2 AND s.status IN ('pending', 'confirmed')
+              WHERE s.race_id = r.id AND rb.language = ANY($2) AND s.status IN ('pending', 'confirmed')
           )
-    "#, export.id, export.language as _)
+    "#, export.id, &export.volunteer_languages as _)
     .fetch_one(pool)
     .await?;
     let (Some(from), Some(to)) = (bounds.from, bounds.to) else { return Ok(()) };
@@ -709,10 +813,15 @@ async fn poll_export(pool: &PgPool, http_client: &reqwest::Client, export: &Expo
         let Some(race_id) = race_id else { continue };
         let approved = episode.commentators.iter().map(|volunteer| ("Commentary", volunteer))
             .chain(episode.trackers.iter().map(|volunteer| ("Tracking", volunteer)))
-            .filter(|(_, volunteer)| volunteer.approved)
+            .filter_map(|(role_type_name, volunteer)| {
+                export.volunteer_languages.iter().copied()
+                    .find(|language| language.short_code() == volunteer.language)
+                    .filter(|_| volunteer.approved)
+                    .map(|language| (role_type_name, volunteer, language))
+            })
             .collect_vec();
         let mut transaction = pool.begin().await?;
-        for (role_type_name, volunteer) in approved {
+        for (role_type_name, volunteer, language) in approved {
             let discord_id = volunteer.discord_id.parse::<i64>().ok();
             let confirmed = sqlx::query!(r#"
                 UPDATE signups s SET status = 'confirmed', updated_at = NOW()
@@ -722,17 +831,28 @@ async fn poll_export(pool: &PgPool, http_client: &reqwest::Client, export: &Expo
                   AND (($4::BIGINT IS NOT NULL AND u.discord_id = $4)
                        OR LOWER(u.discord_username) = LOWER($5))
                 RETURNING s.id AS "signup_id: Id<Signups>", s.user_id AS "user_id: crate::id::Id<crate::id::Users>"
-            "#, race_id as _, export.language as _, role_type_name, discord_id, &volunteer.discord_tag)
+            "#, race_id as _, language as _, role_type_name, discord_id, &volunteer.discord_tag)
             .fetch_all(&mut *transaction)
             .await?;
             for signup in confirmed {
                 Signup::auto_reject_overlapping_signups(&mut transaction, signup.signup_id, signup.user_id).await?;
             }
         }
-        if let Some(channel) = episode.channels.iter().find(|channel| channel.language == export.language) {
+        let channels = episode.channels.iter().filter_map(|channel| {
+            export.volunteer_languages.iter().copied()
+                .find(|language| language.short_code() == channel.language)
+                .map(|language| (channel, language))
+        }).collect_vec();
+        if !channels.is_empty() {
             let mut race = Race::from_id(&mut transaction, http_client, race_id).await?;
-            if !race.video_urls.contains_key(&export.language) {
-                race.video_urls.insert(export.language, Url::parse(&format!("https://twitch.tv/{}", channel.slug))?);
+            let mut changed = false;
+            for (channel, language) in channels {
+                if !race.video_urls.contains_key(&language) {
+                    race.video_urls.insert(language, Url::parse(&format!("https://twitch.tv/{}", channel.slug))?);
+                    changed = true;
+                }
+            }
+            if changed {
                 race.save(&mut transaction).await?;
             }
         }
@@ -754,7 +874,7 @@ async fn poll_all_exports(pool: &PgPool, http_client: &reqwest::Client, exports:
     for (batch_index, batch) in exports.chunks(SCHEDULE_BATCH_SIZE).enumerate() {
         for (export, result) in batch.iter().zip(future::join_all(batch.iter().map(|export| poll_export(pool, http_client, export))).await) {
             if let Err(error) = result {
-                eprintln!("SpeedGaming status poll {}/{} ({}) failed: {error}", export.series.slug(), export.event, export.language);
+                eprintln!("SpeedGaming status poll {}/{} failed: {error}", export.series.slug(), export.event);
             }
         }
         if batch_index + 1 < batch_count {
@@ -772,6 +892,8 @@ mod tests {
     fn parses_live_csrf_shapes() {
         assert_eq!(input_value(r#"<input type='hidden' name='csrfmiddlewaretoken' value='abc' />"#, "csrfmiddlewaretoken").unwrap(), "abc");
         assert_eq!(input_value(r#"<input name="csrfmiddlewaretoken" value="def">"#, "csrfmiddlewaretoken").unwrap(), "def");
+        assert_eq!(input_value(r#"<INPUT value="ghi" type="hidden" name="csrfmiddlewaretoken">"#, "csrfmiddlewaretoken").unwrap(), "ghi");
+        assert_eq!(input_value(r#"<input name="other" value="wrong"><input name="episodeid" value="74585">"#, "episodeid").unwrap(), "74585");
     }
 
     #[test]
@@ -785,5 +907,38 @@ mod tests {
         assert_eq!(format_race_note(Some("1"), Some(2)), "Round 1 Game 2");
         assert_eq!(format_race_note(Some("Grand Finals"), None), "Grand Finals Game 1");
         assert_eq!(format_race_note(None, None), "Game 1");
+    }
+
+    #[test]
+    fn converts_speedgaming_form_time_to_eastern_time() {
+        let winter = Utc.with_ymd_and_hms(2026, 1, 15, 18, 30, 0).unwrap();
+        assert_eq!(speedgaming_form_time(winter), ("01/15/2026".to_owned(), "01:30".to_owned(), "pm".to_owned()));
+
+        let summer = Utc.with_ymd_and_hms(2026, 7, 15, 18, 30, 0).unwrap();
+        assert_eq!(speedgaming_form_time(summer), ("07/15/2026".to_owned(), "02:30".to_owned(), "pm".to_owned()));
+    }
+
+    #[test]
+    fn localizes_volunteer_signup_urls() {
+        assert_eq!(
+            volunteer_signup_url(German, "commentator", 74597),
+            "https://speedgaming.org/de/commentator/signup/74597/",
+        );
+        assert_eq!(
+            volunteer_signup_url(French, "tracker", 74597),
+            "https://speedgaming.org/fr/tracker/signup/74597/",
+        );
+    }
+
+    #[test]
+    fn accepts_unconfigured_speedgaming_languages_in_schedule_response() {
+        let episode: ScheduleEpisode = serde_json::from_str(r#"{
+            "id": 74597,
+            "commentators": [{"language": "es", "approved": true}],
+            "trackers": [],
+            "channels": [{"language": "es", "slug": "speedgaminges"}]
+        }"#).unwrap();
+        assert_eq!(episode.commentators[0].language, "es");
+        assert_eq!(episode.channels[0].language, "es");
     }
 }

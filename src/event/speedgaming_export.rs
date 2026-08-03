@@ -99,7 +99,6 @@ pub(crate) async fn get(
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let header = event_data.header(&mut transaction, Some(&me), Tab::SpeedGamingExport, false).await?;
     let exports = ExportConfig::for_event(&mut transaction, series, &event).await?;
-    let used_languages = exports.iter().map(|export| export.language).collect::<HashSet<_>>();
     let mut stats: HashMap<i32, (i64, i64)> = HashMap::default();
     for export in &exports {
         let row = sqlx::query!(r#"
@@ -113,8 +112,8 @@ pub(crate) async fn get(
     let content = html! {
         : header;
         article {
-            h2 : "SpeedGaming Exports";
-            p : "Each language can export upcoming 1v1 races to a separate SpeedGaming event slug.";
+            h2 : "SpeedGaming Export";
+            p : "Exports upcoming 1v1 races to one SpeedGaming event. Volunteer signup languages are selected separately.";
 
             @if exports.is_empty() {
                 p : "No SpeedGaming exports are configured for this event.";
@@ -122,16 +121,20 @@ pub(crate) async fn get(
             @for export in &exports {
                 @let (succeeded, attention) = stats.get(&export.id).copied().unwrap_or_default();
                 section {
-                    h3 : format!("{} — {}", export.language, export.slug);
+                    h3 : &export.slug;
                     p : format!("Exported races: {succeeded}; needs attention: {attention}");
                     : full_form(uri!(update_export(series, &*event, export.id)), csrf.as_ref(), html! {
-                        : form_field("language", &mut Vec::new(), html! {
-                            label(for = "language") : "Language";
-                            select(name = "language", required) {
+                        : form_field("volunteer_languages", &mut Vec::new(), html! {
+                            label : "Volunteer signup languages";
+                            div {
                                 @for language in all::<Language>() {
-                                    option(value = language.short_code(), selected? = export.language == language) : language;
+                                    label {
+                                        input(type = "checkbox", name = "volunteer_languages", value = language.short_code(), checked? = export.volunteer_languages.contains(&language));
+                                        : format!(" {language}");
+                                    }
                                 }
                             }
+                            small : " Only applications in these languages are sent to SpeedGaming and synchronized back to HTH.";
                         });
                         : form_field("slug", &mut Vec::new(), html! {
                             label(for = "slug") : "SpeedGaming Slug";
@@ -165,16 +168,20 @@ pub(crate) async fn get(
                 }
             }
 
-            @if used_languages.len() < all::<Language>().count() {
+            @if exports.is_empty() {
                 h3 : "Add Export";
                 : full_form(uri!(add_export(series, &*event)), csrf.as_ref(), html! {
-                    : form_field("language", &mut Vec::new(), html! {
-                        label(for = "language") : "Language";
-                        select(name = "language", required) {
-                            @for language in all::<Language>().filter(|language| !used_languages.contains(language)) {
-                                option(value = language.short_code()) : language;
+                    : form_field("volunteer_languages", &mut Vec::new(), html! {
+                        label : "Volunteer signup languages";
+                        div {
+                            @for language in all::<Language>() {
+                                label {
+                                    input(type = "checkbox", name = "volunteer_languages", value = language.short_code());
+                                    : format!(" {language}");
+                                }
                             }
                         }
+                        small : " Only applications in these languages are sent to SpeedGaming and synchronized back to HTH.";
                     });
                     : form_field("slug", &mut Vec::new(), html! {
                         label(for = "slug") : "SpeedGaming Slug";
@@ -220,7 +227,8 @@ pub(crate) async fn get(
 pub(crate) struct ExportForm {
     #[field(default = String::new())]
     csrf: String,
-    language: Language,
+    #[field(default = Vec::new())]
+    volunteer_languages: Vec<Language>,
     slug: String,
     trigger_condition: String,
     delay_minutes: i32,
@@ -248,7 +256,7 @@ pub(crate) async fn add_export(
         let trigger = trigger(&value.trigger_condition).ok_or(StatusOrError::Status(Status::BadRequest))?;
         let mut transaction = pool.begin().await?;
         Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-        ExportConfig::create(&mut transaction, series, event, value.language, &value.slug, trigger, value.delay_minutes, value.export_volunteers).await?;
+        ExportConfig::create(&mut transaction, series, event, &value.slug, trigger, value.delay_minutes, value.export_volunteers, &value.volunteer_languages).await?;
         transaction.commit().await?;
         speedgaming_export::schedule_sync(pool.inner().clone(), http_client.inner().clone());
     }
@@ -281,10 +289,10 @@ pub(crate) async fn update_export(
         }
         let has_attempts = sqlx::query_scalar!("SELECT EXISTS (SELECT 1 FROM speedgaming_race_exports WHERE export_id = $1) AS \"exists!\"", export_id)
             .fetch_one(&mut *transaction).await?;
-        if has_attempts && (export.language != value.language || export.slug != value.slug) {
+        if has_attempts && export.slug != value.slug {
             return Err(StatusOrError::Status(Status::BadRequest))
         }
-        ExportConfig::update(&mut transaction, export_id, value.language, &value.slug, trigger, value.delay_minutes, value.export_volunteers, value.enabled).await?;
+        ExportConfig::update(&mut transaction, export_id, &value.slug, trigger, value.delay_minutes, value.export_volunteers, value.enabled, &value.volunteer_languages).await?;
         transaction.commit().await?;
         if value.enabled {
             speedgaming_export::schedule_sync(pool.inner().clone(), http_client.inner().clone());
@@ -314,16 +322,20 @@ pub(crate) async fn delete_export(
     form.verify(&csrf);
     if form.value.is_some() {
         let mut transaction = pool.begin().await?;
-        let export = ExportConfig::from_id(&mut transaction, export_id).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+        let export = ExportConfig::from_id_for_update(&mut transaction, export_id).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
         if export.series != series || export.event != event {
             return Err(StatusOrError::Status(Status::NotFound))
         }
-        let has_attempts = sqlx::query_scalar!("SELECT EXISTS (SELECT 1 FROM speedgaming_race_exports WHERE export_id = $1) AS \"exists!\"", export_id)
-            .fetch_one(&mut *transaction).await?;
-        if has_attempts {
-            return Err(StatusOrError::Status(Status::BadRequest))
-        }
-        ExportConfig::delete(&mut transaction, export_id).await?;
+        sqlx::query!("UPDATE speedgaming_exports SET enabled = false, updated_at = NOW() WHERE id = $1", export_id)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+
+        // Let an already-running request finish, while the disabled flag prevents it from
+        // claiming any more races. This keeps a stale sync snapshot from racing the delete.
+        let _guard = speedgaming_export::SYNC_LOCK.lock().await;
+        let mut transaction = pool.begin().await?;
+        ExportConfig::archive(&mut transaction, export_id).await?;
         transaction.commit().await?;
     }
     Ok(Redirect::to(uri!(get(series, event))))
