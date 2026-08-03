@@ -2261,18 +2261,21 @@ impl GlobalState {
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
         tokio::spawn(async move {
+            println!("requesting AvianArt seed with preset '{preset}'");
             let client = avianart::AvianartClient::new(
                 self.avianart_api_key.clone(),
                 self.http_client.clone(),
             );
             let hash = client.generate_seed(&preset).await
                 .map_err(|e| RollError::Avianart(e.to_string()))?;
+            println!("AvianArt accepted seed request {hash} with preset '{preset}'");
             let seed_data = client.wait_for_seed(&hash).await
                 .map_err(|e| RollError::Avianart(e.to_string()))?;
             let seed_hash = seed_data.file_hash()
                 .map(avianart::parse_file_hash)
                 .transpose()
                 .map_err(|e| RollError::Avianart(e.to_string()))?;
+            println!("AvianArt seed request {hash} completed");
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
                     file_hash: None,
@@ -3351,20 +3354,20 @@ impl SeedRollUpdate {
                 } else {
                     eprintln!("seed rolling failed {num_retries} times, no sample error recorded");
                 }
+                Handler::mark_roll_failed(state, roll_failed).await;
                 ctx.say(if let French = language {
                     format!("Désolé @entrants, le randomizer a rapporté une erreur {num_retries} fois de suite donc je vais laisser tomber. Utilisez !reroll pour réessayer. Si l'erreur persiste, essayer de roll une seed de votre côté et contacter TreZc0_.")
                 } else {
                     format!("Sorry @entrants, the randomizer reported an error {num_retries} times, so I'm giving up on rolling the seed. Use !reroll to try again. If this error persists, please report it to TreZc0_.")
                 }).await?;
-                roll_failed.store(true, atomic::Ordering::SeqCst);
-                lock!(@write state = state; *state = RaceState::Init);
             }
             Self::Error(e) => {
                 eprintln!("seed roll error in https://{}{}: {e} ({e:?})", racetime_host(), ctx.data().await.url);
                 if let Environment::Production = Environment::default() {
                     log::error!("seed roll error in https://{}{}: {e} ({e:?})", racetime_host(), ctx.data().await.url);
                 }
-                ctx.say("Sorry @entrants, something went wrong while rolling the seed. Please report this error to TreZc0_ and if necessary roll the seed manually.").await?;
+                Handler::mark_roll_failed(state, roll_failed).await;
+                ctx.say("Sorry @entrants, something went wrong while rolling the seed. You can use !reroll to try again; please report the error to TreZc0_ if it persists.").await?;
             }
             #[cfg(unix)] Self::Message(msg) => ctx.say(msg).await?,
         }
@@ -4211,6 +4214,15 @@ impl Handler {
         }
     }
 
+    async fn mark_roll_failed(state: &ArcRwLock<RaceState>, roll_failed: &AtomicBool) {
+        roll_failed.store(true, atomic::Ordering::SeqCst);
+        lock!(@write state = state; {
+            if matches!(*state, RaceState::Rolling) {
+                *state = RaceState::Init;
+            }
+        });
+    }
+
     async fn can_monitor(&self, ctx: &RaceContext<GlobalState>, is_monitor: bool, msg: &ChatMessage) -> sqlx::Result<bool> {
         if is_monitor { return Ok(true) }
         if let Some(OfficialRaceData { ref event, .. }) = self.official_data {
@@ -4409,47 +4421,64 @@ impl Handler {
         let official_data = self.official_data.clone();
         let roll_failed = self.roll_failed.clone();
         tokio::spawn(async move {
-            lock!(@write state = state; *state = RaceState::Rolling); //TODO ensure only one seed is rolled at a time
-            let mut seed_state = None::<SeedRollUpdate>;
-            if let Some(delay) = delay_until.and_then(|delay_until| (delay_until - Utc::now()).to_std().ok()) {
-                // don't want to give an unnecessarily exact estimate if the room was opened automatically 30 or 60 minutes ahead of start
-                let display_delay = if delay > Duration::from_secs(14 * 60) && delay < Duration::from_secs(16 * 60) {
-                    Duration::from_secs(15 * 60)
-                } else if delay > Duration::from_secs(44 * 60) && delay < Duration::from_secs(46 * 60) {
-                    Duration::from_secs(45 * 60)
-                } else if delay > Duration::from_secs(19 * 60) && delay < Duration::from_secs(21 * 60) {
-                    Duration::from_secs(20 * 60)
-                } else {
-                    delay
-                };
-                if !suppress_preamble {
-                    ctx.say(if let French = language {
-                        format!("Votre {description} sera postée dans {}.", French.format_duration(display_delay, true))
+            let room_url = format!("https://{}{}", racetime_host(), ctx.data().await.url);
+            let result = async {
+                lock!(@write state = state; *state = RaceState::Rolling); //TODO ensure only one seed is rolled at a time
+                let mut seed_state = None::<SeedRollUpdate>;
+                if let Some(delay) = delay_until.and_then(|delay_until| (delay_until - Utc::now()).to_std().ok()) {
+                    let roll_deadline = Instant::now() + delay;
+                    // don't want to give an unnecessarily exact estimate if the room was opened automatically 30 or 60 minutes ahead of start
+                    let display_delay = if delay > Duration::from_secs(14 * 60) && delay < Duration::from_secs(16 * 60) {
+                        Duration::from_secs(15 * 60)
+                    } else if delay > Duration::from_secs(44 * 60) && delay < Duration::from_secs(46 * 60) {
+                        Duration::from_secs(45 * 60)
+                    } else if delay > Duration::from_secs(19 * 60) && delay < Duration::from_secs(21 * 60) {
+                        Duration::from_secs(20 * 60)
                     } else {
-                        format!("Your {description} will be posted in {}.", English.format_duration(display_delay, true))
-                    }).await?;
-                }
-                let mut sleep = pin!(sleep_until(Instant::now() + delay));
-                loop {
-                    select! {
-                        () = &mut sleep => {
-                            if let Some(update) = seed_state.take() {
-                                update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
+                        delay
+                    };
+                    if !suppress_preamble {
+                        let message = if let French = language {
+                            format!("Votre {description} sera postée dans {}.", French.format_duration(display_delay, true))
+                        } else {
+                            format!("Your {description} will be posted in {}.", English.format_duration(display_delay, true))
+                        };
+                        if let Err(e) = ctx.say(message).await {
+                            eprintln!("failed to announce scheduled seed roll in {room_url}; continuing with the roll: {e} ({e:?})");
+                            if let Environment::Production = Environment::default() {
+                                log::error!("failed to announce scheduled seed roll in {room_url}; continuing with the roll: {e} ({e:?})");
                             }
-                            while let Some(update) = updates.recv().await {
-                                update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
-                            }
-                            break
                         }
-                        Some(update) = updates.recv() => seed_state = Some(update),
+                    }
+                    let mut sleep = pin!(sleep_until(roll_deadline));
+                    loop {
+                        select! {
+                            () = &mut sleep => {
+                                if let Some(update) = seed_state.take() {
+                                    update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
+                                }
+                                while let Some(update) = updates.recv().await {
+                                    update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
+                                }
+                                break
+                            }
+                            Some(update) = updates.recv() => seed_state = Some(update),
+                        }
+                    }
+                } else {
+                    while let Some(update) = updates.recv().await {
+                        update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
                     }
                 }
-            } else {
-                while let Some(update) = updates.recv().await {
-                    update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
+                Ok::<_, Error>(())
+            }.await;
+            if let Err(e) = result {
+                eprintln!("seed roll task failed in {room_url}: {e} ({e:?})");
+                if let Environment::Production = Environment::default() {
+                    log::error!("seed roll task failed in {room_url}: {e} ({e:?})");
                 }
+                Self::mark_roll_failed(&state, &roll_failed).await;
             }
-            Ok::<_, Error>(())
         });
     }
 
