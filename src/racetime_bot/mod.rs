@@ -4162,6 +4162,30 @@ struct Handler {
 }
 
 impl Handler {
+    async fn official_event_from_db(ctx: &RaceContext<GlobalState>, room_url: &Url) -> Result<Option<cal::Event>, Error> {
+        let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+        let event = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, room_url.clone()).await.to_racetime()?;
+        transaction.commit().await.to_racetime()?;
+        Ok(event)
+    }
+
+    /// Finds the database row for a racetime.gg room without making already-committed rooms wait
+    /// behind the race importer. Newly created rooms may be announced to the bot just before their
+    /// transaction commits, so retry briefly and only use new_room_lock as the final fallback.
+    async fn official_event_for_room(ctx: &RaceContext<GlobalState>, room_url: &Url) -> Result<Option<cal::Event>, Error> {
+        for attempt in 0..3 {
+            if let Some(event) = Self::official_event_from_db(ctx, room_url).await? {
+                return Ok(Some(event))
+            }
+            if attempt < 2 {
+                sleep(Duration::from_millis(100)).await;
+            }
+        }
+        lock!(new_room_lock = ctx.global_state.new_room_lock; {
+            Self::official_event_from_db(ctx, room_url).await
+        })
+    }
+
     /// For `existing_state`, `Some(None)` means this is an existing race room with unknown state, while `None` means this is a new race room.
     async fn should_handle_inner(race_data: &RaceData, global_state: Arc<GlobalState>, existing_state: Option<Option<&Self>>) -> bool {
         if Goal::from_race_data(race_data).is_none() { return false }
@@ -4707,12 +4731,14 @@ impl RaceHandler<GlobalState> for Handler {
 
     async fn new(ctx: &RaceContext<GlobalState>) -> Result<Self, Error> {
         let data = ctx.data().await;
-        // Resolve DB state and collect racetime.gg API calls to perform, but defer actually
-        // sending them until after new_room_lock is released, so a stalled websocket send
-        // (e.g. due to a degraded connection) can't block every other room from starting.
-        let official_result = lock!(new_room_lock = ctx.global_state.new_room_lock; { // make sure a new room isn't handled before it's added to the database
+        let room_url = format!("https://{}{}", racetime_host(), data.url).parse().to_racetime()?;
+        let official_event = Self::official_event_for_room(ctx, &room_url).await?;
+        // Resolve DB state and collect racetime.gg API calls to perform. new_room_lock is only
+        // needed above while identifying a just-created room; keeping it during the rest of this
+        // initialization lets an unrelated import stall every open room after a restart.
+        let official_result = if let Some(cal_event) = official_event {
             let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
-            let result = if let Some(cal_event) = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, format!("https://{}{}", racetime_host(), ctx.data().await.url).parse().to_racetime()?).await.to_racetime()? {
+            let result = {
                 let mut pending_sends = Vec::default();
                 let goal = Goal::for_event(cal_event.race.series, &cal_event.race.event).ok_or(GoalFromStrError).to_racetime()?;
                 let event = cal_event.race.event(&mut transaction).await.to_racetime()?;
@@ -4742,7 +4768,7 @@ impl RaceHandler<GlobalState> for Handler {
                 }
                 if let Some(companion_race_id) = cal_event.race.companion_race_id {
                     let companion_event = cal::Event {
-                        race: cal::Race::from_id(&mut transaction, &ctx.global_state.http_client, companion_race_id).await.to_racetime()?,
+                        race: Race::from_id(&mut transaction, &ctx.global_state.http_client, companion_race_id).await.to_racetime()?,
                         kind: cal::EventKind::Normal,
                     };
                     let companion_event_data = companion_event.race.event(&mut transaction).await.to_racetime()?;
@@ -4955,12 +4981,12 @@ impl RaceHandler<GlobalState> for Handler {
                     fpa_enabled,
                     goal,
                 ), pending_sends))
-            } else {
-                None
             };
             transaction.commit().await.to_racetime()?;
             result
-        });
+        } else {
+            None
+        };
         let (existing_seed, official_data, race_state, high_seed_name, low_seed_name, fpa_enabled, goal) = if let Some((new_data, pending_sends)) = official_result {
             for pending_send in pending_sends {
                 match pending_send {

@@ -3710,7 +3710,31 @@ impl IsNetworkError for AutoImportError {
 
 async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, config: Config, mut shutdown: rocket::Shutdown, discord_ctx: RwFuture<DiscordCtx>, new_room_lock: Arc<Mutex<()>>) -> Result<(), AutoImportError> {
     loop {
+        // Refresh potentially slow, rate-limited start.gg pages before taking new_room_lock.
+        // Handler::new and the scheduled room creator both need that lock, so holding it while a
+        // 30-minute cache refresh runs can leave every open room unhandled after a restart.
+        let startgg_event_slugs = {
+            let mut transaction = db_pool.begin().await?;
+            let urls = sqlx::query_scalar!(r#"
+                SELECT url AS "url!"
+                FROM events
+                WHERE auto_import AND (end_time IS NULL OR end_time > NOW()) AND url IS NOT NULL
+            "#).fetch_all(&mut *transaction).await?;
+            transaction.commit().await?;
+            urls.into_iter()
+                .map(|url| Url::parse(&url))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .filter(|url| matches!(url.host_str(), Some("start.gg" | "www.start.gg")))
+                .map(|url| url.path()[1..].to_owned())
+                .collect::<HashSet<_>>()
+        };
+        for event_slug in startgg_event_slugs {
+            startgg::preload_event_sets(&http_client, &config, &event_slug).await?;
+        }
+
         lock!(new_room_lock = new_room_lock; {
+            let lock_acquired_at = Instant::now();
             let mut transaction = db_pool.begin().await?;
             for row in sqlx::query!(r#"SELECT series, event FROM events WHERE end_time IS NULL OR end_time > NOW()"#).fetch_all(&mut *transaction).await? {
                 let series = match row.series.parse::<Series>() {
@@ -4002,6 +4026,10 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                 }
             }
             transaction.commit().await?;
+            let lock_held_for = lock_acquired_at.elapsed();
+            if lock_held_for >= Duration::from_secs(10) {
+                eprintln!("automatic race import held new_room_lock for {}", English.format_duration(lock_held_for, true));
+            }
         });
         select! {
             () = &mut shutdown => break,

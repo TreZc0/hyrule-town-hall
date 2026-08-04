@@ -302,6 +302,36 @@ where T::Variables: Clone + Eq + Hash + Send + Sync, T::ResponseData: Clone + Se
     })
 }
 
+/// Loads every page of a start.gg event into the query cache.
+///
+/// The automatic race importer calls this before taking `new_room_lock`. A cold or expired
+/// start.gg cache can require many rate-limited HTTP requests, none of which should prevent
+/// existing racetime.gg room handlers from starting or scheduled rooms from opening.
+pub(crate) async fn preload_event_sets(http_client: &reqwest::Client, config: &Config, event_slug: &str) -> Result<(), Error> {
+    let mut page = 1;
+    loop {
+        let response = query_cached::<EventSetsQuery>(http_client, &config.startgg, event_sets_query::Variables {
+            event_slug: event_slug.to_owned(),
+            page,
+        }).await?;
+        let total_pages = match &response {
+            event_sets_query::ResponseData {
+                event: Some(event_sets_query::EventSetsQueryEvent {
+                    sets: Some(event_sets_query::EventSetsQueryEventSets {
+                        page_info: Some(event_sets_query::EventSetsQueryEventSetsPageInfo { total_pages: Some(total_pages) }),
+                        ..
+                    }),
+                }),
+            } => *total_pages,
+            _ => return Err(Error::NoQueryMatch(response)),
+        };
+        if page >= total_pages {
+            return Ok(())
+        }
+        page += 1;
+    }
+}
+
 pub(crate) enum ImportSkipReason {
     Exists,
     Preview,
