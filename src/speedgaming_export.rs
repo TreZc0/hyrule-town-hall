@@ -797,28 +797,32 @@ struct ScheduleEpisode {
     channels: Vec<ScheduleChannel>,
 }
 
+fn poll_window(now: DateTime<Utc>) -> (DateTime<Utc>, DateTime<Utc>) {
+    (now - TimeDelta::hours(3), now + TimeDelta::hours(24))
+}
+
 async fn poll_export(pool: &PgPool, http_client: &reqwest::Client, export: &ExportConfig) -> Result<(), Error> {
-    let bounds = sqlx::query!(r#"
-        SELECT MIN(r.start) AS "from", MAX(r.start) AS "to"
-        FROM speedgaming_race_exports re
-        JOIN races r ON r.id = re.race_id
-        WHERE re.export_id = $1 AND re.state = 'succeeded'
-          AND r.start > NOW() - INTERVAL '6 hours'
-          AND EXISTS (
-              SELECT 1 FROM signups s
-              JOIN role_bindings rb ON rb.id = s.role_binding_id
-              WHERE s.race_id = r.id AND rb.language = ANY($2) AND s.status IN ('pending', 'confirmed')
-          )
-    "#, export.id, &export.volunteer_languages as _)
+    let (from, to) = poll_window(Utc::now());
+    let delay = TimeDelta::minutes(export.delay_minutes.into());
+    let has_races = sqlx::query_scalar!(r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM speedgaming_race_exports re
+            JOIN races r ON r.id = re.race_id
+            WHERE re.export_id = $1 AND re.state = 'succeeded'
+              AND r.start >= $2 AND r.start <= $3
+        ) AS "exists!"
+    "#, export.id, from - delay, to - delay)
     .fetch_one(pool)
     .await?;
-    let (Some(from), Some(to)) = (bounds.from, bounds.to) else { return Ok(()) };
-    let delay = TimeDelta::minutes(export.delay_minutes.into());
+    if !has_races {
+        return Ok(())
+    }
     let episodes = http_client.get(format!("{BASE_URL}/api/schedule/"))
         .query(&[
             ("event", export.slug.clone()),
-            ("from", (from + delay - TimeDelta::hours(1)).to_rfc3339()),
-            ("to", (to + delay + TimeDelta::hours(6)).to_rfc3339()),
+            ("from", from.to_rfc3339()),
+            ("to", to.to_rfc3339()),
         ])
         .send().await?
         .error_for_status()?
@@ -946,6 +950,18 @@ mod tests {
         assert!(!restream_consent_allows_export(false, None));
         assert!(restream_consent_allows_export(true, Some(false)));
         assert!(restream_consent_allows_export(true, None));
+    }
+
+    #[test]
+    fn limits_schedule_poll_to_three_hours_ago_and_the_next_24_hours() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 4, 15, 30, 0).unwrap();
+        assert_eq!(
+            poll_window(now),
+            (
+                Utc.with_ymd_and_hms(2026, 8, 4, 12, 30, 0).unwrap(),
+                Utc.with_ymd_and_hms(2026, 8, 5, 15, 30, 0).unwrap(),
+            ),
+        );
     }
 
     #[test]
