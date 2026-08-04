@@ -266,7 +266,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
         }
 
         let db_pool = PgPoolOptions::default()
-            .max_connections(16)
+            .max_connections(50)
             .connect_with(db_options)
             .await?;
         let seed_metadata = Arc::default();

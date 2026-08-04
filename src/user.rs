@@ -399,7 +399,7 @@ pub(crate) async fn set_timezone(pool: &State<PgPool>, me: User, csrf: Option<Cs
 }
 
 #[rocket::get("/user/<id>")]
-pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, racetime_user: Option<RaceTimeUser>, discord_user: Option<DiscordUser>, http_client: &State<reqwest::Client>, config: &State<Config>, id: Id<Users>) -> Result<RawHtml<String>, StatusOrError<PageError>> {
+pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, racetime_user: Option<RaceTimeUser>, discord_user: Option<DiscordUser>, id: Id<Users>) -> Result<RawHtml<String>, StatusOrError<PageError>> {
     let mut transaction = pool.begin().await?;
     let user = if let Some(user) = User::from_id(&mut *transaction, id).await? {
         user
@@ -612,21 +612,10 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
         html! {}
     };
     let startgg = if let Some(ref startgg_id) = user.startgg_id {
-        let startgg_name = startgg::query_cached::<startgg::UserSlugQuery>(http_client, &config.startgg, startgg::user_slug_query::Variables { id: startgg_id.clone() }).await
-            .ok()
-            .and_then(|r| r.user)
-            .and_then(|u| u.name);
         html! {
             p {
                 : "start.gg: ";
-                @if let Some(name) = startgg_name {
-                    bdi : name;
-                    : " (ID: ";
-                    code : startgg_id.to_string();
-                    : ")";
-                } else {
-                    code : startgg_id.to_string();
-                }
+                code : startgg_id.to_string();
                 @if me.as_ref().is_some_and(|me| me.id == user.id) {
                     form(method = "post", action = uri!(crate::auth::unlink_startgg), style = "display: inline; margin-left: 2em") {
                         : csrf;
