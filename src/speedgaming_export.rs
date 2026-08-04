@@ -310,7 +310,7 @@ async fn user_identity(http_client: &reqwest::Client, user: &User) -> Result<Run
     });
     Ok(RunnerIdentity {
         discord_username,
-        display_name: twitch_name.clone().unwrap_or_else(|| user.display_name().to_owned()),
+        display_name: user.display_name().to_owned(),
         twitch_name,
     })
 }
@@ -345,9 +345,6 @@ async fn runner_identity(
                 } else {
                     None
                 };
-                if let Some(twitch_name) = &identity.twitch_name {
-                    identity.display_name = twitch_name.clone();
-                }
             }
             Ok(identity)
         }
@@ -361,7 +358,7 @@ async fn runner_identity(
             };
             Ok(RunnerIdentity {
                 discord_username: None,
-                display_name: twitch_name.clone().unwrap_or_else(|| name.clone()),
+                display_name: name.clone(),
                 twitch_name,
             })
         }
@@ -473,12 +470,9 @@ async fn should_export_race(
     if race.ignored || start <= Utc::now() {
         return Ok(false)
     }
-    if !race.restream_consent_required {
-        if let Some(mut teams) = race.teams_opt() {
-            if !teams.all(|team| team.restream_consent) {
-                return Ok(false)
-            }
-        }
+    let entrant_consent = race.teams_opt().map(|mut teams| teams.all(|team| team.restream_consent));
+    if !restream_consent_allows_export(race.restream_consent_required, entrant_consent) {
+        return Ok(false)
     }
     match export.trigger_condition {
         ExportTrigger::WhenScheduled => Ok(true),
@@ -488,6 +482,10 @@ async fn should_export_race(
                 && matches!(signup.status, VolunteerSignupStatus::Pending | VolunteerSignupStatus::Confirmed)
         })),
     }
+}
+
+fn restream_consent_allows_export(forced_consent: bool, entrant_consent: Option<bool>) -> bool {
+    forced_consent || entrant_consent == Some(true)
 }
 
 async fn claim_race_export(
@@ -939,6 +937,15 @@ mod tests {
 
         let summer = Utc.with_ymd_and_hms(2026, 7, 15, 18, 30, 0).unwrap();
         assert_eq!(speedgaming_form_time(summer), ("07/15/2026".to_owned(), "02:30".to_owned(), "pm".to_owned()));
+    }
+
+    #[test]
+    fn requires_restream_consent_before_export() {
+        assert!(restream_consent_allows_export(false, Some(true)));
+        assert!(!restream_consent_allows_export(false, Some(false)));
+        assert!(!restream_consent_allows_export(false, None));
+        assert!(restream_consent_allows_export(true, Some(false)));
+        assert!(restream_consent_allows_export(true, None));
     }
 
     #[test]
