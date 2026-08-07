@@ -5619,6 +5619,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                                         .await
                                         .ok()
                                         .flatten()
+                                        .flatten()
                                     };
 
                                     if let Ok(Some(user)) = User::from_id(&mut *transaction, signup.user_id).await {
