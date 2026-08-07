@@ -1351,6 +1351,7 @@ struct RestreamChannel {
     url_pattern: String,
     discord_invite_url: String,
     display_name: Option<String>,
+    racetime_team_slug: Option<String>,
 }
 
 #[rocket::get("/admin/restream-channels")]
@@ -1367,7 +1368,7 @@ pub(crate) async fn list_restream_channels(
 
     let channels = sqlx::query_as!(
         RestreamChannel,
-        "SELECT id, url_pattern, discord_invite_url, display_name FROM restream_channels ORDER BY url_pattern"
+        "SELECT id, url_pattern, discord_invite_url, display_name, racetime_team_slug FROM restream_channels ORDER BY url_pattern"
     )
     .fetch_all(pool.inner())
     .await
@@ -1386,6 +1387,7 @@ pub(crate) async fn list_restream_channels(
                             th : "URL Pattern";
                             th : "Display Name";
                             th : "Discord Invite";
+                            th : "racetime.gg Team Slug";
                             th : "Actions";
                         }
                     }
@@ -1397,6 +1399,7 @@ pub(crate) async fn list_restream_channels(
                                 td {
                                     a(href = &ch.discord_invite_url, target = "_blank") : &ch.discord_invite_url;
                                 }
+                                td : ch.racetime_team_slug.as_deref().unwrap_or("—");
                                 td {
                                     a(href = uri!(edit_restream_channel_form(ch.id))) : "Edit";
                                     : " | ";
@@ -1429,6 +1432,12 @@ pub(crate) async fn list_restream_channels(
                     input(type = "text", id = "display_name", name = "display_name",
                         placeholder = "e.g. Zelda Speedruns");
                 });
+                : form_field("racetime_team_slug", &mut Vec::new(), html! {
+                    label(for = "racetime_team_slug") : "racetime.gg Team Slug (optional)";
+                    input(type = "text", id = "racetime_team_slug", name = "racetime_team_slug",
+                        placeholder = "e.g. zsr");
+                    small : "Members of this racetime.gg team may always use !monitor on races restreamed here.";
+                });
             }, Vec::new(), "Add Channel");
 
             p {
@@ -1455,6 +1464,8 @@ pub(crate) struct RestreamChannelForm {
     discord_invite_url: String,
     #[field(default = String::new())]
     display_name: String,
+    #[field(default = String::new())]
+    racetime_team_slug: String,
 }
 
 #[rocket::post("/admin/restream-channels", data = "<form>")]
@@ -1474,11 +1485,13 @@ pub(crate) async fn create_restream_channel(
     if let Some(ref value) = form.value {
         let pattern = normalize_restream_url_pattern(&value.url_pattern);
         let display_name = value.display_name.trim();
+        let racetime_team_slug = value.racetime_team_slug.trim();
         sqlx::query!(
-            "INSERT INTO restream_channels (url_pattern, discord_invite_url, display_name) VALUES ($1, $2, $3)",
+            "INSERT INTO restream_channels (url_pattern, discord_invite_url, display_name, racetime_team_slug) VALUES ($1, $2, $3, $4)",
             pattern,
             value.discord_invite_url.trim(),
             if display_name.is_empty() { None } else { Some(display_name) },
+            if racetime_team_slug.is_empty() { None } else { Some(racetime_team_slug) },
         )
         .execute(pool.inner())
         .await
@@ -1503,7 +1516,7 @@ pub(crate) async fn edit_restream_channel_form(
 
     let ch = sqlx::query_as!(
         RestreamChannel,
-        "SELECT id, url_pattern, discord_invite_url, display_name FROM restream_channels WHERE id = $1",
+        "SELECT id, url_pattern, discord_invite_url, display_name, racetime_team_slug FROM restream_channels WHERE id = $1",
         id
     )
     .fetch_optional(pool.inner())
@@ -1531,6 +1544,12 @@ pub(crate) async fn edit_restream_channel_form(
                     label(for = "display_name") : "Display Name (optional)";
                     input(type = "text", id = "display_name", name = "display_name",
                         value = ch.display_name.as_deref().unwrap_or_default());
+                });
+                : form_field("racetime_team_slug", &mut Vec::new(), html! {
+                    label(for = "racetime_team_slug") : "racetime.gg Team Slug (optional)";
+                    input(type = "text", id = "racetime_team_slug", name = "racetime_team_slug",
+                        value = ch.racetime_team_slug.as_deref().unwrap_or_default());
+                    small : "Members of this racetime.gg team may always use !monitor on races restreamed here.";
                 });
             }, Vec::new(), "Save Changes");
 
@@ -1568,11 +1587,13 @@ pub(crate) async fn update_restream_channel(
     if let Some(ref value) = form.value {
         let pattern = normalize_restream_url_pattern(&value.url_pattern);
         let display_name = value.display_name.trim();
+        let racetime_team_slug = value.racetime_team_slug.trim();
         sqlx::query!(
-            "UPDATE restream_channels SET url_pattern = $1, discord_invite_url = $2, display_name = $3, updated_at = NOW() WHERE id = $4",
+            "UPDATE restream_channels SET url_pattern = $1, discord_invite_url = $2, display_name = $3, racetime_team_slug = $4, updated_at = NOW() WHERE id = $5",
             pattern,
             value.discord_invite_url.trim(),
             if display_name.is_empty() { None } else { Some(display_name) },
+            if racetime_team_slug.is_empty() { None } else { Some(racetime_team_slug) },
             id,
         )
         .execute(pool.inner())

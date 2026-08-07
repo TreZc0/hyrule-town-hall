@@ -131,6 +131,24 @@ pub(crate) async fn user_data(http_client: &reqwest::Client, user_id: &str) -> w
     }
 }
 
+#[derive(Deserialize)]
+struct TeamProfile {
+    members: Vec<TeamMemberProfile>,
+}
+
+#[derive(Deserialize)]
+struct TeamMemberProfile {
+    id: String,
+}
+
+pub(crate) async fn team_member_ids(http_client: &reqwest::Client, team_slug: &str) -> wheel::Result<HashSet<String>> {
+    let profile = http_client.get(format!("https://{}/team/{team_slug}/data", racetime_host()))
+        .send().await?
+        .detailed_error_for_status().await?
+        .json_with_text_in_error::<TeamProfile>().await?;
+    Ok(profile.members.into_iter().map(|member| member.id).collect())
+}
+
 pub(crate) async fn parse_user(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, id_or_url: &str) -> Result<String, ParseUserError> {
     if let Ok(id) = id_or_url.parse() {
         return if let Some(user) = User::from_id(&mut **transaction, id).await? {
@@ -1674,6 +1692,7 @@ pub(crate) struct GlobalState {
     seed_cache_tx: watch::Sender<()>,
     seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>,
     pub(crate) extra_room_senders: Arc<RwLock<HashMap<String, mpsc::Sender<String>>>>,
+    restream_team_members: Arc<RwLock<HashMap<String, (Instant, HashSet<String>)>>>,
     #[cfg_attr(not(unix), allow(dead_code))]
     avianart_api_key: Option<String>,
 }
@@ -1705,8 +1724,21 @@ impl GlobalState {
             },
             new_room_lock, racetime_config, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, discord_ctx, clean_shutdown, seed_cache_tx, seed_metadata,
             extra_room_senders: Arc::new(RwLock::new(HashMap::default())),
+            restream_team_members: Arc::new(RwLock::new(HashMap::default())),
             avianart_api_key,
         }
+    }
+
+    async fn is_racetime_team_member(&self, team_slug: &str, user_id: &str) -> bool {
+        const TTL: Duration = Duration::from_secs(3600);
+        let cached = lock!(@read restream_team_members = self.restream_team_members; restream_team_members.get(team_slug).and_then(|(fetched_at, members)| (fetched_at.elapsed() < TTL).then(|| members.contains(user_id))));
+        if let Some(is_member) = cached {
+            return is_member
+        }
+        let Ok(members) = team_member_ids(&self.http_client, team_slug).await else { return false };
+        let is_member = members.contains(user_id);
+        lock!(@write restream_team_members = self.restream_team_members; restream_team_members.insert(team_slug.to_owned(), (Instant::now(), members)));
+        is_member
     }
 
     /// Locked while event rooms are being created. Also used to serialize manual race
@@ -4249,10 +4281,24 @@ impl Handler {
 
     async fn can_monitor(&self, ctx: &RaceContext<GlobalState>, is_monitor: bool, msg: &ChatMessage) -> sqlx::Result<bool> {
         if is_monitor { return Ok(true) }
-        if let Some(OfficialRaceData { ref event, .. }) = self.official_data {
+        if let Some(OfficialRaceData { ref event, ref restreams, .. }) = self.official_data {
             if let Some(UserData { ref id, .. }) = msg.user {
                 if let Some(user) = User::from_racetime(&ctx.global_state.db_pool, id).await? {
-                    return sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM organizers WHERE series = $1 AND event = $2 AND organizer = $3) AS "exists!""#, event.series as _, &event.event, user.id as _).fetch_one(&ctx.global_state.db_pool).await
+                    if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM organizers WHERE series = $1 AND event = $2 AND organizer = $3) AS "exists!""#, event.series as _, &event.event, user.id as _).fetch_one(&ctx.global_state.db_pool).await? {
+                        return Ok(true)
+                    }
+                }
+                for video_url in restreams.keys() {
+                    let pattern = crate::admin::normalize_restream_url_pattern(&video_url.to_string());
+                    let team_slug = sqlx::query_scalar!("SELECT racetime_team_slug FROM restream_channels WHERE url_pattern = $1", pattern)
+                        .fetch_optional(&ctx.global_state.db_pool)
+                        .await?
+                        .flatten();
+                    if let Some(team_slug) = team_slug {
+                        if ctx.global_state.is_racetime_team_member(&team_slug, id).await {
+                            return Ok(true)
+                        }
+                    }
                 }
             }
         }
