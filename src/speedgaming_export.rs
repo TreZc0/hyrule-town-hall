@@ -807,6 +807,14 @@ fn looks_speedgaming_owned(url: &Url) -> bool {
     url.as_str().to_lowercase().contains("twitch.tv/speedgaming")
 }
 
+/// SpeedGaming uses these sentinel channel slugs to represent a disabled/removed restream
+/// instead of omitting the channel entry.
+const SG_NO_STREAM_SLUGS: &[&str] = &["norestream", "nostream"];
+
+fn is_no_stream_channel(channel: &ScheduleChannel) -> bool {
+    SG_NO_STREAM_SLUGS.contains(&channel.slug.as_str())
+}
+
 async fn poll_export(pool: &PgPool, http_client: &reqwest::Client, export: &ExportConfig) -> Result<(), Error> {
     let (from, to) = poll_window(Utc::now());
     let delay = TimeDelta::minutes(export.delay_minutes.into());
@@ -872,7 +880,7 @@ async fn poll_export(pool: &PgPool, http_client: &reqwest::Client, export: &Expo
         let mut race = Race::from_id(&mut transaction, http_client, race_id).await?;
         let mut changed = false;
         for language in export.volunteer_languages.iter().copied() {
-            let channel = episode.channels.iter().find(|channel| channel.language == language.short_code());
+            let channel = episode.channels.iter().find(|channel| channel.language == language.short_code() && !is_no_stream_channel(channel));
             match (channel, race.video_urls.get(&language)) {
                 (Some(channel), existing) => {
                     let new_url = Url::parse(&format!("https://twitch.tv/{}", channel.slug))?;
