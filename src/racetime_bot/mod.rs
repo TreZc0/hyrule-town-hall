@@ -7390,6 +7390,16 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
             msg.push(" <");
             msg.push(room_url_fr.to_string());
             msg.push('>');
+            if !cal_event.race.video_urls.is_empty() {
+                msg.push("\nRestreams:");
+                for (language, video_url) in &cal_event.race.video_urls {
+                    msg.push("\n");
+                    msg.push(&language.to_string());
+                    msg.push(": <");
+                    msg.push(video_url.to_string());
+                    msg.push(">");
+                }
+            }
             msg.build()
         } else {
             let info_prefix = if let Some(custom_title) = cal_event.race.custom_title_with_event(&event.display_name) {
@@ -7512,6 +7522,16 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                     msg.push(notification);
                     sqlx::query!("UPDATE races SET notified = TRUE WHERE id = $1", cal_event.race.id as _).execute(&mut **transaction).await.to_racetime()?;
                 },
+            }
+            if !cal_event.race.video_urls.is_empty() {
+                msg.push("\nRestreams:");
+                for (language, video_url) in &cal_event.race.video_urls {
+                    msg.push("\n");
+                    msg.push(&language.to_string());
+                    msg.push(": <");
+                    msg.push(video_url.to_string());
+                    msg.push(">");
+                }
             }
             msg.build()
         }
