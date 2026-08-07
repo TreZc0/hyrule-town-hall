@@ -71,6 +71,9 @@ async fn resolve_event_location(
         race.video_urls.get(&event_config.language)
             .or_else(|| race.video_urls.values().next())
             .map(|u| u.to_string())
+    } else if matches!(race.schedule, RaceSchedule::Live { room: Some(_), .. }) {
+        race.multistream_url(transaction, http_client, event_config).await?
+            .map(|u| u.to_string())
     } else {
         race.multistream_url_prerace(transaction, http_client, event_config).await?
             .map(|u| u.to_string())

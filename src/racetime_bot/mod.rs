@@ -4191,6 +4191,7 @@ struct Handler {
     cleaned_up: Arc<AtomicBool>,
     cleanup_timeout: Option<tokio::task::JoinHandle<()>>,
     finish_timeout: Option<tokio::task::JoinHandle<()>>,
+    discord_event_prestart_check: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Handler {
@@ -5842,7 +5843,7 @@ impl RaceHandler<GlobalState> for Handler {
                     goal,
                 )
         };
-        let this = Self {
+        let mut this = Self {
             breaks: None, //TODO default breaks for restreamed matches?
             break_notifications: None,
             goal_notifications: None,
@@ -5854,8 +5855,62 @@ impl RaceHandler<GlobalState> for Handler {
             cleaned_up: Arc::default(),
             cleanup_timeout: None,
             finish_timeout: None,
+            discord_event_prestart_check: None,
             official_data, high_seed_name, low_seed_name, fpa_enabled,
         };
+        // Now that the room exists, refresh the Discord scheduled event's multistream link
+        // in case an entrant linked their Twitch account after the event was scheduled, and
+        // schedule one more check shortly before the race starts to catch a last-minute link.
+        // Both checks run in the background so they don't delay the handler starting up.
+        if let Some(OfficialRaceData { ref cal_event, .. }) = this.official_data {
+            if cal_event.race.video_urls.is_empty() && cal_event.race.discord_scheduled_event_id.is_some() {
+                let ctx = ctx.clone();
+                let race_id = cal_event.race.id;
+                tokio::spawn(async move {
+                    let mut transaction = match ctx.global_state.db_pool.begin().await {
+                        Ok(transaction) => transaction,
+                        Err(_) => return,
+                    };
+                    let Ok(race) = Race::from_id(&mut transaction, &ctx.global_state.http_client, race_id).await else { return };
+                    if race.video_urls.is_empty() && race.discord_scheduled_event_id.is_some() {
+                        if let Ok(event) = race.event(&mut transaction).await {
+                            let discord_ctx = ctx.global_state.discord_ctx.read().await;
+                            if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&discord_ctx, &mut transaction, &race, &event, &ctx.global_state.http_client).await {
+                                eprintln!("failed to refresh Discord scheduled event location on room open for race {race_id}: {e}");
+                                return;
+                            }
+                        }
+                    }
+                    let _ = transaction.commit().await;
+                });
+            }
+            if let Some(start) = cal_event.start() {
+                let wait = start - TimeDelta::minutes(1) - Utc::now();
+                if let Ok(wait) = wait.to_std() {
+                    let ctx = ctx.clone();
+                    let race_id = cal_event.race.id;
+                    this.discord_event_prestart_check = Some(tokio::spawn(async move {
+                        sleep(wait).await;
+                        if !Self::should_handle_inner(&*ctx.data().await, ctx.global_state.clone(), Some(None)).await { return }
+                        let mut transaction = match ctx.global_state.db_pool.begin().await {
+                            Ok(transaction) => transaction,
+                            Err(_) => return,
+                        };
+                        let Ok(race) = Race::from_id(&mut transaction, &ctx.global_state.http_client, race_id).await else { return };
+                        if race.video_urls.is_empty() && race.discord_scheduled_event_id.is_some() {
+                            if let Ok(event) = race.event(&mut transaction).await {
+                                let discord_ctx = ctx.global_state.discord_ctx.read().await;
+                                if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&discord_ctx, &mut transaction, &race, &event, &ctx.global_state.http_client).await {
+                                    eprintln!("failed to refresh Discord scheduled event location before race start for race {race_id}: {e}");
+                                    return;
+                                }
+                            }
+                        }
+                        let _ = transaction.commit().await;
+                    }));
+                }
+            }
+        }
         // Defer restreamer setup to background task to allow handler to start immediately
         if let Some(OfficialRaceData { ref event, ref restreams, ref cal_event, .. }) = this.official_data {
             if !restreams.is_empty() {
@@ -6938,6 +6993,7 @@ impl RaceHandler<GlobalState> for Handler {
                                         cleaned_up: cleaned_up.clone(),
                                         cleanup_timeout: None,
                                         finish_timeout: None,
+                                        discord_event_prestart_check: None,
                                     };
                                     let room_url = format!("https://{}{}", racetime_host(), data.url);
                                     if let Err(e) = dummy_handler.official_race_finished(&ctx_clone, data, cal_event, event, fpa_invoked, official_breaks_used || breaks_used, None).await {
