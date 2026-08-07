@@ -5868,6 +5868,16 @@ impl RaceHandler<GlobalState> for Handler {
                     if !Self::should_handle_inner(&*ctx_clone.data().await, ctx_clone.global_state.clone(), Some(None)).await { return }
 
                     let restreams_text = restreams_clone.iter().map(|(video_url, state)| format!("in {} at {video_url}", state.language.expect("preset restreams should have languages assigned"))).join(" and "); // don't use English.join_str since racetime.gg parses the comma as part of the URL
+                    let mut restream_team_slugs = HashSet::new();
+                    for video_url in restreams_clone.keys() {
+                        let pattern = crate::admin::normalize_restream_url_pattern(&video_url.to_string());
+                        if let Ok(Some(Some(team_slug))) = sqlx::query_scalar!("SELECT racetime_team_slug FROM restream_channels WHERE url_pattern = $1", pattern)
+                            .fetch_optional(&ctx_clone.global_state.db_pool)
+                            .await
+                        {
+                            restream_team_slugs.insert(team_slug);
+                        }
+                    }
                     for restreamer in restreams_clone.values().flat_map(|RestreamState { restreamer_racetime_id, .. }| restreamer_racetime_id) {
                         let data = ctx_clone.data().await;
                         if data.monitors.iter().find(|monitor| monitor.id == *restreamer).is_some() { continue }
@@ -5918,6 +5928,17 @@ impl RaceHandler<GlobalState> for Handler {
                         }
                     } else {
                         format!("This race is being restreamed {restreams_text} — auto-start is disabled. Restreamers can use '!ready' once the restream is ready. Auto-start will be unlocked once all restreams are ready.")
+                    };
+                    let text = if restream_team_slugs.is_empty() {
+                        text
+                    } else {
+                        let mut team_slugs = restream_team_slugs.into_iter().collect_vec();
+                        team_slugs.sort();
+                        if team_slugs.len() == 1 {
+                            format!("{text} Members of the {} racetime.gg team can also use '!monitor' to become race monitors.", team_slugs[0])
+                        } else {
+                            format!("{text} Members of the {} racetime.gg teams can also use '!monitor' to become race monitors.", team_slugs.join(" and "))
+                        }
                     };
                     let _ = ctx_clone.send_message(&text, true, Vec::default()).await;
                 });
