@@ -801,6 +801,12 @@ fn poll_window(now: DateTime<Utc>) -> (DateTime<Utc>, DateTime<Utc>) {
     (now - TimeDelta::hours(3), now + TimeDelta::hours(24))
 }
 
+/// Heuristic for whether a `video_urls` entry was set by a previous SpeedGaming poll (and is
+/// therefore safe for a later poll to update or clear) rather than by an organizer.
+fn looks_speedgaming_owned(url: &Url) -> bool {
+    url.as_str().to_lowercase().contains("twitch.tv/speedgaming")
+}
+
 async fn poll_export(pool: &PgPool, http_client: &reqwest::Client, export: &ExportConfig) -> Result<(), Error> {
     let (from, to) = poll_window(Utc::now());
     let delay = TimeDelta::minutes(export.delay_minutes.into());
@@ -863,23 +869,27 @@ async fn poll_export(pool: &PgPool, http_client: &reqwest::Client, export: &Expo
                 Signup::auto_reject_overlapping_signups(&mut transaction, signup.signup_id, signup.user_id).await?;
             }
         }
-        let channels = episode.channels.iter().filter_map(|channel| {
-            export.volunteer_languages.iter().copied()
-                .find(|language| language.short_code() == channel.language)
-                .map(|language| (channel, language))
-        }).collect_vec();
-        if !channels.is_empty() {
-            let mut race = Race::from_id(&mut transaction, http_client, race_id).await?;
-            let mut changed = false;
-            for (channel, language) in channels {
-                if !race.video_urls.contains_key(&language) {
-                    race.video_urls.insert(language, Url::parse(&format!("https://twitch.tv/{}", channel.slug))?);
+        let mut race = Race::from_id(&mut transaction, http_client, race_id).await?;
+        let mut changed = false;
+        for language in export.volunteer_languages.iter().copied() {
+            let channel = episode.channels.iter().find(|channel| channel.language == language.short_code());
+            match (channel, race.video_urls.get(&language)) {
+                (Some(channel), existing) => {
+                    let new_url = Url::parse(&format!("https://twitch.tv/{}", channel.slug))?;
+                    if existing.is_none_or(looks_speedgaming_owned) && existing != Some(&new_url) {
+                        race.video_urls.insert(language, new_url);
+                        changed = true;
+                    }
+                }
+                (None, Some(existing)) if looks_speedgaming_owned(existing) => {
+                    race.video_urls.remove(&language);
                     changed = true;
                 }
+                (None, _) => {}
             }
-            if changed {
-                race.save(&mut transaction).await?;
-            }
+        }
+        if changed {
+            race.save(&mut transaction).await?;
         }
         sqlx::query!(r#"
             UPDATE speedgaming_race_exports SET last_polled_at = NOW()
