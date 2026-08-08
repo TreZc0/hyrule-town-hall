@@ -6675,7 +6675,7 @@ impl RaceHandler<GlobalState> for Handler {
         Ok(())
     }
 
-    async fn race_data(&mut self, ctx: &RaceContext<GlobalState>, _old_race_data: RaceData) -> Result<(), Error> {
+    async fn race_data(&mut self, ctx: &RaceContext<GlobalState>, old_race_data: RaceData) -> Result<(), Error> {
         let data = ctx.data().await;
         let goal = self.goal(ctx).await.to_racetime()?;
         if let Some(OfficialRaceData { ref event, ref entrants, ref mut scores, .. }) = self.official_data {
@@ -6899,57 +6899,60 @@ impl RaceHandler<GlobalState> for Handler {
                         => {}
                 }
             }
-            RaceStatusValue::Finished => if self.unlock_spoiler_log(ctx, goal).await? {
+            RaceStatusValue::Finished => {
+                let first_finish = self.unlock_spoiler_log(ctx, goal).await?;
                 if let Goal::TriforceBlitz | Goal::TriforceBlitzProgressionSpoiler = goal {
-                    if self.check_tfb_finish(ctx).await? {
-                        self.cleaned_up.store(true, atomic::Ordering::SeqCst);
-                        if let Some(task) = self.finish_timeout.take() {
-                            task.abort();
-                        }
-                    } else {
-                        let cleaned_up = self.cleaned_up.clone();
-                        let official_data = self.official_data.as_ref().map(|OfficialRaceData { event, cal_event, .. }| (event.clone(), cal_event.clone()));
-                        let ctx = ctx.clone();
-                        self.cleanup_timeout = Some(tokio::spawn(async move {
-                            sleep(Duration::from_secs(60 * 60)).await;
-                            if cleaned_up.load(atomic::Ordering::SeqCst) {
-                                if let Some((event, cal_event)) = official_data {
-                                    if let Some(organizer_channel) = event.discord_organizer_channel {
-                                        let mut msg = MessageBuilder::default();
-                                        msg.push("race chat closed with incomplete score reports: <https://");
-                                        msg.push(racetime_host());
-                                        msg.push(&ctx.data().await.url);
-                                        msg.push('>');
-                                        if event.discord_race_results_channel.is_some() || matches!(cal_event.race.source, cal::Source::StartGG { .. }) {
-                                            msg.push(" — please manually ");
-                                            if let Some(results_channel) = event.discord_race_results_channel {
-                                                msg.push("post the announcement in ");
-                                                msg.mention(&results_channel);
-                                            }
-                                            match cal_event.race.startgg_set_url() {
-                                                Ok(Some(startgg_set_url)) => {
-                                                    if event.discord_race_results_channel.is_some() {
-                                                        msg.push(" and ");
-                                                    }
-                                                    msg.push_named_link_no_preview("report the result on start.gg", startgg_set_url);
+                    if first_finish {
+                        if self.check_tfb_finish(ctx).await? {
+                            self.cleaned_up.store(true, atomic::Ordering::SeqCst);
+                            if let Some(task) = self.finish_timeout.take() {
+                                task.abort();
+                            }
+                        } else {
+                            let cleaned_up = self.cleaned_up.clone();
+                            let official_data = self.official_data.as_ref().map(|OfficialRaceData { event, cal_event, .. }| (event.clone(), cal_event.clone()));
+                            let ctx = ctx.clone();
+                            self.cleanup_timeout = Some(tokio::spawn(async move {
+                                sleep(Duration::from_secs(60 * 60)).await;
+                                if cleaned_up.load(atomic::Ordering::SeqCst) {
+                                    if let Some((event, cal_event)) = official_data {
+                                        if let Some(organizer_channel) = event.discord_organizer_channel {
+                                            let mut msg = MessageBuilder::default();
+                                            msg.push("race chat closed with incomplete score reports: <https://");
+                                            msg.push(racetime_host());
+                                            msg.push(&ctx.data().await.url);
+                                            msg.push('>');
+                                            if event.discord_race_results_channel.is_some() || matches!(cal_event.race.source, cal::Source::StartGG { .. }) {
+                                                msg.push(" — please manually ");
+                                                if let Some(results_channel) = event.discord_race_results_channel {
+                                                    msg.push("post the announcement in ");
+                                                    msg.mention(&results_channel);
                                                 }
-                                                Ok(None) => {}
-                                                Err(_) => {
-                                                    if event.discord_race_results_channel.is_some() {
-                                                        msg.push(" and ");
+                                                match cal_event.race.startgg_set_url() {
+                                                    Ok(Some(startgg_set_url)) => {
+                                                        if event.discord_race_results_channel.is_some() {
+                                                            msg.push(" and ");
+                                                        }
+                                                        msg.push_named_link_no_preview("report the result on start.gg", startgg_set_url);
                                                     }
-                                                    msg.push("report the result on start.gg");
+                                                    Ok(None) => {}
+                                                    Err(_) => {
+                                                        if event.discord_race_results_channel.is_some() {
+                                                            msg.push(" and ");
+                                                        }
+                                                        msg.push("report the result on start.gg");
+                                                    }
                                                 }
+                                                msg.push(" after adjusting the times");
                                             }
-                                            msg.push(" after adjusting the times");
+                                            let _ = organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, msg.build()).await;
                                         }
-                                        let _ = organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, msg.build()).await;
                                     }
                                 }
-                            }
-                        }));
+                            }));
+                        }
                     }
-                } else {
+                } else if !matches!(old_race_data.status.value, RaceStatusValue::Finished) {
                     // Cancel any existing finish timeout if race finishes again
                     if let Some(task) = self.finish_timeout.take() {
                         task.abort();
@@ -6961,55 +6964,65 @@ impl RaceHandler<GlobalState> for Handler {
                     let ctx_clone = ctx.clone();
                     self.finish_timeout = Some(tokio::spawn(async move {
                         sleep(Duration::from_secs(30)).await;
-                        if !cleaned_up.load(atomic::Ordering::SeqCst) {
-                            if let Some(OfficialRaceData { ref cal_event, ref event, goal, fpa_invoked, breaks_used: official_breaks_used, .. }) = official_data {
-                                let data = ctx_clone.data().await;
-                                // Re-check that race is still finished after the 30 second delay
-                                if let RaceStatusValue::Finished = data.status.value {
-                                    // Use a dummy handler to call official_race_finished
-                                    // We can't call self.official_race_finished directly because we've moved into the closure
-                                    let dummy_handler = Handler {
-                                        official_data: Some(OfficialRaceData {
-                                            cal_event: cal_event.clone(),
-                                            event: event.clone(),
-                                            goal,
-                                            restreams: HashMap::new(),
-                                            entrants: Vec::new(),
-                                            fpa_invoked,
-                                            breaks_used: official_breaks_used,
-                                            scores: HashMap::new(),
-                                        }),
-                                        high_seed_name: String::new(),
-                                        low_seed_name: String::new(),
-                                        breaks: None,
-                                        break_notifications: None,
-                                        goal_notifications: None,
-                                        start_saved: false,
-                                        fpa_enabled: false,
-                                        locked: false,
-                                        roll_failed: Arc::default(),
-                                        password_sent: false,
-                                        race_state: ArcRwLock::new(RaceState::Init),
-                                        cleaned_up: cleaned_up.clone(),
-                                        cleanup_timeout: None,
-                                        finish_timeout: None,
-                                        discord_event_prestart_check: None,
-                                    };
-                                    let room_url = format!("https://{}{}", racetime_host(), data.url);
-                                    if let Err(e) = dummy_handler.official_race_finished(&ctx_clone, data, cal_event, event, fpa_invoked, official_breaks_used || breaks_used, None).await {
-                                        eprintln!("failed to finalize race result reporting for {room_url}: {e}");
-                                        let discord_ctx = ctx_clone.global_state.discord_ctx.read().await;
-                                        match ADMIN_USER.create_dm_channel(&*discord_ctx).await {
-                                            Ok(dm) => if let Err(dm_error) = dm.say(&*discord_ctx, format!("Failed to finalize race result reporting for <{room_url}>: {e}")).await {
-                                                eprintln!("failed to DM admin about final race result reporting failure: {dm_error}");
-                                            },
-                                            Err(dm_error) => eprintln!("failed to open admin DM about final race result reporting failure: {dm_error}"),
-                                        }
-                                    }
-                                    cleaned_up.store(true, atomic::Ordering::SeqCst);
-                                }
-                            }
+                        let data = ctx_clone.data().await;
+                        let room_url = format!("https://{}{}", racetime_host(), data.url);
+                        if cleaned_up.load(atomic::Ordering::SeqCst) {
+                            log::warn!("skipping race result reporting for {room_url}: race was already cleaned up");
+                            return
                         }
+                        let Some(OfficialRaceData { ref cal_event, ref event, goal, fpa_invoked, breaks_used: official_breaks_used, .. }) = official_data else {
+                            log::warn!("skipping race result reporting for {room_url}: room is not associated with an official race");
+                            return
+                        };
+                        // Re-check that race is still finished after the 30 second delay
+                        if !matches!(data.status.value, RaceStatusValue::Finished) {
+                            log::warn!("skipping race result reporting for {room_url}: race status is {:?}", data.status.value);
+                            return
+                        }
+                        // Use a dummy handler to call official_race_finished
+                        // We can't call self.official_race_finished directly because we've moved into the closure
+                        let dummy_handler = Handler {
+                            official_data: Some(OfficialRaceData {
+                                cal_event: cal_event.clone(),
+                                event: event.clone(),
+                                goal,
+                                restreams: HashMap::new(),
+                                entrants: Vec::new(),
+                                fpa_invoked,
+                                breaks_used: official_breaks_used,
+                                scores: HashMap::new(),
+                            }),
+                            high_seed_name: String::new(),
+                            low_seed_name: String::new(),
+                            breaks: None,
+                            break_notifications: None,
+                            goal_notifications: None,
+                            start_saved: false,
+                            fpa_enabled: false,
+                            locked: false,
+                            roll_failed: Arc::default(),
+                            password_sent: false,
+                            race_state: ArcRwLock::new(RaceState::Init),
+                            cleaned_up: cleaned_up.clone(),
+                            cleanup_timeout: None,
+                            finish_timeout: None,
+                            discord_event_prestart_check: None,
+                        };
+                        let reporting_started = Instant::now();
+                        log::info!("starting race result reporting for {room_url}");
+                        if let Err(e) = dummy_handler.official_race_finished(&ctx_clone, data, cal_event, event, fpa_invoked, official_breaks_used || breaks_used, None).await {
+                            eprintln!("failed to finalize race result reporting for {room_url}: {e}");
+                            let discord_ctx = ctx_clone.global_state.discord_ctx.read().await;
+                            match ADMIN_USER.create_dm_channel(&*discord_ctx).await {
+                                Ok(dm) => if let Err(dm_error) = dm.say(&*discord_ctx, format!("Failed to finalize race result reporting for <{room_url}>: {e}")).await {
+                                    eprintln!("failed to DM admin about final race result reporting failure: {dm_error}");
+                                },
+                                Err(dm_error) => eprintln!("failed to open admin DM about final race result reporting failure: {dm_error}"),
+                            }
+                        } else {
+                            log::info!("finished race result reporting for {room_url} in {:?}", reporting_started.elapsed());
+                        }
+                        cleaned_up.store(true, atomic::Ordering::SeqCst);
                     }));
                 }
             },
