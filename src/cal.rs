@@ -3575,10 +3575,10 @@ pub(crate) async fn import_races_post(discord_ctx: &State<RwFuture<DiscordCtx>>,
             race_import_jobs.write().await.insert(job_id, RaceImportStatus::Running { total: races.len(), completed: 0, failed: Vec::default() });
             let pool = pool.inner().clone();
             let discord_ctx = discord_ctx.inner().clone();
-            let new_room_lock = global_state.new_room_lock();
+            let race_import_lock = global_state.race_import_lock();
             let jobs = Arc::clone(race_import_jobs.inner());
             tokio::spawn(async move {
-                lock!(new_room_lock = new_room_lock; {
+                lock!(race_import_lock = race_import_lock; {
                     for race in races {
                         let label = format!("{:?}", race.source);
                         let result = import_race(&pool, &*discord_ctx.read().await, race).await;
@@ -3656,6 +3656,23 @@ pub(crate) async fn import_races_status(pool: &State<PgPool>, race_import_jobs: 
 /// (and usable by race room commands) without waiting for the rest of the batch.
 async fn import_race(pool: &PgPool, discord_ctx: &DiscordCtx, race: Race) -> Result<(), event::Error> {
     let mut transaction = pool.begin().await?;
+    // Race discovery happens before background manual jobs acquire race_import_lock. Recheck under
+    // that lock before creating the Discord thread so a queued job cannot import a stale result.
+    let already_imported = match &race.source {
+        Source::Challonge { id } => sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM races WHERE challonge_match = $1)")
+            .bind(id)
+            .fetch_one(&mut *transaction)
+            .await?,
+        Source::StartGG { set, .. } => sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM races WHERE startgg_set = $1)")
+            .bind(set)
+            .fetch_one(&mut *transaction)
+            .await?,
+        Source::Manual | Source::League { .. } | Source::Sheet { .. } | Source::SpeedGaming { .. } => false,
+    };
+    if already_imported {
+        transaction.commit().await?;
+        return Ok(())
+    }
     let game_count = race.game.unwrap_or(1);
     let mut scheduling_thread = None;
     for game in 1..=game_count {
@@ -3708,11 +3725,10 @@ impl IsNetworkError for AutoImportError {
     }
 }
 
-async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, config: Config, mut shutdown: rocket::Shutdown, discord_ctx: RwFuture<DiscordCtx>, new_room_lock: Arc<Mutex<()>>) -> Result<(), AutoImportError> {
+async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, config: Config, mut shutdown: rocket::Shutdown, discord_ctx: RwFuture<DiscordCtx>, new_room_lock: Arc<Mutex<()>>, race_import_lock: Arc<Mutex<()>>) -> Result<(), AutoImportError> {
     loop {
-        // Refresh potentially slow, rate-limited start.gg pages before taking new_room_lock.
-        // Handler::new and the scheduled room creator both need that lock, so holding it while a
-        // 30-minute cache refresh runs can leave every open room unhandled after a restart.
+        // Refresh potentially slow, rate-limited start.gg pages before serializing imports. This
+        // only warms the query cache, so it cannot race to create duplicate scheduling threads.
         let startgg_event_slugs = {
             let mut transaction = db_pool.begin().await?;
             let urls = sqlx::query_scalar!(r#"
@@ -3733,10 +3749,12 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
             startgg::preload_event_sets(&http_client, &config, &event_slug).await?;
         }
 
-        lock!(new_room_lock = new_room_lock; {
-            let lock_acquired_at = Instant::now();
+        lock!(race_import_lock = race_import_lock; {
             let mut transaction = db_pool.begin().await?;
-            for row in sqlx::query!(r#"SELECT series, event FROM events WHERE end_time IS NULL OR end_time > NOW()"#).fetch_all(&mut *transaction).await? {
+            for row in sqlx::query!(
+                r#"SELECT series, event FROM events WHERE (auto_import OR $1) AND (end_time IS NULL OR end_time > NOW())"#,
+                speedgaming_export::LEGACY_IMPORT_ENABLED,
+            ).fetch_all(&mut *transaction).await? {
                 let series = match row.series.parse::<Series>() {
                     Ok(s) => s,
                     Err(()) => {
@@ -3750,6 +3768,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                         MatchSource::Manual => {}
                         MatchSource::Challonge { .. } => {} // Challonge's API doesn't provide enough data to automate race imports
                         MatchSource::League => if event.is_started(&mut transaction).await? {
+                            lock!(new_room_lock = new_room_lock; {
                             let mut races = Vec::default();
                             for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE series = $1 AND event = $2"#, event.series as _, &event.event).fetch_all(&mut *transaction).await? {
                                 races.push(Race::from_id(&mut transaction, &http_client, id).await?);
@@ -3840,12 +3859,22 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                     races.last_mut().expect("just pushed")
                                 }.save(&mut transaction).await?;
                             }
+                            transaction.commit().await?;
+                            });
+                            transaction = db_pool.begin().await?;
                         },
                         MatchSource::StartGG(event_slug) => loop {
+                            let import_started_at = Instant::now();
                             match startgg::races_to_import(&mut transaction, &http_client, &config, &event, event_slug).await {
-                                Ok((races, _)) => {
+                                Ok((races, skips)) => {
+                                    let set_count = races.len() + skips.len();
+                                    let new_race_count = races.len();
                                     for race in races {
                                         import_race(&db_pool, &*discord_ctx.read().await, race).await?;
+                                    }
+                                    let import_duration = import_started_at.elapsed();
+                                    if import_duration >= Duration::from_secs(10) {
+                                        eprintln!("automatic start.gg race import for {}/{} ({event_slug}) processed {set_count} sets ({new_race_count} new) in {}", event.series.slug(), &event.event, English.format_duration(import_duration, true));
                                     }
                                     break
                                 }
@@ -3906,6 +3935,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                     }
                 }
                 if speedgaming_export::LEGACY_IMPORT_ENABLED && let Some(ref speedgaming_slug) = event.speedgaming_slug {
+                    lock!(new_room_lock = new_room_lock; {
                     let schedule = match sgl::schedule(&http_client, speedgaming_slug).await {
                         Ok(s) => s,
                         Err(e) => {
@@ -4023,13 +4053,12 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                             }
                         }
                     }
+                    transaction.commit().await?;
+                    });
+                    transaction = db_pool.begin().await?;
                 }
             }
             transaction.commit().await?;
-            let lock_held_for = lock_acquired_at.elapsed();
-            if lock_held_for >= Duration::from_secs(10) {
-                eprintln!("automatic race import held new_room_lock for {}", English.format_duration(lock_held_for, true));
-            }
         });
         select! {
             () = &mut shutdown => break,
@@ -4163,11 +4192,11 @@ pub(crate) async fn auto_ignore_past_custom_races(
     Ok(())
 }
 
-pub(crate) async fn auto_import_races(db_pool: PgPool, http_client: reqwest::Client, config: Config, shutdown: rocket::Shutdown, discord_ctx: RwFuture<DiscordCtx>, new_room_lock: Arc<Mutex<()>>) -> Result<(), AutoImportError> {
+pub(crate) async fn auto_import_races(db_pool: PgPool, http_client: reqwest::Client, config: Config, shutdown: rocket::Shutdown, discord_ctx: RwFuture<DiscordCtx>, new_room_lock: Arc<Mutex<()>>, race_import_lock: Arc<Mutex<()>>) -> Result<(), AutoImportError> {
     let mut last_crash = Instant::now();
     let mut wait_time = Duration::from_secs(1);
     loop {
-        match auto_import_races_inner(db_pool.clone(), http_client.clone(), config.clone(), shutdown.clone(), discord_ctx.clone(), new_room_lock.clone()).await {
+        match auto_import_races_inner(db_pool.clone(), http_client.clone(), config.clone(), shutdown.clone(), discord_ctx.clone(), new_room_lock.clone(), race_import_lock.clone()).await {
             Ok(()) => break Ok(()),
             Err(AutoImportError::Discord(discord_bot::Error::UninitializedDiscordGuild(guild_id))) => {
                 let wait_time = Duration::from_secs(60);

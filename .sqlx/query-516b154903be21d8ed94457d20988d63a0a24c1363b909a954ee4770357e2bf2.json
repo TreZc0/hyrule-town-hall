@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT restream_consent, custom_choices AS \"custom_choices: Json<HashMap<String, String>>\" FROM teams WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "restream_consent",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "custom_choices: Json<HashMap<String, String>>",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "516b154903be21d8ed94457d20988d63a0a24c1363b909a954ee4770357e2bf2"
+}

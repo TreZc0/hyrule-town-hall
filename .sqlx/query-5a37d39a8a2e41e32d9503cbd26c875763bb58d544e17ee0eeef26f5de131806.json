@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"primary_id: Id<Races>\", companion_race_id AS \"companion_race_id: Id<Races>\", start AS \"start!\"\n            FROM races\n            WHERE (id = ANY($1) OR companion_race_id = ANY($1))\n              AND companion_race_id IS NOT NULL\n              AND start IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "primary_id: Id<Races>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "companion_race_id: Id<Races>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "start!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "5a37d39a8a2e41e32d9503cbd26c875763bb58d544e17ee0eeef26f5de131806"
+}

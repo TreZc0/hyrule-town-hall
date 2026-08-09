@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id FROM speedgaming_exports\n            WHERE series = $1 AND event = $2 AND slug = $3\n              AND archived_at IS NOT NULL\n            ORDER BY archived_at DESC\n            LIMIT 1\n            FOR UPDATE\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b770e2e4f653221c6d1d7cf6608e105f9501f4b2f5d2b11b864f1d971e3898e6"
+}

@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    UPDATE speedgaming_volunteer_exports SET state = $3, last_error = $4\n                    WHERE signup_id = $1 AND export_id = $2\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        {
+          "Custom": {
+            "name": "speedgaming_delivery_state",
+            "kind": {
+              "Enum": [
+                "pending",
+                "in_progress",
+                "succeeded",
+                "failed",
+                "ambiguous"
+              ]
+            }
+          }
+        },
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6779e6f83adfcbbb489de0aa1f4b5904fc3d8f146b68096b732cb53cbeb3a5d2"
+}

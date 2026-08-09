@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT restreamer AS \"restreamer: Id<Users>\", language AS \"language: Language\" FROM restreamers WHERE series = $1 AND event = $2 ORDER BY restreamer, language",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "restreamer: Id<Users>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "language: Language",
+        "type_info": {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "ce0cf3db1a952b7cebeff10b1d3f00fa9bc93a961f5645190f20613d10bdf22c"
+}

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COUNT(*) FILTER (WHERE state = 'succeeded') AS \"succeeded!\",\n                   COUNT(*) FILTER (WHERE state IN ('failed', 'ambiguous')) AS \"attention!\"\n            FROM speedgaming_volunteer_exports WHERE export_id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "succeeded!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "attention!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "655046a88977b65fe2ba4f8501d257871673af9a457d80ac65c3ed47016531ef"
+}

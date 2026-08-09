@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO restream_channels (url_pattern, discord_invite_url, display_name, racetime_team_slug) VALUES ($1, $2, $3, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c37a0d1363eecec9f049c14694c44e024b76d34eb465d963c1bfd3b835662804"
+}

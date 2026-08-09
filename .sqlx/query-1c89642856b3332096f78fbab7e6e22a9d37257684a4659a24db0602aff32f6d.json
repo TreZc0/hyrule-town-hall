@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT race_id AS \"race_id: Id<Races>\" FROM speedgaming_race_exports\n            WHERE export_id = $1 AND episode_id = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "race_id: Id<Races>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1c89642856b3332096f78fbab7e6e22a9d37257684a4659a24db0602aff32f6d"
+}

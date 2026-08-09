@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT discord_invite_url FROM restream_channels WHERE url_pattern = $1",
+  "query": "SELECT racetime_team_slug FROM restream_channels WHERE url_pattern = $1",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "discord_invite_url",
+        "name": "racetime_team_slug",
         "type_info": "Varchar"
       }
     ],
@@ -18,5 +18,5 @@
       true
     ]
   },
-  "hash": "4eb69363ce2e75089c44d3eb87eeb10ad6fe43360e551ade7aab87386339c3e1"
+  "hash": "bf4d7b84179dcfefa72b771e5aec0daf7f934604cbc03e28b68c99ffebe240f9"
 }

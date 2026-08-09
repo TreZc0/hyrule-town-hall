@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE races SET room = NULL WHERE room = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5f5b23281e2eccfa75f2a2856d2904055c4a04dc7e3b3c20c25bb5280d9a09b3"
+}

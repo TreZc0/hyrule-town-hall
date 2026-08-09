@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT series AS \"series: crate::series::Series\", event, display_name FROM events ORDER BY series, event",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "series: crate::series::Series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "event",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "display_name",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3214b992c9b52bfe8b21a68e74de09a4ddbf9076cf4a1d069052b63297e08eac"
+}

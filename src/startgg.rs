@@ -304,7 +304,7 @@ where T::Variables: Clone + Eq + Hash + Send + Sync, T::ResponseData: Clone + Se
 
 /// Loads every page of a start.gg event into the query cache.
 ///
-/// The automatic race importer calls this before taking `new_room_lock`. A cold or expired
+/// The automatic race importer calls this before taking `race_import_lock`. A cold or expired
 /// start.gg cache can require many rate-limited HTTP requests, none of which should prevent
 /// existing racetime.gg room handlers from starting or scheduled rooms from opening.
 pub(crate) async fn preload_event_sets(http_client: &reqwest::Client, config: &Config, event_slug: &str) -> Result<(), Error> {
@@ -493,7 +493,7 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
         Ok(None)
     }
 
-    async fn process_page(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config, event: &event::Data<'_>, event_slug: &str, page: i64, races: &mut Vec<Race>, skips: &mut Vec<(ID, ImportSkipReason)>) -> Result<i64, cal::Error> {
+    async fn process_page(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config, event: &event::Data<'_>, event_slug: &str, existing_sets: &HashSet<ID>, page: i64, races: &mut Vec<Race>, skips: &mut Vec<(ID, ImportSkipReason)>) -> Result<i64, cal::Error> {
         let response = query_cached::<EventSetsQuery>(http_client, &config.startgg, event_sets_query::Variables { event_slug: event_slug.to_owned(), page }).await?;
         let event_sets_query::ResponseData {
             event: Some(event_sets_query::EventSetsQueryEvent {
@@ -507,7 +507,7 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
             let event_sets_query::EventSetsQueryEventSetsNodes { id: Some(id), phase_group, full_round_text, slots: Some(slots), set_games_type, total_games, round } = set else { panic!("unexpected set format") };
             if id.0.starts_with("preview") {
                 skips.push((id, ImportSkipReason::Preview));
-            } else if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM races WHERE startgg_set = $1) AS "exists!""#, id as _).fetch_one(&mut **transaction).await? {
+            } else if existing_sets.contains(&id) {
                 skips.push((id, ImportSkipReason::Exists));
             } else if let [
                 Some(event_sets_query::EventSetsQueryEventSetsNodesSlots { entrant: Some(event_sets_query::EventSetsQueryEventSetsNodesSlotsEntrant { id: Some(ref team1) }) }),
@@ -535,11 +535,16 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
         Ok(total_pages)
     }
 
+    // This importer visits every set in the bracket on every pass. Fetch the existing IDs once
+    // instead of issuing one EXISTS query per set while processing the cached start.gg pages.
+    let existing_sets = sqlx::query_scalar!(
+        r#"SELECT startgg_set AS "startgg_set!: ID" FROM races WHERE startgg_set IS NOT NULL"#,
+    ).fetch_all(&mut **transaction).await?.into_iter().collect::<HashSet<_>>();
     let mut races = Vec::default();
     let mut skips = Vec::default();
-    let total_pages = process_page(&mut *transaction, http_client, config, event, event_slug, 1, &mut races, &mut skips).await?;
+    let total_pages = process_page(&mut *transaction, http_client, config, event, event_slug, &existing_sets, 1, &mut races, &mut skips).await?;
     for page in 2..=total_pages {
-        process_page(&mut *transaction, http_client, config, event, event_slug, page, &mut races, &mut skips).await?;
+        process_page(&mut *transaction, http_client, config, event, event_slug, &existing_sets, page, &mut races, &mut skips).await?;
     }
     Ok((races, skips))
 }

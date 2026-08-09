@@ -1679,6 +1679,8 @@ struct TwwrGenerateResponse {
 pub(crate) struct GlobalState {
     /// Locked while event rooms are being created. Wait with handling new rooms while it's held.
     new_room_lock: Arc<Mutex<()>>,
+    /// Serializes automatic and manual imports so external Discord side effects aren't duplicated.
+    race_import_lock: Arc<Mutex<()>>,
     host_info: racetime::HostInfo,
     racetime_config: ConfigRaceTime,
     pub(crate) db_pool: PgPool,
@@ -1704,6 +1706,7 @@ impl TypeMapKey for GlobalState {
 impl GlobalState {
     pub(crate) async fn new(
         new_room_lock: Arc<Mutex<()>>,
+        race_import_lock: Arc<Mutex<()>>,
         racetime_config: ConfigRaceTime,
         db_pool: PgPool,
         http_client: reqwest::Client,
@@ -1722,7 +1725,7 @@ impl GlobalState {
                 hostname: Cow::Borrowed(racetime_host()),
                 ..racetime::HostInfo::default()
             },
-            new_room_lock, racetime_config, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, discord_ctx, clean_shutdown, seed_cache_tx, seed_metadata,
+            new_room_lock, race_import_lock, racetime_config, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, discord_ctx, clean_shutdown, seed_cache_tx, seed_metadata,
             extra_room_senders: Arc::new(RwLock::new(HashMap::default())),
             restream_team_members: Arc::new(RwLock::new(HashMap::default())),
             avianart_api_key,
@@ -1741,11 +1744,10 @@ impl GlobalState {
         is_member
     }
 
-    /// Locked while event rooms are being created. Also used to serialize manual race
-    /// imports against the automatic import loop, and against each other, so they don't
-    /// race to create duplicate Discord scheduling threads for the same match.
-    pub(crate) fn new_room_lock(&self) -> Arc<Mutex<()>> {
-        Arc::clone(&self.new_room_lock)
+    /// Serializes imports against the automatic loop and against each other so they don't race to
+    /// create duplicate Discord scheduling threads for the same match.
+    pub(crate) fn race_import_lock(&self) -> Arc<Mutex<()>> {
+        Arc::clone(&self.race_import_lock)
     }
 
     pub(crate) fn roll_twwr_seed(self: Arc<Self>, version: Option<VersionedBranch>, settings_string: String, unlock_spoiler_log: UnlockSpoilerLog) -> mpsc::Receiver<SeedRollUpdate> {

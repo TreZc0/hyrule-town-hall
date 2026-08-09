@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO speedgaming_volunteer_exports (signup_id, export_id, state, attempt_count, last_attempt_at)\n        VALUES ($1, $2, 'in_progress', 1, NOW())\n        ON CONFLICT (signup_id, export_id) DO UPDATE SET\n            state = 'in_progress', attempt_count = speedgaming_volunteer_exports.attempt_count + 1,\n            last_attempt_at = NOW(), last_error = NULL\n        WHERE speedgaming_volunteer_exports.state IN ('pending', 'failed')\n           OR (speedgaming_volunteer_exports.state = 'ambiguous'\n               AND speedgaming_volunteer_exports.last_error LIKE '%403 Forbidden%')\n        RETURNING true AS \"claimed!\"\n    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "claimed!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3d042a14d9de057317ae0fee6069a721198be3d43c3c244ced7a78ae8f49bb6c"
+}

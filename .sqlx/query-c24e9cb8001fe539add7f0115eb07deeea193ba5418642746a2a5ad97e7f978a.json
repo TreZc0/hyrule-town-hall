@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id: Id<Races>\" FROM races WHERE companion_race_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Races>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c24e9cb8001fe539add7f0115eb07deeea193ba5418642746a2a5ad97e7f978a"
+}

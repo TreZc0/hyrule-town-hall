@@ -283,6 +283,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             ootr_api_client.clone(),
         ).await?;
         let new_room_lock = Arc::default();
+        let race_import_lock = Arc::default();
         let clean_shutdown = Arc::default();
         // Create a default racetime config for fallback (will be overridden by database-driven credentials)
         let racetime_config = config::ConfigRaceTime {
@@ -292,6 +293,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
         let (seed_cache_tx, seed_cache_rx) = watch::channel(());
         let global_state = Arc::new(racetime_bot::GlobalState::new(
             Arc::clone(&new_room_lock),
+            Arc::clone(&race_import_lock),
             racetime_config,
             db_pool.clone(),
             http_client.clone(),
@@ -317,7 +319,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Ok(Err(e)) => Err(Error::from(e)),
             Err(e) => Err(Error::from(e)),
         });
-        let import_task = tokio::spawn(cal::auto_import_races(db_pool.clone(), http_client.clone(), config, rocket.shutdown(), discord_builder.ctx_fut.clone(), new_room_lock)).map(|res| match res {
+        let import_task = tokio::spawn(cal::auto_import_races(db_pool.clone(), http_client.clone(), config, rocket.shutdown(), discord_builder.ctx_fut.clone(), new_room_lock, race_import_lock)).map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(Error::from(e)),
             Err(e) => Err(Error::Task(e)),

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT e.discord_guild AS \"discord_guild!\", o.discord_role_id AS \"discord_role_id!\"\n            FROM events e\n            JOIN game_series gs ON gs.series = e.series\n            JOIN role_bindings rb ON rb.id = $1 AND rb.game_id = gs.game_id\n            JOIN event_role_binding_overrides o\n                ON o.series = e.series AND o.event = e.event AND o.role_binding_id = $1\n            WHERE (e.end_time IS NULL OR e.end_time > NOW())\n            AND e.force_custom_role_binding = false\n            AND e.discord_guild IS NOT NULL\n            AND o.discord_role_id IS NOT NULL\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "discord_guild!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "discord_role_id!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "9d0ac65332645e5c335d1b21c69744a86225d81de558b83d33e2b00dcc41cba7"
+}

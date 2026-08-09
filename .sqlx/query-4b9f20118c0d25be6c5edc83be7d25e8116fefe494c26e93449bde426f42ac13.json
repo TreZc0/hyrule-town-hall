@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE signups s SET status = 'confirmed', updated_at = NOW()\n                FROM role_bindings rb, role_types rt, users u\n                WHERE s.race_id = $1 AND s.role_binding_id = rb.id AND rb.role_type_id = rt.id\n                  AND s.user_id = u.id AND s.status = 'pending' AND rb.language = $2 AND rt.name = $3\n                  AND (($4::BIGINT IS NOT NULL AND u.discord_id = $4)\n                       OR LOWER(u.discord_username) = LOWER($5))\n                RETURNING s.id AS \"signup_id: Id<Signups>\", s.user_id AS \"user_id: crate::id::Id<crate::id::Users>\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "signup_id: Id<Signups>",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id: crate::id::Id<crate::id::Users>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "4b9f20118c0d25be6c5edc83be7d25e8116fefe494c26e93449bde426f42ac13"
+}

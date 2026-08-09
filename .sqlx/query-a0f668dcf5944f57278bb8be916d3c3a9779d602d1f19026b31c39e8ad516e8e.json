@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE races SET xkeys_uuid = $1, seed_data = $2, hash1 = $3, hash2 = $4, hash3 = $5, hash4 = $6, hash5 = $7 WHERE id = $8",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a0f668dcf5944f57278bb8be916d3c3a9779d602d1f19026b31c39e8ad516e8e"
+}
