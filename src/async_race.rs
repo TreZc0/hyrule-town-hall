@@ -101,6 +101,7 @@ impl AsyncRaceManager {
         
         let player_name = player.display_name();
         let display_order = Self::get_display_order(race, async_part);
+        let game_suffix = race.game.map(|game| format!(" (G{game})")).unwrap_or_default();
         let thread_name = if race.phase.is_some() || race.round.is_some() {
             let round_str = if let Some(phase) = &race.phase {
                 if let Some(round) = &race.round {
@@ -113,9 +114,9 @@ impl AsyncRaceManager {
             } else {
                 String::new()
             };
-            format!("Async {}: {} ({})", round_str.trim(), player_name, if display_order == 1 { "1st" } else if display_order == 2 { "2nd" } else { "3rd" })
+            format!("Async {}{}: {} ({})", round_str.trim(), game_suffix, player_name, if display_order == 1 { "1st" } else if display_order == 2 { "2nd" } else { "3rd" })
         } else {
-            format!("Async {}: {} ({})", matchup, player_name, if display_order == 1 { "1st" } else if display_order == 2 { "2nd" } else { "3rd" })
+            format!("Async {}{}: {} ({})", matchup, game_suffix, player_name, if display_order == 1 { "1st" } else if display_order == 2 { "2nd" } else { "3rd" })
         };
         
         let mut content = Self::build_async_thread_content(
@@ -216,7 +217,11 @@ impl AsyncRaceManager {
         
         content.push("Hey ");
         content.mention_user(player);
-        content.push(", this thread will be used to handle your part of the async for this race: ");
+        content.push(", this thread will be used to handle your part of the async for this race");
+        if let Some(game) = race.game {
+            content.push(format!(" (G{game})"));
+        }
+        content.push(": ");
         
         if let Some(phase) = &race.phase {
             content.push_safe(phase.clone());

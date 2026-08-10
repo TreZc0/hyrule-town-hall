@@ -603,8 +603,33 @@ async fn apply_live_schedule(
     Ok(())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SchedulingRaceFilter {
+    Upcoming,
+    UnplayedAsyncPart,
+}
+
+fn async_part_for_team(race: &Race, team: &Team) -> Option<u8> {
+    race.teams()
+        .position(|race_team| race_team == team)
+        .and_then(|index| u8::try_from(index + 1).ok())
+}
+
+async fn async_part_has_been_played(transaction: &mut Transaction<'_, Postgres>, race: &Race, async_part: u8) -> sqlx::Result<bool> {
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+            SELECT 1 FROM async_times
+            WHERE race_id = $1
+            AND async_part = $2
+            AND (start_time IS NOT NULL OR player_finished_at IS NOT NULL)
+        ) AS "played!""#,
+        race.id as _,
+        async_part as i32,
+    ).fetch_one(&mut **transaction).await
+}
+
 //TODO refactor (MH admins should have permissions, room already being open should not remove permissions but only remove the team from return)
-async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction, game: Option<i16>, allow_rooms_for_other_teams: bool, alternative_instructions: Option<&str>, already_deferred: bool, skip_room_check: bool) -> Result<Option<(Transaction<'a, Postgres>, Race, Option<Team>)>, Box<dyn std::error::Error + Send + Sync>> {
+async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction, game: Option<i16>, allow_rooms_for_other_teams: bool, alternative_instructions: Option<&str>, already_deferred: bool, skip_room_check: bool, race_filter: SchedulingRaceFilter) -> Result<Option<(Transaction<'a, Postgres>, Race, Option<Team>)>, Box<dyn std::error::Error + Send + Sync>> {
     let (mut transaction, http_client) = {
         let data = ctx.data.read().await;
         (
@@ -613,6 +638,27 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
         )
     };
     let mut applicable_races = Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), game, false).await?;
+    let mut filtered_out_played_async = false;
+    if race_filter == SchedulingRaceFilter::UnplayedAsyncPart && game.is_none() {
+        let mut unplayed_races = Vec::with_capacity(applicable_races.len());
+        for race in applicable_races {
+            let mut async_part = None;
+            for (index, team) in race.teams().enumerate() {
+                if team.members(&mut transaction).await?.into_iter().any(|member| member.discord.is_some_and(|discord| discord.id == interaction.user_id())) {
+                    async_part = u8::try_from(index + 1).ok();
+                    break
+                }
+            }
+            if let Some(async_part) = async_part {
+                if async_part_has_been_played(&mut transaction, &race, async_part).await? {
+                    filtered_out_played_async = true;
+                    continue
+                }
+            }
+            unplayed_races.push(race);
+        }
+        applicable_races = unplayed_races;
+    }
     if let Some(Some(min_game)) = applicable_races.iter().map(|race| race.game).min() {
         // None < Some(_) so this code only runs if all applicable races are best-of-N
         applicable_races.retain(|race| race.game == Some(min_game));
@@ -623,6 +669,21 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
                 .expect("interaction called from outside registered guild")
                 .expect("interaction called from guild with conflicting draft kinds");
             let mut content = MessageBuilder::default();
+            if filtered_out_played_async {
+                content.push("Sorry, you don't have any remaining unplayed async games in this thread.");
+                if already_deferred {
+                    interaction.edit_response(ctx, EditInteractionResponse::new()
+                        .content(content.build())
+                    ).await?;
+                } else {
+                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                        .ephemeral(true)
+                        .content(content.build())
+                    )).await?;
+                }
+                transaction.rollback().await?;
+                return Ok(None)
+            }
             match (Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), game, true).await?.is_empty(), game.is_some()) {
                 (false, false) => {
                     content.push("Sorry, this thread is not associated with any upcoming races. ");
@@ -711,7 +772,7 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
 }
 
 async fn check_draft_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction) -> Result<Option<(event::Data<'static>, Race, draft::Kind, draft::MessageContext<'a>)>, Box<dyn std::error::Error + Send + Sync>> {
-    let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, Some("You can continue the draft in the race room"), false, true).await? else { return Ok(None) };
+    let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, Some("You can continue the draft in the race room"), false, true, SchedulingRaceFilter::Upcoming).await? else { return Ok(None) };
     let guild_id = interaction.guild_id().expect("Received interaction from outside of a guild");
     let event = race.event(&mut transaction).await?;
     Ok(if let Some(team) = team {
@@ -1792,7 +1853,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         } else if Some(interaction.data.id) == command_ids.no {
                             draft_action(ctx, interaction, draft::Action::BooleanChoice(false), None).await?;
                         } else if interaction.data.id == command_ids.post_status {
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false, false).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false, false, SchedulingRaceFilter::Upcoming).await? {
                                 let event = race.event(&mut transaction).await?;
                                 if event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id)) {
                                     if let Some(draft_kind) = event.draft_kind() {
@@ -2322,7 +2383,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 .ephemeral(false)
                             )).await?;
 
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, false, None, true, false).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, false, None, true, false, SchedulingRaceFilter::Upcoming).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
@@ -2478,7 +2539,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 CommandDataOptionValue::Integer(game) => i16::try_from(game).expect("game number out of range"),
                                 _ => panic!("unexpected slash command option type"),
                             });
-                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None, false, false).await? {
+                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None, false, false, SchedulingRaceFilter::UnplayedAsyncPart).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
@@ -2508,6 +2569,21 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     )).await?;
                                     transaction.rollback().await?;
                                 } else if team.is_some() && event.asyncs_allowed() || is_organizer {
+                                        if let Some(ref team) = team {
+                                            let async_part = async_part_for_team(&race, team).expect("participant team missing from race entrants");
+                                            if async_part_has_been_played(&mut transaction, &race, async_part).await? {
+                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                                    .ephemeral(true)
+                                                    .content(if let Some(game) = race.game {
+                                                        format!("Sorry, your part of Game {game} has already started and can no longer be rescheduled.")
+                                                    } else {
+                                                        "Sorry, your part of this async has already started and can no longer be rescheduled.".to_owned()
+                                                    })
+                                                )).await?;
+                                                transaction.rollback().await?;
+                                                return Ok(())
+                                            }
+                                        }
                                         let start = match interaction.data.options[0].value {
                                             CommandDataOptionValue::String(ref start) => start,
                                             _ => panic!("unexpected slash command option type"),
@@ -2973,7 +3049,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             interaction.create_response(ctx, CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()
                                 .ephemeral(false)
                             )).await?;
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None, true, false).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None, true, false, SchedulingRaceFilter::UnplayedAsyncPart).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 if speedgaming_export::LEGACY_IMPORT_ENABLED && event.speedgaming_slug.is_some() {
@@ -3051,7 +3127,22 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                 })
                                             ).await?;
                                         }
-                                        RaceSchedule::Async { .. } => match race.entrants {
+                                        RaceSchedule::Async { .. } => {
+                                            if let Some(ref team) = team {
+                                                let async_part = async_part_for_team(&race, team).expect("participant team missing from race entrants");
+                                                if async_part_has_been_played(&mut transaction, &race, async_part).await? {
+                                                    interaction.edit_response(ctx, EditInteractionResponse::new()
+                                                        .content(if let Some(game) = race.game {
+                                                            format!("Sorry, your part of Game {game} has already started and can no longer be removed from the schedule.")
+                                                        } else {
+                                                            "Sorry, your part of this async has already started and can no longer be removed from the schedule.".to_owned()
+                                                        })
+                                                    ).await?;
+                                                    transaction.rollback().await?;
+                                                    return Ok(())
+                                                }
+                                            }
+                                            match race.entrants {
                                             Entrants::Two([Entrant::MidosHouseTeam(ref team1), Entrant::MidosHouseTeam(ref team2)]) => {
                                                 if team.as_ref().is_some_and(|team| team1 == team) {
                                                     sqlx::query!("UPDATE races SET async_start1 = NULL, schedule_updated_at = NOW() WHERE id = $1", race.id as _).execute(&mut *transaction).await?;
@@ -3096,8 +3187,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     })
                                                 ).await?;
                                             }
-                                            _ => panic!("found race with not 2 or 3 MH teams scheduled as async"),
-                                        },
+                                                _ => panic!("found race with not 2 or 3 MH teams scheduled as async"),
+                                            }
+                                        }
                                     }
                                 } else {
                                     interaction.edit_response(ctx, EditInteractionResponse::new()
@@ -3182,7 +3274,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         } else if Some(interaction.data.id) == command_ids.skip {
                             draft_action(ctx, interaction, draft::Action::Skip, None).await?;
                         } else if interaction.data.id == command_ids.status {
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false, false).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false, false, SchedulingRaceFilter::Upcoming).await? {
                                 let event = race.event(&mut transaction).await?;
                                 if let Some(draft_kind) = event.draft_kind() {
                                     if let Some(ref draft) = race.draft {
@@ -3450,7 +3542,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     } else if let Some((setting, value)) = custom_id.strip_prefix("draft_option_").and_then(|setting_value| setting_value.split_once("__")) {
                         draft_action(ctx, interaction, draft::Action::Pick { setting: setting.to_owned(), value: value.to_owned() }, None).await?;
                     } else if custom_id == "draft_start" {
-                        let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, None, false, false).await? else { return Ok(()) };
+                        let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, None, false, false, SchedulingRaceFilter::Upcoming).await? else { return Ok(()) };
                         if team.is_none() {
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                 .ephemeral(true)
@@ -4236,7 +4328,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 .components(vec![])
                         )).await?;
 
-                        if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, Some(game_num), false, None, true, false).await? {
+                        if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, Some(game_num), false, None, true, false, SchedulingRaceFilter::Upcoming).await? {
                             let event = race.event(&mut transaction).await?;
                             let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                             let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
