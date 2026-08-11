@@ -4249,14 +4249,11 @@ impl Handler {
                     room_url: race_data.url.clone(),
                     public: !race_data.unlisted,
                 };
-                if !clean_shutdown.open_rooms.insert(room.clone()) {
-                    // Previous handler is still mid-cleanup (handled_races was cleared but
-                    // open_rooms hasn't been updated yet by our task() spawn). Skip this scan
-                    // cycle; the next one will pick it up cleanly.
+                if clean_shutdown.open_rooms.contains(&room) {
+                    // A handler started by this or a previous bot instance is still active.
                     unlock!();
                     return false
                 }
-                clean_shutdown.updates.send(CleanShutdownUpdate::RoomOpened(room)).allow_unreceived();
             });
         }
         true
@@ -4743,6 +4740,22 @@ impl RaceHandler<GlobalState> for Handler {
 
     async fn task(global_state: Arc<GlobalState>, race_data: Arc<tokio::sync::RwLock<RaceData>>, join_handle: tokio::task::JoinHandle<Result<(), racetime::bot::HandleError<Error>>>) -> Result<(), Error> {
         let race_data = ArcRwLock::from(race_data);
+        let room = lock!(@read data = race_data; OpenRoom::RaceTime {
+            room_url: data.url.clone(),
+            public: !data.unlisted,
+        });
+        let should_start = lock!(clean_shutdown = global_state.clean_shutdown; {
+            if clean_shutdown.should_handle_new() && clean_shutdown.open_rooms.insert(room.clone()) {
+                clean_shutdown.updates.send(CleanShutdownUpdate::RoomOpened(room)).allow_unreceived();
+                true
+            } else {
+                false
+            }
+        });
+        if !should_start {
+            join_handle.abort();
+            return Ok(())
+        }
         tokio::spawn(async move {
             lock!(@read data = race_data; println!("race handler for https://{}{} started", racetime_host(), data.url));
             let res = join_handle.await;
@@ -8009,7 +8022,12 @@ async fn handle_rooms(global_state: Arc<GlobalState>, shutdown: rocket::Shutdown
                     let sender = bot.extra_room_sender();
                     lock!(@write senders = global_state.extra_room_senders; senders.insert(category_slug.clone(), sender));
                     let handle = tokio::spawn(async move {
-                        let _ = bot.run_until::<Handler, _, _>(shutdown).await;
+                        if let Err(e) = bot.run_until::<Handler, _, _>(shutdown).await {
+                            eprintln!("racetime.gg bot for category '{category_slug}' errored: {e} ({e:?})");
+                            if let Environment::Production = Environment::default() {
+                                log::error!("racetime.gg bot for category '{category_slug}' errored: {e} ({e:?})");
+                            }
+                        }
                     });
                     bot_handles.push(handle);
                 }
@@ -8033,7 +8051,12 @@ async fn handle_rooms(global_state: Arc<GlobalState>, shutdown: rocket::Shutdown
         } else {
             // Wait for all bots to complete
             for handle in bot_handles {
-                let _ = handle.await;
+                if let Err(e) = handle.await {
+                    eprintln!("racetime.gg bot task panicked: {e}");
+                    if let Environment::Production = Environment::default() {
+                        log::error!("racetime.gg bot task panicked: {e}");
+                    }
+                }
             }
             break Ok(())
         }

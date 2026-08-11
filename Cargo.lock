@@ -5634,9 +5634,9 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "racetime"
-version = "0.35.1"
+version = "0.35.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a31421feff3777dfc8cfcb671cd5f9f679ab36fba31aa6f0374d43a3f5052b4"
+checksum = "2dced0912256da4129b3481ded8234b10b692ed5b2f13f0de65de88bde1ed545"
 dependencies = [
  "async-trait",
  "chrono",
