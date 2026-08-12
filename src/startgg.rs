@@ -86,6 +86,7 @@ impl From<ID> for String {
 }
 
 type Int = i64;
+type Boolean = bool;
 type String = std::string::String;
 
 #[derive(GraphQLQuery)]
@@ -167,6 +168,16 @@ pub(crate) struct UserSlugQuery;
     response_derives = "Debug, Clone",
 )]
 pub(crate) struct EntrantsQuery;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "assets/graphql/startgg-schema.json",
+    query_path = "assets/graphql/startgg-swiss-sets-query.graphql",
+    skip_default_scalars, // workaround for https://github.com/smashgg/developer-portal/issues/171
+    variables_derives = "Clone, PartialEq, Eq, Hash",
+    response_derives = "Debug, Clone",
+)]
+pub(crate) struct SwissSetsQuery;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -578,7 +589,6 @@ pub(crate) async fn fetch_event_entrants(http_client: &reqwest::Client, config: 
                 id: Some(entrant_id), 
                 name: Some(entrant_name), 
                 participants: Some(participants),
-                paginated_sets: _,
             } = entrant else { continue };
             
             let user_ids: Vec<Option<ID>> = participants.into_iter()
@@ -613,26 +623,61 @@ pub struct SwissStanding {
     pub losses: usize,
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SwissRecord {
+    wins: usize,
+    losses: usize,
+}
+
+fn apply_swiss_set(
+    records: &mut HashMap<String, SwissRecord>,
+    entrant_ids: impl IntoIterator<Item = String>,
+    winner_id: Option<String>,
+    is_bye: bool,
+) {
+    let entrant_ids = entrant_ids.into_iter().collect::<HashSet<_>>();
+    match entrant_ids.into_iter().collect::<Vec<_>>().as_slice() {
+        [entrant_id] if is_bye || winner_id.as_deref() == Some(entrant_id.as_str()) => {
+            if let Some(record) = records.get_mut(entrant_id) {
+                record.wins += 1;
+            }
+        }
+        [entrant1_id, entrant2_id] => {
+            let Some(winner_id) = winner_id else { return };
+            let (winner_id, loser_id) = if winner_id == entrant1_id.as_str() {
+                (entrant1_id, entrant2_id)
+            } else if winner_id == entrant2_id.as_str() {
+                (entrant2_id, entrant1_id)
+            } else {
+                return
+            };
+            if let Some(record) = records.get_mut(winner_id) {
+                record.wins += 1;
+            }
+            if let Some(record) = records.get_mut(loser_id) {
+                record.losses += 1;
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Computes Swiss standings for a Startgg Swiss event
 pub(crate) async fn swiss_standings(
     http_client: &reqwest::Client,
     _config: &Config,
     event_slug: &str,
     startgg_token: &str,
-    resigned_entrant_ids: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<SwissStanding>, Error> {
-    use entrants_query::EntrantsQueryEventEntrantsNodesPaginatedSetsNodes as SetNode;
-    use entrants_query::EntrantsQueryEventEntrantsNodesPaginatedSetsNodesPhaseGroup as PhaseGroup;
     use entrants_query::EntrantsQueryEventEntrantsNodes as EntrantNode;
     use entrants_query::EntrantsQueryEventEntrantsPageInfo as PageInfo;
     use entrants_query::EntrantsQueryEventEntrants as Entrants;
     use entrants_query::EntrantsQueryEvent as Event;
     use entrants_query::ResponseData as ResponseData;
-    use event_sets_query::EventSetsQueryEventSetsNodes as EventSetNode;
-    use event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup as EventSetPhaseGroup;
-    use event_sets_query::EventSetsQueryEventSets as EventSets;
-    use event_sets_query::EventSetsQueryEvent as EventSetsEvent;
-    use event_sets_query::ResponseData as EventSetsResponseData;
+    use swiss_sets_query::SwissSetsQueryEventSets as SwissSets;
+    use swiss_sets_query::SwissSetsQueryEventSetsNodes as SwissSetNode;
+    use swiss_sets_query::SwissSetsQueryEvent as SwissEvent;
+    use swiss_sets_query::ResponseData as SwissResponseData;
 
     // Helper function to fetch remaining pages sequentially
     async fn fetch_remaining_pages<T>(
@@ -656,98 +701,10 @@ pub(crate) async fn swiss_standings(
         Ok(())
     }
     
-    // First, get tournament structure to understand what rounds should exist
-    let mut swiss_rounds = HashSet::<String>::new();
-    
-    // Fetch all event sets pages
-    let event_sets_response = query_cached::<EventSetsQuery>(
-        http_client,
-        startgg_token,
-        event_sets_query::Variables {
-            event_slug: event_slug.to_owned(),
-            page: 1,
-        },
-    )
-    .await?;
-    
-    let total_event_pages = if let EventSetsResponseData {
-        event: Some(EventSetsEvent {
-            sets: Some(EventSets {
-                page_info: Some(event_sets_query::EventSetsQueryEventSetsPageInfo { total_pages: Some(tp) }),
-                nodes: Some(sets),
-            }),
-            ..
-        }),
-        ..
-    } = event_sets_response {
-        // Process first page
-        for set in sets.into_iter().filter_map(|s| s) {
-            let EventSetNode {
-                phase_group: Some(EventSetPhaseGroup { 
-                    phase: Some(phase),
-                    rounds: Some(_rounds),
-                    ..
-                }),
-                full_round_text: Some(round_text),
-                ..
-            } = set else { continue };
-            
-            // Check if this is a Swiss phase
-            if phase.name == Some("Swiss".to_string()) {
-                swiss_rounds.insert(round_text);
-            }
-        }
-        tp
-    } else {
-        return Ok(Vec::new());
-    };
-
-    // Fetch remaining event sets pages
-    fetch_remaining_pages::<EventSetsQuery>(
-        http_client,
-        startgg_token,
-        total_event_pages,
-        |page| event_sets_query::Variables {
-            event_slug: event_slug.to_owned(),
-            page,
-        },
-        |response| {
-            let EventSetsResponseData {
-                event: Some(EventSetsEvent {
-                    sets: Some(EventSets {
-                        nodes: Some(sets),
-                        ..
-                    }),
-                    ..
-                }),
-                ..
-            } = response else { return };
-            
-            for set in sets.iter().filter_map(|s| s.as_ref()) {
-                let EventSetNode {
-                    phase_group: Some(EventSetPhaseGroup { 
-                        phase: Some(phase),
-                        rounds: Some(_rounds),
-                        ..
-                    }),
-                    full_round_text: Some(round_text),
-                    ..
-                } = set else { continue };
-                
-                // Check if this is a Swiss phase
-                if phase.name == Some("Swiss".to_string()) {
-                    swiss_rounds.insert(round_text.clone());
-                }
-            }
-        },
-    )
-    .await?;
-
-    // Now get all entrants and their actual matches
-    let mut all_entrants = Vec::new();
-    let mut entrant_matches = std::collections::HashMap::new();
-    
-    // Fetch all entrants pages
+    // Fetch entrant IDs and names. Match records are calculated separately from the event's
+    // complete set list so pending matches and explicit byes are handled consistently.
+    let mut entrant_names = HashMap::new();
+    let mut records = HashMap::new();
     let entrants_response = query_cached::<EntrantsQuery>(
         http_client,
         startgg_token,
@@ -768,44 +725,15 @@ pub(crate) async fn swiss_standings(
         }),
         ..
     } = entrants_response {
-        // Process first page
         for entrant in entrants.into_iter().filter_map(|e| e) {
             let EntrantNode {
                 id: Some(entrant_id),
                 name: Some(entrant_name),
-                paginated_sets: Some(paginated_sets),
                 ..
             } = entrant else { continue };
-            
-            let mut wins = 0;
-            let mut losses = 0;
-            let mut total_matches = 0; // Track ALL matches (including null winnerId)
-            
-            if let Some(set_nodes) = paginated_sets.nodes {
-                for set in set_nodes.into_iter().filter_map(|s| s) {
-                    let SetNode {
-                        winner_id,
-                        phase_group: Some(PhaseGroup { bracket_type, .. }),
-                        ..
-                    } = set else { continue };
-                    
-                    if bracket_type != Some(entrants_query::BracketType::SWISS) { continue; }
-                    
-                    // Count ALL matches (including null winnerId)
-                    total_matches += 1;
-                    
-                    // Count wins/losses based on winner_id
-                    match winner_id {
-                        Some(wid) if wid.to_string() == entrant_id.to_string() => wins += 1,
-                        Some(_) => losses += 1,
-                        None => {}, // winnerId null means the match hasn't been played yet
-                    }
-                }
-            }
-            
-            // Store the matches for this entrant
-            entrant_matches.insert(entrant_id.to_string(), (entrant_name.clone(), wins, losses, total_matches));
-            all_entrants.push((entrant_name, wins, losses));
+            let entrant_id = entrant_id.to_string();
+            entrant_names.insert(entrant_id.clone(), entrant_name);
+            records.insert(entrant_id, SwissRecord::default());
         }
         tp
     } else {
@@ -837,69 +765,86 @@ pub(crate) async fn swiss_standings(
                 let EntrantNode {
                     id: Some(entrant_id),
                     name: Some(entrant_name),
-                    paginated_sets: Some(paginated_sets),
                     ..
                 } = entrant else { continue };
-                
-                let mut wins = 0;
-                let mut losses = 0;
-                let mut total_matches = 0; // Track ALL matches (including null winnerId)
-                
-                if let Some(set_nodes) = &paginated_sets.nodes {
-                    for set in set_nodes.iter().filter_map(|s| s.as_ref()) {
-                        let SetNode {
-                            winner_id,
-                            phase_group: Some(PhaseGroup { bracket_type, .. }),
-                            ..
-                        } = set else { continue };
-                        
-                        if *bracket_type != Some(entrants_query::BracketType::SWISS) { continue; }
-                        
-                        // Count ALL matches (including null winnerId)
-                        total_matches += 1;
-                        
-                        // Count wins/losses based on winner_id
-                        match winner_id {
-                            Some(wid) if wid.to_string() == entrant_id.to_string() => wins += 1,
-                            Some(_) => losses += 1,
-                            None => {}, // winnerId null means the match hasn't been played yet
-                        }
-                    }
-                }
-                
-                // Store the matches for this entrant
-                entrant_matches.insert(entrant_id.to_string(), (entrant_name.clone(), wins, losses, total_matches));
-                all_entrants.push((entrant_name.clone(), wins, losses));
+                let entrant_id = entrant_id.to_string();
+                entrant_names.insert(entrant_id.clone(), entrant_name.clone());
+                records.insert(entrant_id, SwissRecord::default());
             }
         },
     )
     .await?;
 
-    // Now apply the correct bye detection logic
-    let expected_rounds = swiss_rounds.len();
-    if expected_rounds > 0 {
-        for (entrant_id, (name, wins, losses, total_matches)) in &mut entrant_matches {
-            // Skip bye prediction for resigned entrants
-            if let Some(resigned_ids) = resigned_entrant_ids {
-                if resigned_ids.contains(entrant_id) {
-                    continue;
-                }
+    fn process_sets<'a>(
+        sets: impl Iterator<Item = &'a SwissSetNode>,
+        records: &mut HashMap<String, SwissRecord>,
+    ) {
+        for set in sets {
+            let SwissSetNode {
+                id: Some(id),
+                winner_id,
+                phase_group: Some(phase_group),
+                slots: Some(slots),
+            } = set else { continue };
+            if id.0.starts_with("preview")
+                || phase_group.bracket_type != Some(swiss_sets_query::BracketType::SWISS)
+            {
+                continue
             }
-            
-            // Only apply byes if the total number of matches is less than expected rounds
-            // This indicates that some matches were wiped from the API
-            if *total_matches < expected_rounds {
-                let missing_matches = expected_rounds - *total_matches;
-                *wins += missing_matches;
-                
-                // Update the all_entrants list
-                if let Some(entrant) = all_entrants.iter_mut().find(|(n, _, _)| n == name) {
-                    entrant.1 = *wins;
-                    entrant.2 = *losses;
-                }
-            }
+            let entrant_ids = slots.iter().filter_map(|slot| {
+                slot.as_ref()?.entrant.as_ref()?.id.as_ref().map(ToString::to_string)
+            });
+            let is_bye = slots.iter().filter_map(Option::as_ref).any(|slot| {
+                slot.seed.as_ref().and_then(|seed| seed.is_bye) == Some(true)
+            });
+            apply_swiss_set(records, entrant_ids, winner_id.map(|id| id.to_string()), is_bye);
         }
     }
+
+    let swiss_sets_response = query_cached::<SwissSetsQuery>(
+        http_client,
+        startgg_token,
+        swiss_sets_query::Variables {
+            event_slug: event_slug.to_owned(),
+            page: 1,
+        },
+    )
+    .await?;
+    let total_set_pages = if let SwissResponseData {
+        event: Some(SwissEvent {
+            sets: Some(SwissSets {
+                page_info: Some(swiss_sets_query::SwissSetsQueryEventSetsPageInfo { total_pages: Some(tp) }),
+                nodes: Some(sets),
+            }),
+        }),
+    } = &swiss_sets_response {
+        process_sets(sets.iter().filter_map(Option::as_ref), &mut records);
+        *tp
+    } else {
+        return Ok(Vec::new())
+    };
+    fetch_remaining_pages::<SwissSetsQuery>(
+        http_client,
+        startgg_token,
+        total_set_pages,
+        |page| swiss_sets_query::Variables {
+            event_slug: event_slug.to_owned(),
+            page,
+        },
+        |response| {
+            let SwissResponseData {
+                event: Some(SwissEvent {
+                    sets: Some(SwissSets { nodes: Some(sets), .. }),
+                }),
+            } = response else { return };
+            process_sets(sets.iter().filter_map(Option::as_ref), &mut records);
+        },
+    )
+    .await?;
+
+    let mut all_entrants = entrant_names.into_iter().filter_map(|(id, name)| {
+        records.remove(&id).map(|SwissRecord { wins, losses }| (name, wins, losses))
+    }).collect::<Vec<_>>();
 
     // Sort: wins desc, losses asc, name asc
     all_entrants.sort_by(|a, b| {
@@ -930,4 +875,66 @@ pub(crate) async fn swiss_standings(
         });
     }
     Ok(standings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_swiss_set, HashMap, SwissRecord};
+
+    fn records() -> HashMap<String, SwissRecord> {
+        ["entrant1", "entrant2"].into_iter()
+            .map(|id| (id.to_owned(), SwissRecord::default()))
+            .collect()
+    }
+
+    #[test]
+    fn pending_swiss_set_does_not_change_records() {
+        let mut records = records();
+        apply_swiss_set(
+            &mut records,
+            ["entrant1".to_owned(), "entrant2".to_owned()],
+            None,
+            false,
+        );
+        assert_eq!(records["entrant1"], SwissRecord::default());
+        assert_eq!(records["entrant2"], SwissRecord::default());
+    }
+
+    #[test]
+    fn completed_swiss_set_adds_win_and_loss() {
+        let mut records = records();
+        apply_swiss_set(
+            &mut records,
+            ["entrant1".to_owned(), "entrant2".to_owned()],
+            Some("entrant2".to_owned()),
+            false,
+        );
+        assert_eq!(records["entrant1"], SwissRecord { wins: 0, losses: 1 });
+        assert_eq!(records["entrant2"], SwissRecord { wins: 1, losses: 0 });
+    }
+
+    #[test]
+    fn explicit_bye_adds_one_win() {
+        let mut records = records();
+        apply_swiss_set(
+            &mut records,
+            ["entrant1".to_owned()],
+            None,
+            true,
+        );
+        assert_eq!(records["entrant1"], SwissRecord { wins: 1, losses: 0 });
+        assert_eq!(records["entrant2"], SwissRecord::default());
+    }
+
+    #[test]
+    fn unmatched_single_entrant_is_not_assumed_to_be_a_bye() {
+        let mut records = records();
+        apply_swiss_set(
+            &mut records,
+            ["entrant1".to_owned()],
+            None,
+            false,
+        );
+        assert_eq!(records["entrant1"], SwissRecord::default());
+    }
 }

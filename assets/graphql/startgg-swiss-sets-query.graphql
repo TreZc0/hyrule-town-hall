@@ -1,0 +1,24 @@
+query SwissSetsQuery($event_slug: String!, $page: Int!) {
+  event(slug: $event_slug) {
+    sets(page: $page, perPage: 50, filters: { showByes: true }) {
+      pageInfo {
+        totalPages
+      }
+      nodes {
+        id
+        winnerId
+        phaseGroup {
+          bracketType
+        }
+        slots(includeByes: true) {
+          entrant {
+            id
+          }
+          seed {
+            isBye
+          }
+        }
+      }
+    }
+  }
+}
