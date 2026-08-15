@@ -6649,6 +6649,10 @@ impl RaceHandler<GlobalState> for Handler {
                                 ctx.say(format!("Sorry {reply_to}, only @entrants or race monitors may use this command.")).await?;
                             } else if !is_monitor && !self.roll_failed.load(atomic::Ordering::SeqCst) {
                                 ctx.say(format!("Sorry {reply_to}, !reroll is only available after a failed roll attempt.")).await?;
+                            } else if matches!(goal, Goal::Crosskeys2025 | Goal::Crosskeys2026) {
+                                let cal_event = self.official_data.as_ref().expect("Crosskeys goal must have official_data").cal_event.clone();
+                                ctx.say(format!("{reply_to} Attempting to reroll the seed, please wait...")).await?;
+                                self.roll_crosskeys_seed(ctx, cal_event, goal.language(), "a").await;
                             } else if let Some(settings) = goal.single_settings() {
                                 // Goal has default settings, use them to roll
                                 let event = self.official_data.as_ref().map(|OfficialRaceData { event, .. }| event);
