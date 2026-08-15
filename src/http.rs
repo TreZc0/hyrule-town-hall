@@ -20,6 +20,7 @@ use {
         api,
         game,
         games,
+        hth_info,
         notification::{
             self,
             Notification,
@@ -245,6 +246,8 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
                         : " • ";
                         a(href = "https://discord.gg/zsr", target = "_blank") : "ZSR Discord";
                         : " • ";
+                        a(href = uri!(hth_info::get)) : "HTH Guide";
+                        : " • ";
                         a(href = uri!(legal::legal_disclaimer)) : "Legal";
                         : " • ";
                         a(href = uri!(api::graphql_playground)) : "API";
@@ -258,7 +261,7 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
 }
 
 #[rocket::get("/")]
-async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, me: Option<User>, uri: Origin<'_>) -> Result<RawHtml<String>, event::Error> {
+pub(crate) async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, me: Option<User>, uri: Origin<'_>) -> Result<RawHtml<String>, event::Error> {
     let mut transaction = pool.begin().await?;
     let mut upcoming_events = Vec::default();
     let mut races = Vec::default();
@@ -587,7 +590,7 @@ async fn archive(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, sort: 
 }
 
 #[rocket::get("/new")]
-async fn new_event(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
+pub(crate) async fn new_event(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
     let mut transaction = pool.begin().await?;
     let admin_user = User::primary_global_admin(&mut *transaction).await?.ok_or(PageError::AdminUserData(2))?;
     page(transaction, &me, &uri, PageStyle::default(), "New Event — Hyrule Town Hall", html! {
@@ -698,6 +701,7 @@ pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http
         index,
         archive,
         new_event,
+        hth_info::get,
         robots_txt,
         api::graphql_request,
         api::graphql_query,

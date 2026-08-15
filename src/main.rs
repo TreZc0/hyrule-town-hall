@@ -53,6 +53,7 @@ mod games;
 mod hash_icon;
 mod hash_icon_db;
 #[macro_use] mod http;
+mod hth_info;
 mod id;
 mod lang;
 mod legal;
@@ -105,8 +106,8 @@ impl Environment {
 
     fn base_uri(&self) -> rocket::http::uri::Absolute<'static> {
         match self {
-            Self::Production => uri!("https://hth.zeldaspeedruns.com"),
-            Self::Dev => uri!("https://hthdev.zeldaspeedruns.com"),
+            Self::Production => uri!("https://hyruletownhall.com"),
+            Self::Dev => uri!("https://hthdev.zsr.gg"),
             Self::Local => uri!("http://localhost:24814"),
         }
     }

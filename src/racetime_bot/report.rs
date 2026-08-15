@@ -1,9 +1,6 @@
 use {
     std::collections::HashMap,
-    tokio::{
-        sync::RwLockReadGuard,
-        time::timeout,
-    },
+    tokio::time::timeout,
     serenity::all::{
         CreateActionRow,
         CreateButton,
@@ -868,7 +865,7 @@ async fn report_ffa(ctx: &RaceContext<GlobalState>, cal_event: &cal::Event, even
 impl Handler {
     #[must_use = "should set cleaned_up if this returns true"]
     pub(super) async fn check_tfb_finish(&self, ctx: &RaceContext<GlobalState>) -> Result<bool, Error> {
-        let data = ctx.data().await;
+        let data = ctx.data().await.clone();
         let Some(OfficialRaceData { ref cal_event, ref event, fpa_invoked, breaks_used, ref scores, .. }) = self.official_data else { return Ok(true) };
         Ok(if let Some(scores) = data.entrants.iter().map(|entrant| {
             let key = if let Some(ref team) = entrant.team { Some(&team.slug) } else { entrant.user.as_ref().map(|user| &user.id) };
@@ -890,7 +887,7 @@ impl Handler {
         })
     }
 
-    pub(super) async fn official_race_finished(&self, ctx: &RaceContext<GlobalState>, data: RwLockReadGuard<'_, RaceData>, cal_event: &cal::Event, event: &event::Data<'_>, fpa_invoked: bool, breaks_used: bool, tfb_scores: Option<HashMap<String, tfb::Score>>) -> Result<(), Error> {
+    pub(super) async fn official_race_finished(&self, ctx: &RaceContext<GlobalState>, data: RaceData, cal_event: &cal::Event, event: &event::Data<'_>, fpa_invoked: bool, breaks_used: bool, tfb_scores: Option<HashMap<String, tfb::Score>>) -> Result<(), Error> {
         let stream_delay = match cal_event.race.entrants {
             Entrants::Open | Entrants::Count { .. } => event.open_stream_delay,
             Entrants::Two(_) | Entrants::Three(_) | Entrants::Named(_) => event.invitational_stream_delay,

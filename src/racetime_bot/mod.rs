@@ -4197,6 +4197,25 @@ struct Handler {
 }
 
 impl Handler {
+    async fn fresh_race_data(ctx: &RaceContext<GlobalState>, room_url: &str) -> Result<RaceData, Error> {
+        ctx.global_state.http_client
+            .get(format!("{room_url}/data"))
+            .header(reqwest::header::CACHE_CONTROL, "no-cache")
+            .send().await.to_racetime()?
+            .detailed_error_for_status().await.to_racetime()?
+            .json_with_text_in_error().await.to_racetime()
+    }
+
+    async fn notify_admin(ctx: &RaceContext<GlobalState>, message: String) {
+        let discord_ctx = ctx.global_state.discord_ctx.read().await;
+        match ADMIN_USER.create_dm_channel(&*discord_ctx).await {
+            Ok(dm) => if let Err(e) = dm.say(&*discord_ctx, message).await {
+                eprintln!("failed to DM admin about race result confirmation failure: {e}");
+            },
+            Err(e) => eprintln!("failed to open admin DM about race result confirmation failure: {e}"),
+        }
+    }
+
     async fn official_event_from_db(ctx: &RaceContext<GlobalState>, room_url: &Url) -> Result<Option<cal::Event>, Error> {
         let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
         let event = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, room_url.clone()).await.to_racetime()?;
@@ -6979,8 +6998,7 @@ impl RaceHandler<GlobalState> for Handler {
                     let ctx_clone = ctx.clone();
                     self.finish_timeout = Some(tokio::spawn(async move {
                         sleep(Duration::from_secs(30)).await;
-                        let data = ctx_clone.data().await;
-                        let room_url = format!("https://{}{}", racetime_host(), data.url);
+                        let room_url = format!("https://{}{}", racetime_host(), ctx_clone.data().await.url);
                         if cleaned_up.load(atomic::Ordering::SeqCst) {
                             log::warn!("skipping race result reporting for {room_url}: race was already cleaned up");
                             return
@@ -6989,11 +7007,36 @@ impl RaceHandler<GlobalState> for Handler {
                             log::warn!("skipping race result reporting for {room_url}: room is not associated with an official race");
                             return
                         };
-                        // Re-check that race is still finished after the 30 second delay
-                        if !matches!(data.status.value, RaceStatusValue::Finished) {
-                            log::warn!("skipping race result reporting for {room_url}: race status is {:?}", data.status.value);
-                            return
-                        }
+                        // The HTTP endpoint can briefly lag behind the WebSocket finish event. Treat
+                        // InProgress as inconclusive for another minute rather than losing the result.
+                        let mut retries_remaining = 12;
+                        let data = loop {
+                            match Self::fresh_race_data(&ctx_clone, &room_url).await {
+                                Ok(data) if matches!(data.status.value, RaceStatusValue::Finished) => break data,
+                                Ok(data) if matches!(data.status.value, RaceStatusValue::InProgress) => {
+                                    if retries_remaining == 0 {
+                                        log::warn!("skipping race result reporting for {room_url}: fresh race status remained InProgress after retries");
+                                        Self::notify_admin(&ctx_clone, format!("The final race status for <{room_url}> remained in progress after retrying. Results were not reported automatically.")).await;
+                                        return
+                                    }
+                                    log::info!("delaying race result reporting for {room_url}: fresh race status is InProgress ({retries_remaining} retries remaining)");
+                                }
+                                Ok(data) => {
+                                    log::warn!("skipping race result reporting for {room_url}: fresh race status is {:?}", data.status.value);
+                                    return
+                                }
+                                Err(e) if retries_remaining > 0 => {
+                                    log::warn!("failed to refresh race data for {room_url}, retrying result confirmation ({retries_remaining} retries remaining): {e}");
+                                }
+                                Err(e) => {
+                                    log::warn!("skipping race result reporting for {room_url}: failed to refresh race data after retries: {e}");
+                                    Self::notify_admin(&ctx_clone, format!("Failed to confirm the final race status for <{room_url}> after retrying: {e}")).await;
+                                    return
+                                }
+                            }
+                            retries_remaining -= 1;
+                            sleep(Duration::from_secs(5)).await;
+                        };
                         // Use a dummy handler to call official_race_finished
                         // We can't call self.official_race_finished directly because we've moved into the closure
                         let dummy_handler = Handler {
