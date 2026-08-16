@@ -1169,6 +1169,16 @@ fn column_letter_to_index(col: &str) -> Option<usize> {
     }
 }
 
+fn is_orphaned_append_marker(row: &[String], export_id_prefix: &str, id_col_idx: usize) -> bool {
+    let Some(marker) = row.first().filter(|cell| cell.starts_with(export_id_prefix)) else {
+        return false;
+    };
+    row.iter()
+        .enumerate()
+        .skip(1)
+        .all(|(idx, cell)| cell.is_empty() || (idx == id_col_idx && cell == marker))
+}
+
 async fn dedupe_export_rows(
     http_client: &reqwest::Client,
     backend: &RestreamingBackend,
@@ -1182,8 +1192,25 @@ async fn dedupe_export_rows(
     };
 
     let mut rows_by_id: HashMap<String, Vec<usize>> = HashMap::default();
+    let mut updates = Vec::new();
+    let mut cleared_rows = 0usize;
     for (idx, row) in rows.iter().enumerate() {
         let row_num = idx + 1;
+        // New rows are initially appended with their export ID in column A as a
+        // temporary anchor. If the subsequent write failed, that marker used to be
+        // left behind forever because normal lookup only checks the configured ID
+        // column. It is safe to clear when no other cell in the row has content.
+        if row_num >= 4 && is_orphaned_append_marker(row, &export_id_prefix, id_col_idx) {
+            updates.push((format!("'Restream Signups'!A{}", row_num), vec![vec![String::new()]]));
+            if id_col_idx != 0 && row.get(id_col_idx).is_some_and(|cell| !cell.is_empty()) {
+                updates.push((
+                    format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row_num),
+                    vec![vec![String::new()]],
+                ));
+            }
+            cleared_rows += 1;
+            continue;
+        }
         if let Some(cell) = row.get(id_col_idx) {
             if row_num >= 4 && cell.starts_with(&export_id_prefix) {
                 rows_by_id.entry(cell.clone()).or_default().push(row_num);
@@ -1191,8 +1218,6 @@ async fn dedupe_export_rows(
         }
     }
 
-    let mut updates = Vec::new();
-    let mut cleared_rows = 0usize;
     for row_nums in rows_by_id.into_values() {
         if row_nums.len() <= 1 { continue }
         let survivor = row_nums[0];
@@ -1368,6 +1393,17 @@ pub(crate) async fn export_race(
                     .ok_or_else(|| Error::Sheets(WriteError::SheetNotFound("unable to resolve appended row".to_owned())))?
             }
         };
+
+        // Persist the marker in its authoritative column before filling the rest of
+        // the row. If the larger write fails, the next sync can now find and repair
+        // this row instead of appending another column-A-only orphan.
+        let id_range = format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row);
+        sheets::update_values(
+            http_client,
+            &backend.google_sheet_id,
+            &id_range,
+            vec![vec![export_id.clone()]],
+        ).await?;
 
         let notes = delay_notes_update("", delay_minutes);
         let updates = build_signup_row_updates(
@@ -1694,4 +1730,28 @@ pub(crate) fn schedule_volunteer_api_call(pool: PgPool, http_client: reqwest::Cl
             send_volunteer_api(&pool, &http_client, race_id).await;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_orphaned_append_marker;
+
+    #[test]
+    fn recognizes_orphaned_append_marker() {
+        let prefix = "HTH-mw-s8-";
+
+        assert!(is_orphaned_append_marker(&["HTH-mw-s8-123".to_owned()], prefix, 17));
+        assert!(!is_orphaned_append_marker(&["HTH-mw-s7-123".to_owned()], prefix, 17));
+
+        let mut row_with_export_id = vec![String::new(); 18];
+        row_with_export_id[0] = "HTH-mw-s8-123".to_owned();
+        row_with_export_id[17] = "HTH-mw-s8-123".to_owned();
+        assert!(is_orphaned_append_marker(&row_with_export_id, prefix, 17));
+
+        row_with_export_id[17] = "HTH-mw-s8-456".to_owned();
+        assert!(!is_orphaned_append_marker(&row_with_export_id, prefix, 17));
+
+        let row_with_other_data = vec!["HTH-mw-s8-123".to_owned(), "Monday".to_owned()];
+        assert!(!is_orphaned_append_marker(&row_with_other_data, prefix, 17));
+    }
 }
