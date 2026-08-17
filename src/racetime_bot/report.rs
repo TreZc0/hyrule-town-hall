@@ -1,5 +1,9 @@
 use {
-    std::collections::HashMap,
+    std::{
+        collections::HashMap,
+        hash::Hash,
+    },
+    graphql_client::GraphQLQuery,
     tokio::time::timeout,
     serenity::all::{
         CreateActionRow,
@@ -12,6 +16,53 @@ use {
         racetime_bot::*,
     },
 };
+
+const STARTGG_REPORT_ATTEMPTS: u8 = 3;
+
+#[derive(Debug, thiserror::Error)]
+#[error("start.gg {operation} failed for set {set_id}: {source}")]
+struct StartggReportError {
+    operation: &'static str,
+    set_id: startgg::ID,
+    #[source]
+    source: startgg::Error,
+}
+
+/// Runs a start.gg operation used by result reporting, retrying transient failures.
+///
+/// The mutations called through this helper set/reset a set to the same requested state on every
+/// attempt. Retrying the identical payload also covers the ambiguous case where start.gg applied
+/// a mutation but the response was lost. Deterministic GraphQL errors are not retried.
+async fn startgg_report_request<T: GraphQLQuery + 'static>(
+    http_client: &reqwest::Client,
+    startgg_token: &str,
+    set_id: &startgg::ID,
+    operation: &'static str,
+    variables: T::Variables,
+) -> Result<T::ResponseData, Error>
+where
+    T::Variables: Clone + Eq + Hash + Send + Sync,
+    T::ResponseData: Clone + Send + Sync,
+{
+    for attempt in 1..=STARTGG_REPORT_ATTEMPTS {
+        match startgg::query_uncached::<T>(http_client, startgg_token, variables.clone()).await {
+            Ok(response) => return Ok(response),
+            Err(source) if source.is_network_error() && attempt < STARTGG_REPORT_ATTEMPTS => {
+                eprintln!(
+                    "transient start.gg {operation} failure for set {set_id} (attempt {attempt}/{STARTGG_REPORT_ATTEMPTS}), retrying: {}",
+                    format_error_chain(&source),
+                );
+                sleep(Duration::from_secs(u64::from(attempt))).await;
+            }
+            Err(source) => return Err(Error::Custom(Box::new(StartggReportError {
+                operation,
+                set_id: set_id.clone(),
+                source,
+            }))),
+        }
+    }
+    unreachable!("nonempty start.gg reporting attempt range")
+}
 
 /// Sends a Discord channel message with a timeout (`DISCORD_SEND_TIMEOUT`, defined alongside
 /// `try_discord_send` in the parent module), retrying once on timeout or failure.
@@ -100,13 +151,15 @@ async fn collect_completed_game_results(
     current_game: i16,
     current_winner_id: &startgg::ID,
 ) -> Result<Vec<startgg::GameResult>, Error> {
-    let set_data = startgg::query_uncached::<startgg::SetQuery>(
+    let set_data = startgg_report_request::<startgg::SetQuery>(
         http_client,
         startgg_token,
+        set_id,
+        "completed-games query",
         startgg::set_query::Variables {
             set_id: set_id.clone(),
         }
-    ).await.to_racetime()?;
+    ).await?;
 
     let mut results = Vec::new();
 
@@ -688,11 +741,13 @@ async fn report_external_and_init_draft<'a>(
                     };
                     if match_decided {
                         if event.startgg_double_rr {
-                            let score_data = startgg::query_uncached::<startgg::SetScoreQuery>(
+                            let score_data = startgg_report_request::<startgg::SetScoreQuery>(
                                 &global_state.http_client,
                                 &global_state.startgg_token,
+                                set,
+                                "double-round-robin first-game winner query",
                                 startgg::set_score_query::Variables { set_id: set.clone() },
-                            ).await.to_racetime()?;
+                            ).await?;
                             let game1_winner_id = score_data.set
                                 .and_then(|s| s.slots)
                                 .into_iter()
@@ -706,69 +761,81 @@ async fn report_external_and_init_draft<'a>(
                                 startgg::GameResult { game_num: 1, winner_entrant_id: game1_winner_id },
                                 startgg::GameResult { game_num: 2, winner_entrant_id: winner_entrant_id.clone() },
                             ];
-                            startgg::query_uncached::<startgg::ResetSetMutation>(
+                            startgg_report_request::<startgg::ResetSetMutation>(
                                 &global_state.http_client,
                                 &global_state.startgg_token,
+                                set,
+                                "double-round-robin reset",
                                 startgg::reset_set_mutation::Variables { set_id: set.clone() },
-                            ).await.to_racetime()?;
+                            ).await?;
                             let overall_winner_id = if is_match_decided(&all_game_results, total_games) {
                                 Some(determine_overall_winner(&all_game_results))
                             } else {
                                 None
                             };
-                            startgg::query_uncached::<startgg::ReportBracketSetMutation>(
+                            startgg_report_request::<startgg::ReportBracketSetMutation>(
                                 &global_state.http_client,
                                 &global_state.startgg_token,
+                                set,
+                                "combined double-round-robin result report",
                                 startgg::report_bracket_set_mutation::Variables {
                                     set_id: set.clone(),
                                     winner_id: overall_winner_id,
                                     game_data: Some(all_game_results.iter().map(|gr| Some(gr.to_game_data_input())).collect()),
                                 },
-                            ).await.to_racetime()?;
+                            ).await?;
                         } else {
                             let overall_winner = determine_overall_winner(&completed_game_results);
-                            startgg::query_uncached::<startgg::ReportBracketSetMutation>(
+                            startgg_report_request::<startgg::ReportBracketSetMutation>(
                                 &global_state.http_client,
                                 &global_state.startgg_token,
+                                set,
+                                "completed multi-game result report",
                                 startgg::report_bracket_set_mutation::Variables {
                                     set_id: set.clone(),
                                     winner_id: Some(overall_winner),
                                     game_data: Some(completed_game_results.iter().map(|gr| Some(gr.to_game_data_input())).collect()),
                                 },
-                            ).await.to_racetime()?;
+                            ).await?;
                         }
                         ignored_race_ids = race.ignore_remaining_games(&mut transaction).await.to_racetime()?;
                         series_decided = true;
                     } else if event.startgg_double_rr {
-                        startgg::query_uncached::<startgg::ReportBracketSetMutation>(
+                        startgg_report_request::<startgg::ReportBracketSetMutation>(
                             &global_state.http_client,
                             &global_state.startgg_token,
+                            set,
+                            "first double-round-robin game report",
                             startgg::report_bracket_set_mutation::Variables {
                                 set_id: set.clone(),
                                 winner_id: Some(winner_entrant_id.clone()),
                                 game_data: Some(completed_game_results.iter().map(|gr| Some(gr.to_game_data_input())).collect()),
                             },
-                        ).await.to_racetime()?;
+                        ).await?;
                     } else {
-                        startgg::query_uncached::<startgg::ReportBracketSetMutation>(
+                        startgg_report_request::<startgg::ReportBracketSetMutation>(
                             &global_state.http_client,
                             &global_state.startgg_token,
+                            set,
+                            "partial multi-game result report",
                             startgg::report_bracket_set_mutation::Variables {
                                 set_id: set.clone(),
                                 winner_id: None,
                                 game_data: Some(completed_game_results.iter().map(|gr| Some(gr.to_game_data_input())).collect()),
                             },
-                        ).await.to_racetime()?;
+                        ).await?;
                     }
                 } else {
-                    startgg::query_uncached::<startgg::ReportOneGameResultMutation>(
+                    startgg_report_request::<startgg::ReportOneGameResultMutation>(
                         &global_state.http_client,
                         &global_state.startgg_token,
+                        set,
+                        "single-game result report",
                         startgg::report_one_game_result_mutation::Variables {
                             set_id: set.clone(),
                             winner_entrant_id: winner_entrant_id.clone(),
                         },
-                    ).await.to_racetime()?;
+                    ).await?;
                 }
             } else if let Some(organizer_channel) = event.discord_organizer_channel {
                 let mut msg = MessageBuilder::default();

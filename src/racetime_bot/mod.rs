@@ -73,6 +73,24 @@ pub(crate) enum Error {
     #[error(transparent)] ServerErrors(#[from] racetime::handler::ServerErrors),
 }
 
+/// Formats an error together with its non-duplicate sources.
+///
+/// Transparent error wrappers make the normal `Display` output useful to callers, but they also
+/// hide details such as whether a reqwest failure was caused by DNS, TLS, connection setup, or a
+/// timeout. Result-finalization failures are rare and actionable enough to include the full chain.
+fn format_error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut messages = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(error) = source {
+        let message = error.to_string();
+        if messages.last() != Some(&message) {
+            messages.push(message);
+        }
+        source = error.source();
+    }
+    messages.join(": ")
+}
+
 pub(crate) trait ResultExt {
     type Ok;
 
@@ -7073,10 +7091,11 @@ impl RaceHandler<GlobalState> for Handler {
                         let reporting_started = Instant::now();
                         log::info!("starting race result reporting for {room_url}");
                         if let Err(e) = dummy_handler.official_race_finished(&ctx_clone, data, cal_event, event, fpa_invoked, official_breaks_used || breaks_used, None).await {
-                            eprintln!("failed to finalize race result reporting for {room_url}: {e}");
+                            let error = format_error_chain(&e);
+                            eprintln!("failed to finalize race result reporting for {room_url}: {error}");
                             let discord_ctx = ctx_clone.global_state.discord_ctx.read().await;
                             match ADMIN_USER.create_dm_channel(&*discord_ctx).await {
-                                Ok(dm) => if let Err(dm_error) = dm.say(&*discord_ctx, format!("Failed to finalize race result reporting for <{room_url}>: {e}")).await {
+                                Ok(dm) => if let Err(dm_error) = dm.say(&*discord_ctx, format!("Failed to finalize race result reporting for <{room_url}>: {error}")).await {
                                     eprintln!("failed to DM admin about final race result reporting failure: {dm_error}");
                                 },
                                 Err(dm_error) => eprintln!("failed to open admin DM about final race result reporting failure: {dm_error}"),
