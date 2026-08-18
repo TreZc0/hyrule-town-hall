@@ -27,7 +27,6 @@ use {
         },
         legal,
         racetime_bot::SeedMetadata,
-        weekly::WeeklySchedule,
         prelude::*,
     },
 };
@@ -80,13 +79,13 @@ pub(crate) fn favicon(url: &Url) -> RawHtml<String> {
         Some("youtube.com" | "www.youtube.com") => html! {
             img(class = "favicon", alt = "external link (youtube.com)", srcset = "https://www.youtube.com/s/desktop/435d54f2/img/favicon.ico 16w, https://www.youtube.com/s/desktop/435d54f2/img/favicon_32x32.png 32w, https://www.youtube.com/s/desktop/435d54f2/img/favicon_48x48.png 48w, https://www.youtube.com/s/desktop/435d54f2/img/favicon_96x96.png 96w, https://www.youtube.com/s/desktop/435d54f2/img/favicon_144x144.png 144w");
         },
-        Some("zeldaspeedruns.com" | "www.zeldaspeedruns.com") => html! {
-            img(class = "favicon", alt = "external link (zeldaspeedruns.com)", srcset = "https://www.zeldaspeedruns.com/favicon-16x16.png 16w, https://www.zeldaspeedruns.com/favicon-32x32.png 32w, https://www.zeldaspeedruns.com/favicon-96x96.png 96w, https://www.zeldaspeedruns.com/android-chrome-192x192.png 192w, https://www.zeldaspeedruns.com/favicon-194x194.png 194w");
+        Some("zeldaspeedruns.com" | "www.zeldaspeedruns.com" | "zsr.gg" | "www.zsr.gg") => html! {
+            img(class = "favicon", alt = "external link (ZSR)", srcset = "https://www.zeldaspeedruns.com/favicon-16x16.png 16w, https://www.zeldaspeedruns.com/favicon-32x32.png 32w, https://www.zeldaspeedruns.com/favicon-96x96.png 96w, https://www.zeldaspeedruns.com/android-chrome-192x192.png 192w, https://www.zeldaspeedruns.com/favicon-194x194.png 194w");
         },
         Some("discord.gg") => html! {
             img(class = "favicon", alt = "external link (discord.gg)", src = static_url!("discord-favicon.ico"));
         },
-        Some("racetime.gg" | "racetime.midos.house" | "rtdev.zeldaspeedruns.com") => html! {
+        Some("racetime.gg" | "racetime.midos.house" | "rtdev.zeldaspeedruns.com" | "rtdev.zsr.gg") => html! {
             img(class = "favicon", alt = "external link (racetime.gg)", src = static_url!("racetimeGG-favicon.svg"));
         },
         Some("start.gg" | "www.start.gg") => html! {
@@ -260,34 +259,153 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
     })
 }
 
+struct HomeEvent {
+    data: event::Data<'static>,
+    game: Option<game::Game>,
+    start: Option<DateTime<Utc>>,
+    is_ongoing: bool,
+    is_unlisted: bool,
+}
+
+async fn home_events(
+    transaction: &mut Transaction<'_, Postgres>,
+    me: Option<&User>,
+) -> Result<Vec<HomeEvent>, event::Error> {
+    let me_id = me.map(|me| i64::from(me.id));
+    let is_global_admin = me.is_some_and(User::is_global_admin);
+    let rows = sqlx::query!(r#"
+        WITH visible_events AS (
+            SELECT
+                e.series,
+                e.event,
+                e.start,
+                e.listed,
+                qualifier_async.max_delay,
+                qualifier_async.num_qualified,
+                qualifier_async.last_submission
+            FROM events e
+            LEFT JOIN LATERAL (
+                SELECT
+                    a.max_delay,
+                    (
+                        SELECT COUNT(*)
+                        FROM teams t
+                        JOIN async_teams at ON at.team = t.id
+                        WHERE t.series = e.series
+                          AND t.event = e.event
+                          AND NOT t.resigned
+                          AND at.kind = 'qualifier'
+                          AND at.submitted IS NOT NULL
+                    ) AS num_qualified,
+                    (
+                        SELECT MAX(at.submitted)
+                        FROM teams t
+                        JOIN async_teams at ON at.team = t.id
+                        WHERE t.series = e.series
+                          AND t.event = e.event
+                          AND NOT t.resigned
+                          AND at.kind = 'qualifier'
+                          AND at.submitted IS NOT NULL
+                    ) AS last_submission
+                FROM asyncs a
+                WHERE a.series = e.series
+                  AND a.event = e.event
+                  AND a.kind = 'qualifier'
+            ) qualifier_async ON TRUE
+            WHERE (e.end_time IS NULL OR e.end_time > NOW())
+              AND (
+                  e.listed
+                  OR $2
+                  OR ($1::bigint IS NOT NULL AND EXISTS (
+                      SELECT 1
+                      FROM organizers o
+                      WHERE o.series = e.series
+                        AND o.event = e.event
+                        AND o.organizer = $1
+                  ))
+              )
+        ), timed_events AS (
+            SELECT
+                visible_events.*,
+                CASE
+                    WHEN start IS NULL THEN NULL
+                    WHEN max_delay IS NULL THEN start
+                    WHEN num_qualified % 2 = 0 AND last_submission IS NOT NULL THEN GREATEST(start, last_submission)
+                    WHEN num_qualified % 2 = 1 AND start <= NOW() THEN start + max_delay
+                    ELSE start
+                END AS adjusted_start
+            FROM visible_events
+        )
+        SELECT
+            e.series AS "series: Series",
+            e.event,
+            e.listed,
+            e.adjusted_start,
+            (
+                COALESCE(e.adjusted_start <= NOW(), false)
+                OR EXISTS (
+                    SELECT 1 FROM weekly_schedules ws
+                    WHERE ws.series = e.series AND ws.event = e.event AND ws.active
+                )
+                OR EXISTS (
+                    SELECT 1 FROM races r
+                    WHERE r.series = e.series
+                      AND r.event = e.event
+                      AND r.phase = 'Qualifier'
+                      AND r.start <= NOW()
+                )
+            ) AS "is_ongoing!",
+            game.id AS "game_id?",
+            game.name AS "game_name?",
+            game.display_name AS "game_display_name?",
+            game.description AS "game_description?",
+            game.discord_guild AS "game_discord_guild?: PgSnowflake<GuildId>",
+            game.created_at AS "game_created_at?",
+            game.updated_at AS "game_updated_at?"
+        FROM timed_events e
+        LEFT JOIN LATERAL (
+            SELECT g.id, g.name, g.display_name, g.description, g.discord_guild, g.created_at, g.updated_at
+            FROM game_series gs
+            JOIN games g ON g.id = gs.game_id
+            WHERE gs.series = e.series
+            ORDER BY g.id
+            LIMIT 1
+        ) game ON TRUE
+        ORDER BY e.start ASC NULLS LAST
+    "#, me_id, is_global_admin).fetch_all(&mut **transaction).await?;
+    let mut events = Vec::with_capacity(rows.len());
+    for row in rows {
+        let data = event::Data::new(&mut *transaction, row.series, row.event).await?
+            .expect("event deleted during transaction");
+        let game = row.game_id.map(|id| game::Game {
+            id,
+            name: row.game_name.expect("game name missing for mapped game"),
+            display_name: row.game_display_name.expect("game display name missing for mapped game"),
+            description: row.game_description,
+            discord_guild: row.game_discord_guild.map(|PgSnowflake(id)| id),
+            created_at: row.game_created_at.expect("game creation time missing for mapped game"),
+            updated_at: row.game_updated_at.expect("game update time missing for mapped game"),
+        });
+        events.push(HomeEvent {
+            is_unlisted: !row.listed,
+            is_ongoing: row.is_ongoing,
+            start: row.adjusted_start,
+            data,
+            game,
+        });
+    }
+    Ok(events)
+}
+
 #[rocket::get("/")]
-pub(crate) async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, me: Option<User>, uri: Origin<'_>) -> Result<RawHtml<String>, event::Error> {
+pub(crate) async fn index(pool: &State<PgPool>, http_client: &State<reqwest::Client>, me: Option<User>, uri: Origin<'_>) -> Result<RawHtml<String>, event::Error> {
     let mut transaction = pool.begin().await?;
-    let mut upcoming_events = Vec::default();
-    let mut races = Vec::default();
-    for row in sqlx::query!(r#"SELECT series AS "series: Series", event FROM events WHERE listed AND (end_time IS NULL OR end_time > NOW()) ORDER BY start ASC NULLS LAST"#).fetch_all(&mut *transaction).await? {
-        let event = event::Data::new(&mut transaction, row.series, row.event).await?.expect("event deleted during transaction");
-        races.extend(Race::for_event(&mut transaction, http_client, &event).await?.into_iter().filter(|race| match race.schedule {
-            RaceSchedule::Unscheduled => true, // Include unscheduled races
-            RaceSchedule::Live { end, .. } => end.is_none(),
-            RaceSchedule::Async { start1, start2, end1, end2, .. } => start1.is_some() && start2.is_some() && (end1.is_none() || end2.is_none()), // second half scheduled and not ended
-        }));
-        upcoming_events.push(event);
-    }
-    let mut upcoming_events_unlisted = Vec::default();
-    if let Some(me) = &me {
-        let unlisted_rows: Vec<(Series, String)> = if me.is_global_admin() {
-            sqlx::query!(r#"SELECT series AS "series: Series", event FROM events WHERE NOT listed AND (end_time IS NULL OR end_time > NOW()) ORDER BY start ASC NULLS LAST"#)
-                .fetch_all(&mut *transaction).await?.into_iter().map(|r| (r.series, r.event)).collect()
-        } else {
-            sqlx::query!(r#"SELECT e.series AS "series: Series", e.event FROM events e JOIN organizers o ON o.series = e.series AND o.event = e.event WHERE NOT e.listed AND (e.end_time IS NULL OR e.end_time > NOW()) AND o.organizer = $1 ORDER BY e.start ASC NULLS LAST"#, me.id as _)
-                .fetch_all(&mut *transaction).await?.into_iter().map(|r| (r.series, r.event)).collect()
-        };
-        for (series, event_slug) in unlisted_rows {
-            let event = event::Data::new(&mut transaction, series, event_slug).await?.expect("event deleted during transaction");
-            upcoming_events_unlisted.push(event);
-        }
-    }
+    let mut events = home_events(&mut transaction, me.as_ref()).await?;
+    let event_data = events.iter()
+        .filter(|event| !event.is_unlisted)
+        .map(|event| event.data.clone())
+        .collect::<Vec<_>>();
+    let mut races = Race::for_homepage(&mut transaction, http_client, &event_data).await?;
     races.sort_unstable_by(|race1, race2| {
         let start1 = match race1.schedule {
             RaceSchedule::Unscheduled => None,
@@ -314,49 +432,19 @@ pub(crate) async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
             .then_with(|| race1.game.cmp(&race2.game))
             .then_with(|| race1.id.cmp(&race2.id))
     });
-    let chests_event = upcoming_events.choose(&mut rng());
+    let chests_event = events.iter().filter(|event| !event.is_unlisted).map(|event| &event.data).choose(&mut rng());
     let chests = if let Some(event) = chests_event { event.chests().await? } else { ChestAppearances::random() };
-    let mut ongoing_events = Vec::default();
-    for event in upcoming_events.drain(..).collect_vec() {
-        if event.series != Series::Standard || event.event != "w" { // the weeklies are a perpetual event so we avoid always listing them
-            let started = event.is_started(&mut transaction).await?;
-            let has_active_weekly = WeeklySchedule::for_event(&mut transaction, event.series, &event.event).await?.iter().any(|s| s.active);
-            let has_started_qualifier = sqlx::query_scalar!(
-                r#"SELECT EXISTS (SELECT 1 FROM races WHERE series = $1 AND event = $2 AND phase = 'Qualifier' AND start <= NOW()) AS "exists!""#,
-                event.series as _, &event.event
-            ).fetch_one(&mut *transaction).await?;
-            if started || has_active_weekly || has_started_qualifier { &mut ongoing_events } else { &mut upcoming_events }.push(event);
-        }
-    }
-    let mut ongoing_events_unlisted = Vec::default();
-    for event in upcoming_events_unlisted.drain(..).collect_vec() {
-        if event.series != Series::Standard || event.event != "w" {
-            let started = event.is_started(&mut transaction).await?;
-            let has_active_weekly = WeeklySchedule::for_event(&mut transaction, event.series, &event.event).await?.iter().any(|s| s.active);
-            let has_started_qualifier = sqlx::query_scalar!(
-                r#"SELECT EXISTS (SELECT 1 FROM races WHERE series = $1 AND event = $2 AND phase = 'Qualifier' AND start <= NOW()) AS "exists!""#,
-                event.series as _, &event.event
-            ).fetch_one(&mut *transaction).await?;
-            if started || has_active_weekly || has_started_qualifier { &mut ongoing_events_unlisted } else { &mut upcoming_events_unlisted }.push(event);
-        }
-    }
+    events.retain(|event| event.data.series != Series::Standard || event.data.event != "w");
     let mut ongoing_by_game = Vec::new();
-    for event in ongoing_events {
-        let game = event.game(&mut transaction).await.map_err(event::Error::from)?;
-        let key = game.as_ref().map(|g| g.id);
-        if let Some(pos) = ongoing_by_game.iter().position(|(g, _): &(Option<game::Game>, Vec<_>)| g.as_ref().map(|g| g.id) == key) {
-            ongoing_by_game[pos].1.push((event, false));
+    let mut upcoming_by_game = Vec::new();
+    for event in events {
+        let HomeEvent { data, game, start, is_ongoing, is_unlisted } = event;
+        let groups = if is_ongoing { &mut ongoing_by_game } else { &mut upcoming_by_game };
+        let key = game.as_ref().map(|game| game.id);
+        if let Some(pos) = groups.iter().position(|(group_game, _): &(Option<game::Game>, Vec<_>)| group_game.as_ref().map(|game| game.id) == key) {
+            groups[pos].1.push((data, is_unlisted, start));
         } else {
-            ongoing_by_game.push((game, vec![(event, false)]));
-        }
-    }
-    for event in ongoing_events_unlisted {
-        let game = event.game(&mut transaction).await.map_err(event::Error::from)?;
-        let key = game.as_ref().map(|g| g.id);
-        if let Some(pos) = ongoing_by_game.iter().position(|(g, _): &(Option<game::Game>, Vec<_>)| g.as_ref().map(|g| g.id) == key) {
-            ongoing_by_game[pos].1.push((event, true));
-        } else {
-            ongoing_by_game.push((game, vec![(event, true)]));
+            groups.push((game, vec![(data, is_unlisted, start)]));
         }
     }
     ongoing_by_game.sort_by(|(a, _), (b, _)| match (a.as_ref(), b.as_ref()) {
@@ -365,25 +453,6 @@ pub(crate) async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
         (Some(_), None) => Less,
         (Some(ga), Some(gb)) => ga.display_name.cmp(&gb.display_name),
     });
-    let mut upcoming_by_game = Vec::new();
-    for event in upcoming_events {
-        let game = event.game(&mut transaction).await.map_err(event::Error::from)?;
-        let key = game.as_ref().map(|g| g.id);
-        if let Some(pos) = upcoming_by_game.iter().position(|(g, _): &(Option<game::Game>, Vec<_>)| g.as_ref().map(|g| g.id) == key) {
-            upcoming_by_game[pos].1.push((event, false));
-        } else {
-            upcoming_by_game.push((game, vec![(event, false)]));
-        }
-    }
-    for event in upcoming_events_unlisted {
-        let game = event.game(&mut transaction).await.map_err(event::Error::from)?;
-        let key = game.as_ref().map(|g| g.id);
-        if let Some(pos) = upcoming_by_game.iter().position(|(g, _): &(Option<game::Game>, Vec<_>)| g.as_ref().map(|g| g.id) == key) {
-            upcoming_by_game[pos].1.push((event, true));
-        } else {
-            upcoming_by_game.push((game, vec![(event, true)]));
-        }
-    }
     upcoming_by_game.sort_by(|(a, _), (b, _)| match (a.as_ref(), b.as_ref()) {
         (None, None) => Equal,
         (None, Some(_)) => Greater,
@@ -431,7 +500,7 @@ pub(crate) async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
                             li {
                                 b : game.as_ref().map(|g| g.display_name.as_str()).unwrap_or("Other");
                                 ul {
-                                    @for (event, is_unlisted) in events {
+                                    @for (event, is_unlisted, _) in events {
                                         li {
                                             : event;
                                             @if is_unlisted {
@@ -455,13 +524,13 @@ pub(crate) async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
                             li {
                                 b : game.as_ref().map(|g| g.display_name.as_str()).unwrap_or("Other");
                                 ul {
-                                    @for (event, is_unlisted) in events {
+                                    @for (event, is_unlisted, start) in events {
                                         li {
                                             : event;
                                             @if is_unlisted {
                                                 : " (not public)";
                                             }
-                                            @if let Some(start) = event.start(&mut transaction).await? {
+                                            @if let Some(start) = start {
                                                 : " — ";
                                                 : format_datetime(start, DateTimeFormat { long: false, running_text: false });
                                             }
@@ -488,7 +557,7 @@ pub(crate) async fn index(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
         @if races.is_empty() {
             i : "(none currently)";
         } else {
-            : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, None, cal::RaceTableOptions { game_count: false, show_multistreams: true, can_edit: me.as_ref().is_some_and(|me| me.is_archivist), show_restream_consent: false, challonge_import_ctx: None }, &races, me.as_ref(), None).await?;
+            : cal::race_table(&mut transaction, None, http_client, &uri, None, cal::RaceTableOptions { game_count: false, show_multistreams: false, can_edit: me.as_ref().is_some_and(|me| me.is_archivist), show_restream_consent: false, challonge_import_ctx: None }, &races, me.as_ref(), None).await?;
         }
     };
     Ok(page(transaction, &me, &uri, PageStyle { kind: PageKind::Index, chests, ..PageStyle::default() }, "Hyrule Town Hall", page_content).await?)

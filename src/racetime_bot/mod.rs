@@ -2356,7 +2356,7 @@ impl GlobalState {
             let uuid = Uuid::new_v4();
 
             // Download the weights YAML
-            let weights_url = "https://zeldaspeedruns.com/assets/hth/miniturnier_doors.yaml";
+            let weights_url = "https://assets.zsr.gg/hth/miniturnier_doors.yaml";
             let response = reqwest::get(weights_url).await?;
             let weights_yaml_content = response.text().await?;
             

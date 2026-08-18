@@ -101,7 +101,7 @@ impl Environment {
 
 
     fn racetime_host(&self) -> &'static str {
-        if self.is_dev() { "rtdev.zeldaspeedruns.com" } else { "racetime.gg" }
+        if self.is_dev() { "rtdev.zsr.gg" } else { "racetime.gg" }
     }
 
     fn base_uri(&self) -> rocket::http::uri::Absolute<'static> {
@@ -335,6 +335,11 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
         });
+        let racetime_room_status_task = tokio::spawn(racetime_room_status_manager(db_pool.clone(), http_client.clone(), rocket.shutdown())).map(|res| match res {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(e),
+            Err(e) => Err(Error::Task(e)),
+        });
         let zsr_export_task = tokio::spawn(zsr_export_manager(db_pool.clone(), http_client.clone(), rocket.shutdown())).map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(e),
@@ -371,7 +376,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Err(e) => Err(Error::from(e)),
         });
         #[cfg(not(unix))] let unix_socket_task = future::ok(());
-        let ((), (), (), (), (), (), (), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, async_race_task, volunteer_request_task, zsr_export_task, speedgaming_export_task, weekly_race_task, deadline_task, rocket_task, unix_socket_task)?;
+        let ((), (), (), (), (), (), (), (), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, async_race_task, racetime_room_status_task, volunteer_request_task, zsr_export_task, speedgaming_export_task, weekly_race_task, deadline_task, rocket_task, unix_socket_task)?;
     }
     Ok(())
 }
@@ -397,6 +402,25 @@ async fn async_race_manager(
         }
     }
 
+    Ok(())
+}
+
+async fn racetime_room_status_manager(
+    db_pool: PgPool,
+    http_client: reqwest::Client,
+    shutdown: rocket::Shutdown,
+) -> Result<(), Error> {
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                if let Err(error) = cal::reconcile_racetime_room_statuses(&db_pool, &http_client).await {
+                    log::error!("failed to reconcile racetime room statuses: {error}");
+                }
+            }
+            _ = shutdown.clone() => break,
+        }
+    }
     Ok(())
 }
 

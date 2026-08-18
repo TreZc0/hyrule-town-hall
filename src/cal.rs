@@ -11,6 +11,7 @@ use {
             URL,
         },
     },
+    racetime::model::RaceStatusValue,
     reqwest::StatusCode,
     rocket_util::Response,
     serenity::all::{
@@ -201,8 +202,22 @@ impl Entrant {
     }
 
     pub(crate) async fn to_html(&self, transaction: &mut Transaction<'_, Postgres>, discord_ctx: &DiscordCtx, running_text: bool) -> Result<RawHtml<String>, discord_bot::Error> {
+        self.to_html_with_optional_discord(transaction, Some(discord_ctx), None, running_text).await
+    }
+
+    async fn to_html_with_optional_discord(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        discord_ctx: Option<&DiscordCtx>,
+        team_html_cache: Option<&HashMap<Id<Teams>, String>>,
+        running_text: bool,
+    ) -> Result<RawHtml<String>, discord_bot::Error> {
         Ok(match self {
-            Self::MidosHouseTeam(team) => team.to_html(transaction, running_text).await?,
+            Self::MidosHouseTeam(team) => if let Some(html) = team_html_cache.and_then(|cache| cache.get(&team.id)) {
+                RawHtml(html.clone())
+            } else {
+                team.to_html(transaction, running_text).await?
+            },
             Self::Discord { id, racetime_id, .. } => {
                 let url = if let Some(racetime_id) = racetime_id {
                     format!("https://{}/user/{racetime_id}", racetime_host())
@@ -215,11 +230,17 @@ impl Entrant {
                             bdi : user.discord.unwrap().display_name;
                         }
                     }
-                } else {
+                } else if let Some(discord_ctx) = discord_ctx {
                     let user = id.to_user(discord_ctx).await?;
                     html! {
                         a(href = url) {
                             bdi : user.global_name.unwrap_or(user.name);
+                        }
+                    }
+                } else {
+                    html! {
+                        a(href = url) {
+                            bdi : id.to_string();
                         }
                     }
                 }
@@ -590,7 +611,16 @@ impl Race {
         Ok(label.trim().to_owned())
     }
 
-    pub(crate) async fn from_id(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, id: Id<Races>) -> Result<Self, Error> {
+    pub(crate) async fn from_id(transaction: &mut Transaction<'_, Postgres>, _http_client: &reqwest::Client, id: Id<Races>) -> Result<Self, Error> {
+        let mut team_cache = HashMap::new();
+        Self::from_id_with_team_cache(transaction, id, &mut team_cache).await
+    }
+
+    async fn from_id_with_team_cache(
+        transaction: &mut Transaction<'_, Postgres>,
+        id: Id<Races>,
+        team_cache: &mut HashMap<Id<Teams>, Team>,
+    ) -> Result<Self, Error> {
         let row = sqlx::query!(r#"SELECT
             r.series AS "series: Series",
             r.event,
@@ -693,7 +723,13 @@ impl Race {
         };
         let entrants = {
             let p1 = if let Some(team1) = row.team1 {
-                Some(Entrant::MidosHouseTeam(Team::from_id(&mut *transaction, team1).await?.ok_or(Error::UnknownTeam)?))
+                Some(Entrant::MidosHouseTeam(if let Some(team) = team_cache.get(&team1) {
+                    team.clone()
+                } else {
+                    let team = Team::from_id(&mut *transaction, team1).await?.ok_or(Error::UnknownTeam)?;
+                    team_cache.insert(team1, team.clone());
+                    team
+                }))
             } else if let Some(PgSnowflake(id)) = row.p1_discord {
                 Some(Entrant::Discord {
                     racetime_id: row.p1_racetime,
@@ -710,7 +746,13 @@ impl Race {
                 None
             };
             let p2 = if let Some(team2) = row.team2 {
-                Some(Entrant::MidosHouseTeam(Team::from_id(&mut *transaction, team2).await?.ok_or(Error::UnknownTeam)?))
+                Some(Entrant::MidosHouseTeam(if let Some(team) = team_cache.get(&team2) {
+                    team.clone()
+                } else {
+                    let team = Team::from_id(&mut *transaction, team2).await?.ok_or(Error::UnknownTeam)?;
+                    team_cache.insert(team2, team.clone());
+                    team
+                }))
             } else if let Some(PgSnowflake(id)) = row.p2_discord {
                 Some(Entrant::Discord {
                     racetime_id: row.p2_racetime,
@@ -727,7 +769,13 @@ impl Race {
                 None
             };
             let p3 = if let Some(team3) = row.team3 {
-                Some(Entrant::MidosHouseTeam(Team::from_id(&mut *transaction, team3).await?.ok_or(Error::UnknownTeam)?))
+                Some(Entrant::MidosHouseTeam(if let Some(team) = team_cache.get(&team3) {
+                    team.clone()
+                } else {
+                    let team = Team::from_id(&mut *transaction, team3).await?.ok_or(Error::UnknownTeam)?;
+                    team_cache.insert(team3, team.clone());
+                    team
+                }))
             } else if let Some(name) = row.p3 {
                 Some(Entrant::Named { racetime_id: None, twitch_username: None, name })
             } else {
@@ -749,30 +797,6 @@ impl Race {
             }
         };
 
-        macro_rules! update_end {
-            ($var:ident, $room:ident, $query:literal) => {
-                let $var = if let Some(end) = row.$var {
-                    Some(end)
-                } else if let Some(ref room) = row.$room {
-                    let end = http_client.get(format!("{room}/data"))
-                        .send().await?
-                        .detailed_error_for_status().await?
-                        .json_with_text_in_error::<RaceData>().await?
-                        .ended_at;
-                    if let Some(end) = end {
-                        sqlx::query!($query, end, id as _).execute(&mut **transaction).await?;
-                    }
-                    end
-                } else {
-                    None
-                };
-            };
-        }
-
-        update_end!(end_time, room, "UPDATE races SET end_time = $1 WHERE id = $2");
-        update_end!(async_end1, async_room1, "UPDATE races SET async_end1 = $1 WHERE id = $2");
-        update_end!(async_end2, async_room2, "UPDATE races SET async_end2 = $1 WHERE id = $2");
-        update_end!(async_end3, async_room3, "UPDATE races SET async_end3 = $1 WHERE id = $2");
         Ok(Self {
             series: row.series,
             event: row.event,
@@ -782,7 +806,7 @@ impl Race {
             scheduling_thread: row.scheduling_thread.map(|PgSnowflake(id)| id),
             schedule: RaceSchedule::new(
                 row.start, row.async_start1, row.async_start2, row.async_start3,
-                end_time, async_end1, async_end2, async_end3,
+                row.end_time, row.async_end1, row.async_end2, row.async_end3,
                 row.room.map(|room| room.parse()).transpose()?, row.async_room1.map(|room| room.parse()).transpose()?, row.async_room2.map(|room| room.parse()).transpose()?, row.async_room3.map(|room| room.parse()).transpose()?,
             ),
             schedule_updated_at: row.schedule_updated_at,
@@ -953,6 +977,62 @@ impl Race {
                 => {} // these series are now scheduled via Mido's House
         }
         races.retain(|race| !race.ignored || race.is_ended());
+        races.sort_unstable();
+        Ok(races)
+    }
+
+    pub(crate) async fn for_homepage(
+        transaction: &mut Transaction<'_, Postgres>,
+        http_client: &reqwest::Client,
+        events: &[event::Data<'_>],
+    ) -> Result<Vec<Self>, Error> {
+        if events.is_empty() {
+            return Ok(Vec::default())
+        }
+        let series = events.iter().map(|event| event.series.to_string()).collect::<Vec<_>>();
+        let event_slugs = events.iter().map(|event| event.event.to_string()).collect::<Vec<_>>();
+        let rows = sqlx::query!(r#"SELECT
+                id AS "id: Id<Races>",
+                team1 AS "team1: Id<Teams>",
+                team2 AS "team2: Id<Teams>",
+                team3 AS "team3: Id<Teams>"
+            FROM races
+            WHERE (series, event) IN (
+                SELECT selected_series::varchar, selected_event::varchar
+                FROM UNNEST($1::text[], $2::text[]) AS selected(selected_series, selected_event)
+            )
+            AND NOT ignored
+            AND (
+                (start IS NULL AND async_start1 IS NULL AND async_start2 IS NULL AND async_start3 IS NULL)
+                OR (start IS NOT NULL AND async_start1 IS NULL AND async_start2 IS NULL AND async_start3 IS NULL AND end_time IS NULL)
+                OR (start IS NULL AND async_start1 IS NOT NULL AND async_start2 IS NOT NULL AND (async_end1 IS NULL OR async_end2 IS NULL))
+            )"#, &series, &event_slugs)
+            .fetch_all(&mut **transaction)
+            .await?;
+        let mut team_ids = rows.iter()
+            .flat_map(|row| [row.team1, row.team2, row.team3])
+            .flatten()
+            .map(i64::from)
+            .collect::<Vec<_>>();
+        team_ids.sort_unstable();
+        team_ids.dedup();
+        let mut team_cache = Team::from_ids(&mut *transaction, &team_ids).await?
+            .into_iter()
+            .map(|team| (team.id, team))
+            .collect::<HashMap<_, _>>();
+        let mut races = Vec::with_capacity(rows.len());
+        for row in rows {
+            races.push(Self::from_id_with_team_cache(&mut *transaction, row.id, &mut team_cache).await?);
+        }
+        for event in events.iter().filter(|event| matches!(event.series, Series::NineDaysOfSaws | Series::Pictionary)) {
+            races.retain(|race| race.series != event.series || race.event != event.event);
+            races.extend(Self::for_event(&mut *transaction, http_client, event).await?);
+        }
+        races.retain(|race| !race.ignored && match race.schedule {
+            RaceSchedule::Unscheduled => true,
+            RaceSchedule::Live { end, .. } => end.is_none(),
+            RaceSchedule::Async { start1, start2, end1, end2, .. } => start1.is_some() && start2.is_some() && (end1.is_none() || end2.is_none()),
+        });
         races.sort_unstable();
         Ok(races)
     }
@@ -1403,15 +1483,6 @@ impl Race {
         } else {
             None
         })
-    }
-
-    pub(crate) async fn player_video_urls(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<(User, Url)>, Error> {
-        let rows = sqlx::query!(r#"SELECT player AS "player: Id<Users>", video FROM race_player_videos WHERE race = $1"#, self.id as _).fetch_all(&mut **transaction).await?;
-        let mut tuples = Vec::with_capacity(rows.len());
-        for row in rows {
-            tuples.push((User::from_id(&mut **transaction, row.player).await?.expect("foreign key constraint violated"), row.video.parse()?));
-        }
-        Ok(tuples)
     }
 
     pub(crate) fn has_any_room(&self) -> bool {
@@ -2628,7 +2699,7 @@ pub(crate) struct RaceTableOptions<'a> {
 
 pub(crate) async fn race_table(
     transaction: &mut Transaction<'_, Postgres>,
-    discord_ctx: &DiscordCtx,
+    discord_ctx: Option<&DiscordCtx>,
     http_client: &reqwest::Client,
     uri: &Origin<'_>,
     event: Option<&event::Data<'_>>,
@@ -2736,8 +2807,16 @@ pub(crate) async fn race_table(
             } else {
                 Race::from_id(transaction, http_client, companion_race_id).await?
             };
-            let primary_title = primary_race.matchup_label(transaction, discord_ctx).await?;
-            let companion_title = companion_race.matchup_label(transaction, discord_ctx).await?;
+            let primary_title = if let Some(discord_ctx) = discord_ctx {
+                primary_race.matchup_label(transaction, discord_ctx).await?
+            } else {
+                "linked race".to_owned()
+            };
+            let companion_title = if let Some(discord_ctx) = discord_ctx {
+                companion_race.matchup_label(transaction, discord_ctx).await?
+            } else {
+                "linked race".to_owned()
+            };
             if displayed_race_ids.contains(&i64::from(companion_race_id)) {
                 companion_display_starts.insert(companion_race_id, (row.primary_id, row.start, primary_title.clone()));
                 combined_race_links.insert(companion_race_id, (row.primary_id, primary_title));
@@ -2768,6 +2847,96 @@ pub(crate) async fn race_table(
                 .then_with(|| race_a.game.cmp(&race_b.game))
                 .then_with(|| race_a.id.cmp(&race_b.id))
         });
+    }
+    let mut displayed_teams = HashMap::new();
+    for team in displayed_races.iter().flat_map(|race| race.teams()) {
+        displayed_teams.entry(team.id).or_insert(team);
+    }
+    let team_ids = displayed_teams.keys().copied().map(i64::from).collect::<Vec<_>>();
+    let mut team_members = HashMap::<Id<Teams>, Vec<(Id<Users>, String)>>::new();
+    if !team_ids.is_empty() {
+        for row in sqlx::query!(r#"SELECT
+                tm.team AS "team: Id<Teams>",
+                u.id AS "user_id: Id<Users>",
+                CASE u.display_source
+                    WHEN 'racetime' THEN u.racetime_display_name
+                    WHEN 'discord' THEN u.discord_display_name
+                END AS "display_name!"
+            FROM team_members tm
+            JOIN users u ON u.id = tm.member
+            WHERE tm.team = ANY($1)
+            ORDER BY tm.team, tm.role"#, &team_ids)
+            .fetch_all(&mut **transaction)
+            .await?
+        {
+            team_members.entry(row.team).or_default().push((row.user_id, row.display_name));
+        }
+    }
+    let team_html_cache = displayed_teams.into_iter().map(|(id, team)| {
+        let members = team_members.get(&id).map(Vec::as_slice).unwrap_or_default();
+        let member = members.first().filter(|_| members.len() == 1).map(|(id, name)| (*id, name.as_str()));
+        (id, team.to_html_with_single_member(member, false).0)
+    }).collect::<HashMap<_, _>>();
+    let mut player_video_urls = HashMap::<Id<Races>, Vec<(String, Url)>>::new();
+    if !displayed_race_ids.is_empty() {
+        for row in sqlx::query!(r#"SELECT
+                rpv.race AS "race: Id<Races>",
+                rpv.video,
+                CASE u.display_source
+                    WHEN 'racetime' THEN u.racetime_display_name
+                    WHEN 'discord' THEN u.discord_display_name
+                END AS "player_name!"
+            FROM race_player_videos rpv
+            JOIN users u ON u.id = rpv.player
+            WHERE rpv.race = ANY($1)"#, &displayed_race_ids)
+            .fetch_all(&mut **transaction)
+            .await?
+        {
+            player_video_urls.entry(row.race).or_default().push((row.player_name, row.video.parse()?));
+        }
+    }
+    let mut event_permissions = HashMap::<(Series, String), (bool, bool)>::new();
+    if let Some(user) = user {
+        let mut event_keys = displayed_races.iter().map(|race| (race.series, race.event.clone())).collect::<Vec<_>>();
+        event_keys.sort_unstable();
+        event_keys.dedup();
+        let event_series = event_keys.iter().map(|(series, _)| series.to_string()).collect::<Vec<_>>();
+        let event_slugs = event_keys.iter().map(|(_, event)| event.clone()).collect::<Vec<_>>();
+        if !event_keys.is_empty() {
+            for row in sqlx::query!(r#"SELECT
+                    e.series AS "series: Series",
+                    e.event,
+                    EXISTS (
+                        SELECT 1 FROM organizers o
+                        WHERE o.series = e.series AND o.event = e.event AND o.organizer = $3
+                    ) AS "is_organizer!",
+                    (
+                        EXISTS (
+                            SELECT 1 FROM organizers o
+                            WHERE o.series = e.series AND o.event = e.event AND o.organizer = $3
+                        )
+                        OR EXISTS (
+                            SELECT 1 FROM restreamers r
+                            WHERE r.series = e.series AND r.event = e.event AND r.restreamer = $3
+                        )
+                        OR EXISTS (
+                            SELECT 1
+                            FROM game_series gs
+                            JOIN game_restreamers gr ON gr.game_id = gs.game_id
+                            WHERE gs.series = e.series AND gr.restreamer = $3
+                        )
+                    ) AS "can_manage_volunteers!"
+                FROM events e
+                WHERE (e.series, e.event) IN (
+                    SELECT selected_series::varchar, selected_event::varchar
+                    FROM UNNEST($1::text[], $2::text[]) AS selected(selected_series, selected_event)
+                )"#, &event_series, &event_slugs, user.id as _)
+                .fetch_all(&mut **transaction)
+                .await?
+            {
+                event_permissions.insert((row.series, row.event), (row.is_organizer, row.can_manage_volunteers));
+            }
+        }
     }
     Ok(html! {
         table {
@@ -2902,7 +3071,7 @@ pub(crate) async fn race_table(
                             }
                             Entrants::Two([ref team1, ref team2]) => {
                                 td(class = "vs1", colspan = "3") {
-                                    : team1.to_html(&mut *transaction, discord_ctx, false).await?;
+                                    : team1.to_html_with_optional_discord(&mut *transaction, discord_ctx, Some(&team_html_cache), false).await?;
                                     @if let RaceSchedule::Async { start1: Some(start), .. } = race.schedule {
                                         br;
                                         small {
@@ -2911,7 +3080,7 @@ pub(crate) async fn race_table(
                                     }
                                 }
                                 td(class = "vs2", colspan = "3") {
-                                    : team2.to_html(&mut *transaction, discord_ctx, false).await?;
+                                    : team2.to_html_with_optional_discord(&mut *transaction, discord_ctx, Some(&team_html_cache), false).await?;
                                     @if let RaceSchedule::Async { start2: Some(start), .. } = race.schedule {
                                         br;
                                         small {
@@ -2922,7 +3091,7 @@ pub(crate) async fn race_table(
                             }
                             Entrants::Three([ref team1, ref team2, ref team3]) => {
                                 td(colspan = "2") {
-                                    : team1.to_html(&mut *transaction, discord_ctx, false).await?;
+                                    : team1.to_html_with_optional_discord(&mut *transaction, discord_ctx, Some(&team_html_cache), false).await?;
                                     @if let RaceSchedule::Async { start1: Some(start), .. } = race.schedule {
                                         br;
                                         small {
@@ -2931,7 +3100,7 @@ pub(crate) async fn race_table(
                                     }
                                 }
                                 td(colspan = "2") {
-                                    : team2.to_html(&mut *transaction, discord_ctx, false).await?;
+                                    : team2.to_html_with_optional_discord(&mut *transaction, discord_ctx, Some(&team_html_cache), false).await?;
                                     @if let RaceSchedule::Async { start2: Some(start), .. } = race.schedule {
                                         br;
                                         small {
@@ -2940,7 +3109,7 @@ pub(crate) async fn race_table(
                                     }
                                 }
                                 td(colspan = "2") {
-                                    : team3.to_html(&mut *transaction, discord_ctx, false).await?;
+                                    : team3.to_html_with_optional_discord(&mut *transaction, discord_ctx, Some(&team_html_cache), false).await?;
                                     @if let RaceSchedule::Async { start3: Some(start), .. } = race.schedule {
                                         br;
                                         small {
@@ -2960,8 +3129,8 @@ pub(crate) async fn race_table(
                                         a(class = "favicon", title = "multistream", href = multistream_url.to_string(), target = "_blank") : favicon(&multistream_url);
                                     }
                                 }
-                                @for (user, video_url) in race.player_video_urls(&mut *transaction).await? {
-                                    a(class = "favicon", title = format!("{user}'s vod"), href = video_url.to_string(), target = "_blank") : favicon(&video_url);
+                                @for (player_name, video_url) in player_video_urls.get(&race.id).into_iter().flatten() {
+                                    a(class = "favicon", title = format!("{player_name}'s vod"), href = video_url.to_string(), target = "_blank") : favicon(video_url);
                                 }
                                 @if let Some(startgg_url) = race.startgg_set_url()? {
                                     a(class = "favicon", title = "start.gg set", href = startgg_url.to_string(), target = "_blank") : favicon(&startgg_url);
@@ -2989,16 +3158,8 @@ pub(crate) async fn race_table(
                                 @let all_teams_consented = restream_race.restream_consent_required || restream_race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
                                 @if scheduled && all_teams_consented {
                                         @if let Some(user) = user {
-                                            @let is_organizer = event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(user));
-                                            @let is_event_restreamer = event.restreamers(&mut *transaction).await.ok().map_or(false, |rest| rest.contains(user));
-                                            @let is_game_restreamer = if is_event_restreamer { false } else {
-                                                match crate::game::Game::from_series(&mut *transaction, race.series).await {
-                                                    Ok(Some(game)) => game.is_restreamer_any_language(&mut *transaction, user).await.unwrap_or(false),
-                                                    _ => false,
-                                                }
-                                            };
-                                            @let is_restreamer = is_event_restreamer || is_game_restreamer;
-                                            @if is_organizer || is_restreamer {
+                                            @let can_manage_volunteers = event_permissions.get(&(race.series, race.event.clone())).is_some_and(|(_, can_manage)| *can_manage);
+                                            @if can_manage_volunteers {
                                                 a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, volunteer_race_id, _))) : "Manage Volunteers";
                                             } else if let Some(approved_roles) = approved_role_binding_ids {
                                                 @if !approved_roles.is_empty() {
@@ -3095,7 +3256,7 @@ pub(crate) async fn race_table(
                             td {
                                 @if let Some(user) = user {
                                     @let is_admin = user.is_global_admin();
-                                    @let is_organizer = event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(user));
+                                    @let is_organizer = event_permissions.get(&(race.series, race.event.clone())).is_some_and(|(is_organizer, _)| *is_organizer);
                                     @if is_admin || is_organizer {
                                         a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
                                     } else if options.can_edit {
@@ -3366,7 +3527,7 @@ pub(crate) async fn import_races_form(mut transaction: Transaction<'_, Postgres>
                     }
                 }
             } else {
-                let table = race_table(&mut transaction, discord_ctx, http_client, &uri, Some(&event), RaceTableOptions { game_count: true, show_multistreams: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: Some(ctx.clone()) }, &races, None, None).await?;
+                let table = race_table(&mut transaction, Some(discord_ctx), http_client, &uri, Some(&event), RaceTableOptions { game_count: true, show_multistreams: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: Some(ctx.clone()) }, &races, None, None).await?;
                 let errors = ctx.errors().collect_vec();
                 full_form(uri!(import_races_post(event.series, &*event.event)), csrf, html! {
                     p : "The following races will be imported:";
@@ -3450,7 +3611,7 @@ pub(crate) async fn import_races_form(mut transaction: Transaction<'_, Postgres>
                     }
                 }
             } else {
-                let table = race_table(&mut transaction, discord_ctx, http_client, &uri, Some(&event), RaceTableOptions { game_count: true, show_multistreams: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: None }, &races, None, None).await?;
+                let table = race_table(&mut transaction, Some(discord_ctx), http_client, &uri, Some(&event), RaceTableOptions { game_count: true, show_multistreams: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: None }, &races, None, None).await?;
                 let errors = ctx.errors().collect_vec();
                 full_form(uri!(import_races_post(event.series, &*event.event)), csrf, html! {
                     p : "The following races will be imported:";
@@ -4189,6 +4350,84 @@ pub(crate) async fn auto_ignore_past_custom_races(
     )
     .execute(&mut **transaction)
     .await?;
+    Ok(())
+}
+
+pub(crate) async fn reconcile_racetime_room_statuses(
+    db_pool: &PgPool,
+    http_client: &reqwest::Client,
+) -> Result<(), Error> {
+    let rooms = sqlx::query!(r#"
+        SELECT id AS "id: Id<Races>", 'live' AS "kind!", room AS "room!"
+        FROM races
+        WHERE NOT ignored AND room IS NOT NULL AND end_time IS NULL AND start <= NOW()
+        UNION ALL
+        SELECT id AS "id: Id<Races>", 'async1' AS "kind!", async_room1 AS "room!"
+        FROM races
+        WHERE NOT ignored AND async_room1 IS NOT NULL AND async_end1 IS NULL AND async_start1 <= NOW()
+        UNION ALL
+        SELECT id AS "id: Id<Races>", 'async2' AS "kind!", async_room2 AS "room!"
+        FROM races
+        WHERE NOT ignored AND async_room2 IS NOT NULL AND async_end2 IS NULL AND async_start2 <= NOW()
+        UNION ALL
+        SELECT id AS "id: Id<Races>", 'async3' AS "kind!", async_room3 AS "room!"
+        FROM races
+        WHERE NOT ignored AND async_room3 IS NOT NULL AND async_end3 IS NULL AND async_start3 <= NOW()
+    "#).fetch_all(db_pool).await?;
+    for room in rooms {
+        let response = match http_client.get(format!("{}/data", room.room))
+            .timeout(Duration::from_secs(3))
+            .send().await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                log::warn!("failed to refresh racetime room {}: {error}", room.room);
+                continue
+            }
+        };
+        let response = match response.detailed_error_for_status().await {
+            Ok(response) => response,
+            Err(error) => {
+                log::warn!("failed to refresh racetime room {}: {error}", room.room);
+                continue
+            }
+        };
+        let data = match response.json_with_text_in_error::<RaceData>().await {
+            Ok(data) => data,
+            Err(error) => {
+                log::warn!("failed to decode racetime room {}: {error}", room.room);
+                continue
+            }
+        };
+        let cancelled = data.status.value == RaceStatusValue::Cancelled;
+        if !cancelled && data.status.value != RaceStatusValue::Finished {
+            continue
+        }
+        let terminal_at = data.ended_at.unwrap_or_else(Utc::now);
+        match room.kind.as_str() {
+            "live" => {
+                sqlx::query!(
+                    "UPDATE races SET end_time = $1, ignored = ignored OR $2 WHERE id = $3 AND end_time IS NULL",
+                    terminal_at,
+                    cancelled,
+                    room.id as _,
+                ).execute(db_pool).await?;
+            }
+            "async1" => {
+                sqlx::query!("UPDATE races SET async_end1 = $1 WHERE id = $2 AND async_end1 IS NULL", terminal_at, room.id as _)
+                    .execute(db_pool).await?;
+            }
+            "async2" => {
+                sqlx::query!("UPDATE races SET async_end2 = $1 WHERE id = $2 AND async_end2 IS NULL", terminal_at, room.id as _)
+                    .execute(db_pool).await?;
+            }
+            "async3" => {
+                sqlx::query!("UPDATE races SET async_end3 = $1 WHERE id = $2 AND async_end3 IS NULL", terminal_at, room.id as _)
+                    .execute(db_pool).await?;
+            }
+            _ => unreachable!("unknown racetime room kind"),
+        }
+    }
     Ok(())
 }
 
