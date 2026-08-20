@@ -335,7 +335,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
         });
-        let racetime_room_status_task = tokio::spawn(racetime_room_status_manager(db_pool.clone(), http_client.clone(), rocket.shutdown())).map(|res| match res {
+        let racetime_room_status_task = tokio::spawn(weekly_racetime_room_status_manager(db_pool.clone(), http_client.clone(), rocket.shutdown())).map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
@@ -405,7 +405,7 @@ async fn async_race_manager(
     Ok(())
 }
 
-async fn racetime_room_status_manager(
+async fn weekly_racetime_room_status_manager(
     db_pool: PgPool,
     http_client: reqwest::Client,
     shutdown: rocket::Shutdown,
@@ -414,8 +414,8 @@ async fn racetime_room_status_manager(
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                if let Err(error) = cal::reconcile_racetime_room_statuses(&db_pool, &http_client).await {
-                    log::error!("failed to reconcile racetime room statuses: {error}");
+                if let Err(error) = cal::reconcile_weekly_racetime_room_statuses(&db_pool, &http_client).await {
+                    log::error!("failed to reconcile weekly racetime room statuses: {error}");
                 }
             }
             _ = shutdown.clone() => break,

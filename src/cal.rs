@@ -4353,26 +4353,33 @@ pub(crate) async fn auto_ignore_past_custom_races(
     Ok(())
 }
 
-pub(crate) async fn reconcile_racetime_room_statuses(
+/// Records terminal racetime.gg timestamps for generated weekly races.
+///
+/// Other races are finalized by their room bot. In particular, a cancelled
+/// tournament room may need to be restarted and must remain otherwise untouched.
+pub(crate) async fn reconcile_weekly_racetime_room_statuses(
     db_pool: &PgPool,
     http_client: &reqwest::Client,
 ) -> Result<(), Error> {
     let rooms = sqlx::query!(r#"
-        SELECT id AS "id: Id<Races>", 'live' AS "kind!", room AS "room!"
+        SELECT races.id AS "id: Id<Races>", races.room AS "room!"
         FROM races
-        WHERE NOT ignored AND room IS NOT NULL AND end_time IS NULL AND start <= NOW()
-        UNION ALL
-        SELECT id AS "id: Id<Races>", 'async1' AS "kind!", async_room1 AS "room!"
-        FROM races
-        WHERE NOT ignored AND async_room1 IS NOT NULL AND async_end1 IS NULL AND async_start1 <= NOW()
-        UNION ALL
-        SELECT id AS "id: Id<Races>", 'async2' AS "kind!", async_room2 AS "room!"
-        FROM races
-        WHERE NOT ignored AND async_room2 IS NOT NULL AND async_end2 IS NULL AND async_start2 <= NOW()
-        UNION ALL
-        SELECT id AS "id: Id<Races>", 'async3' AS "kind!", async_room3 AS "room!"
-        FROM races
-        WHERE NOT ignored AND async_room3 IS NOT NULL AND async_end3 IS NULL AND async_start3 <= NOW()
+        WHERE NOT races.ignored
+        AND races.room IS NOT NULL
+        AND races.end_time IS NULL
+        AND races.start <= NOW()
+        AND EXISTS (
+            SELECT 1
+            FROM weekly_schedules ws
+            WHERE ws.series = races.series
+            AND ws.event = races.event
+            AND races.round = ws.name || ' ' || CASE ws.frequency_days
+                WHEN 14 THEN 'Biweekly'
+                WHEN 28 THEN 'Monthly'
+                WHEN 30 THEN 'Monthly'
+                ELSE 'Weekly'
+            END
+        )
     "#).fetch_all(db_pool).await?;
     for room in rooms {
         let response = match http_client.get(format!("{}/data", room.room))
@@ -4399,34 +4406,15 @@ pub(crate) async fn reconcile_racetime_room_statuses(
                 continue
             }
         };
-        let cancelled = data.status.value == RaceStatusValue::Cancelled;
-        if !cancelled && data.status.value != RaceStatusValue::Finished {
+        if !matches!(data.status.value, RaceStatusValue::Cancelled | RaceStatusValue::Finished) {
             continue
         }
         let terminal_at = data.ended_at.unwrap_or_else(Utc::now);
-        match room.kind.as_str() {
-            "live" => {
-                sqlx::query!(
-                    "UPDATE races SET end_time = $1, ignored = ignored OR $2 WHERE id = $3 AND end_time IS NULL",
-                    terminal_at,
-                    cancelled,
-                    room.id as _,
-                ).execute(db_pool).await?;
-            }
-            "async1" => {
-                sqlx::query!("UPDATE races SET async_end1 = $1 WHERE id = $2 AND async_end1 IS NULL", terminal_at, room.id as _)
-                    .execute(db_pool).await?;
-            }
-            "async2" => {
-                sqlx::query!("UPDATE races SET async_end2 = $1 WHERE id = $2 AND async_end2 IS NULL", terminal_at, room.id as _)
-                    .execute(db_pool).await?;
-            }
-            "async3" => {
-                sqlx::query!("UPDATE races SET async_end3 = $1 WHERE id = $2 AND async_end3 IS NULL", terminal_at, room.id as _)
-                    .execute(db_pool).await?;
-            }
-            _ => unreachable!("unknown racetime room kind"),
-        }
+        sqlx::query!(
+            "UPDATE races SET end_time = $1 WHERE id = $2 AND end_time IS NULL",
+            terminal_at,
+            room.id as _,
+        ).execute(db_pool).await?;
     }
     Ok(())
 }
