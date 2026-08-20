@@ -691,6 +691,7 @@ async fn report_external_and_init_draft<'a>(
 ) -> Result<(Transaction<'a, Postgres>, Vec<Id<Races>>), Error> {
     let mut ignored_race_ids: Vec<Id<Races>> = vec![];
     let mut series_decided = false;
+    let mut standings_changed = false;
     match race.source {
         cal::Source::Manual | cal::Source::Sheet { .. } => {}
         cal::Source::Challonge { .. } => {} //TODO
@@ -800,6 +801,7 @@ async fn report_external_and_init_draft<'a>(
                         }
                         ignored_race_ids = race.ignore_remaining_games(&mut transaction).await.to_racetime()?;
                         series_decided = true;
+                        standings_changed = true;
                     } else if event.startgg_double_rr {
                         startgg_report_request::<startgg::ReportBracketSetMutation>(
                             &global_state.http_client,
@@ -836,6 +838,7 @@ async fn report_external_and_init_draft<'a>(
                             winner_entrant_id: winner_entrant_id.clone(),
                         },
                     ).await?;
+                    standings_changed = true;
                 }
             } else if let Some(organizer_channel) = event.discord_organizer_channel {
                 let mut msg = MessageBuilder::default();
@@ -846,6 +849,16 @@ async fn report_external_and_init_draft<'a>(
             }
         },
         cal::Source::SpeedGaming { .. } => {}
+    }
+
+    if standings_changed && event.swiss_standings {
+        if let MatchSource::StartGG(event_slug) = event.match_source() {
+            startgg::refresh_swiss_standings(
+                global_state.http_client.clone(),
+                event_slug.to_owned(),
+                global_state.startgg_token.clone(),
+            ).await;
+        }
     }
 
     if_chain! {

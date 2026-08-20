@@ -11,6 +11,9 @@ use {
 const RATE_LIMIT: Duration = Duration::from_millis(60_000 / 80);
 
 static CACHE: LazyLock<Mutex<(Instant, TypeMap)>> = LazyLock::new(|| Mutex::new((Instant::now() + RATE_LIMIT, TypeMap::default())));
+static SWISS_STANDINGS_CACHE: LazyLock<Mutex<HashMap<String, Vec<SwissStanding>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Whether another refresh was requested while the current refresh for an event was running.
+static SWISS_STANDINGS_REFRESHES: LazyLock<Mutex<HashMap<String, bool>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub(crate) async fn invalidate_cache() {
     lock!(cache = CACHE; {
@@ -168,6 +171,16 @@ pub(crate) struct UserSlugQuery;
     response_derives = "Debug, Clone",
 )]
 pub(crate) struct EntrantsQuery;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "assets/graphql/startgg-schema.json",
+    query_path = "assets/graphql/startgg-swiss-entrants-query.graphql",
+    skip_default_scalars, // workaround for https://github.com/smashgg/developer-portal/issues/171
+    variables_derives = "Clone, PartialEq, Eq, Hash",
+    response_derives = "Debug, Clone",
+)]
+pub(crate) struct SwissEntrantsQuery;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -662,18 +675,16 @@ fn apply_swiss_set(
     }
 }
 
-/// Computes Swiss standings for a Startgg Swiss event
-pub(crate) async fn swiss_standings(
+async fn fetch_swiss_standings(
     http_client: &reqwest::Client,
-    _config: &Config,
     event_slug: &str,
     startgg_token: &str,
 ) -> Result<Vec<SwissStanding>, Error> {
-    use entrants_query::EntrantsQueryEventEntrantsNodes as EntrantNode;
-    use entrants_query::EntrantsQueryEventEntrantsPageInfo as PageInfo;
-    use entrants_query::EntrantsQueryEventEntrants as Entrants;
-    use entrants_query::EntrantsQueryEvent as Event;
-    use entrants_query::ResponseData as ResponseData;
+    use swiss_entrants_query::SwissEntrantsQueryEventEntrantsNodes as EntrantNode;
+    use swiss_entrants_query::SwissEntrantsQueryEventEntrantsPageInfo as PageInfo;
+    use swiss_entrants_query::SwissEntrantsQueryEventEntrants as Entrants;
+    use swiss_entrants_query::SwissEntrantsQueryEvent as Event;
+    use swiss_entrants_query::ResponseData as ResponseData;
     use swiss_sets_query::SwissSetsQueryEventSets as SwissSets;
     use swiss_sets_query::SwissSetsQueryEventSetsNodes as SwissSetNode;
     use swiss_sets_query::SwissSetsQueryEvent as SwissEvent;
@@ -705,10 +716,10 @@ pub(crate) async fn swiss_standings(
     // complete set list so pending matches and explicit byes are handled consistently.
     let mut entrant_names = HashMap::new();
     let mut records = HashMap::new();
-    let entrants_response = query_cached::<EntrantsQuery>(
+    let entrants_response = query_cached::<SwissEntrantsQuery>(
         http_client,
         startgg_token,
-        entrants_query::Variables {
+        swiss_entrants_query::Variables {
             slug: Some(event_slug.to_owned()),
             page: Some(1),
         },
@@ -718,7 +729,7 @@ pub(crate) async fn swiss_standings(
     let total_entrant_pages = if let ResponseData {
         event: Some(Event {
             entrants: Some(Entrants {
-                page_info: Some(PageInfo { page: Some(_), total_pages: Some(tp) }),
+                page_info: Some(PageInfo { total_pages: Some(tp) }),
                 nodes: Some(entrants),
             }),
             ..
@@ -741,11 +752,11 @@ pub(crate) async fn swiss_standings(
     };
 
     // Fetch remaining entrants pages
-    fetch_remaining_pages::<EntrantsQuery>(
+    fetch_remaining_pages::<SwissEntrantsQuery>(
         http_client,
         startgg_token,
         total_entrant_pages,
-        |page| entrants_query::Variables {
+        |page| swiss_entrants_query::Variables {
             slug: Some(event_slug.to_owned()),
             page: Some(page),
         },
@@ -874,6 +885,83 @@ pub(crate) async fn swiss_standings(
             losses: *losses,
         });
     }
+    Ok(standings)
+}
+
+async fn invalidate_swiss_standings_queries(event_slug: &str) {
+    lock!(cache = CACHE; {
+        let (_, ref mut entries) = *cache;
+        entries.entry::<QueryCache<SwissEntrantsQuery>>().or_default()
+            .retain(|variables, _| variables.slug.as_deref() != Some(event_slug));
+        entries.entry::<QueryCache<SwissSetsQuery>>().or_default()
+            .retain(|variables, _| variables.event_slug != event_slug);
+    });
+}
+
+/// Refreshes one event's standings without making a page request wait. Concurrent refresh
+/// requests are coalesced, with one additional pass if a result arrives during a refresh.
+pub(crate) async fn refresh_swiss_standings(
+    http_client: reqwest::Client,
+    event_slug: String,
+    startgg_token: String,
+) {
+    let should_spawn = lock!(refreshes = SWISS_STANDINGS_REFRESHES; {
+        match refreshes.entry(event_slug.clone()) {
+            hash_map::Entry::Occupied(mut entry) => {
+                *entry.get_mut() = true;
+                false
+            }
+            hash_map::Entry::Vacant(entry) => {
+                entry.insert(false);
+                true
+            }
+        }
+    });
+    if !should_spawn {
+        return
+    }
+
+    tokio::spawn(async move {
+        loop {
+            invalidate_swiss_standings_queries(&event_slug).await;
+            match fetch_swiss_standings(&http_client, &event_slug, &startgg_token).await {
+                Ok(standings) => lock!(cache = SWISS_STANDINGS_CACHE; {
+                    cache.insert(event_slug.clone(), standings);
+                }),
+                Err(e) => log::warn!("failed to refresh Swiss standings for {event_slug}: {e}"),
+            }
+            let refresh_again = lock!(refreshes = SWISS_STANDINGS_REFRESHES; {
+                if refreshes.get(&event_slug).copied() == Some(true) {
+                    refreshes.insert(event_slug.clone(), false);
+                    true
+                } else {
+                    refreshes.remove(&event_slug);
+                    false
+                }
+            });
+            if !refresh_again {
+                break
+            }
+        }
+    });
+}
+
+/// Computes Swiss standings for a Startgg Swiss event. The completed standings remain cached
+/// until a successfully reported race result starts a background refresh.
+pub(crate) async fn swiss_standings(
+    http_client: &reqwest::Client,
+    _config: &Config,
+    event_slug: &str,
+    startgg_token: &str,
+) -> Result<Vec<SwissStanding>, Error> {
+    if let Some(standings) = lock!(cache = SWISS_STANDINGS_CACHE; cache.get(event_slug).cloned()) {
+        return Ok(standings)
+    }
+
+    let standings = fetch_swiss_standings(http_client, event_slug, startgg_token).await?;
+    lock!(cache = SWISS_STANDINGS_CACHE; {
+        cache.insert(event_slug.to_owned(), standings.clone());
+    });
     Ok(standings)
 }
 

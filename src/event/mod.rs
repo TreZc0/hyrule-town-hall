@@ -4146,7 +4146,7 @@ pub(crate) async fn swiss_standings(
     let content = html! {
         : header;
         h2 : "Swiss Standings";
-        p(style = "font-style: italic; color: var(--text-muted); margin-bottom: 1rem;") : "This page automatically updates every 30 minutes.";
+        p(style = "font-style: italic; color: var(--text-muted); margin-bottom: 1rem;") : "This page automatically updates after each race result.";
         @if standings.is_empty() {
             p : "No Swiss standings available at this time.";
         } else {

@@ -1,6 +1,6 @@
 query SwissSetsQuery($event_slug: String!, $page: Int!) {
   event(slug: $event_slug) {
-    sets(page: $page, perPage: 50, filters: { showByes: true }) {
+    sets(page: $page, perPage: 100, filters: { showByes: true }) {
       pageInfo {
         totalPages
       }

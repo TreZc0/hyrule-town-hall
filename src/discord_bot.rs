@@ -5519,10 +5519,15 @@ async fn report_async_race_to_external_platforms(
 ) -> Result<(), Error> {
     // --- Begin external reporting code ---
     let cal_event = cal::Event { race: race.clone(), kind: cal::EventKind::Normal };
-    let discord_data = ctx.data.read().await;
-    let http_client = discord_data.get::<HttpClient>().expect("HTTP client missing from Discord context");
-    let startgg_token = discord_data.get::<StartggToken>().expect("start.gg token missing from Discord context");
-    let challonge_api_key = discord_data.get::<ChallongeApiKey>().expect("Challonge API key missing from Discord context");
+    let (db_pool, http_client, startgg_token, challonge_api_key) = {
+        let discord_data = ctx.data.read().await;
+        (
+            discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").clone(),
+            discord_data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
+            discord_data.get::<StartggToken>().expect("start.gg token missing from Discord context").clone(),
+            discord_data.get::<ChallongeApiKey>().expect("Challonge API key missing from Discord context").clone(),
+        )
+    };
     // Report to start.gg if applicable
     if let Ok(Some(startgg_set_url)) = cal_event.race.startgg_set_url() {
         let mut total_times: Vec<(i32, Option<Duration>)> = results.iter()
@@ -5559,14 +5564,26 @@ async fn report_async_race_to_external_platforms(
                         startgg::ID(startgg_set_url.to_string())
                     };
                     match startgg::query_uncached::<startgg::ReportOneGameResultMutation>(
-                        http_client,
-                        startgg_token,
+                        &http_client,
+                        &startgg_token,
                         startgg::report_one_game_result_mutation::Variables {
                             set_id,
                             winner_entrant_id: startgg_id.clone(),
                         }
                     ).await {
-                        Ok(_) => {},
+                        Ok(_) => {
+                            let mut transaction = db_pool.begin().await?;
+                            let event = race.event(&mut transaction).await?;
+                            if event.swiss_standings {
+                                if let cal::Source::StartGG { ref event, .. } = race.source {
+                                    startgg::refresh_swiss_standings(
+                                        http_client.clone(),
+                                        event.clone(),
+                                        startgg_token.clone(),
+                                    ).await;
+                                }
+                            }
+                        },
                         Err(e) => {
                             eprintln!("Failed to report async race result to start.gg: {:?}", e);
                         }
@@ -5615,7 +5632,7 @@ async fn report_async_race_to_external_platforms(
                         .header(reqwest::header::ACCEPT, "application/json")
                         .header(reqwest::header::CONTENT_TYPE, "application/vnd.api+json")
                         .header("Authorization-Type", "v1")
-                        .header(reqwest::header::AUTHORIZATION, challonge_api_key)
+                        .header(reqwest::header::AUTHORIZATION, &challonge_api_key)
                         .json(&payload)
                         .send()
                         .await {
