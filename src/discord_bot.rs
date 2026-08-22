@@ -25,6 +25,7 @@ use {
         EditInteractionResponse,
         EditMessage,
         EditRole,
+        EditThread,
         InputTextStyle,
     }, serenity_utils::{
         builder::ErrorNotifier,
@@ -211,6 +212,7 @@ pub(crate) struct CommandIds {
     post_status: CommandId,
     pronoun_roles: CommandId,
     racing_role: CommandId,
+    reset_async: CommandId,
     reset_race: CommandId,
     restart_room: CommandId,
     pub(crate) schedule: CommandId,
@@ -626,6 +628,155 @@ async fn async_part_has_been_played(transaction: &mut Transaction<'_, Postgres>,
         race.id as _,
         async_part as i32,
     ).fetch_one(&mut **transaction).await
+}
+
+fn canceled_async_thread_name(name: &str) -> String {
+    const SUFFIX: &str = " (canceled)";
+    const DISCORD_NAME_LIMIT: usize = 100;
+    if name.ends_with(SUFFIX) {
+        return name.to_owned()
+    }
+    let mut canceled_name = name.chars().take(DISCORD_NAME_LIMIT - SUFFIX.chars().count()).collect::<String>();
+    canceled_name.push_str(SUFFIX);
+    canceled_name
+}
+
+async fn reset_async_command(ctx: &DiscordCtx, interaction: &CommandInteraction) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut participant = None;
+    let mut game = None;
+    for option in &interaction.data.options {
+        match (&*option.name, &option.value) {
+            ("participant", CommandDataOptionValue::User(user_id)) => participant = Some(*user_id),
+            ("game", CommandDataOptionValue::Integer(value)) => game = Some(i16::try_from(*value).expect("game number out of range")),
+            (name, _) => panic!("unexpected option for /reset-async: {name}"),
+        }
+    }
+    let participant = participant.expect("required participant missing from /reset-async");
+
+    let (mut transaction, http_client) = {
+        let data = ctx.data.read().await;
+        (
+            data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?,
+            data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
+        )
+    };
+    let races = Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), game, true).await?;
+    let race = match races.into_iter().at_most_one() {
+        Ok(Some(race)) => race,
+        Ok(None) => {
+            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                .ephemeral(true)
+                .content(if game.is_some() {
+                    "Sorry, there is no race with that game number in this scheduling thread."
+                } else {
+                    "Sorry, this is not a race scheduling thread."
+                })
+            )).await?;
+            transaction.rollback().await?;
+            return Ok(())
+        }
+        Err(_) => {
+            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                .ephemeral(true)
+                .content("This thread has multiple games. Please specify the game number.")
+            )).await?;
+            transaction.rollback().await?;
+            return Ok(())
+        }
+    };
+    let event = race.event(&mut transaction).await?;
+    let is_organizer = event.organizers(&mut transaction).await?.into_iter()
+        .any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
+    if !is_organizer {
+        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+            .ephemeral(true)
+            .content("Sorry, only event organizers can use this command.")
+        )).await?;
+        transaction.rollback().await?;
+        return Ok(())
+    }
+    if !matches!(race.schedule, RaceSchedule::Async { .. }) {
+        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+            .ephemeral(true)
+            .content("The selected game does not currently have an async part to reset.")
+        )).await?;
+        transaction.rollback().await?;
+        return Ok(())
+    }
+
+    let mut target_part = None;
+    for (index, team) in race.teams().enumerate() {
+        if team.members(&mut transaction).await?.into_iter()
+            .any(|member| member.discord.is_some_and(|discord| discord.id == participant))
+        {
+            target_part = u8::try_from(index + 1).ok();
+            break
+        }
+    }
+    let Some(async_part) = target_part else {
+        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+            .ephemeral(true)
+            .content("That user is not a participant in the selected game.")
+        )).await?;
+        transaction.rollback().await?;
+        return Ok(())
+    };
+
+    let (thread_id, scheduled, seed_released, ready): (Option<i64>, bool, bool, bool) = match async_part {
+        1 => sqlx::query_as("SELECT async_thread1, async_start1 IS NOT NULL, async_seed1, async_ready1 FROM races WHERE id = $1 FOR UPDATE"),
+        2 => sqlx::query_as("SELECT async_thread2, async_start2 IS NOT NULL, async_seed2, async_ready2 FROM races WHERE id = $1 FOR UPDATE"),
+        3 => sqlx::query_as("SELECT async_thread3, async_start3 IS NOT NULL, async_seed3, async_ready3 FROM races WHERE id = $1 FOR UPDATE"),
+        _ => unreachable!("race has more than three async parts"),
+    }
+        .bind(i64::from(race.id))
+        .fetch_one(&mut *transaction)
+        .await?;
+    let played = async_part_has_been_played(&mut transaction, &race, async_part).await?;
+    if seed_released || ready || played {
+        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+            .ephemeral(true)
+            .content("That async part cannot be reset because its seed has already been released or its run has started.")
+        )).await?;
+        transaction.rollback().await?;
+        return Ok(())
+    }
+    if !scheduled && thread_id.is_none() {
+        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+            .ephemeral(true)
+            .content("That participant's async part is already unscheduled.")
+        )).await?;
+        transaction.rollback().await?;
+        return Ok(())
+    }
+
+    let update = match async_part {
+        1 => "UPDATE races SET async_start1 = NULL, async_end1 = NULL, async_room1 = NULL, async_thread1 = NULL, async_seed1 = FALSE, async_ready1 = FALSE, async_notified_1 = FALSE, schedule_updated_at = NOW() WHERE id = $1",
+        2 => "UPDATE races SET async_start2 = NULL, async_end2 = NULL, async_room2 = NULL, async_thread2 = NULL, async_seed2 = FALSE, async_ready2 = FALSE, async_notified_2 = FALSE, schedule_updated_at = NOW() WHERE id = $1",
+        3 => "UPDATE races SET async_start3 = NULL, async_end3 = NULL, async_room3 = NULL, async_thread3 = NULL, async_seed3 = FALSE, async_ready3 = FALSE, async_notified_3 = FALSE, schedule_updated_at = NOW() WHERE id = $1",
+        _ => unreachable!("race has more than three async parts"),
+    };
+    sqlx::query(update).bind(i64::from(race.id)).execute(&mut *transaction).await?;
+    sqlx::query("DELETE FROM async_times WHERE race_id = $1 AND async_part = $2")
+        .bind(i64::from(race.id))
+        .bind(i32::from(async_part))
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+
+    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+        .ephemeral(false)
+        .content(format!("<@{}>'s async part{} has been reset and can now be scheduled again.", participant.get(), race.game.map_or(String::new(), |game| format!(" for Game {game}"))))
+    )).await?;
+    if let Some(thread_id) = thread_id {
+        let thread = ChannelId::new(thread_id as u64);
+        if let Ok(Channel::Guild(channel)) = thread.to_channel(ctx).await {
+            let _ = thread.edit_thread(ctx, EditThread::new().name(canceled_async_thread_name(&channel.name))).await;
+        }
+        let _ = thread.say(ctx,
+            "This async part was reset by an organizer. The buttons in this thread are no longer valid; use the match scheduling thread to choose a new time."
+        ).await;
+    }
+    Ok(())
 }
 
 //TODO refactor (MH admins should have permissions, room already being open should not remove permissions but only remove the team from return)
@@ -1117,6 +1268,24 @@ mod tests {
     }
 
     #[test]
+    fn canceled_async_thread_name_adds_suffix() {
+        assert_eq!(canceled_async_thread_name("Async: Zelda"), "Async: Zelda (canceled)");
+    }
+
+    #[test]
+    fn canceled_async_thread_name_does_not_duplicate_suffix() {
+        assert_eq!(canceled_async_thread_name("Async: Zelda (canceled)"), "Async: Zelda (canceled)");
+    }
+
+    #[test]
+    fn canceled_async_thread_name_respects_discord_limit() {
+        let name = "a".repeat(100);
+        let canceled = canceled_async_thread_name(&name);
+        assert_eq!(canceled.chars().count(), 100);
+        assert!(canceled.ends_with(" (canceled)"));
+    }
+
+    #[test]
     fn discord_timestamp_accepts_hammertime_short_suffix() {
         assert_eq!(
             parse_timestamp("<t:1784005200:s>"),
@@ -1425,6 +1594,31 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 commands.push(command);
                 idx
             };
+            let reset_async = {
+                let idx = commands.len();
+                commands.push(CreateCommand::new("reset-async")
+                    .kind(CommandType::ChatInput)
+                    .add_context(InteractionContext::Guild)
+                    .description("Resets one participant's unplayed async part. Only for organizers.")
+                    .add_option(CreateCommandOption::new(
+                        CommandOptionType::User,
+                        "participant",
+                        "The participant whose async part should be reset.",
+                    )
+                        .required(true)
+                    )
+                    .add_option(CreateCommandOption::new(
+                        CommandOptionType::Integer,
+                        "game",
+                        "The game number within the match. Required when the thread has multiple games.",
+                    )
+                        .min_int_value(1)
+                        .max_int_value(255)
+                        .required(false)
+                    )
+                );
+                idx
+            };
             let restart_room = {
                 let idx = commands.len();
                 commands.push(
@@ -1692,6 +1886,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 post_status: commands[post_status].id,
                 pronoun_roles: commands[pronoun_roles].id,
                 racing_role: commands[racing_role].id,
+                reset_async: commands[reset_async].id,
                 reset_race: commands[reset_race].id,
                 restart_room: commands[restart_room].id,
                 schedule: commands[schedule].id,
@@ -1955,6 +2150,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 )
                                 .button(CreateButton::new("racingrole").label("racing"))
                             )).await?;
+                        } else if interaction.data.id == command_ids.reset_async {
+                            reset_async_command(ctx, interaction).await?;
                         } else if interaction.data.id == command_ids.reset_race {
                             let Some(_parent_channel) = interaction.channel.as_ref().and_then(|thread| thread.parent_id) else {
                                 interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -3637,6 +3834,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 AsyncRaceError::AlreadyStarted => "The countdown has already been started.",
                                 AsyncRaceError::NotStarted => "You must start the countdown before finishing.",
                                 AsyncRaceError::AlreadyFinished => "You have already finished this race.",
+                                AsyncRaceError::ResetAsyncPart => "This async part was reset. Please schedule a new time in the match thread.",
                                 _ => { eprintln!("Async button error: {:?}", e); "An error occurred." },
                             };
                             if interaction.edit_response(ctx, EditInteractionResponse::new().content(error_msg)).await.is_err() {

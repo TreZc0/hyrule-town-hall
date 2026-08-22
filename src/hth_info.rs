@@ -679,6 +679,11 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                             code : "game:";
                             : " option when Discord cannot identify one race. If a result had already been recorded, reset it manually on start.gg or Challonge as well.";
                         }
+                        p {
+                            : "If only one unplayed async part needs to be rescheduled, an organizer can use ";
+                            code : "/reset-async participant: game:";
+                            : ". This preserves the other participants' schedules and results. It cannot be used after the selected participant's seed has been released or their run has started.";
+                        }
                     }
                     details {
                         summary : "The settings draft needs to start over.";

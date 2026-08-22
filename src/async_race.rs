@@ -822,6 +822,7 @@ impl AsyncRaceManager {
         discord_ctx: &DiscordCtx,
         race_id: i64,
         async_part: u8,
+        channel_id: ChannelId,
         user_id: UserId,
     ) -> Result<(), Error> {
         let mut transaction = pool.begin().await?;
@@ -832,6 +833,15 @@ impl AsyncRaceManager {
         let members = team.members(&mut transaction).await?;
         if !members.iter().any(|m| m.discord.as_ref().map(|d| d.id) == Some(user_id)) {
             return Err(Error::UnauthorizedUser);
+        }
+        let current_thread = match async_part {
+            1 => sqlx::query_scalar::<_, Option<i64>>("SELECT async_thread1 FROM races WHERE id = $1 FOR UPDATE").bind(race_id).fetch_one(&mut *transaction).await?,
+            2 => sqlx::query_scalar::<_, Option<i64>>("SELECT async_thread2 FROM races WHERE id = $1 FOR UPDATE").bind(race_id).fetch_one(&mut *transaction).await?,
+            3 => sqlx::query_scalar::<_, Option<i64>>("SELECT async_thread3 FROM races WHERE id = $1 FOR UPDATE").bind(race_id).fetch_one(&mut *transaction).await?,
+            _ => return Err(Error::InvalidAsyncPart),
+        };
+        if current_thread != Some(channel_id.get() as i64) {
+            return Err(Error::ResetAsyncPart);
         }
         let player = members.into_iter().next().ok_or(Error::NoTeamMembers)?;
         
@@ -987,6 +997,8 @@ pub(crate) enum Error {
     NotStarted,
     #[error("already finished")]
     AlreadyFinished,
+    #[error("this async part has been reset")]
+    ResetAsyncPart,
 }
 
 #[derive(Debug, Clone)]
@@ -1401,7 +1413,7 @@ pub(crate) async fn handle_ready_bracket(
     let AsyncRun::BracketRace { race_id, async_part } = run else {
         return Err(Error::InvalidAsyncPart);
     };
-    AsyncRaceManager::handle_ready_button(pool, ctx, *race_id, *async_part, interaction.user.id).await?;
+    AsyncRaceManager::handle_ready_button(pool, ctx, *race_id, *async_part, interaction.channel_id, interaction.user.id).await?;
     interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
         CreateInteractionResponseMessage::new().components(vec![])
     )).await?;
