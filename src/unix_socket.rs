@@ -187,7 +187,21 @@ pub(crate) async fn listen(mut shutdown: rocket::Shutdown, clean_shutdown: Arc<M
                                     }
                                 };
                                 let mut rx = match seed_gen_type.parse_seed_command(&mut transaction, &global_state, is_official, spoiler_seed, no_password, &args).await {
-                                    Ok(SeedCommandParseResult::Alttpr) => unimplemented!(),
+                                    Ok(SeedCommandParseResult::ConfiguredEvent { .. }) => {
+                                        Some(SeedRollUpdate::Error(RollError::Cloned {
+                                            debug: String::default(),
+                                            display: "This seed type requires race-specific event data; use the bot's !seed command in the race room instead.".to_owned(),
+                                        })).write(&mut sock).await.expect("error writing to UNIX socket");
+                                        None::<SeedRollUpdate>.write(&mut sock).await.expect("error writing to UNIX socket");
+                                        match transaction.commit().await {
+                                            Ok(()) => {}
+                                            Err(e) => {
+                                                Some(SeedRollUpdate::Error(e.into())).write(&mut sock).await.expect("error writing to UNIX socket");
+                                                None::<SeedRollUpdate>.write(&mut sock).await.expect("error writing to UNIX socket");
+                                            }
+                                        }
+                                        break
+                                    }
                                     Ok(SeedCommandParseResult::Rsl { preset, world_count, unlock_spoiler_log, description, .. }) => {
                                         Some(SeedRollUpdate::Message(description)).write(&mut sock).await.expect("error writing to UNIX socket");
                                         global_state.clone().roll_rsl_seed(None, preset, world_count, unlock_spoiler_log)
