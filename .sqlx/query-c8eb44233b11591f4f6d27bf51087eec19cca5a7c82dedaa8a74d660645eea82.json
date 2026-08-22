@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, url_pattern, discord_invite_url, display_name, racetime_team_slug FROM restream_channels ORDER BY url_pattern",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "url_pattern",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "discord_invite_url",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "display_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "racetime_team_slug",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "c8eb44233b11591f4f6d27bf51087eec19cca5a7c82dedaa8a74d660645eea82"
+}

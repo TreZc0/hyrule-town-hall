@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT races.id AS \"id: Id<Races>\", races.room AS \"room!\"\n        FROM races\n        WHERE NOT races.ignored\n        AND races.room IS NOT NULL\n        AND races.end_time IS NULL\n        AND races.start <= NOW()\n        AND EXISTS (\n            SELECT 1\n            FROM weekly_schedules ws\n            WHERE ws.series = races.series\n            AND ws.event = races.event\n            AND races.round = ws.name || ' ' || CASE ws.frequency_days\n                WHEN 14 THEN 'Biweekly'\n                WHEN 28 THEN 'Monthly'\n                WHEN 30 THEN 'Monthly'\n                ELSE 'Weekly'\n            END\n        )\n    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Races>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "room!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "349503de3cb4de2875ac98c11d1f608f43d1d84efe9454bc8f11408992d8ac84"
+}

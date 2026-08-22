@@ -1,6 +1,10 @@
 use {
-    std::collections::HashMap,
-    tokio::sync::RwLockReadGuard,
+    std::{
+        collections::HashMap,
+        hash::Hash,
+    },
+    graphql_client::GraphQLQuery,
+    tokio::time::timeout,
     serenity::all::{
         CreateActionRow,
         CreateButton,
@@ -12,6 +16,65 @@ use {
         racetime_bot::*,
     },
 };
+
+const STARTGG_REPORT_ATTEMPTS: u8 = 3;
+
+#[derive(Debug, thiserror::Error)]
+#[error("start.gg {operation} failed for set {set_id}: {source}")]
+struct StartggReportError {
+    operation: &'static str,
+    set_id: startgg::ID,
+    #[source]
+    source: startgg::Error,
+}
+
+/// Runs a start.gg operation used by result reporting, retrying transient failures.
+///
+/// The mutations called through this helper set/reset a set to the same requested state on every
+/// attempt. Retrying the identical payload also covers the ambiguous case where start.gg applied
+/// a mutation but the response was lost. Deterministic GraphQL errors are not retried.
+async fn startgg_report_request<T: GraphQLQuery + 'static>(
+    http_client: &reqwest::Client,
+    startgg_token: &str,
+    set_id: &startgg::ID,
+    operation: &'static str,
+    variables: T::Variables,
+) -> Result<T::ResponseData, Error>
+where
+    T::Variables: Clone + Eq + Hash + Send + Sync,
+    T::ResponseData: Clone + Send + Sync,
+{
+    for attempt in 1..=STARTGG_REPORT_ATTEMPTS {
+        match startgg::query_uncached::<T>(http_client, startgg_token, variables.clone()).await {
+            Ok(response) => return Ok(response),
+            Err(source) if source.is_network_error() && attempt < STARTGG_REPORT_ATTEMPTS => {
+                eprintln!(
+                    "transient start.gg {operation} failure for set {set_id} (attempt {attempt}/{STARTGG_REPORT_ATTEMPTS}), retrying: {}",
+                    format_error_chain(&source),
+                );
+                sleep(Duration::from_secs(u64::from(attempt))).await;
+            }
+            Err(source) => return Err(Error::Custom(Box::new(StartggReportError {
+                operation,
+                set_id: set_id.clone(),
+                source,
+            }))),
+        }
+    }
+    unreachable!("nonempty start.gg reporting attempt range")
+}
+
+/// Sends a Discord channel message with a timeout (`DISCORD_SEND_TIMEOUT`, defined alongside
+/// `try_discord_send` in the parent module), retrying once on timeout or failure.
+async fn say_with_retry(discord_ctx: &DiscordCtx, channel: ChannelId, msg: impl Into<String>) -> Result<(), Error> {
+    let msg = msg.into();
+    let mut result = timeout(DISCORD_SEND_TIMEOUT, channel.say(discord_ctx, &msg)).await.to_racetime().and_then(|res| res.to_racetime());
+    if let Err(e) = &result {
+        eprintln!("failed to send Discord message to {channel}, retrying once: {e}");
+        result = timeout(DISCORD_SEND_TIMEOUT, channel.say(discord_ctx, &msg)).await.to_racetime().and_then(|res| res.to_racetime());
+    }
+    result.map(|_| ())
+}
 
 trait Score {
     type SortKey: Ord;
@@ -62,13 +125,15 @@ async fn collect_completed_game_results(
     current_game: i16,
     current_winner_id: &startgg::ID,
 ) -> Result<Vec<startgg::GameResult>, Error> {
-    let set_data = startgg::query_uncached::<startgg::SetQuery>(
+    let set_data = startgg_report_request::<startgg::SetQuery>(
         http_client,
         startgg_token,
+        set_id,
+        "completed-games query",
         startgg::set_query::Variables {
             set_id: set_id.clone(),
         }
-    ).await.to_racetime()?;
+    ).await?;
 
     let mut results = Vec::new();
 
@@ -126,7 +191,7 @@ fn determine_overall_winner(game_results: &[startgg::GameResult]) -> startgg::ID
 
 async fn dm_admin_about_result_announcement_failure(discord_ctx: &DiscordCtx, message: String) {
     match ADMIN_USER.create_dm_channel(discord_ctx).await {
-        Ok(dm) => if let Err(e) = dm.say(discord_ctx, message).await {
+        Ok(dm) => if let Err(e) = say_with_retry(discord_ctx, dm.id, message).await {
             eprintln!("failed to DM admin about result announcement failure: {e}");
         },
         Err(e) => eprintln!("failed to open admin DM about result announcement failure: {e}"),
@@ -138,12 +203,13 @@ async fn post_result_announcement(discord_ctx: &DiscordCtx, event: &event::Data<
         return
     };
 
-    if let Err(primary_error) = primary_channel.say(discord_ctx, &msg).await {
+    if let Err(primary_error) = say_with_retry(discord_ctx, primary_channel, &msg).await {
         eprintln!("failed to post race result announcement to {primary_channel}: {primary_error}");
 
         if let Some(organizer_channel) = event.discord_organizer_channel.filter(|&channel| channel != primary_channel) {
-            if let Err(fallback_error) = organizer_channel.say(
+            if let Err(fallback_error) = say_with_retry(
                 discord_ctx,
+                organizer_channel,
                 format!(
                     "Failed to post the race result announcement in <#{}>: {}\n\nIntended announcement:\n{}",
                     primary_channel.get(),
@@ -330,7 +396,7 @@ async fn report_1v1<'a, S: Score>(mut transaction: Transaction<'a, Postgres>, ct
                     }
                     msg.push(" after adjusting the times");
                 }
-                organizer_channel.say(&*discord_ctx, msg.build()).await.to_racetime()?;
+                say_with_retry(&*discord_ctx, organizer_channel, msg.build()).await?;
             }
         }
     } else if let (Some(winner_time), Some(loser_time)) = (winning_time.as_duration(), losing_time.as_duration()) {
@@ -554,10 +620,11 @@ async fn warn_companion_result_partition(
 ) -> Result<(), Error> {
     ctx.say(format!("Automatic result reporting for this shared race room needs organizer review: {message}")).await?;
     if let Some(organizer_channel) = event.discord_organizer_channel {
-        organizer_channel.say(
+        say_with_retry(
             &*ctx.global_state.discord_ctx.read().await,
+            organizer_channel,
             format!("Shared race room result reporting needs organizer review: {message}"),
-        ).await.to_racetime()?;
+        ).await?;
     }
     Ok(())
 }
@@ -598,6 +665,7 @@ async fn report_external_and_init_draft<'a>(
 ) -> Result<(Transaction<'a, Postgres>, Vec<Id<Races>>), Error> {
     let mut ignored_race_ids: Vec<Id<Races>> = vec![];
     let mut series_decided = false;
+    let mut standings_changed = false;
     match race.source {
         cal::Source::Manual | cal::Source::Sheet { .. } => {}
         cal::Source::Challonge { .. } => {} //TODO
@@ -628,7 +696,7 @@ async fn report_external_and_init_draft<'a>(
                 .bearer_auth(&global_state.league_api_key)
                 .form(&form);
             println!("reporting draw-resolved result to League website: {:?}", serde_urlencoded::to_string(&form));
-            request.send().await?.detailed_error_for_status().await.to_racetime()?;
+            request.send().await.to_racetime()?.detailed_error_for_status().await.to_racetime()?;
         },
         cal::Source::StartGG { ref set, .. } => {
             if let Entrant::MidosHouseTeam(Team { startgg_id: Some(winner_entrant_id), .. }) = &winner {
@@ -648,11 +716,13 @@ async fn report_external_and_init_draft<'a>(
                     };
                     if match_decided {
                         if event.startgg_double_rr {
-                            let score_data = startgg::query_uncached::<startgg::SetScoreQuery>(
+                            let score_data = startgg_report_request::<startgg::SetScoreQuery>(
                                 &global_state.http_client,
                                 &global_state.startgg_token,
+                                set,
+                                "double-round-robin first-game winner query",
                                 startgg::set_score_query::Variables { set_id: set.clone() },
-                            ).await.to_racetime()?;
+                            ).await?;
                             let game1_winner_id = score_data.set
                                 .and_then(|s| s.slots)
                                 .into_iter()
@@ -666,79 +736,103 @@ async fn report_external_and_init_draft<'a>(
                                 startgg::GameResult { game_num: 1, winner_entrant_id: game1_winner_id },
                                 startgg::GameResult { game_num: 2, winner_entrant_id: winner_entrant_id.clone() },
                             ];
-                            startgg::query_uncached::<startgg::ResetSetMutation>(
+                            startgg_report_request::<startgg::ResetSetMutation>(
                                 &global_state.http_client,
                                 &global_state.startgg_token,
+                                set,
+                                "double-round-robin reset",
                                 startgg::reset_set_mutation::Variables { set_id: set.clone() },
-                            ).await.to_racetime()?;
+                            ).await?;
                             let overall_winner_id = if is_match_decided(&all_game_results, total_games) {
                                 Some(determine_overall_winner(&all_game_results))
                             } else {
                                 None
                             };
-                            startgg::query_uncached::<startgg::ReportBracketSetMutation>(
+                            startgg_report_request::<startgg::ReportBracketSetMutation>(
                                 &global_state.http_client,
                                 &global_state.startgg_token,
+                                set,
+                                "combined double-round-robin result report",
                                 startgg::report_bracket_set_mutation::Variables {
                                     set_id: set.clone(),
                                     winner_id: overall_winner_id,
                                     game_data: Some(all_game_results.iter().map(|gr| Some(gr.to_game_data_input())).collect()),
                                 },
-                            ).await.to_racetime()?;
+                            ).await?;
                         } else {
                             let overall_winner = determine_overall_winner(&completed_game_results);
-                            startgg::query_uncached::<startgg::ReportBracketSetMutation>(
+                            startgg_report_request::<startgg::ReportBracketSetMutation>(
                                 &global_state.http_client,
                                 &global_state.startgg_token,
+                                set,
+                                "completed multi-game result report",
                                 startgg::report_bracket_set_mutation::Variables {
                                     set_id: set.clone(),
                                     winner_id: Some(overall_winner),
                                     game_data: Some(completed_game_results.iter().map(|gr| Some(gr.to_game_data_input())).collect()),
                                 },
-                            ).await.to_racetime()?;
+                            ).await?;
                         }
                         ignored_race_ids = race.ignore_remaining_games(&mut transaction).await.to_racetime()?;
                         series_decided = true;
+                        standings_changed = true;
                     } else if event.startgg_double_rr {
-                        startgg::query_uncached::<startgg::ReportBracketSetMutation>(
+                        startgg_report_request::<startgg::ReportBracketSetMutation>(
                             &global_state.http_client,
                             &global_state.startgg_token,
+                            set,
+                            "first double-round-robin game report",
                             startgg::report_bracket_set_mutation::Variables {
                                 set_id: set.clone(),
                                 winner_id: Some(winner_entrant_id.clone()),
                                 game_data: Some(completed_game_results.iter().map(|gr| Some(gr.to_game_data_input())).collect()),
                             },
-                        ).await.to_racetime()?;
+                        ).await?;
                     } else {
-                        startgg::query_uncached::<startgg::ReportBracketSetMutation>(
+                        startgg_report_request::<startgg::ReportBracketSetMutation>(
                             &global_state.http_client,
                             &global_state.startgg_token,
+                            set,
+                            "partial multi-game result report",
                             startgg::report_bracket_set_mutation::Variables {
                                 set_id: set.clone(),
                                 winner_id: None,
                                 game_data: Some(completed_game_results.iter().map(|gr| Some(gr.to_game_data_input())).collect()),
                             },
-                        ).await.to_racetime()?;
+                        ).await?;
                     }
                 } else {
-                    startgg::query_uncached::<startgg::ReportOneGameResultMutation>(
+                    startgg_report_request::<startgg::ReportOneGameResultMutation>(
                         &global_state.http_client,
                         &global_state.startgg_token,
+                        set,
+                        "single-game result report",
                         startgg::report_one_game_result_mutation::Variables {
                             set_id: set.clone(),
                             winner_entrant_id: winner_entrant_id.clone(),
                         },
-                    ).await.to_racetime()?;
+                    ).await?;
+                    standings_changed = true;
                 }
             } else if let Some(organizer_channel) = event.discord_organizer_channel {
                 let mut msg = MessageBuilder::default();
                 msg.push("failed to report race result to start.gg: <");
                 msg.push(winning_room.to_string());
                 msg.push("> (winner has no start.gg entrant ID)");
-                organizer_channel.say(&*global_state.discord_ctx.read().await, msg.build()).await.to_racetime()?;
+                say_with_retry(&*global_state.discord_ctx.read().await, organizer_channel, msg.build()).await?;
             }
         },
         cal::Source::SpeedGaming { .. } => {}
+    }
+
+    if standings_changed && event.swiss_standings {
+        if let MatchSource::StartGG(event_slug) = event.match_source() {
+            startgg::refresh_swiss_standings(
+                global_state.http_client.clone(),
+                event_slug.to_owned(),
+                global_state.startgg_token.clone(),
+            ).await;
+        }
     }
 
     if_chain! {
@@ -776,7 +870,7 @@ async fn report_external_and_init_draft<'a>(
                     };
                     let step = draft.next_step(&draft_kind, next_game.game, &mut msg_ctx).await.to_racetime()?;
                     if !step.message.is_empty() {
-                        scheduling_thread.say(&*discord_ctx, step.message).await.to_racetime()?;
+                        say_with_retry(&*discord_ctx, scheduling_thread, step.message).await?;
                     }
                     transaction = msg_ctx.into_transaction();
                 }
@@ -823,7 +917,7 @@ async fn report_ffa(ctx: &RaceContext<GlobalState>, cal_event: &cal::Event, even
 }
 
 impl Handler {
-    pub(super) async fn official_race_finished(&self, ctx: &RaceContext<GlobalState>, data: RwLockReadGuard<'_, RaceData>, cal_event: &cal::Event, event: &event::Data<'_>, fpa_invoked: bool, breaks_used: bool) -> Result<(), Error> {
+    pub(super) async fn official_race_finished(&self, ctx: &RaceContext<GlobalState>, data: RaceData, cal_event: &cal::Event, event: &event::Data<'_>, fpa_invoked: bool, breaks_used: bool) -> Result<(), Error> {
         let stream_delay = match cal_event.race.entrants {
             Entrants::Open | Entrants::Count { .. } => event.open_stream_delay,
             Entrants::Two(_) | Entrants::Three(_) | Entrants::Named(_) => event.invitational_stream_delay,
@@ -847,7 +941,7 @@ impl Handler {
                 sqlx::query!("UPDATE races SET breaks_used = TRUE WHERE id = $1", cal_event.race.id as _).execute(&mut *transaction).await.to_racetime()?;
             }
             if let Some(organizer_channel) = event.discord_organizer_channel {
-                organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, MessageBuilder::default()
+                say_with_retry(&*ctx.global_state.discord_ctx.read().await, organizer_channel, MessageBuilder::default()
                     .push("first half of async finished")
                     .push(if fpa_invoked { " with FPA call" } else if event.manual_reporting_with_breaks && breaks_used { " with breaks" } else { "" })
                     .push(": <https://")
@@ -855,7 +949,7 @@ impl Handler {
                     .push(&ctx.data().await.url)
                     .push('>')
                     .build()
-                ).await.to_racetime()?;
+                ).await?;
             }
         } else if fpa_invoked {
             if let Some(organizer_channel) = event.discord_organizer_channel {
@@ -879,7 +973,7 @@ impl Handler {
                     msg.push(" after adjusting the times");
                 }
                 //TODO note to manually initialize high seed for next game's draft (if any) and use `/post-status`
-                organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, msg.build()).await.to_racetime()?;
+                say_with_retry(&*ctx.global_state.discord_ctx.read().await, organizer_channel, msg.build()).await?;
             }
         } else if event.manual_reporting_with_breaks && breaks_used {
             if let Some(organizer_channel) = event.discord_organizer_channel {
@@ -903,7 +997,7 @@ impl Handler {
                     msg.push(" after adjusting the times");
                 }
                 //TODO note to manually initialize high seed for next game's draft (if any) and use `/post-status`
-                organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, msg.build()).await.to_racetime()?;
+                say_with_retry(&*ctx.global_state.discord_ctx.read().await, organizer_channel, msg.build()).await?;
             }
         } else if cal_event.race.phase.as_deref() == Some("Seeding") {
             // Seeding race: assign qualifier_rank based on finish order
@@ -921,7 +1015,7 @@ impl Handler {
             }
             if let Some(organizer_channel) = event.discord_organizer_channel {
                 let room = Url::parse(&format!("https://{}{}", racetime_host(), data.url)).to_racetime()?;
-                organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, format!("Seeding race finished — qualifier ranks assigned: <{room}>")).await.to_racetime()?;
+                say_with_retry(&*ctx.global_state.discord_ctx.read().await, organizer_channel, format!("Seeding race finished — qualifier ranks assigned: <{room}>")).await?;
             }
             transaction.commit().await.to_racetime()?;
             return Ok(());
@@ -1059,7 +1153,7 @@ impl Handler {
                                 if let Some(ref room) = private_async_part.room() {
                                     let nonactive_team = private_async_part.active_teams().exactly_one().map_err(|_| Error::Custom(Box::new(ExactlyOneError)))?;
                                     let data = ctx.global_state.http_client.get(format!("{}/data", room.to_string()))
-                                        .send().await?
+                                        .send().await.to_racetime()?
                                         .detailed_error_for_status().await.to_racetime()?
                                         .json_with_text_in_error::<RaceData>().await.to_racetime()?;
                                     team_rooms.insert(nonactive_team.racetime_slug.clone().expect("non-racetime.gg team"), Url::clone(room));

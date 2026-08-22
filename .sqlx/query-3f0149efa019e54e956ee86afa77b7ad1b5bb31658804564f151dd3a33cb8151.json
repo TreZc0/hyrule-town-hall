@@ -1,0 +1,78 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT s.id AS \"signup_id: Id<Signups>\", s.user_id AS \"user_id: crate::id::Id<crate::id::Users>\",\n               rt.name AS role_type_name, rb.language AS \"language: Language\", re.episode_id AS \"episode_id!\"\n        FROM signups s\n        JOIN role_bindings rb ON rb.id = s.role_binding_id\n        JOIN role_types rt ON rt.id = rb.role_type_id\n        JOIN speedgaming_race_exports re ON re.race_id = s.race_id AND re.export_id = $1\n        WHERE re.state = 'succeeded' AND rb.language = ANY($2)\n          AND s.status IN ('pending', 'confirmed') AND rt.name IN ('Commentary', 'Tracking')\n        ORDER BY s.created_at, s.id\n    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "signup_id: Id<Signups>",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id: crate::id::Id<crate::id::Users>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "role_type_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "language: Language",
+        "type_info": {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "episode_id!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        {
+          "Custom": {
+            "name": "language[]",
+            "kind": {
+              "Array": {
+                "Custom": {
+                  "name": "language",
+                  "kind": {
+                    "Enum": [
+                      "en",
+                      "fr",
+                      "de",
+                      "pt"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "3f0149efa019e54e956ee86afa77b7ad1b5bb31658804564f151dd3a33cb8151"
+}

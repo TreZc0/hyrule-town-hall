@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT enabled FROM speedgaming_exports WHERE id = $1 AND archived_at IS NULL FOR KEY SHARE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "enabled",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "92310fe20d526bc9725cbecb79a5ab083e13f08227e0ec40671ab1ee86da7a6b"
+}

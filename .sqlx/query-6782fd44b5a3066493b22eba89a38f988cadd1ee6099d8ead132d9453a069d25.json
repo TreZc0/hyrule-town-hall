@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE speedgaming_exports SET\n                    trigger_condition = $2, delay_minutes = $3, export_volunteers = $4,\n                    enabled = true, archived_at = NULL, updated_at = NOW()\n                WHERE id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        {
+          "Custom": {
+            "name": "speedgaming_export_trigger",
+            "kind": {
+              "Enum": [
+                "when_scheduled",
+                "when_restream_channel_set",
+                "when_volunteer_signed_up"
+              ]
+            }
+          }
+        },
+        "Int4",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6782fd44b5a3066493b22eba89a38f988cadd1ee6099d8ead132d9453a069d25"
+}

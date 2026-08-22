@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT series AS \"series: Series\", event FROM events WHERE end_time IS NULL OR end_time > NOW()",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "series: Series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "event",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "82cef9cbcac5ed8d54150263ade1f811409b6b3d6c04141a3f1e9ffa177a8f10"
+}

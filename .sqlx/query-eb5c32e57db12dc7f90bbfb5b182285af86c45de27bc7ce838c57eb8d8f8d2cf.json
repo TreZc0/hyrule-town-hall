@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE races SET web_id = $1, web_gen_time = $2, file_stem = $3 WHERE id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Timestamptz",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eb5c32e57db12dc7f90bbfb5b182285af86c45de27bc7ce838c57eb8d8f8d2cf"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM speedgaming_export_languages WHERE export_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "27315fa114945ef479e423a9f56c2cbe183a90390d58b29bc8a973817ad588bc"
+}

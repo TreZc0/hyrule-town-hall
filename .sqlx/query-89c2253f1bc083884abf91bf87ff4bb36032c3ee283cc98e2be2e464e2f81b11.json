@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT startgg_id FROM teams \n           WHERE series = $1 AND event = $2 AND resigned = TRUE AND startgg_id IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "startgg_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "89c2253f1bc083884abf91bf87ff4bb36032c3ee283cc98e2be2e464e2f81b11"
+}

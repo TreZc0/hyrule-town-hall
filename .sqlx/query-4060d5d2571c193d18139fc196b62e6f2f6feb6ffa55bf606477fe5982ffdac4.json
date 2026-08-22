@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                tm.team AS \"team: Id<Teams>\",\n                u.id AS \"user_id: Id<Users>\",\n                CASE u.display_source\n                    WHEN 'racetime' THEN u.racetime_display_name\n                    WHEN 'discord' THEN u.discord_display_name\n                END AS \"display_name!\"\n            FROM team_members tm\n            JOIN users u ON u.id = tm.member\n            WHERE tm.team = ANY($1)\n            ORDER BY tm.team, tm.role",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team: Id<Teams>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id: Id<Users>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "display_name!",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "4060d5d2571c193d18139fc196b62e6f2f6feb6ffa55bf606477fe5982ffdac4"
+}

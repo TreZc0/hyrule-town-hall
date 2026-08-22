@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE races SET file_stem = $1 WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b3500b73bc69fa96644e55095f2bb8133ddb306d73773627d01dbba123d99017"
+}

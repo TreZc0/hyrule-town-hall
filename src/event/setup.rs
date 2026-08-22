@@ -165,13 +165,6 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             label(class = "help") : "(Role assigned to players when they enter this event)";
                         });
 
-                        : form_field("speedgaming_slug", &mut errors, html! {
-                            label(for = "speedgaming_slug") : "SpeedGaming Slug";
-                            input(type = "text", id = "speedgaming_slug", name = "speedgaming_slug", value = ctx.field_value("speedgaming_slug").unwrap_or(
-                                &event.speedgaming_slug.clone().unwrap_or_default()
-                            ), style = "width: 100%; max-width: 600px;");
-                        });
-
                         : form_field("short_name", &mut errors, html! {
                             label(for = "short_name") : "Short Name";
                             input(type = "text", id = "short_name", name = "short_name", value = ctx.field_value("short_name").unwrap_or(
@@ -753,7 +746,6 @@ pub(crate) struct SetupForm {
     discord_scheduling_channel: Option<String>,
     discord_async_channel: Option<String>,
     discord_participant_role: Option<String>,
-    speedgaming_slug: Option<String>,
     listed: bool,
     emulator_settings_reminder: bool,
     prevent_late_joins: bool,
@@ -1028,7 +1020,6 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
 
             // Handle optional string fields (empty string -> None)
             let short_name = value.short_name.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
-            let speedgaming_slug = value.speedgaming_slug.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
             let challonge_community = value.challonge_community.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
 
             // Parse new racetime bot config fields
@@ -1180,21 +1171,21 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                     discord_invite_url = $6, discord_guild = $7, discord_race_room_channel = $8,
                     discord_race_results_channel = $9, discord_volunteer_info_channel = $10,
                     discord_organizer_channel = $11, discord_scheduling_channel = $12,
-                    discord_async_channel = $13, short_name = $14, speedgaming_slug = $15,
-                    listed = $16, emulator_settings_reminder = $17,
-                    prevent_late_joins = $18, enter_url = $19, teams_url = $20,
-                    challonge_community = $21, team_config = $22, language = $23,
-                    default_game_count = $24, open_stream_delay = $25, invitational_stream_delay = $26,
-                    hide_teams_tab = $27, hide_races_tab = $28, show_qualifier_times = $29,
-                    automated_asyncs = $30, show_opt_out = $31, force_custom_role_binding = $32,
-                    racetime_goal_slug = $35, draft_kind = $36, draft_config = $37,
-                    qualifier_score_kind = $38, is_single_race = $39, hide_entrants = $40,
-                    start_delay = $41, start_delay_open = $42, restrict_chat_in_qualifiers = $43,
-                    async_start_delay = $44, startgg_double_rr = $45,
-                    preroll_mode = $46, spoiler_unlock = $47, is_custom_goal = $48,
-                    fpa_enabled = $49, swiss_standings = $50, rando_version = $51,
-                    is_live_event = $52, seed_gen_type = $53, seed_config = $54
-                WHERE series = $33 AND event = $34
+                    discord_async_channel = $13, short_name = $14,
+                    listed = $15, emulator_settings_reminder = $16,
+                    prevent_late_joins = $17, enter_url = $18, teams_url = $19,
+                    challonge_community = $20, team_config = $21, language = $22,
+                    default_game_count = $23, open_stream_delay = $24, invitational_stream_delay = $25,
+                    hide_teams_tab = $26, hide_races_tab = $27, show_qualifier_times = $28,
+                    automated_asyncs = $29, show_opt_out = $30, force_custom_role_binding = $31,
+                    racetime_goal_slug = $34, draft_kind = $35, draft_config = $36,
+                    qualifier_score_kind = $37, is_single_race = $38, hide_entrants = $39,
+                    start_delay = $40, start_delay_open = $41, restrict_chat_in_qualifiers = $42,
+                    async_start_delay = $43, startgg_double_rr = $44,
+                    preroll_mode = $45, spoiler_unlock = $46, is_custom_goal = $47,
+                    fpa_enabled = $48, swiss_standings = $49, rando_version = $50,
+                    is_live_event = $51, seed_gen_type = $52, seed_config = $53
+                WHERE series = $32 AND event = $33
             "#,
                 value.display_name,
                 start,
@@ -1210,7 +1201,6 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                 discord_scheduling_channel.map(|c| c.get() as i64),
                 discord_async_channel.map(|c| c.get() as i64),
                 short_name,
-                speedgaming_slug,
                 value.listed,
                 value.emulator_settings_reminder,
                 value.prevent_late_joins,
@@ -1585,7 +1575,6 @@ struct UserSearchRow {
     discord_display_name: Option<String>,
     discord_username: Option<String>,
 }
-
 fn create_form_content(me: &Option<User>, _uri: &Origin<'_>, csrf: Option<&CsrfToken>, ctx: Context<'_>) -> RawHtml<String> {
     if let Some(me) = me {
         if me.is_global_admin() {

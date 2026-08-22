@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id AS \"id: Id<Races>\" FROM races\n        WHERE series = $1 AND event = $2 AND ignored = false AND start > NOW()\n        ORDER BY start, id\n    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Races>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a717514df54862f6c543a9f81ed0dff834d985c3cc51c238f265a2a15c3b4f23"
+}

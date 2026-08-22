@@ -17,8 +17,6 @@ use {
     ootr_utils as rando,
     ootr_utils::spoiler::OcarinaNote,
     racetime::{
-        Error,
-        ResultExt as _,
         handler::{
             RaceContext,
             RaceHandler,
@@ -65,9 +63,53 @@ use {
 pub(crate) mod seed_gen_type;
 pub(crate) mod report;
 
+/// racetime 0.35 removed its own catch-all `Error`/`ResultExt`, since `RaceHandler` now has an
+/// associated `Error` type instead of a single crate-wide one. This reimplements the same
+/// catch-all boxing behavior locally so the ~200 existing `.to_racetime()?` call sites keep working.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum Error {
+    #[error(transparent)] Auth(#[from] racetime::AuthError),
+    #[error(transparent)] Custom(#[from] Box<dyn std::error::Error + Send + Sync>),
+    #[error(transparent)] SendError(#[from] racetime::handler::SendError),
+    #[error(transparent)] ServerErrors(#[from] racetime::handler::ServerErrors),
+}
+
+/// Formats an error together with its non-duplicate sources.
+///
+/// Transparent error wrappers make the normal `Display` output useful to callers, but they also
+/// hide details such as whether a reqwest failure was caused by DNS, TLS, connection setup, or a
+/// timeout. Result-finalization failures are rare and actionable enough to include the full chain.
+fn format_error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut messages = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(error) = source {
+        let message = error.to_string();
+        if messages.last() != Some(&message) {
+            messages.push(message);
+        }
+        source = error.source();
+    }
+    messages.join(": ")
+}
+
+pub(crate) trait ResultExt {
+    type Ok;
+
+    fn to_racetime(self) -> Result<Self::Ok, Error>;
+}
+
+impl<T, E: std::error::Error + Send + Sync + 'static> ResultExt for Result<T, E> {
+    type Ok = T;
+
+    fn to_racetime(self) -> Result<T, Error> {
+        self.map_err(|e| Error::Custom(Box::new(e)))
+    }
+}
+
 #[cfg(unix)] const PYTHON: &str = "python3";
 #[cfg(windows)] const PYTHON: &str = "py";
-
+#[cfg(unix)] const ALTTPR_PYTHON: &str = "/opt/alttpr/.venv/bin/python";
+#[cfg(windows)] const ALTTPR_PYTHON: &str = "/opt/alttpr/.venv/Scripts/python.exe";
 pub(crate) const CATEGORY: &str = "alttpr";
 
 const OOTR_DISCORD_GUILD: GuildId = GuildId::new(274180765816848384);
@@ -103,6 +145,24 @@ pub(crate) async fn user_data(http_client: &reqwest::Client, user_id: &str) -> w
         Err(wheel::Error::ResponseStatus { inner, .. }) if inner.status() == Some(StatusCode::NOT_FOUND) => Ok(None),
         Err(e) => Err(e),
     }
+}
+
+#[derive(Deserialize)]
+struct TeamProfile {
+    members: Vec<TeamMemberProfile>,
+}
+
+#[derive(Deserialize)]
+struct TeamMemberProfile {
+    id: String,
+}
+
+pub(crate) async fn team_member_ids(http_client: &reqwest::Client, team_slug: &str) -> wheel::Result<HashSet<String>> {
+    let profile = http_client.get(format!("https://{}/team/{team_slug}/data", racetime_host()))
+        .send().await?
+        .detailed_error_for_status().await?
+        .json_with_text_in_error::<TeamProfile>().await?;
+    Ok(profile.members.into_iter().map(|member| member.id).collect())
 }
 
 pub(crate) async fn parse_user(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, id_or_url: &str) -> Result<String, ParseUserError> {
@@ -402,9 +462,9 @@ impl seed_gen_type::SeedGenType {
                     let (date, ordinal, file_hash) = {
                         let response = global_state.http_client
                             .get("https://www.triforceblitz.com/seed/daily/all")
-                            .send().await?
+                            .send().await.to_racetime()?
                             .detailed_error_for_status().await.to_racetime()?;
-                        let response_body = response.text().await?;
+                        let response_body = response.text().await.to_racetime()?;
                         let latest = kuchiki::parse_html().one(response_body)
                             .select_first("main > section > div > div").map_err(|()| RollError::TfbHtml).to_racetime()?;
                         let latest = latest.as_node();
@@ -570,6 +630,8 @@ struct TwwrGenerateResponse {
 pub(crate) struct GlobalState {
     /// Locked while event rooms are being created. Wait with handling new rooms while it's held.
     new_room_lock: Arc<Mutex<()>>,
+    /// Serializes automatic and manual imports so external Discord side effects aren't duplicated.
+    race_import_lock: Arc<Mutex<()>>,
     host_info: racetime::HostInfo,
     racetime_config: ConfigRaceTime,
     pub(crate) db_pool: PgPool,
@@ -583,6 +645,7 @@ pub(crate) struct GlobalState {
     clean_shutdown: Arc<Mutex<CleanShutdown>>,
     seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>,
     pub(crate) extra_room_senders: Arc<RwLock<HashMap<String, mpsc::Sender<String>>>>,
+    restream_team_members: Arc<RwLock<HashMap<String, (Instant, HashSet<String>)>>>,
     #[cfg_attr(not(unix), allow(dead_code))]
     avianart_api_key: Option<String>,
     #[allow(dead_code)]
@@ -599,6 +662,7 @@ impl TypeMapKey for GlobalState {
 impl GlobalState {
     pub(crate) async fn new(
         new_room_lock: Arc<Mutex<()>>,
+        race_import_lock: Arc<Mutex<()>>,
         racetime_config: ConfigRaceTime,
         db_pool: PgPool,
         http_client: reqwest::Client,
@@ -632,8 +696,28 @@ impl GlobalState {
                 hostname: Cow::Borrowed(racetime_host()),
                 ..racetime::HostInfo::default()
             },
-            new_room_lock, racetime_config, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, discord_ctx, clean_shutdown, seed_metadata, avianart_api_key, mmr_api_key, known_goals, extra_room_senders: Arc::new(RwLock::new(HashMap::default())),
+            new_room_lock, race_import_lock, racetime_config, db_pool, http_client, insecure_http_client, league_api_key, startgg_token, ootr_api_client, discord_ctx, clean_shutdown, seed_metadata, avianart_api_key, mmr_api_key, known_goals,
+            extra_room_senders: Arc::new(RwLock::new(HashMap::default())),
+            restream_team_members: Arc::new(RwLock::new(HashMap::default())),
         }
+    }
+
+    async fn is_racetime_team_member(&self, team_slug: &str, user_id: &str) -> bool {
+        const TTL: Duration = Duration::from_secs(3600);
+        let cached = lock!(@read restream_team_members = self.restream_team_members; restream_team_members.get(team_slug).and_then(|(fetched_at, members)| (fetched_at.elapsed() < TTL).then(|| members.contains(user_id))));
+        if let Some(is_member) = cached {
+            return is_member
+        }
+        let Ok(members) = team_member_ids(&self.http_client, team_slug).await else { return false };
+        let is_member = members.contains(user_id);
+        lock!(@write restream_team_members = self.restream_team_members; restream_team_members.insert(team_slug.to_owned(), (Instant::now(), members)));
+        is_member
+    }
+
+    /// Serializes imports against the automatic loop and against each other so they don't race to
+    /// create duplicate Discord scheduling threads for the same match.
+    pub(crate) fn race_import_lock(&self) -> Arc<Mutex<()>> {
+        Arc::clone(&self.race_import_lock)
     }
 
     pub(crate) fn roll_twwr_seed(self: Arc<Self>, version: Option<VersionedBranch>, settings_string: String, unlock_spoiler_log: UnlockSpoilerLog) -> mpsc::Receiver<SeedRollUpdate> {
@@ -805,20 +889,21 @@ impl GlobalState {
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
         tokio::spawn(async move {
+            println!("requesting AvianArt seed with preset '{preset}'");
             let client = avianart::AvianartClient::new(
                 self.avianart_api_key.clone(),
                 self.http_client.clone(),
             );
             let hash = client.generate_seed(&preset).await
                 .map_err(|e| RollError::Avianart(e.to_string()))?;
+            println!("AvianArt accepted seed request {hash} with preset '{preset}'");
             let seed_data = client.wait_for_seed(&hash).await
                 .map_err(|e| RollError::Avianart(e.to_string()))?;
-            let seed_hash = if let Some(ref spoiler) = seed_data.spoiler {
-                Some(avianart::parse_file_hash(&spoiler.meta.hash)
-                    .map_err(|e| RollError::Avianart(e.to_string()))?)
-            } else {
-                None
-            };
+            let seed_hash = seed_data.file_hash()
+                .map(avianart::parse_file_hash)
+                .transpose()
+                .map_err(|e| RollError::Avianart(e.to_string()))?;
+            println!("AvianArt seed request {hash} completed");
             update_tx.send(SeedRollUpdate::Done {
                 seed: seed::Data {
                     file_hash: None,
@@ -840,14 +925,13 @@ impl GlobalState {
         update_rx
     }
 
-    pub(crate) fn roll_mysteryd20_seed(self: Arc<Self>) -> mpsc::Receiver<SeedRollUpdate> {
+    pub(crate) fn roll_mystery_pool_seed(self: Arc<Self>, weights_url: String) -> mpsc::Receiver<SeedRollUpdate> {
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
         tokio::spawn(async move {
             let uuid = Uuid::new_v4();
 
-            // Download the weights YAML
-            let weights_url = "https://zeldaspeedruns.com/assets/hth/miniturnier_doors.yaml";
+            // Download the weights YAML configured for this event.
             let response = reqwest::get(weights_url).await?;
             let weights_yaml_content = response.text().await?;
             
@@ -860,8 +944,8 @@ impl GlobalState {
             
             for attempt in 0..=MAX_RETRIES {
                 let output = match timeout(Duration::from_secs(180), async {
-                    Command::new(PYTHON)
-                        .current_dir("../alttpr")
+                    Command::new(ALTTPR_PYTHON)
+                        .current_dir("/opt/alttpr")
                         .arg("Mystery.py")
                         .arg("--weights")
                         .arg(yaml_path)
@@ -952,9 +1036,9 @@ impl GlobalState {
 
     /// Roll an ALTTPR Door Randomizer seed from pre-built YAML content.
     ///
-    /// Shared implementation for both Boothisman (AlttprDe9) and MutualChoices (Crosskeys) sources.
+    /// Shared implementation for Boothisman and mutual-choice Door Randomizer sources.
     /// `working_dir` is `"../ALttPDoorRandomizer"` for Boothisman or `"../alttpr"` for MutualChoices.
-    /// `with_output_name` enables `--outputname uuid` and patch-file verification (AlttprDe9 only).
+    /// `with_output_name` enables `--outputname uuid` and patch-file verification.
     pub(crate) fn roll_alttpr_dr_seed(self: Arc<Self>, yaml_content: String, uuid: Uuid, working_dir: &'static str, with_output_name: bool, seed_prefix: &'static str, resolved_randoms: Option<String>) -> mpsc::Receiver<SeedRollUpdate> {
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
@@ -1015,8 +1099,8 @@ impl GlobalState {
         }
     }
 
-    /// Roll an AlttprDe9 seed using the boothisman.de API (for practice seed use from event page).
-    pub(crate) fn roll_alttprde9_seed(self: Arc<Self>, alttprde_options: AlttprDeRaceOptions) -> mpsc::Receiver<SeedRollUpdate> {
+    /// Roll a Door Randomizer seed using the boothisman.de API (for practice seed use from event page).
+    pub(crate) fn roll_boothisman_dr_seed(self: Arc<Self>, alttprde_options: AlttprDeRaceOptions) -> mpsc::Receiver<SeedRollUpdate> {
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
         tokio::spawn(async move {
@@ -1145,8 +1229,8 @@ impl GlobalState {
                 let resolved_randoms_str = reveal_resolved_randoms_str(&choices, &resolved, config, &labels);
                 self.roll_mutual_choices_dr_seed(config.clone(), resolved, resolved_randoms_str)
             }
-            SeedGenType::AlttprDoorRando { source: AlttprDrSource::MysteryPool { .. }, .. } => {
-                self.roll_mysteryd20_seed()
+            SeedGenType::AlttprDoorRando { source: AlttprDrSource::MysteryPool { weights_url }, .. } => {
+                self.roll_mystery_pool_seed(weights_url.clone())
             }
             SeedGenType::AlttprAvianart { .. } => {
                 let game_num = cal_event.race.game.unwrap_or(1);
@@ -2120,20 +2204,20 @@ impl SeedRollUpdate {
                 } else {
                     eprintln!("seed rolling failed {num_retries} times, no sample error recorded");
                 }
+                Handler::mark_roll_failed(state, roll_failed).await;
                 ctx.say(if let French = language {
                     format!("Désolé @entrants, le randomizer a rapporté une erreur {num_retries} fois de suite donc je vais laisser tomber. Utilisez !reroll pour réessayer. Si l'erreur persiste, essayer de roll une seed de votre côté et contacter TreZc0_.")
                 } else {
                     format!("Sorry @entrants, the randomizer reported an error {num_retries} times, so I'm giving up on rolling the seed. Use !reroll to try again. If this error persists, please report it to TreZc0_.")
                 }).await?;
-                roll_failed.store(true, atomic::Ordering::SeqCst);
-                lock!(@write state = state; *state = RaceState::Init);
             }
             Self::Error(e) => {
                 eprintln!("seed roll error in https://{}{}: {e} ({e:?})", racetime_host(), ctx.data().await.url);
                 if let Environment::Production = Environment::default() {
                     log::error!("seed roll error in https://{}{}: {e} ({e:?})", racetime_host(), ctx.data().await.url);
                 }
-                ctx.say("Sorry @entrants, something went wrong while rolling the seed. Please report this error to TreZc0_ and if necessary roll the seed manually.").await?;
+                Handler::mark_roll_failed(state, roll_failed).await;
+                ctx.say("Sorry @entrants, something went wrong while rolling the seed. You can use !reroll to try again; please report the error to TreZc0_ if it persists.").await?;
             }
             #[cfg(unix)] Self::Message(msg) => ctx.say(msg).await?,
         }
@@ -2293,7 +2377,7 @@ async fn set_bot_raceinfo(ctx: &RaceContext<GlobalState>, seed: &seed::Data, rsl
             },
             seed::Files::AvianartSeed { hash, .. } => format!("https://avianart.games/perm/{hash}"),
         },
-    )).await
+    )).await.to_racetime()
 }
 
 #[derive(Clone, Copy)]
@@ -2892,9 +2976,53 @@ struct Handler {
     race_state: ArcRwLock<RaceState>,
     cleaned_up: Arc<AtomicBool>,
     finish_timeout: Option<tokio::task::JoinHandle<()>>,
+    discord_event_prestart_check: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Handler {
+    async fn fresh_race_data(ctx: &RaceContext<GlobalState>, room_url: &str) -> Result<RaceData, Error> {
+        ctx.global_state.http_client
+            .get(format!("{room_url}/data"))
+            .header(reqwest::header::CACHE_CONTROL, "no-cache")
+            .send().await.to_racetime()?
+            .detailed_error_for_status().await.to_racetime()?
+            .json_with_text_in_error().await.to_racetime()
+    }
+
+    async fn notify_admin(ctx: &RaceContext<GlobalState>, message: String) {
+        let discord_ctx = ctx.global_state.discord_ctx.read().await;
+        match ADMIN_USER.create_dm_channel(&*discord_ctx).await {
+            Ok(dm) => if let Err(e) = dm.say(&*discord_ctx, message).await {
+                eprintln!("failed to DM admin about race result confirmation failure: {e}");
+            },
+            Err(e) => eprintln!("failed to open admin DM about race result confirmation failure: {e}"),
+        }
+    }
+
+    async fn official_event_from_db(ctx: &RaceContext<GlobalState>, room_url: &Url) -> Result<Option<cal::Event>, Error> {
+        let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+        let event = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, room_url.clone()).await.to_racetime()?;
+        transaction.commit().await.to_racetime()?;
+        Ok(event)
+    }
+
+    /// Finds the database row for a racetime.gg room without making already-committed rooms wait
+    /// behind the race importer. Newly created rooms may be announced to the bot just before their
+    /// transaction commits, so retry briefly and only use new_room_lock as the final fallback.
+    async fn official_event_for_room(ctx: &RaceContext<GlobalState>, room_url: &Url) -> Result<Option<cal::Event>, Error> {
+        for attempt in 0..3 {
+            if let Some(event) = Self::official_event_from_db(ctx, room_url).await? {
+                return Ok(Some(event))
+            }
+            if attempt < 2 {
+                sleep(Duration::from_millis(100)).await;
+            }
+        }
+        lock!(new_room_lock = ctx.global_state.new_room_lock; {
+            Self::official_event_from_db(ctx, room_url).await
+        })
+    }
+
     /// For `existing_state`, `Some(None)` means this is an existing race room with unknown state, while `None` means this is a new race room.
     async fn should_handle_inner(race_data: &RaceData, global_state: Arc<GlobalState>, existing_state: Option<Option<&Self>>) -> bool {
         // Accept rooms with goals known to the DB OR custom goals (generic events use custom goals)
@@ -2917,14 +3045,11 @@ impl Handler {
                     room_url: race_data.url.clone(),
                     public: !race_data.unlisted,
                 };
-                if !clean_shutdown.open_rooms.insert(room.clone()) {
-                    // Previous handler is still mid-cleanup (handled_races was cleared but
-                    // open_rooms hasn't been updated yet by our task() spawn). Skip this scan
-                    // cycle; the next one will pick it up cleanly.
+                if clean_shutdown.open_rooms.contains(&room) {
+                    // A handler started by this or a previous bot instance is still active.
                     unlock!();
                     return false
                 }
-                clean_shutdown.updates.send(CleanShutdownUpdate::RoomOpened(room)).allow_unreceived();
             });
         }
         true
@@ -2975,12 +3100,35 @@ impl Handler {
         }
     }
 
+    async fn mark_roll_failed(state: &ArcRwLock<RaceState>, roll_failed: &AtomicBool) {
+        roll_failed.store(true, atomic::Ordering::SeqCst);
+        lock!(@write state = state; {
+            if matches!(*state, RaceState::Rolling) {
+                *state = RaceState::Init;
+            }
+        });
+    }
+
     async fn can_monitor(&self, ctx: &RaceContext<GlobalState>, is_monitor: bool, msg: &ChatMessage) -> sqlx::Result<bool> {
         if is_monitor { return Ok(true) }
-        if let Some(OfficialRaceData { ref event, .. }) = self.official_data {
+        if let Some(OfficialRaceData { ref event, ref restreams, .. }) = self.official_data {
             if let Some(UserData { ref id, .. }) = msg.user {
                 if let Some(user) = User::from_racetime(&ctx.global_state.db_pool, id).await? {
-                    return sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM organizers WHERE series = $1 AND event = $2 AND organizer = $3) AS "exists!""#, event.series as _, &event.event, user.id as _).fetch_one(&ctx.global_state.db_pool).await
+                    if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM organizers WHERE series = $1 AND event = $2 AND organizer = $3) AS "exists!""#, event.series as _, &event.event, user.id as _).fetch_one(&ctx.global_state.db_pool).await? {
+                        return Ok(true)
+                    }
+                }
+                for video_url in restreams.keys() {
+                    let pattern = crate::admin::normalize_restream_url_pattern(&video_url.to_string());
+                    let team_slug = sqlx::query_scalar!("SELECT racetime_team_slug FROM restream_channels WHERE url_pattern = $1", pattern)
+                        .fetch_optional(&ctx.global_state.db_pool)
+                        .await?
+                        .flatten();
+                    if let Some(team_slug) = team_slug {
+                        if ctx.global_state.is_racetime_team_member(&team_slug, id).await {
+                            return Ok(true)
+                        }
+                    }
                 }
             }
         }
@@ -3042,36 +3190,9 @@ impl Handler {
                 } else {
                     ("a", format!("seed with {}", step.message))
                 };
-                // Dispatch seed rolling based on seed_gen_type from event DB config.
-                let event_seed_gen_type = self.official_data.as_ref().and_then(|d| d.event.seed_gen_type.as_ref());
-                match event_seed_gen_type {
-                    Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::Boothisman, .. }) => {
-                        let cal_event = self.official_data.as_ref().expect("AlttprDoorRando/Boothisman must have official_data").cal_event.clone();
-                        self.roll_alttprde9_seed(ctx, cal_event, lang, article).await;
-                    }
-                    Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MutualChoices { .. }, .. }) => {
-                        let cal_event = self.official_data.as_ref().expect("AlttprDoorRando/MutualChoices must have official_data").cal_event.clone();
-                        self.roll_crosskeys2025_seed(ctx, cal_event, lang, article).await;
-                    }
-                    Some(seed_gen_type::SeedGenType::Owr { .. }) => {
-                        let cal_event = self.official_data.as_ref().expect("Owr must have official_data").cal_event.clone();
-                        self.roll_owr_seed(ctx, cal_event, lang, article).await;
-                    }
-                    Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MysteryPool { .. }, .. }) => {
-                        let cal_event = self.official_data.as_ref().expect("AlttprDoorRando/MysteryPool must have official_data").cal_event.clone();
-                        self.roll_mysteryd20_seed(ctx, cal_event, lang, article).await;
-                    }
-                    Some(seed_gen_type::SeedGenType::AlttprAvianart { .. }) => {
-                        let cal_event = self.official_data.as_ref().expect("AlttprAvianart must have official_data").cal_event.clone();
-                        let preset = settings.get("preset")
-                            .and_then(|v| v.as_str())
-                            .expect("Avianart Done settings missing preset")
-                            .to_owned();
-                        self.roll_rivals_cup_seed(ctx, cal_event, preset, lang, article).await;
-                    }
-                    _ => {
-                        self.roll_seed(ctx, self.effective_preroll_mode(), self.effective_rando_version(), settings, unlock_spoiler_log, lang, article, description).await;
-                    }
+                let cal_event = self.official_data.as_ref().expect("completed official draft must have official_data").cal_event.clone();
+                if !self.roll_configured_event_seed(ctx, cal_event, Some(settings), unlock_spoiler_log, lang, article, description).await {
+                    ctx.say("Sorry @entrants, this event's seed configuration is incomplete. Please contact a tournament organizer.").await?;
                 }
             }
             draft::StepKind::DoneRsl { preset, world_count } => {
@@ -3167,47 +3288,64 @@ impl Handler {
         let official_data = self.official_data.clone();
         let roll_failed = self.roll_failed.clone();
         tokio::spawn(async move {
-            lock!(@write state = state; *state = RaceState::Rolling); //TODO ensure only one seed is rolled at a time
-            let mut seed_state = None::<SeedRollUpdate>;
-            if let Some(delay) = delay_until.and_then(|delay_until| (delay_until - Utc::now()).to_std().ok()) {
-                // don't want to give an unnecessarily exact estimate if the room was opened automatically 30 or 60 minutes ahead of start
-                let display_delay = if delay > Duration::from_secs(14 * 60) && delay < Duration::from_secs(16 * 60) {
-                    Duration::from_secs(15 * 60)
-                } else if delay > Duration::from_secs(44 * 60) && delay < Duration::from_secs(46 * 60) {
-                    Duration::from_secs(45 * 60)
-                } else if delay > Duration::from_secs(19 * 60) && delay < Duration::from_secs(21 * 60) {
-                    Duration::from_secs(20 * 60)
-                } else {
-                    delay
-                };
-                if !suppress_preamble {
-                    ctx.say(if let French = language {
-                        format!("Votre {description} sera postée dans {}.", French.format_duration(display_delay, true))
+            let room_url = format!("https://{}{}", racetime_host(), ctx.data().await.url);
+            let result = async {
+                lock!(@write state = state; *state = RaceState::Rolling); //TODO ensure only one seed is rolled at a time
+                let mut seed_state = None::<SeedRollUpdate>;
+                if let Some(delay) = delay_until.and_then(|delay_until| (delay_until - Utc::now()).to_std().ok()) {
+                    let roll_deadline = Instant::now() + delay;
+                    // don't want to give an unnecessarily exact estimate if the room was opened automatically 30 or 60 minutes ahead of start
+                    let display_delay = if delay > Duration::from_secs(14 * 60) && delay < Duration::from_secs(16 * 60) {
+                        Duration::from_secs(15 * 60)
+                    } else if delay > Duration::from_secs(44 * 60) && delay < Duration::from_secs(46 * 60) {
+                        Duration::from_secs(45 * 60)
+                    } else if delay > Duration::from_secs(19 * 60) && delay < Duration::from_secs(21 * 60) {
+                        Duration::from_secs(20 * 60)
                     } else {
-                        format!("Your {description} will be posted in {}.", English.format_duration(display_delay, true))
-                    }).await?;
-                }
-                let mut sleep = pin!(sleep_until(Instant::now() + delay));
-                loop {
-                    select! {
-                        () = &mut sleep => {
-                            if let Some(update) = seed_state.take() {
-                                update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
+                        delay
+                    };
+                    if !suppress_preamble {
+                        let message = if let French = language {
+                            format!("Votre {description} sera postée dans {}.", French.format_duration(display_delay, true))
+                        } else {
+                            format!("Your {description} will be posted in {}.", English.format_duration(display_delay, true))
+                        };
+                        if let Err(e) = ctx.say(message).await {
+                            eprintln!("failed to announce scheduled seed roll in {room_url}; continuing with the roll: {e} ({e:?})");
+                            if let Environment::Production = Environment::default() {
+                                log::error!("failed to announce scheduled seed roll in {room_url}; continuing with the roll: {e} ({e:?})");
                             }
-                            while let Some(update) = updates.recv().await {
-                                update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
-                            }
-                            break
                         }
-                        Some(update) = updates.recv() => seed_state = Some(update),
+                    }
+                    let mut sleep = pin!(sleep_until(roll_deadline));
+                    loop {
+                        select! {
+                            () = &mut sleep => {
+                                if let Some(update) = seed_state.take() {
+                                    update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
+                                }
+                                while let Some(update) = updates.recv().await {
+                                    update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
+                                }
+                                break
+                            }
+                            Some(update) = updates.recv() => seed_state = Some(update),
+                        }
+                    }
+                } else {
+                    while let Some(update) = updates.recv().await {
+                        update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
                     }
                 }
-            } else {
-                while let Some(update) = updates.recv().await {
-                    update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
+                Ok::<_, Error>(())
+            }.await;
+            if let Err(e) = result {
+                eprintln!("seed roll task failed in {room_url}: {e} ({e:?})");
+                if let Environment::Production = Environment::default() {
+                    log::error!("seed roll task failed in {room_url}: {e} ({e:?})");
                 }
+                Self::mark_roll_failed(&state, &roll_failed).await;
             }
-            Ok::<_, Error>(())
         });
     }
 
@@ -3217,7 +3355,7 @@ impl Handler {
         self.roll_seed_inner(ctx, delay_until, ctx.global_state.clone().roll_seed(preroll, true, delay_until, version, settings, unlock_spoiler_log), language, article, description, false).await;
     }
 
-    async fn roll_alttprde9_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
+    async fn roll_boothisman_dr_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(10);
 
@@ -3247,7 +3385,7 @@ impl Handler {
                                 ), true, Vec::default()).await.expect("failed to send race options");
     }
 
-    async fn roll_rivals_cup_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, preset: String, language: Language, article: &'static str) {
+    async fn roll_avianart_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, preset: String, language: Language, article: &'static str) {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(10);
         let preset_display = self.official_data.as_ref()
@@ -3262,7 +3400,7 @@ impl Handler {
         self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_avianart_seed(preset), language, article, format!("{preset_display} seed"), false).await;
     }
 
-    async fn roll_crosskeys2025_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
+    async fn roll_mutual_choices_dr_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(10);
 
@@ -3302,11 +3440,72 @@ impl Handler {
         self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_owr_seed(resolved, config, resolved_randoms_str), language, article, format!("seed with {description}"), false).await;
     }
 
-    async fn roll_mysteryd20_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, language: Language, article: &'static str) {
+    async fn roll_mystery_pool_seed(&self, ctx: &RaceContext<GlobalState>, cal_event: cal::Event, weights_url: String, language: Language, article: &'static str) {
         let official_start = cal_event.start().expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(10);
 
-        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_mysteryd20_seed(), language, article, "Mystery seed".to_string(), false).await;
+        self.roll_seed_inner(ctx, Some(delay_until), ctx.global_state.clone().roll_mystery_pool_seed(weights_url), language, article, "mystery seed".to_string(), false).await;
+    }
+
+    /// Roll an official race using only its event configuration.
+    ///
+    /// This is shared by initial room setup, completed drafts, and `!reroll`, so command
+    /// handling never needs to know which event (or which Door Randomizer source) is active.
+    /// Returns `false` when the event does not contain enough configuration to start a roll.
+    async fn roll_configured_event_seed(
+        &self,
+        ctx: &RaceContext<GlobalState>,
+        cal_event: cal::Event,
+        settings: Option<seed::Settings>,
+        unlock_spoiler_log: UnlockSpoilerLog,
+        language: Language,
+        article: &'static str,
+        description: String,
+    ) -> bool {
+        let Some(official_data) = self.official_data.as_ref() else { return false };
+        let seed_gen_type = official_data.event.seed_gen_type.clone();
+        let default_settings = official_data.event.single_settings.clone();
+
+        match seed_gen_type {
+            Some(seed_gen_type::SeedGenType::AlttprDoorRando {
+                source: seed_gen_type::AlttprDrSource::Boothisman,
+                ..
+            }) => self.roll_boothisman_dr_seed(ctx, cal_event, language, article).await,
+            Some(seed_gen_type::SeedGenType::AlttprDoorRando {
+                source: seed_gen_type::AlttprDrSource::MutualChoices { .. },
+                ..
+            }) => self.roll_mutual_choices_dr_seed(ctx, cal_event, language, article).await,
+            Some(seed_gen_type::SeedGenType::AlttprDoorRando {
+                source: seed_gen_type::AlttprDrSource::MysteryPool { weights_url },
+                ..
+            }) => self.roll_mystery_pool_seed(ctx, cal_event, weights_url, language, article).await,
+            Some(seed_gen_type::SeedGenType::AlttprAvianart { .. }) => {
+                let game = cal_event.race.game.unwrap_or(1);
+                let preset = settings.as_ref()
+                    .and_then(|settings| settings.get("preset"))
+                    .and_then(|preset| preset.as_str())
+                    .map(str::to_owned)
+                    .or_else(|| cal_event.race.draft.as_ref()
+                        .and_then(|draft| draft.settings.get(&*format!("game{game}_preset")))
+                        .map(|preset| preset.as_ref().to_owned()));
+                let Some(preset) = preset else { return false };
+                self.roll_avianart_seed(ctx, cal_event, preset, language, article).await;
+            }
+            Some(seed_gen_type::SeedGenType::Owr { .. }) => {
+                self.roll_owr_seed(ctx, cal_event, language, article).await;
+            }
+            Some(seed_gen_type::SeedGenType::TWWR { .. }) => {
+                self.roll_twwr_seed_official(ctx, cal_event, language, article).await;
+            }
+            Some(seed_gen_type::SeedGenType::OotrTriforceBlitz) => {
+                self.roll_tfb_dev_seed(ctx, true, unlock_spoiler_log, language, article, "Triforce Blitz seed".to_string()).await;
+            }
+            Some(seed_gen_type::SeedGenType::OoTR | seed_gen_type::SeedGenType::OotrRsl | seed_gen_type::SeedGenType::Mmr) | None => {
+                let Some(settings) = settings.or(default_settings) else { return false };
+                self.roll_seed(ctx, self.effective_preroll_mode(), self.effective_rando_version(), settings, unlock_spoiler_log, language, article, description).await;
+            }
+        }
+        true
     }
 
     async fn roll_twwr_seed(&self, ctx: &RaceContext<GlobalState>, permalink: String, unlock_spoiler_log: UnlockSpoilerLog, language: Language, article: &'static str, description: String) {
@@ -3395,8 +3594,19 @@ impl Handler {
     }
 }
 
+/// A racetime.gg API call to make once `new_room_lock` (see `Handler::new`) has been released,
+/// so a stalled websocket send can't block every other room from starting.
+enum PendingSend {
+    Accept(String),
+    Invite(String),
+    Say(String),
+    Message(String, bool),
+}
+
 #[async_trait]
 impl RaceHandler<GlobalState> for Handler {
+    type Error = Error;
+
     async fn should_handle(race_data: &RaceData, global_state: Arc<GlobalState>) -> Result<bool, Error> {
         Ok(Self::should_handle_inner(race_data, global_state, None).await)
     }
@@ -3405,8 +3615,24 @@ impl RaceHandler<GlobalState> for Handler {
         Ok(!Self::should_handle_inner(&*ctx.data().await, ctx.global_state.clone(), Some(Some(self))).await)
     }
 
-    async fn task(global_state: Arc<GlobalState>, race_data: Arc<tokio::sync::RwLock<RaceData>>, join_handle: tokio::task::JoinHandle<()>) -> Result<(), Error> {
+    async fn task(global_state: Arc<GlobalState>, race_data: Arc<tokio::sync::RwLock<RaceData>>, join_handle: tokio::task::JoinHandle<Result<(), racetime::bot::HandleError<Error>>>) -> Result<(), Error> {
         let race_data = ArcRwLock::from(race_data);
+        let room = lock!(@read data = race_data; OpenRoom::RaceTime {
+            room_url: data.url.clone(),
+            public: !data.unlisted,
+        });
+        let should_start = lock!(clean_shutdown = global_state.clean_shutdown; {
+            if clean_shutdown.should_handle_new() && clean_shutdown.open_rooms.insert(room.clone()) {
+                clean_shutdown.updates.send(CleanShutdownUpdate::RoomOpened(room)).allow_unreceived();
+                true
+            } else {
+                false
+            }
+        });
+        if !should_start {
+            join_handle.abort();
+            return Ok(())
+        }
         tokio::spawn(async move {
             lock!(@read data = race_data; println!("race handler for https://{}{} started", racetime_host(), data.url));
             let res = join_handle.await;
@@ -3422,12 +3648,19 @@ impl RaceHandler<GlobalState> for Handler {
                         clean_shutdown.updates.send(CleanShutdownUpdate::Empty).allow_unreceived();
                     }
                 });
-                if let Ok(()) = res {
-                    println!("race handler for https://{}{} stopped", racetime_host(), data.url);
-                } else {
-                    eprintln!("race handler for https://{}{} panicked", racetime_host(), data.url);
-                    if let Environment::Production = Environment::default() {
-                        log::error!("race handler for https://{}{} panicked", racetime_host(), data.url);
+                match res {
+                    Ok(Ok(())) => println!("race handler for https://{}{} stopped", racetime_host(), data.url),
+                    Ok(Err(e)) => {
+                        eprintln!("race handler for https://{}{} errored: {e}", racetime_host(), data.url);
+                        if let Environment::Production = Environment::default() {
+                            log::error!("race handler for https://{}{} errored: {e}", racetime_host(), data.url);
+                        }
+                    }
+                    Err(_) => {
+                        eprintln!("race handler for https://{}{} panicked", racetime_host(), data.url);
+                        if let Environment::Production = Environment::default() {
+                            log::error!("race handler for https://{}{} panicked", racetime_host(), data.url);
+                        }
                     }
                 }
             });
@@ -3437,9 +3670,15 @@ impl RaceHandler<GlobalState> for Handler {
 
     async fn new(ctx: &RaceContext<GlobalState>) -> Result<Self, Error> {
         let data = ctx.data().await;
-        let (existing_seed, official_data, race_state, high_seed_name, low_seed_name, fpa_enabled) = lock!(new_room_lock = ctx.global_state.new_room_lock; { // make sure a new room isn't handled before it's added to the database
+        let room_url = format!("https://{}{}", racetime_host(), data.url).parse().to_racetime()?;
+        let official_event = Self::official_event_for_room(ctx, &room_url).await?;
+        // Resolve DB state and collect racetime.gg API calls to perform. new_room_lock is only
+        // needed above while identifying a just-created room; keeping it during the rest of this
+        // initialization lets an unrelated import stall every open room after a restart.
+        let official_result = if let Some(cal_event) = official_event {
             let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
-            let new_data = if let Some(cal_event) = cal::Event::from_room(&mut transaction, &ctx.global_state.http_client, format!("https://{}{}", racetime_host(), ctx.data().await.url).parse()?).await.to_racetime()? {
+            let result = {
+                let mut pending_sends = Vec::default();
                 let event = cal_event.race.event(&mut transaction).await.to_racetime()?;
                 let mut entrants = Vec::default();
                 for member in cal_event.racetime_users_to_invite(&mut transaction, &*ctx.global_state.discord_ctx.read().await, &event).await.to_racetime()? {
@@ -3447,7 +3686,7 @@ impl RaceHandler<GlobalState> for Handler {
                         Ok(member) => {
                             if let Some(entrant) = data.entrants.iter().find(|entrant| entrant.user.as_ref().is_some_and(|user| user.id == member)) {
                                 match entrant.status.value {
-                                    EntrantStatusValue::Requested => ctx.accept_request(&member).await?,
+                                    EntrantStatusValue::Requested => pending_sends.push(PendingSend::Accept(member.clone())),
                                     EntrantStatusValue::Invited |
                                     EntrantStatusValue::Declined |
                                     EntrantStatusValue::Ready |
@@ -3458,16 +3697,16 @@ impl RaceHandler<GlobalState> for Handler {
                                     EntrantStatusValue::Dq => {}
                                 }
                             } else {
-                                ctx.invite_user(&member).await?;
+                                pending_sends.push(PendingSend::Invite(member.clone()));
                             }
                             entrants.push(member);
                         }
-                        Err(msg) => ctx.say(msg).await?,
+                        Err(msg) => pending_sends.push(PendingSend::Say(msg)),
                     }
                 }
                 if let Some(companion_race_id) = cal_event.race.companion_race_id {
                     let companion_event = cal::Event {
-                        race: cal::Race::from_id(&mut transaction, &ctx.global_state.http_client, companion_race_id).await.to_racetime()?,
+                        race: Race::from_id(&mut transaction, &ctx.global_state.http_client, companion_race_id).await.to_racetime()?,
                         kind: cal::EventKind::Normal,
                     };
                     let companion_event_data = companion_event.race.event(&mut transaction).await.to_racetime()?;
@@ -3476,7 +3715,7 @@ impl RaceHandler<GlobalState> for Handler {
                             Ok(member) => {
                                 if let Some(entrant) = data.entrants.iter().find(|entrant| entrant.user.as_ref().is_some_and(|user| user.id == member)) {
                                     match entrant.status.value {
-                                        EntrantStatusValue::Requested => ctx.accept_request(&member).await?,
+                                        EntrantStatusValue::Requested => pending_sends.push(PendingSend::Accept(member.clone())),
                                         EntrantStatusValue::Invited |
                                         EntrantStatusValue::Declined |
                                         EntrantStatusValue::Ready |
@@ -3487,16 +3726,16 @@ impl RaceHandler<GlobalState> for Handler {
                                         EntrantStatusValue::Dq => {}
                                     }
                                 } else {
-                                    ctx.invite_user(&member).await?;
+                                    pending_sends.push(PendingSend::Invite(member.clone()));
                                 }
                                 entrants.push(member);
                             }
-                            Err(msg) => ctx.say(msg).await?,
+                            Err(msg) => pending_sends.push(PendingSend::Say(msg)),
                         }
                     }
                 }
                 if !matches!(data.status.value, RaceStatusValue::Pending | RaceStatusValue::InProgress) {
-                    ctx.send_message(&if_chain! {
+                    let welcome_message = if_chain! {
                         if let French = event.language;
                         if !event.is_single_race();
                         if let (Some(phase), Some(round)) = (cal_event.race.phase.as_ref(), cal_event.race.round.as_ref());
@@ -3537,13 +3776,18 @@ impl RaceHandler<GlobalState> for Handler {
                                 )
                             }
                         }
-                    }, !matches!(event.seed_gen_type, Some(seed_gen_type::SeedGenType::AlttprDoorRando { .. } | seed_gen_type::SeedGenType::AlttprAvianart { .. })), Vec::default()).await?;
+                    };
+                    let welcome_message_allow_ping = !matches!(
+                        event.seed_gen_type.as_ref(),
+                        Some(seed_gen_type::SeedGenType::AlttprDoorRando { .. } | seed_gen_type::SeedGenType::AlttprAvianart { .. }),
+                    );
+                    pending_sends.push(PendingSend::Message(welcome_message, welcome_message_allow_ping));
                     // Announce mode for events with round_modes set
-                    if matches!(event.seed_gen_type, Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::Boothisman, .. })) {
+                    if matches!(event.seed_gen_type.as_ref(), Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::Boothisman, .. })) {
                         if event.round_modes.is_some() {
                             let alttprde_options = AlttprDeRaceOptions::for_race(&ctx.global_state.db_pool, &cal_event.race, event.round_modes.as_ref()).await;
                             if let Some(mode_display) = alttprde_options.mode_display() {
-                                ctx.say(format!("This race will be played in {} mode.", mode_display)).await?;
+                                pending_sends.push(PendingSend::Say(format!("This race will be played in {} mode.", mode_display)));
                             }
                         }
                     }
@@ -3604,7 +3848,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 let _ = dm.say(&*discord_ctx, &notif).await;
                             }
                         }
-                        ctx.say("Error: no draft state found for this race. A global admin has been notified. Use !reroll once the issue has been fixed.").await?;
+                        pending_sends.push(PendingSend::Say(format!("Error: no draft state found for this race. A global admin has been notified. Use !reroll once the issue has been fixed.")));
                         (RaceState::Init, format!("Team A"), format!("Team B"))
                     }
                 } else {
@@ -3651,17 +3895,18 @@ impl RaceHandler<GlobalState> for Handler {
                 } else {
                     match data.status.value {
                         RaceStatusValue::Invitational => {
-                            ctx.say(if let French = event.language {
+                            pending_sends.push(PendingSend::Say(if let French = event.language {
                                 "Le FPA est activé pour cette race. Les joueurs pourront utiliser !fpa pendant la race pour signaler d'un problème technique de leur côté. Les race monitors doivent activer les notifications en cliquant sur l'icône de cloche 🔔 sous le chat."
                             } else {
                                 "Fair play agreement is active for this official race. Entrants may use the !fpa command during the race to notify of a crash. Race monitors (if any) should enable notifications using the bell 🔔 icon below chat."
-                            }).await?; //TODO different message for monitorless FPA?
+                            }.to_string())); //TODO different message for monitorless FPA?
                             true
                         }
                         RaceStatusValue::Open => false,
                         _ => data.entrants.len() < 10, // guess based on entrant count, assuming an open race for 10 or more
                     }
                 };
+                Some((
                 (
                     cal_event.race.seed.clone(),
                     Some(OfficialRaceData {
@@ -3673,8 +3918,24 @@ impl RaceHandler<GlobalState> for Handler {
                     high_seed_name,
                     low_seed_name,
                     fpa_enabled,
-                )
-            } else {
+                ), pending_sends))
+            };
+            transaction.commit().await.to_racetime()?;
+            result
+        } else {
+            None
+        };
+        let (existing_seed, official_data, race_state, high_seed_name, low_seed_name, fpa_enabled) = if let Some((new_data, pending_sends)) = official_result {
+            for pending_send in pending_sends {
+                match pending_send {
+                    PendingSend::Accept(member) => { ctx.accept_request(&member).await?; }
+                    PendingSend::Invite(member) => { ctx.invite_user(&member).await?; }
+                    PendingSend::Say(msg) => { ctx.say(msg).await?; }
+                    PendingSend::Message(msg, allow_ping) => { ctx.send_message(&msg, allow_ping, Vec::default()).await?; }
+                }
+            }
+            new_data
+        } else {
                 let mut race_state = RaceState::Init;
                 if let Some(ref info_bot) = data.info_bot {
                     for section in info_bot.split(" | ") {
@@ -3728,11 +3989,8 @@ impl RaceHandler<GlobalState> for Handler {
                     format!("Team B"),
                     false,
                 )
-            };
-            transaction.commit().await.to_racetime()?;
-            new_data
-        });
-        let this = Self {
+        };
+        let mut this = Self {
             breaks: None, //TODO default breaks for restreamed matches?
             break_notifications: None,
             locked: false,
@@ -3741,8 +3999,62 @@ impl RaceHandler<GlobalState> for Handler {
             race_state: ArcRwLock::new(race_state),
             cleaned_up: Arc::default(),
             finish_timeout: None,
+            discord_event_prestart_check: None,
             official_data, high_seed_name, low_seed_name, fpa_enabled,
         };
+        // Now that the room exists, refresh the Discord scheduled event's multistream link
+        // in case an entrant linked their Twitch account after the event was scheduled, and
+        // schedule one more check shortly before the race starts to catch a last-minute link.
+        // Both checks run in the background so they don't delay the handler starting up.
+        if let Some(OfficialRaceData { ref cal_event, .. }) = this.official_data {
+            if cal_event.race.video_urls.is_empty() && cal_event.race.discord_scheduled_event_id.is_some() {
+                let ctx = ctx.clone();
+                let race_id = cal_event.race.id;
+                tokio::spawn(async move {
+                    let mut transaction = match ctx.global_state.db_pool.begin().await {
+                        Ok(transaction) => transaction,
+                        Err(_) => return,
+                    };
+                    let Ok(race) = Race::from_id(&mut transaction, &ctx.global_state.http_client, race_id).await else { return };
+                    if race.video_urls.is_empty() && race.discord_scheduled_event_id.is_some() {
+                        if let Ok(event) = race.event(&mut transaction).await {
+                            let discord_ctx = ctx.global_state.discord_ctx.read().await;
+                            if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&discord_ctx, &mut transaction, &race, &event, &ctx.global_state.http_client).await {
+                                eprintln!("failed to refresh Discord scheduled event location on room open for race {race_id}: {e}");
+                                return;
+                            }
+                        }
+                    }
+                    let _ = transaction.commit().await;
+                });
+            }
+            if let Some(start) = cal_event.start() {
+                let wait = start - TimeDelta::minutes(1) - Utc::now();
+                if let Ok(wait) = wait.to_std() {
+                    let ctx = ctx.clone();
+                    let race_id = cal_event.race.id;
+                    this.discord_event_prestart_check = Some(tokio::spawn(async move {
+                        sleep(wait).await;
+                        if !Self::should_handle_inner(&*ctx.data().await, ctx.global_state.clone(), Some(None)).await { return }
+                        let mut transaction = match ctx.global_state.db_pool.begin().await {
+                            Ok(transaction) => transaction,
+                            Err(_) => return,
+                        };
+                        let Ok(race) = Race::from_id(&mut transaction, &ctx.global_state.http_client, race_id).await else { return };
+                        if race.video_urls.is_empty() && race.discord_scheduled_event_id.is_some() {
+                            if let Ok(event) = race.event(&mut transaction).await {
+                                let discord_ctx = ctx.global_state.discord_ctx.read().await;
+                                if let Err(e) = crate::discord_scheduled_events::update_discord_scheduled_event(&discord_ctx, &mut transaction, &race, &event, &ctx.global_state.http_client).await {
+                                    eprintln!("failed to refresh Discord scheduled event location before race start for race {race_id}: {e}");
+                                    return;
+                                }
+                            }
+                        }
+                        let _ = transaction.commit().await;
+                    }));
+                }
+            }
+        }
         // Defer restreamer setup to background task to allow handler to start immediately
         if let Some(OfficialRaceData { ref event, ref restreams, ref cal_event, .. }) = this.official_data {
             if !restreams.is_empty() {
@@ -3755,6 +4067,16 @@ impl RaceHandler<GlobalState> for Handler {
                     if !Self::should_handle_inner(&*ctx_clone.data().await, ctx_clone.global_state.clone(), Some(None)).await { return }
 
                     let restreams_text = restreams_clone.iter().map(|(video_url, state)| format!("in {} at {video_url}", state.language.expect("preset restreams should have languages assigned"))).join(" and "); // don't use English.join_str since racetime.gg parses the comma as part of the URL
+                    let mut restream_team_slugs = HashSet::new();
+                    for video_url in restreams_clone.keys() {
+                        let pattern = crate::admin::normalize_restream_url_pattern(&video_url.to_string());
+                        if let Ok(Some(Some(team_slug))) = sqlx::query_scalar!("SELECT racetime_team_slug FROM restream_channels WHERE url_pattern = $1", pattern)
+                            .fetch_optional(&ctx_clone.global_state.db_pool)
+                            .await
+                        {
+                            restream_team_slugs.insert(team_slug);
+                        }
+                    }
                     for restreamer in restreams_clone.values().flat_map(|RestreamState { restreamer_racetime_id, .. }| restreamer_racetime_id) {
                         let data = ctx_clone.data().await;
                         if data.monitors.iter().find(|monitor| monitor.id == *restreamer).is_some() { continue }
@@ -3806,6 +4128,17 @@ impl RaceHandler<GlobalState> for Handler {
                     } else {
                         format!("This race is being restreamed {restreams_text} — auto-start is disabled. Restreamers can use '!ready' once the restream is ready. Auto-start will be unlocked once all restreams are ready.")
                     };
+                    let text = if restream_team_slugs.is_empty() {
+                        text
+                    } else {
+                        let mut team_slugs = restream_team_slugs.into_iter().collect_vec();
+                        team_slugs.sort();
+                        if team_slugs.len() == 1 {
+                            format!("{text} Members of the {} racetime.gg team can also use '!monitor' to become race monitors.", team_slugs[0])
+                        } else {
+                            format!("{text} Members of the {} racetime.gg teams can also use '!monitor' to become race monitors.", team_slugs.join(" and "))
+                        }
+                    };
                     let _ = ctx_clone.send_message(&text, true, Vec::default()).await;
                 });
             }
@@ -3818,40 +4151,25 @@ impl RaceHandler<GlobalState> for Handler {
                     // Only roll seeds for events that have seed configuration
                     let _event_id = Some((event.series, &*event.event));
                     match *state {
-                        RaceState::Init => match &event.seed_gen_type {
-                            Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::Boothisman, .. }) => {
-                                if event.draft_kind().is_none() {
-                                    this.roll_alttprde9_seed(ctx, cal_event.clone(), English, "a").await
-                                }
-                                // else: ban-pick draft event with missing draft state — error already
-                                // reported at room open via the draft_kind check; do not roll
-                            }
-                            Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MutualChoices { .. }, .. }) => {
-                                this.roll_crosskeys2025_seed(ctx, cal_event.clone(), English, "a").await
-                            }
-                            Some(seed_gen_type::SeedGenType::Owr { .. }) => {
-                                this.roll_owr_seed(ctx, cal_event.clone(), English, "a").await
-                            }
-                            Some(seed_gen_type::SeedGenType::AlttprDoorRando { source: seed_gen_type::AlttprDrSource::MysteryPool { .. }, .. }) => {
-                                this.roll_mysteryd20_seed(ctx, cal_event.clone(), English, "a").await
-                            }
-                            Some(seed_gen_type::SeedGenType::AlttprAvianart { .. }) => {
-                                ctx.say("@entrants WARNING: The preset draft for this match is not complete! Please complete the draft in the scheduling Discord thread before the race.").await.to_racetime()?;
-                            }
-                            Some(seed_gen_type::SeedGenType::TWWR { .. }) => {
-                                this.roll_twwr_seed_official(ctx, cal_event.clone(), English, "a").await
-                            }
-                            Some(seed_gen_type::SeedGenType::OotrTriforceBlitz) => {
-                                this.roll_tfb_dev_seed(ctx, true, this.effective_unlock_spoiler_log(false), English, "a", format!("Triforce Blitz S4 co-op seed")).await
-                            }
-                            Some(_) | None => {
-                                if let Some(ref settings) = event.single_settings {
-                                    let event_lang = event.language;
-                                    let (article, desc) = if let French = event_lang { ("une", format!("seed")) } else { ("a", format!("seed")) };
-                                    this.roll_seed(ctx, this.effective_preroll_mode(), this.effective_rando_version(), settings.clone(), this.effective_unlock_spoiler_log(false), event_lang, article, desc).await;
+                        RaceState::Init => {
+                            // A configured draft is handled by the Draft state below. If its DB
+                            // state is missing, room initialization already notified organizers.
+                            if event.draft_kind().is_none() {
+                                let event_lang = event.language;
+                                let article = if let French = event_lang { "une" } else { "a" };
+                                if !this.roll_configured_event_seed(
+                                    ctx,
+                                    cal_event.clone(),
+                                    None,
+                                    this.effective_unlock_spoiler_log(false),
+                                    event_lang,
+                                    article,
+                                    "seed".to_string(),
+                                ).await && event.seed_gen_type.is_some() {
+                                    ctx.say("@entrants WARNING: This event's seed configuration is incomplete. Please contact a tournament organizer.").await.to_racetime()?;
                                 }
                             }
-                        },
+                        }
                         RaceState::Draft { state: ref draft_state, .. } => {
                             this.advance_draft(ctx, &state).await?;
                             // Warn if draft is incomplete
@@ -4206,7 +4524,7 @@ impl RaceHandler<GlobalState> for Handler {
                         || (ctx.global_state.racetime_config.client_id.clone(), ctx.global_state.racetime_config.client_secret.clone()),
                         |row| (row.client_id, row.client_secret),
                     );
-                    let (access_token, _) = racetime::authorize_with_host(&ctx.global_state.host_info, &client_id, &client_secret, &ctx.global_state.http_client).await?;
+                    let (access_token, _) = racetime::authorize_with_host(&ctx.global_state.host_info, &client_id, &client_secret, &ctx.global_state.http_client).await.to_racetime()?;
                     let (goal_str, goal_is_custom) = if let Some(ref slug) = cal_event.race.racetime_goal_slug {
                         (slug.clone(), event.is_custom_goal)
                     } else {
@@ -4219,7 +4537,7 @@ impl RaceHandler<GlobalState> for Handler {
                         data.info_user.clone().unwrap_or_default(),
                         data.info_bot.clone().unwrap_or_default(),
                         true,
-                    ).await.edit_with_host(&ctx.global_state.host_info, &access_token, &ctx.global_state.http_client, &category_slug, &data.slug).await?;
+                    ).await.edit_with_host(&ctx.global_state.host_info, &access_token, &ctx.global_state.http_client, &category_slug, &data.slug).await.to_racetime()?;
                 } else {
                     ctx.say(format!("Restream ready, still waiting for other restreams.")).await?;
                 }
@@ -4251,7 +4569,7 @@ impl RaceHandler<GlobalState> for Handler {
                                             || (ctx.global_state.racetime_config.client_id.clone(), ctx.global_state.racetime_config.client_secret.clone()),
                                             |row| (row.client_id, row.client_secret),
                                         );
-                                        let (access_token, _) = racetime::authorize_with_host(&ctx.global_state.host_info, &client_id, &client_secret, &ctx.global_state.http_client).await?;
+                                        let (access_token, _) = racetime::authorize_with_host(&ctx.global_state.host_info, &client_id, &client_secret, &ctx.global_state.http_client).await.to_racetime()?;
                                         let (goal_str, goal_is_custom) = if let Some(ref slug) = cal_event.race.racetime_goal_slug {
                                             (slug.clone(), event.is_custom_goal)
                                         } else {
@@ -4264,7 +4582,7 @@ impl RaceHandler<GlobalState> for Handler {
                                             data.info_user.clone().unwrap_or_default(),
                                             data.info_bot.clone().unwrap_or_default(),
                                             false,
-                                        ).await.edit_with_host(&ctx.global_state.host_info, &access_token, &ctx.global_state.http_client, &category_slug, &data.slug).await?;
+                                        ).await.edit_with_host(&ctx.global_state.host_info, &access_token, &ctx.global_state.http_client, &category_slug, &data.slug).await.to_racetime()?;
                                     }
                                     restreams.entry(restream_url).or_default().restreamer_racetime_id = Some(restreamer_racetime_id.clone());
                                     ctx.say("Restreamer assigned. Use “!ready” once the restream is ready. Auto-start will be unlocked once all restreams are ready.").await?; //TODO mention restreamer
@@ -4403,13 +4721,9 @@ impl RaceHandler<GlobalState> for Handler {
                                 ctx.say(format!("Sorry {reply_to}, only @entrants or race monitors may use this command.")).await?;
                             } else if !is_monitor && !self.roll_failed.load(atomic::Ordering::SeqCst) {
                                 ctx.say(format!("Sorry {reply_to}, !reroll is only available after a failed roll attempt.")).await?;
-                            } else if let Some(settings) = self.official_data.as_ref().and_then(|d| d.event.single_settings.clone()) {
-                                // Goal has default settings, use them to roll
-                                let unlock_spoiler_log = self.effective_unlock_spoiler_log(false);
-                                ctx.say(format!("{reply_to} Attempting to reroll the seed, please wait...")).await?;
-                                self.roll_seed(ctx, self.effective_preroll_mode(), self.effective_rando_version(), settings, unlock_spoiler_log, lang, "a", format!("seed")).await;
                             } else if self.official_data.as_ref().and_then(|d| d.event.draft_kind()).is_some() {
-                                // Official draft event — try to reload draft state from DB (allows fixing and retrying after a DB fix)
+                                // Reload the draft from the DB so a configuration repair can be
+                                // retried without restarting the bot.
                                 ctx.say(format!("{reply_to} Attempting to reroll the seed, please wait...")).await?;
                                 let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
                                 let room_url: Url = format!("https://{}{}", racetime_host(), ctx.data().await.url).parse().to_racetime()?;
@@ -4427,8 +4741,23 @@ impl RaceHandler<GlobalState> for Handler {
                                     ctx.say(format!("Sorry {reply_to}, failed to find this race in the database.")).await?;
                                 }
                             } else {
-                                // Goal requires parameters
-                                ctx.say(format!("Sorry {reply_to}, this goal requires settings to be specified. Please use the !seed command with the appropriate parameters to roll a seed.")).await?;
+                                let article = if let French = lang { "une" } else { "a" };
+                                ctx.say(format!("{reply_to} Attempting to reroll the seed, please wait...")).await?;
+                                if let Some(cal_event) = self.official_data.as_ref().map(|data| data.cal_event.clone()) {
+                                    if !self.roll_configured_event_seed(
+                                        ctx,
+                                        cal_event,
+                                        None,
+                                        self.effective_unlock_spoiler_log(false),
+                                        lang,
+                                        article,
+                                        "seed".to_string(),
+                                    ).await {
+                                        ctx.say(format!("Sorry {reply_to}, this event does not have enough seed configuration to reroll automatically. Please contact a tournament organizer.")).await?;
+                                    }
+                                } else {
+                                    ctx.say(format!("Sorry {reply_to}, this room is not associated with a configured event.")).await?;
+                                }
                             }
                         },
                     RaceState::Draft { .. } => ctx.say(format!("Sorry {reply_to}, settings are currently being drafted. Please finish the draft first.")).await?,
@@ -4462,7 +4791,7 @@ impl RaceHandler<GlobalState> for Handler {
         Ok(())
     }
 
-    async fn race_data(&mut self, ctx: &RaceContext<GlobalState>, _old_race_data: RaceData) -> Result<(), Error> {
+    async fn race_data(&mut self, ctx: &RaceContext<GlobalState>, old_race_data: RaceData) -> Result<(), Error> {
         let data = ctx.data().await;
         let lang = self.language();
         if let Some(OfficialRaceData { ref entrants, .. }) = self.official_data {
@@ -4552,7 +4881,9 @@ impl RaceHandler<GlobalState> for Handler {
                     });
                 }
             }
-            RaceStatusValue::Finished => if self.unlock_spoiler_log(ctx).await? {
+            RaceStatusValue::Finished => if self.unlock_spoiler_log(ctx).await?
+                && !matches!(old_race_data.status.value, RaceStatusValue::Finished)
+            {
                 {
                     // Cancel any existing finish timeout if race finishes again
                     if let Some(task) = self.finish_timeout.take() {
@@ -4565,49 +4896,85 @@ impl RaceHandler<GlobalState> for Handler {
                     let ctx_clone = ctx.clone();
                     self.finish_timeout = Some(tokio::spawn(async move {
                         sleep(Duration::from_secs(30)).await;
-                        if !cleaned_up.load(atomic::Ordering::SeqCst) {
-                            if let Some(OfficialRaceData { ref cal_event, ref event, fpa_invoked, breaks_used: official_breaks_used, .. }) = official_data {
-                                let data = ctx_clone.data().await;
-                                // Re-check that race is still finished after the 30 second delay
-                                if let RaceStatusValue::Finished = data.status.value {
-                                    // Use a dummy handler to call official_race_finished
-                                    // We can't call self.official_race_finished directly because we've moved into the closure
-                                    let dummy_handler = Handler {
-                                        official_data: Some(OfficialRaceData {
-                                            cal_event: cal_event.clone(),
-                                            event: event.clone(),
-                                            restreams: HashMap::new(),
-                                            entrants: Vec::new(),
-                                            fpa_invoked,
-                                            breaks_used: official_breaks_used,
-                                        }),
-                                        high_seed_name: String::new(),
-                                        low_seed_name: String::new(),
-                                        breaks: None,
-                                        break_notifications: None,
-                                        fpa_enabled: false,
-                                        locked: false,
-                                        roll_failed: Arc::default(),
-                                        password_sent: false,
-                                        race_state: ArcRwLock::new(RaceState::Init),
-                                        cleaned_up: cleaned_up.clone(),
-                                                                    finish_timeout: None,
-                                    };
-                                    let room_url = format!("https://{}{}", racetime_host(), data.url);
-                                    if let Err(e) = dummy_handler.official_race_finished(&ctx_clone, data, cal_event, event, fpa_invoked, official_breaks_used || breaks_used).await {
-                                        eprintln!("failed to finalize race result reporting for {room_url}: {e}");
-                                        let discord_ctx = ctx_clone.global_state.discord_ctx.read().await;
-                                        match ADMIN_USER.create_dm_channel(&*discord_ctx).await {
-                                            Ok(dm) => if let Err(dm_error) = dm.say(&*discord_ctx, format!("Failed to finalize race result reporting for <{room_url}>: {e}")).await {
-                                                eprintln!("failed to DM admin about final race result reporting failure: {dm_error}");
-                                            },
-                                            Err(dm_error) => eprintln!("failed to open admin DM about final race result reporting failure: {dm_error}"),
-                                        }
+                        let room_url = format!("https://{}{}", racetime_host(), ctx_clone.data().await.url);
+                        if cleaned_up.load(atomic::Ordering::SeqCst) {
+                            log::warn!("skipping race result reporting for {room_url}: race was already cleaned up");
+                            return
+                        }
+                        let Some(OfficialRaceData { ref cal_event, ref event, fpa_invoked, breaks_used: official_breaks_used, .. }) = official_data else {
+                            log::warn!("skipping race result reporting for {room_url}: room is not associated with an official race");
+                            return
+                        };
+                        // The HTTP endpoint can briefly lag behind the WebSocket finish event. Treat
+                        // InProgress as inconclusive for another minute rather than losing the result.
+                        let mut retries_remaining = 12;
+                        let data = loop {
+                            match Self::fresh_race_data(&ctx_clone, &room_url).await {
+                                Ok(data) if matches!(data.status.value, RaceStatusValue::Finished) => break data,
+                                Ok(data) if matches!(data.status.value, RaceStatusValue::InProgress) => {
+                                    if retries_remaining == 0 {
+                                        log::warn!("skipping race result reporting for {room_url}: fresh race status remained InProgress after retries");
+                                        Self::notify_admin(&ctx_clone, format!("The final race status for <{room_url}> remained in progress after retrying. Results were not reported automatically.")).await;
+                                        return
                                     }
-                                    cleaned_up.store(true, atomic::Ordering::SeqCst);
+                                    log::info!("delaying race result reporting for {room_url}: fresh race status is InProgress ({retries_remaining} retries remaining)");
+                                }
+                                Ok(data) => {
+                                    log::warn!("skipping race result reporting for {room_url}: fresh race status is {:?}", data.status.value);
+                                    return
+                                }
+                                Err(e) if retries_remaining > 0 => {
+                                    log::warn!("failed to refresh race data for {room_url}, retrying result confirmation ({retries_remaining} retries remaining): {e}");
+                                }
+                                Err(e) => {
+                                    log::warn!("skipping race result reporting for {room_url}: failed to refresh race data after retries: {e}");
+                                    Self::notify_admin(&ctx_clone, format!("Failed to confirm the final race status for <{room_url}> after retrying: {e}")).await;
+                                    return
                                 }
                             }
+                            retries_remaining -= 1;
+                            sleep(Duration::from_secs(5)).await;
+                        };
+                        // Use a dummy handler to call official_race_finished
+                        // We can't call self.official_race_finished directly because we've moved into the closure
+                        let dummy_handler = Handler {
+                            official_data: Some(OfficialRaceData {
+                                cal_event: cal_event.clone(),
+                                event: event.clone(),
+                                restreams: HashMap::new(),
+                                entrants: Vec::new(),
+                                fpa_invoked,
+                                breaks_used: official_breaks_used,
+                            }),
+                            high_seed_name: String::new(),
+                            low_seed_name: String::new(),
+                            breaks: None,
+                            break_notifications: None,
+                            fpa_enabled: false,
+                            locked: false,
+                            roll_failed: Arc::default(),
+                            password_sent: false,
+                            race_state: ArcRwLock::new(RaceState::Init),
+                            cleaned_up: cleaned_up.clone(),
+                            finish_timeout: None,
+                            discord_event_prestart_check: None,
+                        };
+                        let reporting_started = Instant::now();
+                        log::info!("starting race result reporting for {room_url}");
+                        if let Err(e) = dummy_handler.official_race_finished(&ctx_clone, data, cal_event, event, fpa_invoked, official_breaks_used || breaks_used).await {
+                            let error = format_error_chain(&e);
+                            eprintln!("failed to finalize race result reporting for {room_url}: {error}");
+                            let discord_ctx = ctx_clone.global_state.discord_ctx.read().await;
+                            match ADMIN_USER.create_dm_channel(&*discord_ctx).await {
+                                Ok(dm) => if let Err(dm_error) = dm.say(&*discord_ctx, format!("Failed to finalize race result reporting for <{room_url}>: {error}")).await {
+                                    eprintln!("failed to DM admin about final race result reporting failure: {dm_error}");
+                                },
+                                Err(dm_error) => eprintln!("failed to open admin DM about final race result reporting failure: {dm_error}"),
+                            }
+                        } else {
+                            log::info!("finished race result reporting for {room_url} in {:?}", reporting_started.elapsed());
                         }
+                        cleaned_up.store(true, atomic::Ordering::SeqCst);
                     }));
                 }
             },
@@ -4644,7 +5011,7 @@ impl RaceHandler<GlobalState> for Handler {
                             .bearer_auth(&ctx.global_state.league_api_key)
                             .form(&form);
                         println!("reporting cancel to League website: {:?}", serde_urlencoded::to_string(&form));
-                        request.send().await?.detailed_error_for_status().await.to_racetime()?;
+                        request.send().await.to_racetime()?.detailed_error_for_status().await.to_racetime()?;
                     } else {
                         if let Some(organizer_channel) = event.discord_organizer_channel {
                             organizer_channel.say(&*ctx.global_state.discord_ctx.read().await, MessageBuilder::default()
@@ -4725,7 +5092,13 @@ impl RaceHandler<GlobalState> for Handler {
         Ok(())
     }
 
-    async fn error(&mut self, _: &RaceContext<GlobalState>, mut errors: Vec<String>) -> Result<(), Error> {
+    async fn error(&mut self, ctx: &RaceContext<GlobalState>, mut errors: Vec<String>) -> Result<(), Error> {
+        for error in &errors {
+            // racetime.gg rejects invites (e.g. runner already in another race room, or no stream configured) with "<runner> is not allowed to join this race."
+            if let Some(runner) = error.strip_suffix(" is not allowed to join this race.") {
+                ctx.say(format!("Sorry {runner}, I could not invite you automatically — you may already be in another race room or may not have a stream configured on racetime.gg. Please use the “Request to join” button to join manually.")).await?;
+            }
+        }
         errors.retain(|error|
             !error.ends_with(" is not allowed to join this race.") // failing to invite a user should not crash the race handler
             && !error.ends_with(" is already an entrant.") // failing to invite a user should not crash the race handler
@@ -4736,7 +5109,7 @@ impl RaceHandler<GlobalState> for Handler {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(Error::Server(errors))
+            Err(racetime::handler::ServerErrors(errors).into())
         }
     }
 }
@@ -4914,8 +5287,8 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                     info_user,
                     String::default(),
                     cal_event.is_private_async_part() || cal_event.race.video_urls.is_empty(),
-                ).await.start_with_host(host_info, &access_token, &http_client, &category_slug).await?;
-                let room_url = Url::parse(&format!("https://{}/{}/{}", host_info.hostname, category_slug, race_slug))?;
+                ).await.start_with_host(host_info, &access_token, &http_client, &category_slug).await.to_racetime()?;
+                let room_url = Url::parse(&format!("https://{}/{}/{}", host_info.hostname, category_slug, race_slug)).to_racetime()?;
                 match cal_event.kind {
                     cal::EventKind::Normal => { sqlx::query!("UPDATE races SET room = $1 WHERE id = $2", room_url.to_string(), cal_event.race.id as _).execute(&mut **transaction).await.to_racetime()?; }
                     cal::EventKind::Async1 => { sqlx::query!("UPDATE races SET async_room1 = $1 WHERE id = $2", room_url.to_string(), cal_event.race.id as _).execute(&mut **transaction).await.to_racetime()?; }
@@ -4942,12 +5315,12 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                 });
                 Ok(room_url)
             }
-            Err(Error::Reqwest(e)) if e.status().is_some_and(|status| status.is_server_error()) => {
+            Err(racetime::AuthError::Http(e)) if e.status().is_some_and(|status| status.is_server_error()) => {
                 // racetime.gg's auth endpoint has been known to return server errors intermittently.
                 // In that case, we simply try again in the next iteration of the sleep loop.
                 return Ok(None)
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err(e.into()),
         },
         RaceHandleMode::Discord => {
             let task_clean_shutdown = clean_shutdown.clone();
@@ -5065,6 +5438,16 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
             msg.push(" <");
             msg.push(room_url_fr.to_string());
             msg.push('>');
+            if !cal_event.race.video_urls.is_empty() {
+                msg.push("\nRestreams:");
+                for (language, video_url) in &cal_event.race.video_urls {
+                    msg.push("\n");
+                    msg.push(&language.to_string());
+                    msg.push(": <");
+                    msg.push(video_url.to_string());
+                    msg.push(">");
+                }
+            }
             msg.build()
         } else {
             let info_prefix = if let Some(custom_title) = cal_event.race.custom_title_with_event(&event.display_name) {
@@ -5187,6 +5570,16 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                     msg.push(notification);
                     sqlx::query!("UPDATE races SET notified = TRUE WHERE id = $1", cal_event.race.id as _).execute(&mut **transaction).await.to_racetime()?;
                 },
+            }
+            if !cal_event.race.video_urls.is_empty() {
+                msg.push("\nRestreams:");
+                for (language, video_url) in &cal_event.race.video_urls {
+                    msg.push("\n");
+                    msg.push(&language.to_string());
+                    msg.push(": <");
+                    msg.push(video_url.to_string());
+                    msg.push(">");
+                }
             }
             msg.build()
         }
@@ -5378,13 +5771,23 @@ pub(crate) enum CreateRoomsError {
     #[error(transparent)] Sql(#[from] sqlx::Error),
 }
 
+/// How long to wait for a single Discord API call before treating it as failed.
+///
+/// Without this, a stalled Discord HTTP call (e.g. during a network blip) can hang forever
+/// without ever reaching the retry/error-logging logic below.
+const DISCORD_SEND_TIMEOUT: Duration = Duration::from_secs(15);
+
 async fn try_discord_send<T, F, Fut>(make_request: F, context: &str)
 where
     F: Fn() -> Fut,
     Fut: Future<Output = serenity::Result<T>>,
 {
     for attempt in 0..3u8 {
-        match make_request().await {
+        let result = match timeout(DISCORD_SEND_TIMEOUT, make_request()).await {
+            Ok(result) => result.map_err(|e| e.to_string()),
+            Err(_) => Err(format!("timed out after {DISCORD_SEND_TIMEOUT:?}")),
+        };
+        match result {
             Ok(_) => return,
             Err(e) => {
                 if attempt < 2 {
@@ -5574,13 +5977,19 @@ async fn handle_rooms(global_state: Arc<GlobalState>, shutdown: rocket::Shutdown
                 .host(global_state.host_info.clone())
                 .user_agent(concat!("HyruleTownHall/", env!("CARGO_PKG_VERSION"), " (https://github.com/TreZc0/hyrule-town-hall)"))
                 .scan_races_every(Duration::from_secs(5))
+                .network_timeout(Some(Duration::from_secs(30)))
                 .build().await
             {
                 Ok(bot) => {
                     let sender = bot.extra_room_sender();
                     lock!(@write senders = global_state.extra_room_senders; senders.insert(category_slug.clone(), sender));
                     let handle = tokio::spawn(async move {
-                        let _ = bot.run_until::<Handler, _, _>(shutdown).await;
+                        if let Err(e) = bot.run_until::<Handler, _, _>(shutdown).await {
+                            eprintln!("racetime.gg bot for category '{category_slug}' errored: {e} ({e:?})");
+                            if let Environment::Production = Environment::default() {
+                                log::error!("racetime.gg bot for category '{category_slug}' errored: {e} ({e:?})");
+                            }
+                        }
                     });
                     bot_handles.push(handle);
                 }
@@ -5604,7 +6013,12 @@ async fn handle_rooms(global_state: Arc<GlobalState>, shutdown: rocket::Shutdown
         } else {
             // Wait for all bots to complete
             for handle in bot_handles {
-                let _ = handle.await;
+                if let Err(e) = handle.await {
+                    eprintln!("racetime.gg bot task panicked: {e}");
+                    if let Environment::Production = Environment::default() {
+                        log::error!("racetime.gg bot task panicked: {e}");
+                    }
+                }
             }
             break Ok(())
         }

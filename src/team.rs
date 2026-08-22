@@ -24,6 +24,10 @@ impl Team {
         sqlx::query_as!(Self, r#"SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams WHERE id = $1"#, id as _).fetch_optional(&mut **transaction).await
     }
 
+    pub(crate) async fn from_ids(transaction: &mut Transaction<'_, Postgres>, ids: &[i64]) -> sqlx::Result<Vec<Self>> {
+        sqlx::query_as!(Self, r#"SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams WHERE id = ANY($1)"#, ids).fetch_all(&mut **transaction).await
+    }
+
     pub(crate) async fn from_racetime(transaction: &mut Transaction<'_, Postgres>, series: Series, event: &str, racetime_slug: &str) -> sqlx::Result<Option<Self>> {
         sqlx::query_as!(Self, r#"SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", challonge_id, plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams WHERE series = $1 AND event = $2 AND racetime_slug = $3"#, series as _, event, racetime_slug).fetch_optional(&mut **transaction).await
     }
@@ -87,8 +91,20 @@ impl Team {
     }
 
     pub(crate) async fn to_html(&self, transaction: &mut Transaction<'_, Postgres>, running_text: bool) -> sqlx::Result<RawHtml<String>> {
-        Ok(if let Ok(member) = self.members(transaction).await?.into_iter().exactly_one() {
-            member.to_html()
+        let members = self.members(transaction).await?;
+        Ok(self.to_html_with_single_member(
+            members.as_slice().first().filter(|_| members.len() == 1).map(|member| (member.id, member.display_name())),
+            running_text,
+        ))
+    }
+
+    pub(crate) fn to_html_with_single_member(&self, member: Option<(Id<Users>, &str)>, running_text: bool) -> RawHtml<String> {
+        if let Some((id, display_name)) = member {
+            html! {
+                a(href = uri!(crate::user::profile(id))) {
+                    bdi : display_name;
+                }
+            }
         } else {
             let inner = html! {
                 @if let Some(ref name) = self.name {
@@ -114,7 +130,7 @@ impl Team {
                     : inner;
                 }
             }
-        })
+        }
     }
 
     pub(crate) async fn into_event(self, transaction: &mut Transaction<'_, Postgres>) -> Result<event::Data<'static>, event::DataError> {

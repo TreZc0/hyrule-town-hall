@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE speedgaming_volunteer_exports SET state = 'ambiguous', last_error = 'export process stopped during submission'\n        WHERE state = 'in_progress' AND last_attempt_at < NOW() - INTERVAL '15 minutes'\n    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "386804b966acdc9ba53b7244aa665b83d84f75f2926d6505bd43e7eef8cb7b16"
+}

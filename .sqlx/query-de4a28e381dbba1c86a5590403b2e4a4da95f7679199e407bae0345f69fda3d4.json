@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rsl_seeds SET start = $1 WHERE room = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "de4a28e381dbba1c86a5590403b2e4a4da95f7679199e407bae0345f69fda3d4"
+}

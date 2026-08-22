@@ -53,6 +53,7 @@ mod games;
 mod hash_icon;
 mod hash_icon_db;
 #[macro_use] mod http;
+mod hth_info;
 mod id;
 mod lang;
 mod legal;
@@ -65,6 +66,7 @@ mod racetime_bot;
 mod seed;
 mod series;
 mod sheets;
+mod speedgaming_export;
 mod startgg;
 mod team;
 mod time;
@@ -99,13 +101,13 @@ impl Environment {
 
 
     fn racetime_host(&self) -> &'static str {
-        if self.is_dev() { "rtdev.zeldaspeedruns.com" } else { "racetime.gg" }
+        if self.is_dev() { "rtdev.zsr.gg" } else { "racetime.gg" }
     }
 
     fn base_uri(&self) -> rocket::http::uri::Absolute<'static> {
         match self {
-            Self::Production => uri!("https://hth.zeldaspeedruns.com"),
-            Self::Dev => uri!("https://hthdev.zeldaspeedruns.com"),
+            Self::Production => uri!("https://hyruletownhall.com"),
+            Self::Dev => uri!("https://hthdev.zsr.gg"),
             Self::Local => uri!("http://localhost:24814"),
         }
     }
@@ -153,6 +155,7 @@ enum Error {
     #[error(transparent)] Rocket(#[from] rocket::Error),
     #[error(transparent)] Serenity(#[from] serenity::Error),
     #[error(transparent)] Sql(#[from] sqlx::Error),
+    #[error(transparent)] SpeedGamingExport(#[from] speedgaming_export::Error),
     #[error(transparent)] Task(#[from] tokio::task::JoinError),
     #[error(transparent)] VolunteerRequests(#[from] volunteer_requests::Error),
     #[cfg(unix)] #[error(transparent)] Wheel(#[from] wheel::Error),
@@ -264,11 +267,12 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
         }
 
         let db_pool = PgPoolOptions::default()
-            .max_connections(16)
+            .max_connections(50)
             .connect_with(db_options)
             .await?;
         let seed_metadata = Arc::default();
         let practice_seeds: event::PracticeSeeds = Arc::new(tokio::sync::RwLock::new(HashMap::default()));
+        let race_import_jobs: cal::RaceImportJobs = Arc::new(tokio::sync::RwLock::new(HashMap::default()));
         let ootr_api_client = Arc::new(ootr_web::ApiClient::new(http_client.clone(), config.ootr_api_key.clone(), config.ootr_api_key_encryption.clone()));
         let rocket_builder = http::rocket(
             db_pool.clone(),
@@ -280,6 +284,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             ootr_api_client.clone(),
         ).await?;
         let new_room_lock = Arc::default();
+        let race_import_lock = Arc::default();
         let clean_shutdown = Arc::default();
         // Create a default racetime config for fallback (will be overridden by database-driven credentials)
         let racetime_config = config::ConfigRaceTime {
@@ -288,6 +293,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
         };
         let global_state = Arc::new(racetime_bot::GlobalState::new(
             Arc::clone(&new_room_lock),
+            Arc::clone(&race_import_lock),
             racetime_config,
             db_pool.clone(),
             http_client.clone(),
@@ -304,6 +310,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
         let rocket = rocket_builder
             .manage(Arc::clone(&global_state))
             .manage(Arc::clone(&practice_seeds))
+            .manage(Arc::clone(&race_import_jobs))
             .ignite().await?;
         let discord_builder = discord_bot::configure_builder(discord_builder, global_state.clone(), db_pool.clone(), http_client.clone(), config.clone(), Arc::clone(&new_room_lock), Arc::clone(&clean_shutdown), rocket.shutdown());
         #[cfg(unix)] let unix_listener = unix_socket::listen(rocket.shutdown(), clean_shutdown, global_state.clone());
@@ -312,7 +319,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Ok(Err(e)) => Err(Error::from(e)),
             Err(e) => Err(Error::from(e)),
         });
-        let import_task = tokio::spawn(cal::auto_import_races(db_pool.clone(), http_client.clone(), config, rocket.shutdown(), discord_builder.ctx_fut.clone(), new_room_lock)).map(|res| match res {
+        let import_task = tokio::spawn(cal::auto_import_races(db_pool.clone(), http_client.clone(), config, rocket.shutdown(), discord_builder.ctx_fut.clone(), new_room_lock, race_import_lock)).map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(Error::from(e)),
             Err(e) => Err(Error::Task(e)),
@@ -327,7 +334,17 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
         });
-        let zsr_export_task = tokio::spawn(zsr_export_manager(db_pool.clone(), http_client, rocket.shutdown())).map(|res| match res {
+        let racetime_room_status_task = tokio::spawn(weekly_racetime_room_status_manager(db_pool.clone(), http_client.clone(), rocket.shutdown())).map(|res| match res {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(e),
+            Err(e) => Err(Error::Task(e)),
+        });
+        let zsr_export_task = tokio::spawn(zsr_export_manager(db_pool.clone(), http_client.clone(), rocket.shutdown())).map(|res| match res {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(e),
+            Err(e) => Err(Error::Task(e)),
+        });
+        let speedgaming_export_task = tokio::spawn(speedgaming_export_manager(db_pool.clone(), http_client, rocket.shutdown())).map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
@@ -358,7 +375,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Err(e) => Err(Error::from(e)),
         });
         #[cfg(not(unix))] let unix_socket_task = future::ok(());
-        let ((), (), (), (), (), (), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, async_race_task, volunteer_request_task, zsr_export_task, weekly_race_task, deadline_task, rocket_task, unix_socket_task)?;
+        let ((), (), (), (), (), (), (), (), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, async_race_task, racetime_room_status_task, volunteer_request_task, zsr_export_task, speedgaming_export_task, weekly_race_task, deadline_task, rocket_task, unix_socket_task)?;
     }
     Ok(())
 }
@@ -384,6 +401,25 @@ async fn async_race_manager(
         }
     }
 
+    Ok(())
+}
+
+async fn weekly_racetime_room_status_manager(
+    db_pool: PgPool,
+    http_client: reqwest::Client,
+    shutdown: rocket::Shutdown,
+) -> Result<(), Error> {
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                if let Err(error) = cal::reconcile_weekly_racetime_room_statuses(&db_pool, &http_client).await {
+                    log::error!("failed to reconcile weekly racetime room statuses: {error}");
+                }
+            }
+            _ = shutdown.clone() => break,
+        }
+    }
     Ok(())
 }
 
@@ -429,6 +465,28 @@ async fn zsr_export_manager(
             _ = interval.tick() => {
                 if let Err(e) = zsr_export::check_and_sync_all_exports(&db_pool, &http_client).await {
                     eprintln!("Error syncing ZSR exports: {}", e);
+                }
+            }
+            _ = shutdown.clone() => break,
+        }
+    }
+
+    Ok(())
+}
+
+/// Background task for exporting races and volunteer requests to SpeedGaming.
+async fn speedgaming_export_manager(
+    db_pool: PgPool,
+    http_client: reqwest::Client,
+    shutdown: rocket::Shutdown,
+) -> Result<(), Error> {
+    let mut interval = tokio::time::interval(Duration::from_secs(5 * 60));
+
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                if let Err(error) = speedgaming_export::check_and_sync_all_exports(&db_pool, &http_client).await {
+                    eprintln!("Error syncing SpeedGaming exports: {error}");
                 }
             }
             _ = shutdown.clone() => break,

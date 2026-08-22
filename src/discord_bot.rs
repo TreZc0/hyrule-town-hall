@@ -3,6 +3,7 @@ use {
         config::ConfigRaceTime,
         prelude::*,
         racetime_bot::{CleanShutdown, GlobalState},
+        speedgaming_export,
         async_race::{self, Error as AsyncRaceError},
         volunteer_requests,
     }, serenity::all::{
@@ -24,6 +25,7 @@ use {
         EditInteractionResponse,
         EditMessage,
         EditRole,
+        EditThread,
         InputTextStyle,
     }, serenity_utils::{
         builder::ErrorNotifier,
@@ -188,6 +190,15 @@ impl TypeMapKey for NewRoomLock {
     type Value = Arc<Mutex<()>>;
 }
 
+/// Holds the `link`/vod value from a `/result-async` invocation while the organizer
+/// confirms an override via button click, since the vod URL can't be safely encoded
+/// into the button's `custom_id` (which is parsed by splitting on `_`).
+enum PendingAsyncVod {}
+
+impl TypeMapKey for PendingAsyncVod {
+    type Value = Arc<tokio::sync::Mutex<HashMap<u64, Option<String>>>>;
+}
+
 
 
 #[derive(Clone, Copy)]
@@ -201,6 +212,7 @@ pub(crate) struct CommandIds {
     post_status: CommandId,
     pronoun_roles: CommandId,
     racing_role: CommandId,
+    reset_async: CommandId,
     reset_race: CommandId,
     restart_room: CommandId,
     pub(crate) schedule: CommandId,
@@ -593,8 +605,182 @@ async fn apply_live_schedule(
     Ok(())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SchedulingRaceFilter {
+    Upcoming,
+    UnplayedAsyncPart,
+}
+
+fn async_part_for_team(race: &Race, team: &Team) -> Option<u8> {
+    race.teams()
+        .position(|race_team| race_team == team)
+        .and_then(|index| u8::try_from(index + 1).ok())
+}
+
+async fn async_part_has_been_played(transaction: &mut Transaction<'_, Postgres>, race: &Race, async_part: u8) -> sqlx::Result<bool> {
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+            SELECT 1 FROM async_times
+            WHERE race_id = $1
+            AND async_part = $2
+            AND (start_time IS NOT NULL OR player_finished_at IS NOT NULL)
+        ) AS "played!""#,
+        race.id as _,
+        async_part as i32,
+    ).fetch_one(&mut **transaction).await
+}
+
+fn canceled_async_thread_name(name: &str) -> String {
+    const SUFFIX: &str = " (canceled)";
+    const DISCORD_NAME_LIMIT: usize = 100;
+    if name.ends_with(SUFFIX) {
+        return name.to_owned()
+    }
+    let mut canceled_name = name.chars().take(DISCORD_NAME_LIMIT - SUFFIX.chars().count()).collect::<String>();
+    canceled_name.push_str(SUFFIX);
+    canceled_name
+}
+
+async fn reset_async_command(ctx: &DiscordCtx, interaction: &CommandInteraction) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut participant = None;
+    let mut game = None;
+    for option in &interaction.data.options {
+        match (&*option.name, &option.value) {
+            ("participant", CommandDataOptionValue::User(user_id)) => participant = Some(*user_id),
+            ("game", CommandDataOptionValue::Integer(value)) => game = Some(i16::try_from(*value).expect("game number out of range")),
+            (name, _) => panic!("unexpected option for /reset-async: {name}"),
+        }
+    }
+    let participant = participant.expect("required participant missing from /reset-async");
+
+    let (mut transaction, http_client) = {
+        let data = ctx.data.read().await;
+        (
+            data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?,
+            data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
+        )
+    };
+    let races = Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), game, true).await?;
+    let race = match races.into_iter().at_most_one() {
+        Ok(Some(race)) => race,
+        Ok(None) => {
+            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                .ephemeral(true)
+                .content(if game.is_some() {
+                    "Sorry, there is no race with that game number in this scheduling thread."
+                } else {
+                    "Sorry, this is not a race scheduling thread."
+                })
+            )).await?;
+            transaction.rollback().await?;
+            return Ok(())
+        }
+        Err(_) => {
+            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                .ephemeral(true)
+                .content("This thread has multiple games. Please specify the game number.")
+            )).await?;
+            transaction.rollback().await?;
+            return Ok(())
+        }
+    };
+    let event = race.event(&mut transaction).await?;
+    let is_organizer = event.organizers(&mut transaction).await?.into_iter()
+        .any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
+    if !is_organizer {
+        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+            .ephemeral(true)
+            .content("Sorry, only event organizers can use this command.")
+        )).await?;
+        transaction.rollback().await?;
+        return Ok(())
+    }
+    if !matches!(race.schedule, RaceSchedule::Async { .. }) {
+        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+            .ephemeral(true)
+            .content("The selected game does not currently have an async part to reset.")
+        )).await?;
+        transaction.rollback().await?;
+        return Ok(())
+    }
+
+    let mut target_part = None;
+    for (index, team) in race.teams().enumerate() {
+        if team.members(&mut transaction).await?.into_iter()
+            .any(|member| member.discord.is_some_and(|discord| discord.id == participant))
+        {
+            target_part = u8::try_from(index + 1).ok();
+            break
+        }
+    }
+    let Some(async_part) = target_part else {
+        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+            .ephemeral(true)
+            .content("That user is not a participant in the selected game.")
+        )).await?;
+        transaction.rollback().await?;
+        return Ok(())
+    };
+
+    let (thread_id, scheduled, seed_released, ready): (Option<i64>, bool, bool, bool) = match async_part {
+        1 => sqlx::query_as("SELECT async_thread1, async_start1 IS NOT NULL, async_seed1, async_ready1 FROM races WHERE id = $1 FOR UPDATE"),
+        2 => sqlx::query_as("SELECT async_thread2, async_start2 IS NOT NULL, async_seed2, async_ready2 FROM races WHERE id = $1 FOR UPDATE"),
+        3 => sqlx::query_as("SELECT async_thread3, async_start3 IS NOT NULL, async_seed3, async_ready3 FROM races WHERE id = $1 FOR UPDATE"),
+        _ => unreachable!("race has more than three async parts"),
+    }
+        .bind(i64::from(race.id))
+        .fetch_one(&mut *transaction)
+        .await?;
+    let played = async_part_has_been_played(&mut transaction, &race, async_part).await?;
+    if seed_released || ready || played {
+        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+            .ephemeral(true)
+            .content("That async part cannot be reset because its seed has already been released or its run has started.")
+        )).await?;
+        transaction.rollback().await?;
+        return Ok(())
+    }
+    if !scheduled && thread_id.is_none() {
+        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+            .ephemeral(true)
+            .content("That participant's async part is already unscheduled.")
+        )).await?;
+        transaction.rollback().await?;
+        return Ok(())
+    }
+
+    let update = match async_part {
+        1 => "UPDATE races SET async_start1 = NULL, async_end1 = NULL, async_room1 = NULL, async_thread1 = NULL, async_seed1 = FALSE, async_ready1 = FALSE, async_notified_1 = FALSE, schedule_updated_at = NOW() WHERE id = $1",
+        2 => "UPDATE races SET async_start2 = NULL, async_end2 = NULL, async_room2 = NULL, async_thread2 = NULL, async_seed2 = FALSE, async_ready2 = FALSE, async_notified_2 = FALSE, schedule_updated_at = NOW() WHERE id = $1",
+        3 => "UPDATE races SET async_start3 = NULL, async_end3 = NULL, async_room3 = NULL, async_thread3 = NULL, async_seed3 = FALSE, async_ready3 = FALSE, async_notified_3 = FALSE, schedule_updated_at = NOW() WHERE id = $1",
+        _ => unreachable!("race has more than three async parts"),
+    };
+    sqlx::query(update).bind(i64::from(race.id)).execute(&mut *transaction).await?;
+    sqlx::query("DELETE FROM async_times WHERE race_id = $1 AND async_part = $2")
+        .bind(i64::from(race.id))
+        .bind(i32::from(async_part))
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+
+    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+        .ephemeral(false)
+        .content(format!("<@{}>'s async part{} has been reset and can now be scheduled again.", participant.get(), race.game.map_or(String::new(), |game| format!(" for Game {game}"))))
+    )).await?;
+    if let Some(thread_id) = thread_id {
+        let thread = ChannelId::new(thread_id as u64);
+        if let Ok(Channel::Guild(channel)) = thread.to_channel(ctx).await {
+            let _ = thread.edit_thread(ctx, EditThread::new().name(canceled_async_thread_name(&channel.name))).await;
+        }
+        let _ = thread.say(ctx,
+            "This async part was reset by an organizer. The buttons in this thread are no longer valid; use the match scheduling thread to choose a new time."
+        ).await;
+    }
+    Ok(())
+}
+
 //TODO refactor (MH admins should have permissions, room already being open should not remove permissions but only remove the team from return)
-async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction, game: Option<i16>, allow_rooms_for_other_teams: bool, alternative_instructions: Option<&str>, already_deferred: bool, skip_room_check: bool) -> Result<Option<(Transaction<'a, Postgres>, Race, Option<Team>)>, Box<dyn std::error::Error + Send + Sync>> {
+async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction, game: Option<i16>, allow_rooms_for_other_teams: bool, alternative_instructions: Option<&str>, already_deferred: bool, skip_room_check: bool, race_filter: SchedulingRaceFilter) -> Result<Option<(Transaction<'a, Postgres>, Race, Option<Team>)>, Box<dyn std::error::Error + Send + Sync>> {
     let (mut transaction, http_client) = {
         let data = ctx.data.read().await;
         (
@@ -603,6 +789,27 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
         )
     };
     let mut applicable_races = Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), game, false).await?;
+    let mut filtered_out_played_async = false;
+    if race_filter == SchedulingRaceFilter::UnplayedAsyncPart && game.is_none() {
+        let mut unplayed_races = Vec::with_capacity(applicable_races.len());
+        for race in applicable_races {
+            let mut async_part = None;
+            for (index, team) in race.teams().enumerate() {
+                if team.members(&mut transaction).await?.into_iter().any(|member| member.discord.is_some_and(|discord| discord.id == interaction.user_id())) {
+                    async_part = u8::try_from(index + 1).ok();
+                    break
+                }
+            }
+            if let Some(async_part) = async_part {
+                if async_part_has_been_played(&mut transaction, &race, async_part).await? {
+                    filtered_out_played_async = true;
+                    continue
+                }
+            }
+            unplayed_races.push(race);
+        }
+        applicable_races = unplayed_races;
+    }
     if let Some(Some(min_game)) = applicable_races.iter().map(|race| race.game).min() {
         // None < Some(_) so this code only runs if all applicable races are best-of-N
         applicable_races.retain(|race| race.game == Some(min_game));
@@ -613,6 +820,21 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
                 .expect("interaction called from outside registered guild")
                 .expect("interaction called from guild with conflicting draft kinds");
             let mut content = MessageBuilder::default();
+            if filtered_out_played_async {
+                content.push("Sorry, you don't have any remaining unplayed async games in this thread.");
+                if already_deferred {
+                    interaction.edit_response(ctx, EditInteractionResponse::new()
+                        .content(content.build())
+                    ).await?;
+                } else {
+                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                        .ephemeral(true)
+                        .content(content.build())
+                    )).await?;
+                }
+                transaction.rollback().await?;
+                return Ok(None)
+            }
             match (Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), game, true).await?.is_empty(), game.is_some()) {
                 (false, false) => {
                     content.push("Sorry, this thread is not associated with any upcoming races. ");
@@ -701,7 +923,7 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
 }
 
 async fn check_draft_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction) -> Result<Option<(event::Data<'static>, Race, draft::Kind, draft::MessageContext<'a>)>, Box<dyn std::error::Error + Send + Sync>> {
-    let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, Some("You can continue the draft in the race room"), false, true).await? else { return Ok(None) };
+    let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, Some("You can continue the draft in the race room"), false, true, SchedulingRaceFilter::Upcoming).await? else { return Ok(None) };
     let guild_id = interaction.guild_id().expect("Received interaction from outside of a guild");
     let event = race.event(&mut transaction).await?;
     Ok(if let Some(team) = team {
@@ -1046,6 +1268,24 @@ mod tests {
     }
 
     #[test]
+    fn canceled_async_thread_name_adds_suffix() {
+        assert_eq!(canceled_async_thread_name("Async: Zelda"), "Async: Zelda (canceled)");
+    }
+
+    #[test]
+    fn canceled_async_thread_name_does_not_duplicate_suffix() {
+        assert_eq!(canceled_async_thread_name("Async: Zelda (canceled)"), "Async: Zelda (canceled)");
+    }
+
+    #[test]
+    fn canceled_async_thread_name_respects_discord_limit() {
+        let name = "a".repeat(100);
+        let canceled = canceled_async_thread_name(&name);
+        assert_eq!(canceled.chars().count(), 100);
+        assert!(canceled.ends_with(" (canceled)"));
+    }
+
+    #[test]
     fn discord_timestamp_accepts_hammertime_short_suffix() {
         assert_eq!(
             parse_timestamp("<t:1784005200:s>"),
@@ -1115,6 +1355,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
         .data::<StartggToken>(config.startgg)
         .data::<ChallongeApiKey>(config.challonge_api_key.clone())
         .data::<NewRoomLock>(new_room_lock)
+        .data::<PendingAsyncVod>(Arc::new(tokio::sync::Mutex::new(HashMap::new())))
         .data::<CleanShutdown>(clean_shutdown)
         .on_guild_create(false, |ctx, guild, _| Box::pin(async move {
             let mut transaction = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?;
@@ -1351,6 +1592,31 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     .required(false)
                 );
                 commands.push(command);
+                idx
+            };
+            let reset_async = {
+                let idx = commands.len();
+                commands.push(CreateCommand::new("reset-async")
+                    .kind(CommandType::ChatInput)
+                    .add_context(InteractionContext::Guild)
+                    .description("Resets one participant's unplayed async part. Only for organizers.")
+                    .add_option(CreateCommandOption::new(
+                        CommandOptionType::User,
+                        "participant",
+                        "The participant whose async part should be reset.",
+                    )
+                        .required(true)
+                    )
+                    .add_option(CreateCommandOption::new(
+                        CommandOptionType::Integer,
+                        "game",
+                        "The game number within the match. Required when the thread has multiple games.",
+                    )
+                        .min_int_value(1)
+                        .max_int_value(255)
+                        .required(false)
+                    )
+                );
                 idx
             };
             let restart_room = {
@@ -1620,6 +1886,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                 post_status: commands[post_status].id,
                 pronoun_roles: commands[pronoun_roles].id,
                 racing_role: commands[racing_role].id,
+                reset_async: commands[reset_async].id,
                 reset_race: commands[reset_race].id,
                 restart_room: commands[restart_room].id,
                 schedule: commands[schedule].id,
@@ -1647,7 +1914,14 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
             match interaction {
                 Interaction::Command(interaction) => {
                     let guild_id = interaction.guild_id.expect("Discord slash command called outside of a guild");
-                    if let Some(&Some(command_ids)) = ctx.data.read().await.get::<CommandIds>().and_then(|command_ids| command_ids.get(&guild_id)) {
+                    let command_ids = {
+                        let data = ctx.data.read().await;
+                        data.get::<CommandIds>()
+                            .and_then(|command_ids| command_ids.get(&guild_id))
+                            .copied()
+                            .flatten()
+                    };
+                    if let Some(command_ids) = command_ids {
                         if Some(interaction.data.id) == command_ids.ban {
                             send_draft_settings_page(ctx, interaction, "ban", 0).await?;
                         } else if interaction.data.id == command_ids.delete_after {
@@ -1774,7 +2048,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         } else if Some(interaction.data.id) == command_ids.no {
                             draft_action(ctx, interaction, draft::Action::BooleanChoice(false), None).await?;
                         } else if interaction.data.id == command_ids.post_status {
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false, false).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false, false, SchedulingRaceFilter::Upcoming).await? {
                                 let event = race.event(&mut transaction).await?;
                                 if event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id)) {
                                     if let Some(draft_kind) = event.draft_kind() {
@@ -1876,6 +2150,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 )
                                 .button(CreateButton::new("racingrole").label("racing"))
                             )).await?;
+                        } else if interaction.data.id == command_ids.reset_async {
+                            reset_async_command(ctx, interaction).await?;
                         } else if interaction.data.id == command_ids.reset_race {
                             let Some(_parent_channel) = interaction.channel.as_ref().and_then(|thread| thread.parent_id) else {
                                 interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -2305,11 +2581,11 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 .ephemeral(false)
                             )).await?;
 
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, false, None, true, false).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, false, None, true, false, SchedulingRaceFilter::Upcoming).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
-                                if let Some(speedgaming_slug) = &event.speedgaming_slug {
+                                if speedgaming_export::LEGACY_IMPORT_ENABLED && let Some(speedgaming_slug) = &event.speedgaming_slug {
                                     let response_content = if was_scheduled {
                                         format!("Please contact a tournament organizer to reschedule this race.")
                                     } else {
@@ -2461,11 +2737,21 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 CommandDataOptionValue::Integer(game) => i16::try_from(game).expect("game number out of range"),
                                 _ => panic!("unexpected slash command option type"),
                             });
-                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None, false, false).await? {
+                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None, false, false, SchedulingRaceFilter::UnplayedAsyncPart).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
-                                if let Some(speedgaming_slug) = &event.speedgaming_slug {
+                                if event.automated_asyncs && event.discord_async_channel.is_none() {
+                                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content(if let French = event.language {
+                                            format!("Désolé, la planification automatique des asyncs est mal configurée pour cet événement (canal Discord manquant). Merci de contacter un organisateur du tournoi.")
+                                        } else {
+                                            format!("Sorry, automated async scheduling is misconfigured for this event (missing Discord channel). Please contact a tournament organizer.")
+                                        })
+                                    )).await?;
+                                    transaction.rollback().await?;
+                                } else if speedgaming_export::LEGACY_IMPORT_ENABLED && let Some(speedgaming_slug) = &event.speedgaming_slug {
                                     let response_content = if was_scheduled {
                                         format!("Please contact a tournament organizer to reschedule this race.")
                                     } else {
@@ -2481,6 +2767,21 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     )).await?;
                                     transaction.rollback().await?;
                                 } else if team.is_some() && event.asyncs_allowed() || is_organizer {
+                                        if let Some(ref team) = team {
+                                            let async_part = async_part_for_team(&race, team).expect("participant team missing from race entrants");
+                                            if async_part_has_been_played(&mut transaction, &race, async_part).await? {
+                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                                    .ephemeral(true)
+                                                    .content(if let Some(game) = race.game {
+                                                        format!("Sorry, your part of Game {game} has already started and can no longer be rescheduled.")
+                                                    } else {
+                                                        "Sorry, your part of this async has already started and can no longer be rescheduled.".to_owned()
+                                                    })
+                                                )).await?;
+                                                transaction.rollback().await?;
+                                                return Ok(())
+                                            }
+                                        }
                                         let start = match interaction.data.options[0].value {
                                             CommandDataOptionValue::String(ref start) => start,
                                             _ => panic!("unexpected slash command option type"),
@@ -2946,10 +3247,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             interaction.create_response(ctx, CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()
                                 .ephemeral(false)
                             )).await?;
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None, true, false).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None, true, false, SchedulingRaceFilter::UnplayedAsyncPart).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
-                                if event.speedgaming_slug.is_some() {
+                                if speedgaming_export::LEGACY_IMPORT_ENABLED && event.speedgaming_slug.is_some() {
                                     interaction.edit_response(ctx, EditInteractionResponse::new()
                                         .content("Please contact a tournament organizer to reschedule this race.")
                                     ).await?;
@@ -3024,7 +3325,22 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                 })
                                             ).await?;
                                         }
-                                        RaceSchedule::Async { .. } => match race.entrants {
+                                        RaceSchedule::Async { .. } => {
+                                            if let Some(ref team) = team {
+                                                let async_part = async_part_for_team(&race, team).expect("participant team missing from race entrants");
+                                                if async_part_has_been_played(&mut transaction, &race, async_part).await? {
+                                                    interaction.edit_response(ctx, EditInteractionResponse::new()
+                                                        .content(if let Some(game) = race.game {
+                                                            format!("Sorry, your part of Game {game} has already started and can no longer be removed from the schedule.")
+                                                        } else {
+                                                            "Sorry, your part of this async has already started and can no longer be removed from the schedule.".to_owned()
+                                                        })
+                                                    ).await?;
+                                                    transaction.rollback().await?;
+                                                    return Ok(())
+                                                }
+                                            }
+                                            match race.entrants {
                                             Entrants::Two([Entrant::MidosHouseTeam(ref team1), Entrant::MidosHouseTeam(ref team2)]) => {
                                                 if team.as_ref().is_some_and(|team| team1 == team) {
                                                     sqlx::query!("UPDATE races SET async_start1 = NULL, schedule_updated_at = NOW() WHERE id = $1", race.id as _).execute(&mut *transaction).await?;
@@ -3069,8 +3385,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                     })
                                                 ).await?;
                                             }
-                                            _ => panic!("found race with not 2 or 3 MH teams scheduled as async"),
-                                        },
+                                                _ => panic!("found race with not 2 or 3 MH teams scheduled as async"),
+                                            }
+                                        }
                                     }
                                 } else {
                                     interaction.edit_response(ctx, EditInteractionResponse::new()
@@ -3155,7 +3472,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         } else if Some(interaction.data.id) == command_ids.skip {
                             draft_action(ctx, interaction, draft::Action::Skip, None).await?;
                         } else if interaction.data.id == command_ids.status {
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false, false).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false, false, SchedulingRaceFilter::Upcoming).await? {
                                 let event = race.event(&mut transaction).await?;
                                 if let Some(draft_kind) = event.draft_kind() {
                                     if let Some(ref draft) = race.draft {
@@ -3423,7 +3740,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                     } else if let Some((setting, value)) = custom_id.strip_prefix("draft_option_").and_then(|setting_value| setting_value.split_once("__")) {
                         draft_action(ctx, interaction, draft::Action::Pick { setting: setting.to_owned(), value: value.to_owned() }, None).await?;
                     } else if custom_id == "draft_start" {
-                        let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, None, false, false).await? else { return Ok(()) };
+                        let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, None, false, false, SchedulingRaceFilter::Upcoming).await? else { return Ok(()) };
                         if team.is_none() {
                             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                 .ephemeral(true)
@@ -3518,6 +3835,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 AsyncRaceError::AlreadyStarted => "The countdown has already been started.",
                                 AsyncRaceError::NotStarted => "You must start the countdown before finishing.",
                                 AsyncRaceError::AlreadyFinished => "You have already finished this race.",
+                                AsyncRaceError::ResetAsyncPart => "This async part was reset. Please schedule a new time in the match thread.",
                                 _ => { eprintln!("Async button error: {:?}", e); "An error occurred." },
                             };
                             if interaction.edit_response(ctx, EditInteractionResponse::new().content(error_msg)).await.is_err() {
@@ -3526,21 +3844,26 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 )).await;
                             }
                         }
-                    } else if custom_id == "async_override_cancel" {
+                    } else if custom_id == "async_override_cancel" || custom_id.starts_with("async_override_cancel_") {
+                        if let Some(nonce) = custom_id.strip_prefix("async_override_cancel_").and_then(|nonce| nonce.parse().ok()) {
+                            pending_async_vods(ctx).await.lock().await.remove(&nonce);
+                        }
                         interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                             CreateInteractionResponseMessage::new()
                                 .content("Override cancelled.")
                                 .components(vec![])
                         )).await?;
                     } else if let Some(params) = custom_id.strip_prefix("async_override_result_") {
-                        // Confirm override of an existing async result: params = {race_id}_{async_part}_{total_seconds}
-                        if let Some((race_part_str, seconds_str)) = params.rsplit_once('_') {
-                            if let Some((race_id_str, async_part_str)) = race_part_str.rsplit_once('_') {
-                                if let (Ok(race_id), Ok(async_part), Ok(total_seconds)) = (
-                                    race_id_str.parse::<i64>(),
-                                    async_part_str.parse::<i32>(),
-                                    seconds_str.parse::<i64>(),
-                                ) {
+                        // Confirm override of an existing async result: params = {race_id}_{async_part}_{total_seconds}_{nonce}
+                        if let Some((result_params, nonce_str)) = params.rsplit_once('_') {
+                            if let Some((race_part_str, seconds_str)) = result_params.rsplit_once('_') {
+                                if let Some((race_id_str, async_part_str)) = race_part_str.rsplit_once('_') {
+                                    if let (Ok(race_id), Ok(async_part), Ok(total_seconds), Ok(nonce)) = (
+                                        race_id_str.parse::<i64>(),
+                                        async_part_str.parse::<i32>(),
+                                        seconds_str.parse::<i64>(),
+                                        nonce_str.parse::<u64>(),
+                                    ) {
                                     interaction.create_response(ctx, CreateInteractionResponse::Defer(
                                         CreateInteractionResponseMessage::new()
                                     )).await?;
@@ -3552,11 +3875,13 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         return Ok(());
                                     };
                                     let pg_interval = PgInterval { months: 0, days: 0, microseconds: total_seconds * 1_000_000 };
+                                    let link = pending_async_vods(ctx).await.lock().await.remove(&nonce).flatten();
 
                                     sqlx::query!(
-                                        "UPDATE async_times SET finish_time = $1, recorded_at = NOW(), recorded_by = $2 WHERE race_id = $3 AND async_part = $4",
+                                        "UPDATE async_times SET finish_time = $1, recorded_at = NOW(), recorded_by = $2, link = $3 WHERE race_id = $4 AND async_part = $5",
                                         pg_interval,
                                         user.id as _,
+                                        link,
                                         race_id,
                                         async_part,
                                     ).execute(&mut *transaction).await?;
@@ -3576,17 +3901,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         .content(format!("Override confirmed. Time recorded for {} half: {:02}:{:02}:{:02}", ordinal, h, m, s))
                                         .components(vec![])
                                     ).await?;
-                                    async_race::clear_message_with_button(ctx, interaction.channel_id, &format!("async_override_result_{}_{}_{}", race_id, async_part, total_seconds)).await;
+                                    async_race::clear_message_with_button(ctx, interaction.channel_id, custom_id).await;
+                                    }
                                 }
                             }
                         }
                     } else if let Some(params) = custom_id.strip_prefix("async_override_forfeit_") {
-                        // Confirm override of existing async result with a forfeit: params = {race_id}_{async_part}
-                        if let Some((race_id_str, async_part_str)) = params.rsplit_once('_') {
-                            if let (Ok(race_id), Ok(async_part)) = (race_id_str.parse::<i64>(), async_part_str.parse::<i32>()) {
-                                interaction.create_response(ctx, CreateInteractionResponse::Defer(
-                                    CreateInteractionResponseMessage::new()
-                                )).await?;
+                        // Confirm override of existing async result with a forfeit: params = {race_id}_{async_part}_{nonce}
+                        if let Some((race_part_str, nonce_str)) = params.rsplit_once('_') {
+                            if let Some((race_id_str, async_part_str)) = race_part_str.rsplit_once('_') {
+                                if let (Ok(race_id), Ok(async_part), Ok(nonce)) = (race_id_str.parse::<i64>(), async_part_str.parse::<i32>(), nonce_str.parse::<u64>()) {
+                                    interaction.create_response(ctx, CreateInteractionResponse::Defer(
+                                        CreateInteractionResponseMessage::new()
+                                    )).await?;
 
                                 let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
                                 let mut transaction = pool.begin().await?;
@@ -3595,9 +3922,12 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     return Ok(());
                                 };
 
+                                let link = pending_async_vods(ctx).await.lock().await.remove(&nonce).flatten();
+
                                 sqlx::query!(
-                                    "UPDATE async_times SET finish_time = NULL, recorded_at = NOW(), recorded_by = $1 WHERE race_id = $2 AND async_part = $3",
+                                    "UPDATE async_times SET finish_time = NULL, recorded_at = NOW(), recorded_by = $1, link = $2 WHERE race_id = $3 AND async_part = $4",
                                     user.id as _,
+                                    link,
                                     race_id,
                                     async_part,
                                 ).execute(&mut *transaction).await?;
@@ -3614,18 +3944,21 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     .content(format!("Override confirmed. Forfeit recorded for {} half.", ordinal))
                                     .components(vec![])
                                 ).await?;
-                                async_race::clear_message_with_button(ctx, interaction.channel_id, &format!("async_override_forfeit_{}_{}", race_id, async_part)).await;
+                                async_race::clear_message_with_button(ctx, interaction.channel_id, custom_id).await;
+                                }
                             }
                         }
                     } else if let Some(params) = custom_id.strip_prefix("async_override_qualifier_result_") {
-                        // Confirm override of existing qualifier result: params = {team_id}_{kind_int}_{total_seconds}
-                        if let Some((team_kind_str, seconds_str)) = params.rsplit_once('_') {
-                            if let Some((team_id_str, kind_str)) = team_kind_str.rsplit_once('_') {
-                                if let (Ok(team_id), Ok(kind_int), Ok(total_seconds)) = (
-                                    team_id_str.parse::<u64>(),
-                                    kind_str.parse::<i32>(),
-                                    seconds_str.parse::<i64>(),
-                                ) {
+                        // Confirm override of existing qualifier result: params = {team_id}_{kind_int}_{total_seconds}_{nonce}
+                        if let Some((result_params, nonce_str)) = params.rsplit_once('_') {
+                            if let Some((team_kind_str, seconds_str)) = result_params.rsplit_once('_') {
+                                if let Some((team_id_str, kind_str)) = team_kind_str.rsplit_once('_') {
+                                    if let (Ok(team_id), Ok(kind_int), Ok(total_seconds), Ok(nonce)) = (
+                                        team_id_str.parse::<u64>(),
+                                        kind_str.parse::<i32>(),
+                                        seconds_str.parse::<i64>(),
+                                        nonce_str.parse::<u64>(),
+                                    ) {
                                     if let Some(async_kind) = AsyncKind::from_i32(kind_int) {
                                         interaction.create_response(ctx, CreateInteractionResponse::Defer(
                                             CreateInteractionResponseMessage::new()
@@ -3638,6 +3971,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             return Ok(());
                                         };
                                         let pg_interval = PgInterval { months: 0, days: 0, microseconds: total_seconds * 1_000_000 };
+                                        let link = pending_async_vods(ctx).await.lock().await.remove(&nonce).flatten();
                                         sqlx::query!(
                                             "UPDATE async_teams SET submitted = NOW(), finish_time = $1 WHERE team = $2 AND kind = $3",
                                             pg_interval,
@@ -3649,12 +3983,13 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         let members = team.members(&mut transaction).await?;
                                         for member in &members {
                                             sqlx::query!(
-                                                "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, $5, NULL) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
+                                                "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
                                                 team.series as _,
                                                 team.event,
                                                 member.id as _,
                                                 async_kind as _,
                                                 pg_interval,
+                                                link,
                                             ).execute(&mut *transaction).await?;
                                         }
 
@@ -3668,16 +4003,18 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                             .content(format!("Override confirmed. Time recorded for {}: {:02}:{:02}:{:02}", team_name, h, m, s))
                                             .components(vec![])
                                         ).await?;
-                                        async_race::clear_message_with_button(ctx, interaction.channel_id, &format!("async_override_qualifier_result_{}_{}_{}", team_id, kind_int, total_seconds)).await;
+                                        async_race::clear_message_with_button(ctx, interaction.channel_id, custom_id).await;
+                                        }
                                     }
                                 }
                             }
                         }
                     } else if let Some(params) = custom_id.strip_prefix("async_override_qualifier_forfeit_") {
-                        // Confirm override of existing qualifier result with a forfeit: params = {team_id}_{kind_int}
-                        if let Some((team_id_str, kind_str)) = params.rsplit_once('_') {
-                            if let (Ok(team_id), Ok(kind_int)) = (team_id_str.parse::<u64>(), kind_str.parse::<i32>()) {
-                                if let Some(async_kind) = AsyncKind::from_i32(kind_int) {
+                        // Confirm override of existing qualifier result with a forfeit: params = {team_id}_{kind_int}_{nonce}
+                        if let Some((team_kind_str, nonce_str)) = params.rsplit_once('_') {
+                            if let Some((team_id_str, kind_str)) = team_kind_str.rsplit_once('_') {
+                                if let (Ok(team_id), Ok(kind_int), Ok(nonce)) = (team_id_str.parse::<u64>(), kind_str.parse::<i32>(), nonce_str.parse::<u64>()) {
+                                    if let Some(async_kind) = AsyncKind::from_i32(kind_int) {
                                     interaction.create_response(ctx, CreateInteractionResponse::Defer(
                                         CreateInteractionResponseMessage::new()
                                     )).await?;
@@ -3688,6 +4025,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     let Some(_user) = verify_organizer_for_button(ctx, &interaction, &mut transaction).await? else {
                                         return Ok(());
                                     };
+
+                                    pending_async_vods(ctx).await.lock().await.remove(&nonce);
 
                                     sqlx::query!(
                                         "UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND kind = $2",
@@ -3714,12 +4053,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         .content(format!("Override confirmed. Forfeit recorded for {}.", team_name))
                                         .components(vec![])
                                     ).await?;
-                                    async_race::clear_message_with_button(ctx, interaction.channel_id, &format!("async_override_qualifier_forfeit_{}_{}", team_id, kind_int)).await;
+                                    async_race::clear_message_with_button(ctx, interaction.channel_id, custom_id).await;
+                                    }
                                 }
                             }
                         }
                     } else if let Some(race_id_str) = custom_id.strip_prefix("volunteer_signup_") {
                         // Handle volunteer signup button - shows available roles for the user
+                        // Defer immediately: the DB queries and possible racetime.gg call below
+                        // can exceed Discord's 3-second ack window, causing "Unknown interaction".
+                        interaction.create_response(ctx, CreateInteractionResponse::Defer(
+                            CreateInteractionResponseMessage::new().ephemeral(true)
+                        )).await?;
+
                         let (pool, http_client) = {
                             let data = ctx.data.read().await;
                             (
@@ -3732,11 +4078,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let race_id: Id<Races> = match race_id_str.parse::<u64>() {
                             Ok(id) => Id::from(id),
                             Err(_) => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Invalid race ID.")
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Invalid race ID.")
+                                ).await?;
                                 return Ok(());
                             }
                         };
@@ -3745,11 +4089,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let user = match User::from_discord(&mut *transaction, interaction.user.id).await? {
                             Some(u) => u,
                             None => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content(format!("You need to link your Discord account on the website first.\nVisit: <{}>", base_uri()))
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content(format!("You need to link your Discord account on the website first.\nVisit: <{}>", base_uri()))
+                                ).await?;
                                 return Ok(());
                             }
                         };
@@ -3758,11 +4100,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let race = match Race::from_id(&mut transaction, &http_client, race_id).await {
                             Ok(r) => r,
                             Err(_) => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Could not find this race.")
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Could not find this race.")
+                                ).await?;
                                 return Ok(());
                             }
                         };
@@ -3834,14 +4174,12 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 format!("{}/games", base_uri())
                             };
 
-                            interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content(format!(
-                                        "You don't have any confirmed volunteer roles for this event.\nApply at: <{}>",
-                                        apply_url
-                                    ))
-                            )).await?;
+                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                .content(format!(
+                                    "You don't have any confirmed volunteer roles for this event.\nApply at: <{}>",
+                                    apply_url
+                                ))
+                            ).await?;
                             return Ok(());
                         }
 
@@ -3897,11 +4235,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         }
 
                         if buttons.is_empty() {
-                            interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content("All roles you're qualified for are either full or you're already signed up.")
-                            )).await?;
+                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                .content("All roles you're qualified for are either full or you're already signed up.")
+                            ).await?;
                             return Ok(());
                         }
 
@@ -3912,16 +4248,20 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             "Select the role you want to sign up for. Roles marked ✦ will automatically enroll you:".to_string()
                         };
 
-                        interaction.create_response(ctx, CreateInteractionResponse::Message(
-                            CreateInteractionResponseMessage::new()
-                                .ephemeral(true)
-                                .content(prompt)
-                                .components(vec![CreateActionRow::Buttons(buttons)])
-                        )).await?;
+                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                            .content(prompt)
+                            .components(vec![CreateActionRow::Buttons(buttons)])
+                        ).await?;
 
                         transaction.commit().await?;
                     } else if let Some(params) = custom_id.strip_prefix("volunteer_role_") {
                         // Handle volunteer role selection - creates the signup
+                        // Defer immediately: the DB queries and possible racetime.gg call below
+                        // can exceed Discord's 3-second ack window, causing "Unknown interaction".
+                        interaction.create_response(ctx, CreateInteractionResponse::Defer(
+                            CreateInteractionResponseMessage::new().ephemeral(true)
+                        )).await?;
+
                         let (pool, http_client) = {
                             let data = ctx.data.read().await;
                             (
@@ -3935,11 +4275,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let (race_id_str, binding_id_str) = match params.split_once('_') {
                             Some((r, b)) => (r, b),
                             None => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Invalid button format.")
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Invalid button format.")
+                                ).await?;
                                 return Ok(());
                             }
                         };
@@ -3947,11 +4285,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let race_id: Id<Races> = match race_id_str.parse::<u64>() {
                             Ok(id) => Id::from(id),
                             Err(_) => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Invalid race ID.")
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Invalid race ID.")
+                                ).await?;
                                 return Ok(());
                             }
                         };
@@ -3959,11 +4295,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let binding_id: Id<RoleBindings> = match binding_id_str.parse::<u64>() {
                             Ok(id) => Id::from(id),
                             Err(_) => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Invalid role binding ID.")
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Invalid role binding ID.")
+                                ).await?;
                                 return Ok(());
                             }
                         };
@@ -3972,11 +4306,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let user = match User::from_discord(&mut *transaction, interaction.user.id).await? {
                             Some(u) => u,
                             None => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("You need to link your Discord account on the website first.")
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("You need to link your Discord account on the website first.")
+                                ).await?;
                                 return Ok(());
                             }
                         };
@@ -3985,11 +4317,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         let _race = match Race::from_id(&mut transaction, &http_client, race_id).await {
                             Ok(r) => r,
                             Err(_) => {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("Could not find this race.")
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Could not find this race.")
+                                ).await?;
                                 return Ok(());
                             }
                         };
@@ -4011,11 +4341,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             ).await?;
 
                             if auto_approved.is_none() {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
-                                        .content("You don't have permission for this role.")
-                                )).await?;
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("You don't have permission for this role.")
+                                ).await?;
                                 return Ok(());
                             }
                         }
@@ -4029,11 +4357,9 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         ).await?;
 
                         if already_signed {
-                            interaction.create_response(ctx, CreateInteractionResponse::Message(
-                                CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content("You're already signed up for this role on this race.")
-                            )).await?;
+                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                .content("You're already signed up for this role on this race.")
+                            ).await?;
                             return Ok(());
                         }
 
@@ -4048,6 +4374,11 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
 
                         transaction.commit().await?;
 
+                        speedgaming_export::schedule_sync(
+                            pool.clone(),
+                            http_client.clone(),
+                        );
+
                         // Update the volunteer info post to reflect the new signup
                         let _ = volunteer_requests::update_volunteer_post_for_race(
                             &pool,
@@ -4056,11 +4387,10 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         ).await;
 
                         // Confirm success - update the original message to remove buttons
-                        interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                            CreateInteractionResponseMessage::new()
-                                .content("Thank you for signing up. You will be informed once your signup has been processed by the team.")
-                                .components(vec![])
-                        )).await?;
+                        interaction.edit_response(ctx, EditInteractionResponse::new()
+                            .content("Thank you for signing up. You will be informed once your signup has been processed by the team.")
+                            .components(vec![])
+                        ).await?;
                     } else if let Some(signup_id_str) = custom_id.strip_prefix("volunteer_withdraw_") {
                         if let Some(signup_id_str) = signup_id_str.strip_prefix("confirm_") {
                             // Confirmed withdrawal — perform the actual withdrawal
@@ -4197,11 +4527,11 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 .components(vec![])
                         )).await?;
 
-                        if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, Some(game_num), false, None, true, false).await? {
+                        if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, Some(game_num), false, None, true, false, SchedulingRaceFilter::Upcoming).await? {
                             let event = race.event(&mut transaction).await?;
                             let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                             let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
-                            if let Some(speedgaming_slug) = &event.speedgaming_slug {
+                            if speedgaming_export::LEGACY_IMPORT_ENABLED && let Some(speedgaming_slug) = &event.speedgaming_slug {
                                 let response_content = if was_scheduled {
                                     format!("Please contact a tournament organizer to reschedule this race.")
                                 } else {
@@ -4908,7 +5238,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
                 content.push(' ');
             }
             content.push("match.");
-            if let Some(speedgaming_slug) = &event.speedgaming_slug {
+            if speedgaming_export::LEGACY_IMPORT_ENABLED && let Some(speedgaming_slug) = &event.speedgaming_slug {
                 content.push(" Use <https://speedgaming.org/");
                 content.push(speedgaming_slug);
                 if game_count > 1 {
@@ -5184,10 +5514,15 @@ async fn report_async_race_to_external_platforms(
 ) -> Result<(), Error> {
     // --- Begin external reporting code ---
     let cal_event = cal::Event { race: race.clone(), kind: cal::EventKind::Normal };
-    let discord_data = ctx.data.read().await;
-    let http_client = discord_data.get::<HttpClient>().expect("HTTP client missing from Discord context");
-    let startgg_token = discord_data.get::<StartggToken>().expect("start.gg token missing from Discord context");
-    let challonge_api_key = discord_data.get::<ChallongeApiKey>().expect("Challonge API key missing from Discord context");
+    let (db_pool, http_client, startgg_token, challonge_api_key) = {
+        let discord_data = ctx.data.read().await;
+        (
+            discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").clone(),
+            discord_data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
+            discord_data.get::<StartggToken>().expect("start.gg token missing from Discord context").clone(),
+            discord_data.get::<ChallongeApiKey>().expect("Challonge API key missing from Discord context").clone(),
+        )
+    };
     // Report to start.gg if applicable
     if let Ok(Some(startgg_set_url)) = cal_event.race.startgg_set_url() {
         let mut total_times: Vec<(i32, Option<Duration>)> = results.iter()
@@ -5224,14 +5559,26 @@ async fn report_async_race_to_external_platforms(
                         startgg::ID(startgg_set_url.to_string())
                     };
                     match startgg::query_uncached::<startgg::ReportOneGameResultMutation>(
-                        http_client,
-                        startgg_token,
+                        &http_client,
+                        &startgg_token,
                         startgg::report_one_game_result_mutation::Variables {
                             set_id,
                             winner_entrant_id: startgg_id.clone(),
                         }
                     ).await {
-                        Ok(_) => {},
+                        Ok(_) => {
+                            let mut transaction = db_pool.begin().await?;
+                            let event = race.event(&mut transaction).await?;
+                            if event.swiss_standings {
+                                if let cal::Source::StartGG { ref event, .. } = race.source {
+                                    startgg::refresh_swiss_standings(
+                                        http_client.clone(),
+                                        event.clone(),
+                                        startgg_token.clone(),
+                                    ).await;
+                                }
+                            }
+                        },
                         Err(e) => {
                             eprintln!("Failed to report async race result to start.gg: {:?}", e);
                         }
@@ -5268,7 +5615,7 @@ async fn report_async_race_to_external_platforms(
             if let Some(winner_team) = winner_team {
                 if let Some(ref winner_id) = winner_team.challonge_id {
                     match challonge::report::report_result(
-                        http_client, challonge_api_key, id, winner_id, &[(1, 0)],
+                        &http_client, &challonge_api_key, id, winner_id, &[(1, 0)],
                     ).await {
                         Ok(()) => {},
                         Err(e) => log::error!("Failed to report async race result to Challonge: {e:?}"),
@@ -5314,7 +5661,11 @@ async fn handle_async_command(
         .ephemeral(false)
     )).await?;
 
-    let mut transaction = ctx.data.read().await.get::<DbPool>().as_ref().expect("database connection pool missing from Discord context").begin().await?;
+    let pool = ctx.data.read().await
+        .get::<DbPool>()
+        .expect("database connection pool missing from Discord context")
+        .clone();
+    let mut transaction = pool.begin().await?;
 
     // Check if user is an organizer
     let user_id = interaction.user.id;
@@ -5400,25 +5751,26 @@ async fn handle_async_command(
 
                     if already_submitted {
                         let new_desc = if is_forfeit { "forfeit".to_string() } else { qual_time_str.as_ref().unwrap().clone() };
+                        let nonce = interaction.id.get();
 
                         let confirm_id = if is_forfeit {
-                            format!("async_override_qualifier_forfeit_{}_{}", team_id, async_kind as i32)
+                            format!("async_override_qualifier_forfeit_{}_{}_{}", team_id, async_kind as i32, nonce)
                         } else {
-                            format!("async_override_qualifier_result_{}_{}_{}", team_id, async_kind as i32, qual_total_seconds.unwrap())
+                            format!("async_override_qualifier_result_{}_{}_{}_{}", team_id, async_kind as i32, qual_total_seconds.unwrap(), nonce)
                         };
 
-                        // Clean up any stale override buttons from previous command invocations
-                        async_race::clear_messages_with_button_prefix(ctx, interaction.channel_id, &format!("async_override_qualifier_forfeit_{}_{}", team_id, async_kind as i32)).await;
-                        async_race::clear_messages_with_button_prefix(ctx, interaction.channel_id, &format!("async_override_qualifier_result_{}_{}_{}", team_id, async_kind as i32, "")).await;
+                        // Stash the vod link so the override-confirmation button click can persist it
+                        // (it can't be safely encoded into the button's custom_id, see PendingAsyncVod)
+                        transaction.rollback().await?;
+                        pending_async_vods(ctx).await.lock().await.insert(nonce, link);
 
                         interaction.edit_response(ctx, EditInteractionResponse::new()
                             .content(format!(
                                 "A result already exists for **{}**. Override with **{}**?",
                                 team_name, new_desc
                             ))
-                            .components(vec![override_confirm_buttons(confirm_id)])
+                            .components(vec![override_confirm_buttons(confirm_id, nonce)])
                         ).await?;
-                        transaction.rollback().await?;
                         return Ok(());
                     }
 
@@ -5529,28 +5881,29 @@ async fn handle_async_command(
             "forfeit".to_string()
         };
         let new_desc = if is_forfeit { "forfeit".to_string() } else { time_str.as_ref().unwrap().clone() };
+        let nonce = interaction.id.get();
 
         let display_order = get_display_order(&race, async_part as i32);
         let ordinal = match display_order { 1 => "1st", 2 => "2nd", 3 => "3rd", n => &format!("{}th", n) };
 
         let confirm_id = if is_forfeit {
-            format!("async_override_forfeit_{}_{}", race_id, async_part)
+            format!("async_override_forfeit_{}_{}_{}", race_id, async_part, nonce)
         } else {
-            format!("async_override_result_{}_{}_{}", race_id, async_part, total_seconds.unwrap())
+            format!("async_override_result_{}_{}_{}_{}", race_id, async_part, total_seconds.unwrap(), nonce)
         };
 
-        // Clean up any stale override buttons from previous command invocations
-        async_race::clear_messages_with_button_prefix(ctx, interaction.channel_id, &format!("async_override_forfeit_{}_{}", race_id, async_part)).await;
-        async_race::clear_messages_with_button_prefix(ctx, interaction.channel_id, &format!("async_override_result_{}_{}_{}", race_id, async_part, "")).await;
+        // Stash the vod link so the override-confirmation button click can persist it
+        // (it can't be safely encoded into the button's custom_id, see PendingAsyncVod)
+        transaction.rollback().await?;
+        pending_async_vods(ctx).await.lock().await.insert(nonce, link);
 
         interaction.edit_response(ctx, EditInteractionResponse::new()
             .content(format!(
                 "A result already exists for the {} half of this async: **{}**. Override with **{}**?",
                 ordinal, existing_desc, new_desc
             ))
-            .components(vec![override_confirm_buttons(confirm_id)])
+            .components(vec![override_confirm_buttons(confirm_id, nonce)])
         ).await?;
-        transaction.rollback().await?;
         return Ok(());
     }
 
@@ -5841,9 +6194,16 @@ async fn verify_organizer_for_button(
     Ok(Some(user))
 }
 
-fn override_confirm_buttons(confirm_id: impl Into<String>) -> CreateActionRow {
+async fn pending_async_vods(ctx: &DiscordCtx) -> Arc<tokio::sync::Mutex<HashMap<u64, Option<String>>>> {
+    let data = ctx.data.read().await;
+    data.get::<PendingAsyncVod>()
+        .expect("pending async VOD cache missing from Discord context")
+        .clone()
+}
+
+fn override_confirm_buttons(confirm_id: impl Into<String>, nonce: u64) -> CreateActionRow {
     CreateActionRow::Buttons(vec![
         CreateButton::new(confirm_id.into()).label("Yes, override").style(ButtonStyle::Danger),
-        CreateButton::new("async_override_cancel").label("Cancel").style(ButtonStyle::Secondary),
+        CreateButton::new(format!("async_override_cancel_{nonce}")).label("Cancel").style(ButtonStyle::Secondary),
     ])
 }

@@ -45,6 +45,7 @@ pub(crate) mod teams;
 pub(crate) mod roles;
 pub(crate) mod asyncs;
 pub(crate) mod qualifiers;
+pub(crate) mod speedgaming_export;
 pub(crate) mod zsr_export;
 
 #[derive(Debug, Clone, Copy, sqlx::Type)]
@@ -753,7 +754,7 @@ impl<'a> Data<'a> {
     }
 
     /// Returns Swiss standings for this event
-    pub(crate) async fn swiss_standings(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config) -> Result<Option<Vec<startgg::SwissStanding>>, Error> {
+    pub(crate) async fn swiss_standings(&self, _transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config) -> Result<Option<Vec<startgg::SwissStanding>>, Error> {
         match self.match_source() {
             MatchSource::StartGG(_) => {
                 // Extract the Startgg slug from the event URL
@@ -764,22 +765,7 @@ impl<'a> Data<'a> {
 
                 let startgg_token = &config.startgg;
 
-                // Get resigned teams for this event to exclude them from bye prediction
-                let resigned_entrant_ids = sqlx::query!(
-                    r#"SELECT startgg_id FROM teams
-                       WHERE series = $1 AND event = $2 AND resigned = TRUE AND startgg_id IS NOT NULL"#,
-                    self.series as _,
-                    &self.event
-                )
-                .fetch_all(&mut **transaction)
-                .await
-                .ok()
-                .map(|rows| rows.into_iter()
-                    .filter_map(|row| row.startgg_id)
-                    .map(|id| id.to_string())
-                    .collect::<HashSet<_>>());
-
-                match startgg::swiss_standings(http_client, config, &slug, startgg_token, resigned_entrant_ids.as_ref()).await {
+                match startgg::swiss_standings(http_client, config, &slug, startgg_token).await {
                     Ok(standings) => Ok(Some(standings)),
                     Err(startgg::Error::GraphQL(errors)) => {
                         if errors.iter().any(|e| e.message.contains("query complexity is too high")) {
@@ -1023,6 +1009,11 @@ impl<'a> Data<'a> {
                                 a(class = "button", href = uri!(zsr_export::get(self.series, &*self.event))) : "ZSR Export";
                             }
                         }
+                        @if let Tab::SpeedGamingExport = tab {
+                            a(class = "button selected", href? = is_subpage.then(|| uri!(speedgaming_export::get(self.series, &*self.event)))) : "SG Export";
+                        } else {
+                            a(class = "button", href = uri!(speedgaming_export::get(self.series, &*self.event))) : "SG Export";
+                        }
                     }
                 }
             }
@@ -1055,6 +1046,7 @@ pub(crate) enum Tab {
     Setup,
     Asyncs,
     Qualifiers,
+    SpeedGamingExport,
     ZsrExport,
 }
 
@@ -1398,16 +1390,16 @@ pub(crate) async fn races(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &Stat
                            .unwrap_or_default()
                    }
                };
-                : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: true, can_edit, show_restream_consent, challonge_import_ctx: None }, &ongoing_and_upcoming_races, Some(me), Some(&my_approved_roles)).await?;
+                : cal::race_table(&mut transaction, Some(&*discord_ctx.read().await), http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: true, can_edit, show_restream_consent, challonge_import_ctx: None }, &ongoing_and_upcoming_races, Some(me), Some(&my_approved_roles)).await?;
             } else {
-                : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: true, can_edit, show_restream_consent, challonge_import_ctx: None }, &ongoing_and_upcoming_races, None, None).await?;
+                : cal::race_table(&mut transaction, Some(&*discord_ctx.read().await), http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: true, can_edit, show_restream_consent, challonge_import_ctx: None }, &ongoing_and_upcoming_races, None, None).await?;
             }
         }
         @if !past_races.is_empty() {
             @if any_races_ongoing_or_upcoming {
                 h2 : "Past races";
             }
-            : cal::race_table(&mut transaction, &*discord_ctx.read().await, http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: false, can_edit, show_restream_consent: false, challonge_import_ctx: None }, &past_races, None, None).await?;
+            : cal::race_table(&mut transaction, Some(&*discord_ctx.read().await), http_client, &uri, Some(&data), cal::RaceTableOptions { game_count: false, show_multistreams: false, can_edit, show_restream_consent: false, challonge_import_ctx: None }, &past_races, None, None).await?;
         }
     };
     Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Races — {}", data.display_name), content).await?)
@@ -3850,7 +3842,7 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
                 custom_choices.insert(key.clone(), url_value);
             }
             let options = racetime_bot::AlttprDeRaceOptions { mode, custom_choices, choices: Vec::new() };
-            let rx = Arc::clone(&*global_state).roll_alttprde9_seed(options);
+            let rx = Arc::clone(&*global_state).roll_boothisman_dr_seed(options);
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         },
         SeedGenType::AlttprAvianart { .. } => {
@@ -4068,7 +4060,7 @@ pub(crate) async fn swiss_standings(
     let content = html! {
         : header;
         h2 : "Swiss Standings";
-        p(style = "font-style: italic; color: var(--text-muted); margin-bottom: 1rem;") : "This page automatically updates every 30 minutes.";
+        p(style = "font-style: italic; color: var(--text-muted); margin-bottom: 1rem;") : "This page automatically updates after each race result.";
         @if standings.is_empty() {
             p : "No Swiss standings available at this time.";
         } else {

@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE restream_channels SET url_pattern = $1, discord_invite_url = $2, display_name = $3, racetime_team_slug = $4, updated_at = NOW() WHERE id = $5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "faa171f94c400d4f774fde4256a1e510dc7d7db9fd5729058c5e7ecde345304d"
+}

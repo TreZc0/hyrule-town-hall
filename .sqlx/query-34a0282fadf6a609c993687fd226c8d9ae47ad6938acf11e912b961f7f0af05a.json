@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n            SELECT 1 FROM async_times\n            WHERE race_id = $1\n            AND async_part = $2\n            AND (start_time IS NOT NULL OR player_finished_at IS NOT NULL)\n        ) AS \"played!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "played!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "34a0282fadf6a609c993687fd226c8d9ae47ad6938acf11e912b961f7f0af05a"
+}

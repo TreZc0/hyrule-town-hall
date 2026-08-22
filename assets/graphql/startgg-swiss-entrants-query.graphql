@@ -1,0 +1,13 @@
+query SwissEntrantsQuery($slug: String, $page: Int) {
+  event(slug: $slug) {
+    entrants(query: { page: $page, perPage: 100 }) {
+      pageInfo {
+        totalPages
+      }
+      nodes {
+        id
+        name
+      }
+    }
+  }
+}

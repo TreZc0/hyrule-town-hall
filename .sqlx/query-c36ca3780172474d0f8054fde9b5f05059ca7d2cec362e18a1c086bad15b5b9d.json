@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE races SET end_time = $1 WHERE id = $2 AND end_time IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c36ca3780172474d0f8054fde9b5f05059ca7d2cec362e18a1c086bad15b5b9d"
+}

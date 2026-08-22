@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT EXISTS (\n            SELECT 1\n            FROM speedgaming_race_exports re\n            JOIN races r ON r.id = re.race_id\n            WHERE re.export_id = $1 AND re.state = 'succeeded'\n              AND r.start >= $2 AND r.start <= $3\n        ) AS \"exists!\"\n    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "fb68616e052dfbb2e176c8fbc749588e6abfc04d88106b82af9fb907ab89f52c"
+}

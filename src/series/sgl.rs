@@ -120,6 +120,7 @@ impl Restream {
         }
         if !race.schedule_locked {
             for channel in &self.channels {
+                if matches!(channel.slug.as_str(), "norestream" | "nostream") { continue }
                 if let hash_map::Entry::Vacant(entry) = race.video_urls.entry(channel.language) {
                     let video_url = Url::parse(&format!("https://twitch.tv/{}", channel.slug))?;
                     entry.insert(video_url);

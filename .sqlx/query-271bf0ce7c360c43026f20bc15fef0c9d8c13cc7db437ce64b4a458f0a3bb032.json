@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                rpv.race AS \"race: Id<Races>\",\n                rpv.video,\n                CASE u.display_source\n                    WHEN 'racetime' THEN u.racetime_display_name\n                    WHEN 'discord' THEN u.discord_display_name\n                END AS \"player_name!\"\n            FROM race_player_videos rpv\n            JOIN users u ON u.id = rpv.player\n            WHERE rpv.race = ANY($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "race: Id<Races>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "video",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "player_name!",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "271bf0ce7c360c43026f20bc15fef0c9d8c13cc7db437ce64b4a458f0a3bb032"
+}

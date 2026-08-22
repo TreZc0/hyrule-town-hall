@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT e.id, e.series AS \"series: Series\", e.event, e.slug,\n                   e.trigger_condition AS \"trigger_condition: ExportTrigger\", e.delay_minutes,\n                   e.export_volunteers, e.enabled,\n                   ARRAY(SELECT language FROM speedgaming_export_languages WHERE export_id = e.id ORDER BY language)\n                       AS \"volunteer_languages!: Vec<Language>\"\n            FROM speedgaming_exports e\n            WHERE e.id = $1 AND e.archived_at IS NULL\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "series: Series",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "event",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "trigger_condition: ExportTrigger",
+        "type_info": {
+          "Custom": {
+            "name": "speedgaming_export_trigger",
+            "kind": {
+              "Enum": [
+                "when_scheduled",
+                "when_restream_channel_set",
+                "when_volunteer_signed_up"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "delay_minutes",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "export_volunteers",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "volunteer_languages!: Vec<Language>",
+        "type_info": {
+          "Custom": {
+            "name": "language[]",
+            "kind": {
+              "Array": {
+                "Custom": {
+                  "name": "language",
+                  "kind": {
+                    "Enum": [
+                      "en",
+                      "fr",
+                      "de",
+                      "pt"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "e4b16e66bb2ad380a95313f64fe1d4640a28a5f2c608805ed29d10055205f336"
+}

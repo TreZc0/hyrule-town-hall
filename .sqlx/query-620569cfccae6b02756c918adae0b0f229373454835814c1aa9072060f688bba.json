@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    UPDATE speedgaming_volunteer_exports SET state = 'failed', last_error = $3\n                    WHERE signup_id = $1 AND export_id = $2\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "620569cfccae6b02756c918adae0b0f229373454835814c1aa9072060f688bba"
+}

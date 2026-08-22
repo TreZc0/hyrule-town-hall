@@ -101,6 +101,7 @@ impl AsyncRaceManager {
         
         let player_name = player.display_name();
         let display_order = Self::get_display_order(race, async_part);
+        let game_suffix = race.game.map(|game| format!(" (G{game})")).unwrap_or_default();
         let thread_name = if race.phase.is_some() || race.round.is_some() {
             let round_str = if let Some(phase) = &race.phase {
                 if let Some(round) = &race.round {
@@ -113,9 +114,9 @@ impl AsyncRaceManager {
             } else {
                 String::new()
             };
-            format!("Async {}: {} ({})", round_str.trim(), player_name, if display_order == 1 { "1st" } else if display_order == 2 { "2nd" } else { "3rd" })
+            format!("Async {}{}: {} ({})", round_str.trim(), game_suffix, player_name, if display_order == 1 { "1st" } else if display_order == 2 { "2nd" } else { "3rd" })
         } else {
-            format!("Async {}: {} ({})", matchup, player_name, if display_order == 1 { "1st" } else if display_order == 2 { "2nd" } else { "3rd" })
+            format!("Async {}{}: {} ({})", matchup, game_suffix, player_name, if display_order == 1 { "1st" } else if display_order == 2 { "2nd" } else { "3rd" })
         };
         
         let mut content = Self::build_async_thread_content(
@@ -216,7 +217,11 @@ impl AsyncRaceManager {
         
         content.push("Hey ");
         content.mention_user(player);
-        content.push(", this thread will be used to handle your part of the async for this race: ");
+        content.push(", this thread will be used to handle your part of the async for this race");
+        if let Some(game) = race.game {
+            content.push(format!(" (G{game})"));
+        }
+        content.push(": ");
         
         if let Some(phase) = &race.phase {
             content.push_safe(phase.clone());
@@ -569,6 +574,31 @@ impl AsyncRaceManager {
         Ok(races)
     }
 
+    /// Returns `false` if the event has a participant role configured and any team member does
+    /// not (yet) hold it in the Discord guild — used to defer thread creation so the bot doesn't
+    /// ping members into a role-gated channel they can't actually see.
+    async fn team_has_participant_role(
+        transaction: &mut Transaction<'_, Postgres>,
+        discord_ctx: &DiscordCtx,
+        event: &EventData<'_>,
+        team: &Team,
+    ) -> Result<bool, Error> {
+        let Some(discord_guild) = event.discord_guild else { return Ok(true) };
+        let Some(PgSnowflake(participant_role)) = sqlx::query_scalar!(
+            r#"SELECT id AS "id: PgSnowflake<RoleId>" FROM discord_roles WHERE guild = $1 AND series = $2 AND event = $3"#,
+            PgSnowflake(discord_guild) as _, event.series as _, &*event.event,
+        ).fetch_optional(&mut **transaction).await? else { return Ok(true) };
+
+        for member in &team.members(transaction).await? {
+            let Some(discord) = &member.discord else { return Ok(false) };
+            match discord_guild.member(discord_ctx, discord.id).await {
+                Ok(guild_member) => if !guild_member.roles.contains(&participant_role) { return Ok(false) },
+                Err(_) => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
     async fn create_qualifier_threads(
         transaction: &mut Transaction<'_, Postgres>,
         discord_ctx: &DiscordCtx,
@@ -604,6 +634,14 @@ impl AsyncRaceManager {
             // Load team
             let team = Team::from_id(transaction, row.team_id).await?
                 .ok_or(Error::NoTeamFound)?;
+
+            if !Self::team_has_participant_role(transaction, discord_ctx, &event, &team).await? {
+                // Participant role not (yet) assigned to all members — the async channel may be
+                // role-gated, so creating the thread now would ping members without giving them
+                // access. Skip for now; retried on the next sweep once the role is assigned.
+                log::debug!("Skipping qualifier thread for team {} pending participant role assignment", row.team_id);
+                continue;
+            }
 
             if let Some(async_channel) = event.discord_async_channel {
                 if let Err(e) = Self::create_qualifier_thread(
@@ -787,6 +825,7 @@ impl AsyncRaceManager {
         discord_ctx: &DiscordCtx,
         race_id: i64,
         async_part: u8,
+        channel_id: ChannelId,
         user_id: UserId,
     ) -> Result<(), Error> {
         let mut transaction = pool.begin().await?;
@@ -797,6 +836,15 @@ impl AsyncRaceManager {
         let members = team.members(&mut transaction).await?;
         if !members.iter().any(|m| m.discord.as_ref().map(|d| d.id) == Some(user_id)) {
             return Err(Error::UnauthorizedUser);
+        }
+        let current_thread = match async_part {
+            1 => sqlx::query_scalar::<_, Option<i64>>("SELECT async_thread1 FROM races WHERE id = $1 FOR UPDATE").bind(race_id).fetch_one(&mut *transaction).await?,
+            2 => sqlx::query_scalar::<_, Option<i64>>("SELECT async_thread2 FROM races WHERE id = $1 FOR UPDATE").bind(race_id).fetch_one(&mut *transaction).await?,
+            3 => sqlx::query_scalar::<_, Option<i64>>("SELECT async_thread3 FROM races WHERE id = $1 FOR UPDATE").bind(race_id).fetch_one(&mut *transaction).await?,
+            _ => return Err(Error::InvalidAsyncPart),
+        };
+        if current_thread != Some(channel_id.get() as i64) {
+            return Err(Error::ResetAsyncPart);
         }
         let player = members.into_iter().next().ok_or(Error::NoTeamMembers)?;
         
@@ -951,6 +999,8 @@ pub(crate) enum Error {
     NotStarted,
     #[error("already finished")]
     AlreadyFinished,
+    #[error("this async part has been reset")]
+    ResetAsyncPart,
 }
 
 #[derive(Debug, Clone)]
@@ -1192,20 +1242,6 @@ pub(crate) async fn clear_message_with_button(http: impl CacheHttp, channel_id: 
     }
 }
 
-pub(crate) async fn clear_messages_with_button_prefix(http: impl CacheHttp, channel_id: ChannelId, prefix: &str) {
-    if let Ok(messages) = channel_id.messages(&http, serenity::all::GetMessages::new().limit(20)).await {
-        for message in messages {
-            let has_button = message.components.iter().any(|row| row.components.iter().any(|c| {
-                matches!(c, ActionRowComponent::Button(b)
-                    if matches!(&b.data, ButtonKind::NonLink { custom_id, .. } if custom_id.starts_with(prefix)))
-            }));
-            if has_button {
-                let _ = channel_id.edit_message(&http, message.id, EditMessage::new().components(vec![])).await;
-            }
-        }
-    }
-}
-
 pub(crate) fn create_finish_forfeit_buttons(run: &AsyncRun) -> CreateActionRow {
     CreateActionRow::Buttons(vec![
         CreateButton::new(run.button_id("finish"))
@@ -1387,7 +1423,7 @@ pub(crate) async fn handle_ready_bracket(
     let AsyncRun::BracketRace { race_id, async_part } = run else {
         return Err(Error::InvalidAsyncPart);
     };
-    AsyncRaceManager::handle_ready_button(pool, ctx, *race_id, *async_part, interaction.user.id).await?;
+    AsyncRaceManager::handle_ready_button(pool, ctx, *race_id, *async_part, interaction.channel_id, interaction.user.id).await?;
     interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
         CreateInteractionResponseMessage::new().components(vec![])
     )).await?;
@@ -1695,6 +1731,42 @@ pub(crate) async fn handle_forfeit_cancel(
     Ok(())
 }
 
+/// Looks for a twitch.tv/youtube.com/youtu.be link posted by the async player in the last 20
+/// thread messages, so the org_result modal can be pre-filled with it. Any lookup failure
+/// (DB error, Discord API error, no linked Discord account, no link found) just yields `None`
+/// rather than blocking the modal from opening.
+async fn find_recent_vod_link(
+    ctx: &DiscordCtx,
+    pool: &PgPool,
+    interaction: &ComponentInteraction,
+    run: &AsyncRun,
+) -> Option<String> {
+    let mut transaction = pool.begin().await.ok()?;
+    let player_ids: Vec<UserId> = match run {
+        AsyncRun::Qualifier { team_id, .. } => {
+            let team = Team::from_id(&mut transaction, Id::from(*team_id as u64)).await.ok()??;
+            team.members(&mut transaction).await.ok()?
+        }
+        AsyncRun::BracketRace { race_id, async_part } => {
+            let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(*race_id as u64)).await.ok()?;
+            let team = AsyncRaceManager::get_team_for_async_part(&race, *async_part).ok()?;
+            team.members(&mut transaction).await.ok()?
+        }
+    }.into_iter().filter_map(|u| u.discord.map(|d| d.id)).collect();
+
+    if player_ids.is_empty() { return None }
+
+    let messages = interaction.channel_id.messages(ctx, serenity::all::GetMessages::new().limit(20)).await.ok()?;
+    messages.into_iter()
+        .filter(|message| player_ids.contains(&message.author.id))
+        .find_map(|message| message.content.split_whitespace().find_map(|token| {
+            let url = Url::parse(token).ok()?;
+            let host = url.host_str()?;
+            (host.contains("twitch.tv") || host.contains("youtube.com") || host.contains("youtu.be"))
+                .then(|| token.to_string())
+        }))
+}
+
 pub(crate) async fn handle_org_result(
     ctx: &DiscordCtx,
     interaction: &ComponentInteraction,
@@ -1723,6 +1795,18 @@ pub(crate) async fn handle_org_result(
         }
     };
 
+    let mut link_input = CreateInputText::new(InputTextStyle::Short, "VOD link (optional)", "link")
+        .placeholder("https://...")
+        .required(false);
+    // A modal must be the initial response to its button interaction. Keep the optional
+    // Discord history lookup from consuming Discord's three-second response window.
+    if let Some(vod) = tokio::time::timeout(
+        Duration::from_secs(2),
+        find_recent_vod_link(ctx, pool, interaction, run),
+    ).await.ok().flatten() {
+        link_input = link_input.value(vod);
+    }
+
     interaction.create_response(ctx, CreateInteractionResponse::Modal(
         CreateModal::new(modal_id, "Confirm Result")
             .components(vec![
@@ -1731,11 +1815,7 @@ pub(crate) async fn handle_org_result(
                         .placeholder("H:MM:SS or HH:MM:SS")
                         .required(true)
                 ),
-                CreateActionRow::InputText(
-                    CreateInputText::new(InputTextStyle::Short, "VOD link (optional)", "link")
-                        .placeholder("https://...")
-                        .required(false)
-                ),
+                CreateActionRow::InputText(link_input),
             ])
     )).await?;
     Ok(())

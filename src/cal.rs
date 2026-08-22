@@ -11,6 +11,7 @@ use {
             URL,
         },
     },
+    racetime::model::RaceStatusValue,
     reqwest::StatusCode,
     rocket_util::Response,
     serenity::all::{
@@ -38,6 +39,7 @@ use {
         prelude::*,
         racetime_bot,
         sheets,
+        speedgaming_export,
         weekly::{WeeklySchedule, WeeklySchedules},
     },
     crate::id::RoleBindings,
@@ -141,7 +143,7 @@ fn confirmed_volunteer_signup_tooltip(confirmed_signups: &[&Signup], pending_sig
         .join("\n")
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Source {
     Manual,
     Challonge {
@@ -200,8 +202,22 @@ impl Entrant {
     }
 
     pub(crate) async fn to_html(&self, transaction: &mut Transaction<'_, Postgres>, discord_ctx: &DiscordCtx, running_text: bool) -> Result<RawHtml<String>, discord_bot::Error> {
+        self.to_html_with_optional_discord(transaction, Some(discord_ctx), None, running_text).await
+    }
+
+    async fn to_html_with_optional_discord(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        discord_ctx: Option<&DiscordCtx>,
+        team_html_cache: Option<&HashMap<Id<Teams>, String>>,
+        running_text: bool,
+    ) -> Result<RawHtml<String>, discord_bot::Error> {
         Ok(match self {
-            Self::MidosHouseTeam(team) => team.to_html(transaction, running_text).await?,
+            Self::MidosHouseTeam(team) => if let Some(html) = team_html_cache.and_then(|cache| cache.get(&team.id)) {
+                RawHtml(html.clone())
+            } else {
+                team.to_html(transaction, running_text).await?
+            },
             Self::Discord { id, racetime_id, .. } => {
                 let url = if let Some(racetime_id) = racetime_id {
                     format!("https://{}/user/{racetime_id}", racetime_host())
@@ -214,11 +230,17 @@ impl Entrant {
                             bdi : user.discord.unwrap().display_name;
                         }
                     }
-                } else {
+                } else if let Some(discord_ctx) = discord_ctx {
                     let user = id.to_user(discord_ctx).await?;
                     html! {
                         a(href = url) {
                             bdi : user.global_name.unwrap_or(user.name);
+                        }
+                    }
+                } else {
+                    html! {
+                        a(href = url) {
+                            bdi : id.to_string();
                         }
                     }
                 }
@@ -590,7 +612,16 @@ impl Race {
         Ok(label.trim().to_owned())
     }
 
-    pub(crate) async fn from_id(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, id: Id<Races>) -> Result<Self, Error> {
+    pub(crate) async fn from_id(transaction: &mut Transaction<'_, Postgres>, _http_client: &reqwest::Client, id: Id<Races>) -> Result<Self, Error> {
+        let mut team_cache = HashMap::new();
+        Self::from_id_with_team_cache(transaction, id, &mut team_cache).await
+    }
+
+    async fn from_id_with_team_cache(
+        transaction: &mut Transaction<'_, Postgres>,
+        id: Id<Races>,
+        team_cache: &mut HashMap<Id<Teams>, Team>,
+    ) -> Result<Self, Error> {
         let row = sqlx::query!(r#"SELECT
             r.series AS "series: Series",
             r.event,
@@ -688,7 +719,13 @@ impl Race {
         };
         let entrants = {
             let p1 = if let Some(team1) = row.team1 {
-                Some(Entrant::MidosHouseTeam(Team::from_id(&mut *transaction, team1).await?.ok_or(Error::UnknownTeam)?))
+                Some(Entrant::MidosHouseTeam(if let Some(team) = team_cache.get(&team1) {
+                    team.clone()
+                } else {
+                    let team = Team::from_id(&mut *transaction, team1).await?.ok_or(Error::UnknownTeam)?;
+                    team_cache.insert(team1, team.clone());
+                    team
+                }))
             } else if let Some(PgSnowflake(id)) = row.p1_discord {
                 Some(Entrant::Discord {
                     racetime_id: row.p1_racetime,
@@ -705,7 +742,13 @@ impl Race {
                 None
             };
             let p2 = if let Some(team2) = row.team2 {
-                Some(Entrant::MidosHouseTeam(Team::from_id(&mut *transaction, team2).await?.ok_or(Error::UnknownTeam)?))
+                Some(Entrant::MidosHouseTeam(if let Some(team) = team_cache.get(&team2) {
+                    team.clone()
+                } else {
+                    let team = Team::from_id(&mut *transaction, team2).await?.ok_or(Error::UnknownTeam)?;
+                    team_cache.insert(team2, team.clone());
+                    team
+                }))
             } else if let Some(PgSnowflake(id)) = row.p2_discord {
                 Some(Entrant::Discord {
                     racetime_id: row.p2_racetime,
@@ -722,7 +765,13 @@ impl Race {
                 None
             };
             let p3 = if let Some(team3) = row.team3 {
-                Some(Entrant::MidosHouseTeam(Team::from_id(&mut *transaction, team3).await?.ok_or(Error::UnknownTeam)?))
+                Some(Entrant::MidosHouseTeam(if let Some(team) = team_cache.get(&team3) {
+                    team.clone()
+                } else {
+                    let team = Team::from_id(&mut *transaction, team3).await?.ok_or(Error::UnknownTeam)?;
+                    team_cache.insert(team3, team.clone());
+                    team
+                }))
             } else if let Some(name) = row.p3 {
                 Some(Entrant::Named { racetime_id: None, twitch_username: None, name })
             } else {
@@ -744,30 +793,6 @@ impl Race {
             }
         };
 
-        macro_rules! update_end {
-            ($var:ident, $room:ident, $query:literal) => {
-                let $var = if let Some(end) = row.$var {
-                    Some(end)
-                } else if let Some(ref room) = row.$room {
-                    let end = http_client.get(format!("{room}/data"))
-                        .send().await?
-                        .detailed_error_for_status().await?
-                        .json_with_text_in_error::<RaceData>().await?
-                        .ended_at;
-                    if let Some(end) = end {
-                        sqlx::query!($query, end, id as _).execute(&mut **transaction).await?;
-                    }
-                    end
-                } else {
-                    None
-                };
-            };
-        }
-
-        update_end!(end_time, room, "UPDATE races SET end_time = $1 WHERE id = $2");
-        update_end!(async_end1, async_room1, "UPDATE races SET async_end1 = $1 WHERE id = $2");
-        update_end!(async_end2, async_room2, "UPDATE races SET async_end2 = $1 WHERE id = $2");
-        update_end!(async_end3, async_room3, "UPDATE races SET async_end3 = $1 WHERE id = $2");
         Ok(Self {
             series: row.series,
             event: row.event,
@@ -777,7 +802,7 @@ impl Race {
             scheduling_thread: row.scheduling_thread.map(|PgSnowflake(id)| id),
             schedule: RaceSchedule::new(
                 row.start, row.async_start1, row.async_start2, row.async_start3,
-                end_time, async_end1, async_end2, async_end3,
+                row.end_time, row.async_end1, row.async_end2, row.async_end3,
                 row.room.map(|room| room.parse()).transpose()?, row.async_room1.map(|room| room.parse()).transpose()?, row.async_room2.map(|room| room.parse()).transpose()?, row.async_room3.map(|room| room.parse()).transpose()?,
             ),
             schedule_updated_at: row.schedule_updated_at,
@@ -828,6 +853,62 @@ impl Race {
             races.push(Self::from_id(&mut *transaction, http_client, id).await?);
         }
         races.retain(|race| !race.ignored || race.is_ended());
+        races.sort_unstable();
+        Ok(races)
+    }
+
+    pub(crate) async fn for_homepage(
+        transaction: &mut Transaction<'_, Postgres>,
+        http_client: &reqwest::Client,
+        events: &[event::Data<'_>],
+    ) -> Result<Vec<Self>, Error> {
+        if events.is_empty() {
+            return Ok(Vec::default())
+        }
+        let series = events.iter().map(|event| event.series.to_string()).collect::<Vec<_>>();
+        let event_slugs = events.iter().map(|event| event.event.to_string()).collect::<Vec<_>>();
+        let rows = sqlx::query!(r#"SELECT
+                id AS "id: Id<Races>",
+                team1 AS "team1: Id<Teams>",
+                team2 AS "team2: Id<Teams>",
+                team3 AS "team3: Id<Teams>"
+            FROM races
+            WHERE (series, event) IN (
+                SELECT selected_series::varchar, selected_event::varchar
+                FROM UNNEST($1::text[], $2::text[]) AS selected(selected_series, selected_event)
+            )
+            AND NOT ignored
+            AND (
+                (start IS NULL AND async_start1 IS NULL AND async_start2 IS NULL AND async_start3 IS NULL)
+                OR (start IS NOT NULL AND async_start1 IS NULL AND async_start2 IS NULL AND async_start3 IS NULL AND end_time IS NULL)
+                OR (start IS NULL AND async_start1 IS NOT NULL AND async_start2 IS NOT NULL AND (async_end1 IS NULL OR async_end2 IS NULL))
+            )"#, &series, &event_slugs)
+            .fetch_all(&mut **transaction)
+            .await?;
+        let mut team_ids = rows.iter()
+            .flat_map(|row| [row.team1, row.team2, row.team3])
+            .flatten()
+            .map(i64::from)
+            .collect::<Vec<_>>();
+        team_ids.sort_unstable();
+        team_ids.dedup();
+        let mut team_cache = Team::from_ids(&mut *transaction, &team_ids).await?
+            .into_iter()
+            .map(|team| (team.id, team))
+            .collect::<HashMap<_, _>>();
+        let mut races = Vec::with_capacity(rows.len());
+        for row in rows {
+            races.push(Self::from_id_with_team_cache(&mut *transaction, row.id, &mut team_cache).await?);
+        }
+        for event in events.iter().filter(|event| matches!(event.series, Series::NineDaysOfSaws | Series::Pictionary)) {
+            races.retain(|race| race.series != event.series || race.event != event.event);
+            races.extend(Self::for_event(&mut *transaction, http_client, event).await?);
+        }
+        races.retain(|race| !race.ignored && match race.schedule {
+            RaceSchedule::Unscheduled => true,
+            RaceSchedule::Live { end, .. } => end.is_none(),
+            RaceSchedule::Async { start1, start2, end1, end2, .. } => start1.is_some() && start2.is_some() && (end1.is_none() || end2.is_none()),
+        });
         races.sort_unstable();
         Ok(races)
     }
@@ -1278,15 +1359,6 @@ impl Race {
         } else {
             None
         })
-    }
-
-    pub(crate) async fn player_video_urls(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<(User, Url)>, Error> {
-        let rows = sqlx::query!(r#"SELECT player AS "player: Id<Users>", video FROM race_player_videos WHERE race = $1"#, self.id as _).fetch_all(&mut **transaction).await?;
-        let mut tuples = Vec::with_capacity(rows.len());
-        for row in rows {
-            tuples.push((User::from_id(&mut **transaction, row.player).await?.expect("foreign key constraint violated"), row.video.parse()?));
-        }
-        Ok(tuples)
     }
 
     pub(crate) fn has_any_room(&self) -> bool {
@@ -2492,7 +2564,7 @@ pub(crate) struct RaceTableOptions<'a> {
 
 pub(crate) async fn race_table(
     transaction: &mut Transaction<'_, Postgres>,
-    discord_ctx: &DiscordCtx,
+    discord_ctx: Option<&DiscordCtx>,
     http_client: &reqwest::Client,
     uri: &Origin<'_>,
     event: Option<&event::Data<'_>>,
@@ -2551,7 +2623,7 @@ pub(crate) async fn race_table(
         false
     };
     let root_table = event.is_none();
-    let has_buttons = options.can_edit && !root_table;
+    let has_buttons = !root_table && (options.can_edit || user.is_some_and(User::is_global_admin));
     let now = Utc::now();
     let displayed_race_ids = races.iter().map(|race| i64::from(race.id)).collect::<Vec<_>>();
     let shared_rooms = if displayed_race_ids.is_empty() {
@@ -2598,8 +2670,16 @@ pub(crate) async fn race_table(
             } else {
                 Race::from_id(transaction, http_client, companion_race_id).await?
             };
-            let primary_title = primary_race.matchup_label(transaction, discord_ctx).await?;
-            let companion_title = companion_race.matchup_label(transaction, discord_ctx).await?;
+            let primary_title = if let Some(discord_ctx) = discord_ctx {
+                primary_race.matchup_label(transaction, discord_ctx).await?
+            } else {
+                "linked race".to_owned()
+            };
+            let companion_title = if let Some(discord_ctx) = discord_ctx {
+                companion_race.matchup_label(transaction, discord_ctx).await?
+            } else {
+                "linked race".to_owned()
+            };
             if displayed_race_ids.contains(&i64::from(companion_race_id)) {
                 companion_display_starts.insert(companion_race_id, (row.primary_id, row.start, primary_title.clone()));
                 combined_race_links.insert(companion_race_id, (row.primary_id, primary_title));
@@ -2630,6 +2710,96 @@ pub(crate) async fn race_table(
                 .then_with(|| race_a.game.cmp(&race_b.game))
                 .then_with(|| race_a.id.cmp(&race_b.id))
         });
+    }
+    let mut displayed_teams = HashMap::new();
+    for team in displayed_races.iter().flat_map(|race| race.teams()) {
+        displayed_teams.entry(team.id).or_insert(team);
+    }
+    let team_ids = displayed_teams.keys().copied().map(i64::from).collect::<Vec<_>>();
+    let mut team_members = HashMap::<Id<Teams>, Vec<(Id<Users>, String)>>::new();
+    if !team_ids.is_empty() {
+        for row in sqlx::query!(r#"SELECT
+                tm.team AS "team: Id<Teams>",
+                u.id AS "user_id: Id<Users>",
+                CASE u.display_source
+                    WHEN 'racetime' THEN u.racetime_display_name
+                    WHEN 'discord' THEN u.discord_display_name
+                END AS "display_name!"
+            FROM team_members tm
+            JOIN users u ON u.id = tm.member
+            WHERE tm.team = ANY($1)
+            ORDER BY tm.team, tm.role"#, &team_ids)
+            .fetch_all(&mut **transaction)
+            .await?
+        {
+            team_members.entry(row.team).or_default().push((row.user_id, row.display_name));
+        }
+    }
+    let team_html_cache = displayed_teams.into_iter().map(|(id, team)| {
+        let members = team_members.get(&id).map(Vec::as_slice).unwrap_or_default();
+        let member = members.first().filter(|_| members.len() == 1).map(|(id, name)| (*id, name.as_str()));
+        (id, team.to_html_with_single_member(member, false).0)
+    }).collect::<HashMap<_, _>>();
+    let mut player_video_urls = HashMap::<Id<Races>, Vec<(String, Url)>>::new();
+    if !displayed_race_ids.is_empty() {
+        for row in sqlx::query!(r#"SELECT
+                rpv.race AS "race: Id<Races>",
+                rpv.video,
+                CASE u.display_source
+                    WHEN 'racetime' THEN u.racetime_display_name
+                    WHEN 'discord' THEN u.discord_display_name
+                END AS "player_name!"
+            FROM race_player_videos rpv
+            JOIN users u ON u.id = rpv.player
+            WHERE rpv.race = ANY($1)"#, &displayed_race_ids)
+            .fetch_all(&mut **transaction)
+            .await?
+        {
+            player_video_urls.entry(row.race).or_default().push((row.player_name, row.video.parse()?));
+        }
+    }
+    let mut event_permissions = HashMap::<(Series, String), (bool, bool)>::new();
+    if let Some(user) = user {
+        let mut event_keys = displayed_races.iter().map(|race| (race.series, race.event.clone())).collect::<Vec<_>>();
+        event_keys.sort_unstable();
+        event_keys.dedup();
+        let event_series = event_keys.iter().map(|(series, _)| series.to_string()).collect::<Vec<_>>();
+        let event_slugs = event_keys.iter().map(|(_, event)| event.clone()).collect::<Vec<_>>();
+        if !event_keys.is_empty() {
+            for row in sqlx::query!(r#"SELECT
+                    e.series AS "series: Series",
+                    e.event,
+                    EXISTS (
+                        SELECT 1 FROM organizers o
+                        WHERE o.series = e.series AND o.event = e.event AND o.organizer = $3
+                    ) AS "is_organizer!",
+                    (
+                        EXISTS (
+                            SELECT 1 FROM organizers o
+                            WHERE o.series = e.series AND o.event = e.event AND o.organizer = $3
+                        )
+                        OR EXISTS (
+                            SELECT 1 FROM restreamers r
+                            WHERE r.series = e.series AND r.event = e.event AND r.restreamer = $3
+                        )
+                        OR EXISTS (
+                            SELECT 1
+                            FROM game_series gs
+                            JOIN game_restreamers gr ON gr.game_id = gs.game_id
+                            WHERE gs.series = e.series AND gr.restreamer = $3
+                        )
+                    ) AS "can_manage_volunteers!"
+                FROM events e
+                WHERE (e.series, e.event) IN (
+                    SELECT selected_series::varchar, selected_event::varchar
+                    FROM UNNEST($1::text[], $2::text[]) AS selected(selected_series, selected_event)
+                )"#, &event_series, &event_slugs, user.id as _)
+                .fetch_all(&mut **transaction)
+                .await?
+            {
+                event_permissions.insert((row.series, row.event), (row.is_organizer, row.can_manage_volunteers));
+            }
+        }
     }
     Ok(html! {
         table {
@@ -2764,7 +2934,7 @@ pub(crate) async fn race_table(
                             }
                             Entrants::Two([ref team1, ref team2]) => {
                                 td(class = "vs1", colspan = "3") {
-                                    : team1.to_html(&mut *transaction, discord_ctx, false).await?;
+                                    : team1.to_html_with_optional_discord(&mut *transaction, discord_ctx, Some(&team_html_cache), false).await?;
                                     @if let RaceSchedule::Async { start1: Some(start), .. } = race.schedule {
                                         br;
                                         small {
@@ -2773,7 +2943,7 @@ pub(crate) async fn race_table(
                                     }
                                 }
                                 td(class = "vs2", colspan = "3") {
-                                    : team2.to_html(&mut *transaction, discord_ctx, false).await?;
+                                    : team2.to_html_with_optional_discord(&mut *transaction, discord_ctx, Some(&team_html_cache), false).await?;
                                     @if let RaceSchedule::Async { start2: Some(start), .. } = race.schedule {
                                         br;
                                         small {
@@ -2784,7 +2954,7 @@ pub(crate) async fn race_table(
                             }
                             Entrants::Three([ref team1, ref team2, ref team3]) => {
                                 td(colspan = "2") {
-                                    : team1.to_html(&mut *transaction, discord_ctx, false).await?;
+                                    : team1.to_html_with_optional_discord(&mut *transaction, discord_ctx, Some(&team_html_cache), false).await?;
                                     @if let RaceSchedule::Async { start1: Some(start), .. } = race.schedule {
                                         br;
                                         small {
@@ -2793,7 +2963,7 @@ pub(crate) async fn race_table(
                                     }
                                 }
                                 td(colspan = "2") {
-                                    : team2.to_html(&mut *transaction, discord_ctx, false).await?;
+                                    : team2.to_html_with_optional_discord(&mut *transaction, discord_ctx, Some(&team_html_cache), false).await?;
                                     @if let RaceSchedule::Async { start2: Some(start), .. } = race.schedule {
                                         br;
                                         small {
@@ -2802,7 +2972,7 @@ pub(crate) async fn race_table(
                                     }
                                 }
                                 td(colspan = "2") {
-                                    : team3.to_html(&mut *transaction, discord_ctx, false).await?;
+                                    : team3.to_html_with_optional_discord(&mut *transaction, discord_ctx, Some(&team_html_cache), false).await?;
                                     @if let RaceSchedule::Async { start3: Some(start), .. } = race.schedule {
                                         br;
                                         small {
@@ -2822,8 +2992,8 @@ pub(crate) async fn race_table(
                                         a(class = "favicon", title = "multistream", href = multistream_url.to_string(), target = "_blank") : favicon(&multistream_url);
                                     }
                                 }
-                                @for (user, video_url) in race.player_video_urls(&mut *transaction).await? {
-                                    a(class = "favicon", title = format!("{user}'s vod"), href = video_url.to_string(), target = "_blank") : favicon(&video_url);
+                                @for (player_name, video_url) in player_video_urls.get(&race.id).into_iter().flatten() {
+                                    a(class = "favicon", title = format!("{player_name}'s vod"), href = video_url.to_string(), target = "_blank") : favicon(video_url);
                                 }
                                 @if let Some(startgg_url) = race.startgg_set_url()? {
                                     a(class = "favicon", title = "start.gg set", href = startgg_url.to_string(), target = "_blank") : favicon(&startgg_url);
@@ -2851,18 +3021,13 @@ pub(crate) async fn race_table(
                                     @let all_teams_consented = restream_race.restream_consent_required || restream_race.teams_opt().map_or(true, |mut teams| teams.all(|team| team.restream_consent));
                                     @if scheduled && all_teams_consented {
                                         @if let Some(user) = user {
-                                            @let is_admin = u64::from(user.id) == User::GLOBAL_ADMIN_USER_IDS[0];
-                                            @let is_organizer = event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(user));
-                                            @let is_event_restreamer = event.restreamers(&mut *transaction).await.ok().map_or(false, |rest| rest.contains(user));
-                                            @let is_game_restreamer = if is_event_restreamer { false } else {
-                                                match crate::game::Game::from_series(&mut *transaction, race.series).await {
-                                                    Ok(Some(game)) => game.is_restreamer_any_language(&mut *transaction, user).await.unwrap_or(false),
-                                                    _ => false,
-                                                }
-                                            };
-                                            @let is_restreamer = is_event_restreamer || is_game_restreamer;
-                                            @let can_inline_edit = show_event && (options.can_edit || is_admin || is_organizer || is_restreamer);
-                                            @if is_organizer || is_restreamer {
+                                            @let is_admin = user.is_global_admin();
+                                            @let (is_organizer, can_manage_volunteers) = event_permissions
+                                                .get(&(race.series, race.event.clone()))
+                                                .copied()
+                                                .unwrap_or_default();
+                                            @let can_inline_edit = show_event && (options.can_edit || is_admin || is_organizer || can_manage_volunteers);
+                                            @if can_manage_volunteers {
                                                 a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, volunteer_race_id, _))) : "Manage Volunteers";
                                                 @if can_inline_edit {
                                                     : " | ";
@@ -2968,8 +3133,8 @@ pub(crate) async fn race_table(
                         @if has_buttons {
                             td {
                                 @if let Some(user) = user {
-                                    @let is_admin = u64::from(user.id) == User::GLOBAL_ADMIN_USER_IDS[0];
-                                    @let is_organizer = event.organizers(&mut *transaction).await.ok().map_or(false, |orgs| orgs.contains(user));
+                                    @let is_admin = user.is_global_admin();
+                                    @let is_organizer = event_permissions.get(&(race.series, race.event.clone())).is_some_and(|(is_organizer, _)| *is_organizer);
                                     @if is_admin || is_organizer {
                                         a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
                                     } else if options.can_edit {
@@ -3186,6 +3351,19 @@ pub(crate) async fn race_table(
     })
 }
 
+/// Progress of a race-import job started via [`import_races_post`], tracked in [`RaceImportJobs`]
+/// so the triggering request can return immediately instead of blocking on the whole batch (which
+/// can involve many sequential Discord API calls, one per match) and the client can poll for status.
+pub(crate) enum RaceImportStatus {
+    Running { total: usize, completed: usize, failed: Vec<(String, String)> },
+    Done { total: usize, completed: usize, failed: Vec<(String, String)> },
+}
+
+/// In-memory job map for background race imports, analogous to `event::PracticeSeeds`. Entries are
+/// intentionally never removed by the status page itself (only overwritten by a later import job),
+/// so repeated status-page reloads after completion stay safe instead of 404ing.
+pub(crate) type RaceImportJobs = Arc<tokio::sync::RwLock<HashMap<Uuid, RaceImportStatus>>>;
+
 pub(crate) async fn import_races_form(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &DiscordCtx, config: &Config, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: event::Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
     let header = event.header(&mut transaction, me.as_ref(), Tab::Races, true).await?;
     let form = match event.match_source() {
@@ -3229,7 +3407,7 @@ pub(crate) async fn import_races_form(mut transaction: Transaction<'_, Postgres>
                     }
                 }
             } else {
-                let table = race_table(&mut transaction, discord_ctx, http_client, &uri, Some(&event), RaceTableOptions { game_count: true, show_multistreams: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: Some(ctx.clone()) }, &races, None, None).await?;
+                let table = race_table(&mut transaction, Some(discord_ctx), http_client, &uri, Some(&event), RaceTableOptions { game_count: true, show_multistreams: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: Some(ctx.clone()) }, &races, None, None).await?;
                 let errors = ctx.errors().collect_vec();
                 full_form(uri!(import_races_post(event.series, &*event.event)), csrf, html! {
                     p : "The following races will be imported:";
@@ -3313,7 +3491,7 @@ pub(crate) async fn import_races_form(mut transaction: Transaction<'_, Postgres>
                     }
                 }
             } else {
-                let table = race_table(&mut transaction, discord_ctx, http_client, &uri, Some(&event), RaceTableOptions { game_count: true, show_multistreams: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: None }, &races, None, None).await?;
+                let table = race_table(&mut transaction, Some(discord_ctx), http_client, &uri, Some(&event), RaceTableOptions { game_count: true, show_multistreams: false, can_edit: false, show_restream_consent: false, challonge_import_ctx: None }, &races, None, None).await?;
                 let errors = ctx.errors().collect_vec();
                 full_form(uri!(import_races_post(event.series, &*event.event)), csrf, html! {
                     p : "The following races will be imported:";
@@ -3363,7 +3541,7 @@ pub(crate) struct ImportRacesForm {
 }
 
 #[rocket::post("/event/<series>/<event>/races/import", data = "<form>")]
-pub(crate) async fn import_races_post(discord_ctx: &State<RwFuture<DiscordCtx>>, config: &State<Config>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, ImportRacesForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn import_races_post(discord_ctx: &State<RwFuture<DiscordCtx>>, config: &State<Config>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, global_state: &State<Arc<racetime_bot::GlobalState>>, race_import_jobs: &State<RaceImportJobs>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, ImportRacesForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let event = event::Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
@@ -3431,18 +3609,111 @@ pub(crate) async fn import_races_post(discord_ctx: &State<RwFuture<DiscordCtx>>,
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(import_races_form(transaction, http_client, &*discord_ctx.read().await, config, Some(me), uri, csrf.as_ref(), event, form.context).await?)
         } else {
-            for race in races {
-                transaction = import_race(transaction, &*discord_ctx.read().await, race).await?;
-            }
+            // Nothing written to `transaction` beyond this point, so release it before starting
+            // the (potentially long-running, one-Discord-call-per-match) import work below.
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(event::races(event.series, &*event.event))))
+            let job_id = Uuid::new_v4();
+            race_import_jobs.write().await.insert(job_id, RaceImportStatus::Running { total: races.len(), completed: 0, failed: Vec::default() });
+            let pool = pool.inner().clone();
+            let discord_ctx = discord_ctx.inner().clone();
+            let race_import_lock = global_state.race_import_lock();
+            let jobs = Arc::clone(race_import_jobs.inner());
+            tokio::spawn(async move {
+                lock!(race_import_lock = race_import_lock; {
+                    for race in races {
+                        let label = format!("{:?}", race.source);
+                        let result = import_race(&pool, &*discord_ctx.read().await, race).await;
+                        let mut jobs = jobs.write().await;
+                        if let Some(RaceImportStatus::Running { completed, failed, .. }) = jobs.get_mut(&job_id) {
+                            match result {
+                                Ok(()) => *completed += 1,
+                                Err(e) => failed.push((label, e.to_string())),
+                            }
+                        }
+                    }
+                });
+                let mut jobs = jobs.write().await;
+                if let Some(RaceImportStatus::Running { total, completed, failed }) = jobs.remove(&job_id) {
+                    jobs.insert(job_id, RaceImportStatus::Done { total, completed, failed });
+                }
+            });
+            let job_id = job_id.to_string();
+            RedirectOrContent::Redirect(Redirect::to(uri!(import_races_status(event.series, &*event.event, job_id.as_str()))))
         }
     } else {
         RedirectOrContent::Content(import_races_form(transaction, http_client, &*discord_ctx.read().await, config, Some(me), uri, csrf.as_ref(), event, form.context).await?)
     })
 }
 
-async fn import_race<'a>(mut transaction: Transaction<'a, Postgres>, discord_ctx: &DiscordCtx, race: Race) -> Result<Transaction<'a, Postgres>, event::Error> {
+#[rocket::get("/event/<series>/<event>/races/import/status/<job_id>")]
+pub(crate) async fn import_races_status(pool: &State<PgPool>, race_import_jobs: &State<RaceImportJobs>, me: Option<User>, uri: Origin<'_>, series: Series, event: &str, job_id: &str) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+    let job_id = Uuid::parse_str(job_id).map_err(|_| StatusOrError::Status(Status::NotFound))?;
+    let status = race_import_jobs.read().await.get(&job_id).map(|status| match status {
+        RaceImportStatus::Running { total, completed, failed } => (false, *total, *completed, failed.clone()),
+        RaceImportStatus::Done { total, completed, failed } => (true, *total, *completed, failed.clone()),
+    });
+    let (done, total, completed, failed) = status.ok_or(StatusOrError::Status(Status::NotFound))?;
+
+    let mut transaction = pool.begin().await?;
+    let data = event::Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let header = data.header(&mut transaction, me.as_ref(), Tab::Races, true).await?;
+    let chests = data.chests().await?;
+    let content = if done {
+        html! {
+            : header;
+            article {
+                h2 : "Race Import Complete";
+                p : format!("{completed} of {total} races imported.");
+                @if !failed.is_empty() {
+                    p : "The following matches could not be imported:";
+                    ul {
+                        @for (label, error) in &failed {
+                            li : format!("{label}: {error}");
+                        }
+                    }
+                    p : "You can try importing again — matches that already imported successfully will be skipped.";
+                }
+                a(href = uri!(event::races(series, event)).to_string()) : "Back to races";
+            }
+        }
+    } else {
+        html! {
+            : header;
+            script {
+                : "setTimeout(function(){ location.reload(); }, 2000);";
+            }
+            article {
+                h2 : "Importing Races…";
+                p : format!("{completed} of {total} races imported so far. This page will refresh automatically.");
+            }
+        }
+    };
+    Ok(page(transaction, &me, &uri, PageStyle { chests, ..PageStyle::default() }, "Import Races", content).await?)
+}
+
+/// Imports a single match (and all of its games) in its own transaction, committing as soon as
+/// this match is saved. This keeps a failure partway through a larger batch from rolling back
+/// matches that already imported successfully, and lets already-imported matches be visible
+/// (and usable by race room commands) without waiting for the rest of the batch.
+async fn import_race(pool: &PgPool, discord_ctx: &DiscordCtx, race: Race) -> Result<(), event::Error> {
+    let mut transaction = pool.begin().await?;
+    // Race discovery happens before background manual jobs acquire race_import_lock. Recheck under
+    // that lock before creating the Discord thread so a queued job cannot import a stale result.
+    let already_imported = match &race.source {
+        Source::Challonge { id } => sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM races WHERE challonge_match = $1)")
+            .bind(id)
+            .fetch_one(&mut *transaction)
+            .await?,
+        Source::StartGG { set, .. } => sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM races WHERE startgg_set = $1)")
+            .bind(set)
+            .fetch_one(&mut *transaction)
+            .await?,
+        Source::Manual | Source::League { .. } | Source::Sheet { .. } | Source::SpeedGaming { .. } => false,
+    };
+    if already_imported {
+        transaction.commit().await?;
+        return Ok(())
+    }
     let game_count = race.game.unwrap_or(1);
     let mut scheduling_thread = None;
     for game in 1..=game_count {
@@ -3459,7 +3730,8 @@ async fn import_race<'a>(mut transaction: Transaction<'a, Postgres>, discord_ctx
         }
         race.save(&mut transaction).await?;
     }
-    Ok(transaction)
+    transaction.commit().await?;
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -3494,11 +3766,36 @@ impl IsNetworkError for AutoImportError {
     }
 }
 
-async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, config: Config, mut shutdown: rocket::Shutdown, discord_ctx: RwFuture<DiscordCtx>, new_room_lock: Arc<Mutex<()>>) -> Result<(), AutoImportError> {
+async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, config: Config, mut shutdown: rocket::Shutdown, discord_ctx: RwFuture<DiscordCtx>, new_room_lock: Arc<Mutex<()>>, race_import_lock: Arc<Mutex<()>>) -> Result<(), AutoImportError> {
     loop {
-        lock!(new_room_lock = new_room_lock; {
+        // Refresh potentially slow, rate-limited start.gg pages before serializing imports. This
+        // only warms the query cache, so it cannot race to create duplicate scheduling threads.
+        let startgg_event_slugs = {
             let mut transaction = db_pool.begin().await?;
-            for row in sqlx::query!(r#"SELECT series, event FROM events WHERE end_time IS NULL OR end_time > NOW()"#).fetch_all(&mut *transaction).await? {
+            let urls = sqlx::query_scalar!(r#"
+                SELECT url AS "url!"
+                FROM events
+                WHERE auto_import AND (end_time IS NULL OR end_time > NOW()) AND url IS NOT NULL
+            "#).fetch_all(&mut *transaction).await?;
+            transaction.commit().await?;
+            urls.into_iter()
+                .map(|url| Url::parse(&url))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .filter(|url| matches!(url.host_str(), Some("start.gg" | "www.start.gg")))
+                .map(|url| url.path()[1..].to_owned())
+                .collect::<HashSet<_>>()
+        };
+        for event_slug in startgg_event_slugs {
+            startgg::preload_event_sets(&http_client, &config, &event_slug).await?;
+        }
+
+        lock!(race_import_lock = race_import_lock; {
+            let mut transaction = db_pool.begin().await?;
+            for row in sqlx::query!(
+                r#"SELECT series, event FROM events WHERE (auto_import OR $1) AND (end_time IS NULL OR end_time > NOW())"#,
+                speedgaming_export::LEGACY_IMPORT_ENABLED,
+            ).fetch_all(&mut *transaction).await? {
                 let series = match row.series.parse::<Series>() {
                     Ok(s) => s,
                     Err(()) => {
@@ -3513,10 +3810,11 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                         MatchSource::Challonge { community, tournament } => {
                             let (races, _) = challonge::races_to_import(&mut transaction, &http_client, &config, &event, community, tournament).await?;
                             for race in races {
-                                transaction = import_race(transaction, &*discord_ctx.read().await, race).await?;
+                                import_race(&db_pool, &*discord_ctx.read().await, race).await?;
                             }
                         }
                         MatchSource::League => if event.is_started(&mut transaction).await? {
+                            lock!(new_room_lock = new_room_lock; {
                             let mut races = Vec::default();
                             for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE series = $1 AND event = $2"#, event.series as _, &event.event).fetch_all(&mut *transaction).await? {
                                 races.push(Race::from_id(&mut transaction, &http_client, id).await?);
@@ -3608,12 +3906,22 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                     races.last_mut().expect("just pushed")
                                 }.save(&mut transaction).await?;
                             }
+                            transaction.commit().await?;
+                            });
+                            transaction = db_pool.begin().await?;
                         },
                         MatchSource::StartGG(event_slug) => loop {
+                            let import_started_at = Instant::now();
                             match startgg::races_to_import(&mut transaction, &http_client, &config, &event, event_slug).await {
-                                Ok((races, _)) => {
+                                Ok((races, skips)) => {
+                                    let set_count = races.len() + skips.len();
+                                    let new_race_count = races.len();
                                     for race in races {
-                                        transaction = import_race(transaction, &*discord_ctx.read().await, race).await?;
+                                        import_race(&db_pool, &*discord_ctx.read().await, race).await?;
+                                    }
+                                    let import_duration = import_started_at.elapsed();
+                                    if import_duration >= Duration::from_secs(10) {
+                                        eprintln!("automatic start.gg race import for {}/{} ({event_slug}) processed {set_count} sets ({new_race_count} new) in {}", event.series.slug(), &event.event, English.format_duration(import_duration, true));
                                     }
                                     break
                                 }
@@ -3673,7 +3981,8 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                         }
                     }
                 }
-                if let Some(ref speedgaming_slug) = event.speedgaming_slug {
+                if speedgaming_export::LEGACY_IMPORT_ENABLED && let Some(ref speedgaming_slug) = event.speedgaming_slug {
+                    lock!(new_room_lock = new_room_lock; {
                     let schedule = match sgl::schedule(&http_client, speedgaming_slug).await {
                         Ok(s) => s,
                         Err(e) => {
@@ -3791,6 +4100,9 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                             }
                         }
                     }
+                    transaction.commit().await?;
+                    });
+                    transaction = db_pool.begin().await?;
                 }
             }
             transaction.commit().await?;
@@ -3928,11 +4240,77 @@ pub(crate) async fn auto_ignore_past_custom_races(
     Ok(())
 }
 
-pub(crate) async fn auto_import_races(db_pool: PgPool, http_client: reqwest::Client, config: Config, shutdown: rocket::Shutdown, discord_ctx: RwFuture<DiscordCtx>, new_room_lock: Arc<Mutex<()>>) -> Result<(), AutoImportError> {
+/// Records terminal racetime.gg timestamps for generated weekly races.
+///
+/// Other races are finalized by their room bot. In particular, a cancelled
+/// tournament room may need to be restarted and must remain otherwise untouched.
+pub(crate) async fn reconcile_weekly_racetime_room_statuses(
+    db_pool: &PgPool,
+    http_client: &reqwest::Client,
+) -> Result<(), Error> {
+    let rooms = sqlx::query!(r#"
+        SELECT races.id AS "id: Id<Races>", races.room AS "room!"
+        FROM races
+        WHERE NOT races.ignored
+        AND races.room IS NOT NULL
+        AND races.end_time IS NULL
+        AND races.start <= NOW()
+        AND EXISTS (
+            SELECT 1
+            FROM weekly_schedules ws
+            WHERE ws.series = races.series
+            AND ws.event = races.event
+            AND races.round = ws.name || ' ' || CASE ws.frequency_days
+                WHEN 14 THEN 'Biweekly'
+                WHEN 28 THEN 'Monthly'
+                WHEN 30 THEN 'Monthly'
+                ELSE 'Weekly'
+            END
+        )
+    "#).fetch_all(db_pool).await?;
+    for room in rooms {
+        let response = match http_client.get(format!("{}/data", room.room))
+            .timeout(Duration::from_secs(3))
+            .send().await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                log::warn!("failed to refresh racetime room {}: {error}", room.room);
+                continue
+            }
+        };
+        let response = match response.detailed_error_for_status().await {
+            Ok(response) => response,
+            Err(error) => {
+                log::warn!("failed to refresh racetime room {}: {error}", room.room);
+                continue
+            }
+        };
+        let data = match response.json_with_text_in_error::<RaceData>().await {
+            Ok(data) => data,
+            Err(error) => {
+                log::warn!("failed to decode racetime room {}: {error}", room.room);
+                continue
+            }
+        };
+        if !matches!(data.status.value, RaceStatusValue::Cancelled | RaceStatusValue::Finished) {
+            continue
+        }
+        let terminal_at = data.ended_at.unwrap_or_else(Utc::now);
+        sqlx::query!(
+            "UPDATE races SET end_time = $1 WHERE id = $2 AND end_time IS NULL",
+            terminal_at,
+            room.id as _,
+        ).execute(db_pool).await?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn auto_import_races(db_pool: PgPool, http_client: reqwest::Client, config: Config, shutdown: rocket::Shutdown, discord_ctx: RwFuture<DiscordCtx>, new_room_lock: Arc<Mutex<()>>, race_import_lock: Arc<Mutex<()>>) -> Result<(), AutoImportError> {
     let mut last_crash = Instant::now();
     let mut wait_time = Duration::from_secs(1);
     loop {
-        match auto_import_races_inner(db_pool.clone(), http_client.clone(), config.clone(), shutdown.clone(), discord_ctx.clone(), new_room_lock.clone()).await {
+        match auto_import_races_inner(db_pool.clone(), http_client.clone(), config.clone(), shutdown.clone(), discord_ctx.clone(), new_room_lock.clone(), race_import_lock.clone()).await {
             Ok(()) => break Ok(()),
             Err(AutoImportError::Discord(discord_bot::Error::UninitializedDiscordGuild(guild_id))) => {
                 let wait_time = Duration::from_secs(60);
@@ -4050,7 +4428,7 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
     let mut errors = ctx.as_ref().map(|ctx| ctx.errors().collect()).unwrap_or_default();
     let form = if me.is_some() {
         full_form(uri!(edit_race_post(event.series, &*event.event, race.id, redirect_to)), csrf, html! {
-            @if is_organizer && race.is_custom() {
+            @if (is_organizer || is_admin) && race.is_custom() {
                 fieldset {
                     legend : "Custom race";
                     : form_field("custom_title", &mut errors, html! {
@@ -4373,9 +4751,9 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
             }
         }
         @if let Some(ref me) = me {
-            @if is_organizer {
+            @if is_organizer || is_admin {
                 fieldset {
-                    legend : "Race Schedule (Organizers Only)";
+                    legend : "Race Schedule";
                     @match race.schedule {
                         RaceSchedule::Unscheduled => {
                             p : "Not yet scheduled";
@@ -4711,7 +5089,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
         let can_edit_race_room = is_organizer || is_admin;
         let uses_primary_restream_settings = race.companion_primary_id(&mut transaction).await?.is_some();
 
-        if is_organizer && race.is_custom() && value.custom_title.trim().is_empty() {
+        if (is_organizer || is_admin) && race.is_custom() && value.custom_title.trim().is_empty() {
             form.context.push_error(form::Error::validation("Custom races need a title.").with_name("custom_title"));
         }
 
@@ -4782,13 +5160,13 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
             }
         }
         
-        // Parse and validate start dates if user is an organizer
+        // Parse and validate start dates if user is an organizer or global admin
         let mut new_start_date = None;
         let mut new_async_start1_date = None;
         let mut new_async_start2_date = None;
         let mut new_async_start3_date = None;
-        
-        if is_organizer {
+
+        if is_organizer || is_admin {
             // Parse live race start date
             if !value.start_date.is_empty() {
                 if let Ok(naive_datetime) = NaiveDateTime::parse_from_str(&value.start_date, "%Y-%m-%d %H:%M") {
@@ -5164,8 +5542,8 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 _ => None,
             };
 
-            // Update race schedule with new start dates if organizer
-            if is_organizer {
+            // Update race schedule with new start dates if organizer or global admin
+            if is_organizer || is_admin {
                 match &mut race.schedule {
                     RaceSchedule::Unscheduled => {
                         if let Some(new_start) = new_start_date {
@@ -5202,16 +5580,6 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                         *room3 = (!value.async_room3.is_empty()).then(|| Url::parse(&value.async_room3).expect("validated"));
                     }
                 }
-            } else if is_admin {
-                match &mut race.schedule {
-                    RaceSchedule::Unscheduled => {}
-                    RaceSchedule::Live { room, .. } => *room = (!value.room.is_empty()).then(|| Url::parse(&value.room).expect("validated")),
-                    RaceSchedule::Async { room1, room2, room3, .. } => {
-                        *room1 = (!value.async_room1.is_empty()).then(|| Url::parse(&value.async_room1).expect("validated"));
-                        *room2 = (!value.async_room2.is_empty()).then(|| Url::parse(&value.async_room2).expect("validated"));
-                        *room3 = (!value.async_room3.is_empty()).then(|| Url::parse(&value.async_room3).expect("validated"));
-                    }
-                }
             }
             race.last_edited_by = Some(me.id);
             race.last_edited_at = Some(Utc::now());
@@ -5220,7 +5588,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 race.ignored = value.is_canceled;
             }
             let original_custom_title = race.custom_title.clone();
-            if is_organizer && race.is_custom() {
+            if (is_organizer || is_admin) && race.is_custom() {
                 race.custom_title = Some(value.custom_title.trim().to_owned());
                 race.custom_create_room = value.custom_create_room;
             }
@@ -5275,7 +5643,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                 RaceSchedule::Live { start, .. } => Some(*start),
                 _ => None,
             };
-            if is_organizer && !race.ignored
+            if (is_organizer || is_admin) && !race.ignored
                 && new_schedule_start.is_some()
                 && new_schedule_start != old_schedule_start
             {
@@ -5393,6 +5761,7 @@ pub(crate) async fn edit_race_post(discord_ctx: &State<RwFuture<DiscordCtx>>, po
                                         .fetch_optional(&mut *transaction)
                                         .await
                                         .ok()
+                                        .flatten()
                                         .flatten()
                                     };
 

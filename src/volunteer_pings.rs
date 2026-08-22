@@ -13,6 +13,7 @@ use {
         lang::Language,
         prelude::*,
         series::Series,
+        volunteer_requests::format_round_phase_game,
     },
 };
 
@@ -811,10 +812,8 @@ async fn build_matchup_label(race: &Race, transaction: &mut Transaction<'_, Post
         Entrants::Open => "Open Race".to_string(),
         _ => "Race".to_string(),
     };
-    Ok(match (&race.round, &race.phase) {
-        (Some(r), Some(p)) => format!("{} ({}, {})", base, r, p),
-        (Some(r), None) => format!("{} ({})", base, r),
-        (None, Some(p)) => format!("{} ({})", base, p),
-        (None, None) => base,
+    Ok(match format_round_phase_game(race.round.as_deref(), race.phase.as_deref(), race.game) {
+        Some(suffix) => format!("{base} ({suffix})"),
+        None => base,
     })
 }
