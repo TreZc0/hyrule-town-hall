@@ -29,25 +29,33 @@ impl RestreamMatch {
                 Entrants::Two(entrants) => {
                     if self.players.len() == 2 {
                         for players in self.players.iter().permutations(2) {
+                            let mut all_match = true;
                             for (entrant, player) in entrants.iter().zip_eq(players) {
                                 if !player.matches(&mut *transaction, http_client, entrant).await? {
-                                    return Ok(false)
+                                    all_match = false;
+                                    break
                                 }
                             }
-                            return Ok(true)
+                            if all_match {
+                                return Ok(true)
+                            }
                         }
                     }
                     false
                 }
                 Entrants::Three(entrants) => {
-                    if self.players.len() == 2 {
+                    if self.players.len() == 3 {
                         for players in self.players.iter().permutations(3) {
+                            let mut all_match = true;
                             for (entrant, player) in entrants.iter().zip_eq(players) {
                                 if !player.matches(&mut *transaction, http_client, entrant).await? {
-                                    return Ok(false)
+                                    all_match = false;
+                                    break
                                 }
                             }
-                            return Ok(true)
+                            if all_match {
+                                return Ok(true)
+                            }
                         }
                     }
                     false

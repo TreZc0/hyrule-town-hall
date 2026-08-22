@@ -26,7 +26,6 @@ use {
 pub(crate) mod alttprde;
 pub(crate) mod br;
 pub(crate) mod cabookey;
-pub(crate) mod casboots;
 pub(crate) mod coop;
 pub(crate) mod fr;
 pub(crate) mod league;

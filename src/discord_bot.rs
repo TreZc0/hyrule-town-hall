@@ -5368,7 +5368,23 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
         let discord_data = discord_ctx.data.read().await;
         discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
     };
-    
+
+    // The async manager may observe the same due race more than once. Do not roll or announce a
+    // second seed after this async part has already been handled.
+    let already_notified = match cal_event.kind {
+        cal::EventKind::Async1 => sqlx::query_scalar::<_, bool>("SELECT async_notified_1 FROM races WHERE id = $1"),
+        cal::EventKind::Async2 => sqlx::query_scalar::<_, bool>("SELECT async_notified_2 FROM races WHERE id = $1"),
+        cal::EventKind::Async3 => sqlx::query_scalar::<_, bool>("SELECT async_notified_3 FROM races WHERE id = $1"),
+        cal::EventKind::Normal => panic!("attempted to handle a normal race as an async"),
+    }
+        .bind(i64::from(cal_event.race.id))
+        .fetch_one(&mut *transaction)
+        .await?;
+    if already_notified {
+        transaction.commit().await?;
+        return Ok(())
+    }
+
     let is_second_part = cal_event.race.seed.files().is_some();
 
     // For the second part, the seed (and any resolved randoms) was already rolled and persisted

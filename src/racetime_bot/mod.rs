@@ -339,7 +339,9 @@ pub(crate) enum UnlockSpoilerLog {
 }
 
 pub(crate) enum SeedCommandParseResult {
-    Alttpr,
+    ConfiguredEvent {
+        unlock_spoiler_log: UnlockSpoilerLog,
+    },
     Rsl {
         preset: rsl::VersionedPreset,
         world_count: u8,
@@ -452,8 +454,8 @@ impl seed_gen_type::SeedGenType {
         };
         Ok(match self {
             Self::AlttprDoorRando { .. } | Self::AlttprAvianart { .. } => match args {
-                [] => SeedCommandParseResult::Alttpr,
-                [arg] if arg == "base" => SeedCommandParseResult::Alttpr,
+                [] => SeedCommandParseResult::ConfiguredEvent { unlock_spoiler_log },
+                [arg] if arg == "base" => SeedCommandParseResult::ConfiguredEvent { unlock_spoiler_log },
                 [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn’t quite understand that" },
             },
             Self::OotrTriforceBlitz => match args {
@@ -575,8 +577,8 @@ impl seed_gen_type::SeedGenType {
             },
             Self::OoTR | Self::Mmr => return Ok(SeedCommandParseResult::Error { language: English, msg: "This seed type rolls settings from the event config; use the bot’s !seed command in the race room instead.".into() }),
             Self::Owr { .. } => match args {
-                [] => SeedCommandParseResult::Alttpr,
-                [arg] if arg == "base" => SeedCommandParseResult::Alttpr,
+                [] => SeedCommandParseResult::ConfiguredEvent { unlock_spoiler_log },
+                [arg] if arg == "base" => SeedCommandParseResult::ConfiguredEvent { unlock_spoiler_log },
                 [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn’t quite understand that" },
             },
         })
@@ -1232,14 +1234,16 @@ impl GlobalState {
             SeedGenType::AlttprDoorRando { source: AlttprDrSource::MysteryPool { weights_url }, .. } => {
                 self.roll_mystery_pool_seed(weights_url.clone())
             }
-            SeedGenType::AlttprAvianart { .. } => {
+            SeedGenType::AlttprAvianart { default_preset, .. } => {
                 let game_num = cal_event.race.game.unwrap_or(1);
                 let preset = cal_event.race.draft.as_ref()
                     .and_then(|d| d.settings.get(&*format!("game{game_num}_preset")))
-                    .expect("Avianart async race missing preset in draft state")
-                    .as_ref()
-                    .to_owned();
-                self.roll_avianart_seed(preset)
+                    .map(|preset| preset.as_ref().to_owned())
+                    .or_else(|| default_preset.clone());
+                match preset {
+                    Some(preset) => self.roll_avianart_seed(preset),
+                    None => alttpr_dr_error_receiver(RollError::AlttprDe("Avianart event has no preset configured".to_owned())),
+                }
             }
             SeedGenType::Owr { config } => {
                 let choices = owr_choices_for_race(&self.db_pool, &cal_event.race).await;
@@ -3479,7 +3483,7 @@ impl Handler {
                 source: seed_gen_type::AlttprDrSource::MysteryPool { weights_url },
                 ..
             }) => self.roll_mystery_pool_seed(ctx, cal_event, weights_url, language, article).await,
-            Some(seed_gen_type::SeedGenType::AlttprAvianart { .. }) => {
+            Some(seed_gen_type::SeedGenType::AlttprAvianart { default_preset, .. }) => {
                 let game = cal_event.race.game.unwrap_or(1);
                 let preset = settings.as_ref()
                     .and_then(|settings| settings.get("preset"))
@@ -3487,7 +3491,8 @@ impl Handler {
                     .map(str::to_owned)
                     .or_else(|| cal_event.race.draft.as_ref()
                         .and_then(|draft| draft.settings.get(&*format!("game{game}_preset")))
-                        .map(|preset| preset.as_ref().to_owned()));
+                        .map(|preset| preset.as_ref().to_owned()))
+                    .or(default_preset);
                 let Some(preset) = preset else { return false };
                 self.roll_avianart_seed(ctx, cal_event, preset, language, article).await;
             }
@@ -4624,16 +4629,30 @@ impl RaceHandler<GlobalState> for Handler {
                         } else if let Some(sgt) = sgt.as_ref().filter(|s| matches!(s,
                             seed_gen_type::SeedGenType::AlttprDoorRando { .. }
                             | seed_gen_type::SeedGenType::AlttprAvianart { .. }
+                            | seed_gen_type::SeedGenType::Owr { .. }
                             | seed_gen_type::SeedGenType::OotrTriforceBlitz
                             | seed_gen_type::SeedGenType::OotrRsl
                             | seed_gen_type::SeedGenType::TWWR { .. }
                         )) {
                         let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
                         match sgt.parse_seed_command(&mut transaction, &ctx.global_state, self.is_official(), cmd_name.eq_ignore_ascii_case("spoilerseed"), false, &args).await.to_racetime()? {
-                            SeedCommandParseResult::Alttpr => {
-                                // TODO THIS NEEDS TO BE IMPLEMENTED -- call door rando .py and roll seed with arguments
-                                Command::new("echo").args(["hello", "world"]).check("echo").await.to_racetime()?;
-                                unimplemented!()
+                            SeedCommandParseResult::ConfiguredEvent { unlock_spoiler_log } => {
+                                let Some(cal_event) = self.official_data.as_ref().map(|data| data.cal_event.clone()) else {
+                                    ctx.say(format!("Sorry {reply_to}, this room is not associated with a configured event.")).await?;
+                                    return Ok(())
+                                };
+                                let article = if let French = lang { "une" } else { "a" };
+                                if !self.roll_configured_event_seed(
+                                    ctx,
+                                    cal_event,
+                                    None,
+                                    unlock_spoiler_log,
+                                    lang,
+                                    article,
+                                    "seed".to_string(),
+                                ).await {
+                                    ctx.say(format!("Sorry {reply_to}, this event does not have enough seed configuration to roll automatically. Please contact a tournament organizer.")).await?;
+                                }
                             }
                             SeedCommandParseResult::Rsl { preset, world_count, unlock_spoiler_log, language, article, description } => self.roll_rsl_seed(ctx, preset, world_count, unlock_spoiler_log, language, article, description).await,
                             SeedCommandParseResult::Tfb { version, unlock_spoiler_log, language, article, description } => self.roll_tfb_seed(ctx, version, unlock_spoiler_log, language, article, description).await,

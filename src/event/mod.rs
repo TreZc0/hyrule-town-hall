@@ -885,7 +885,7 @@ impl<'a> Data<'a> {
                         Some(SeedGenType::Owr { .. }) => true,
                         Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman, practice_modes, .. }) => !practice_modes.is_empty(),
                         Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices { .. }, .. }) => true,
-                        Some(SeedGenType::AlttprAvianart { practice_presets }) => !practice_presets.is_empty(),
+                        Some(SeedGenType::AlttprAvianart { practice_presets, .. }) => !practice_presets.is_empty(),
                         Some(SeedGenType::TWWR { .. }) => self.settings_string.is_some(),
                         _ => is_ootr && self.single_settings.is_some(),
                     };
@@ -1148,7 +1148,7 @@ pub(crate) async fn info(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
         Series::AlttprSpecials => None,
         Series::BattleRoyale => ohko::info(&mut transaction, &data).await?,
         Series::Cabookey => cabookey::info(&mut transaction, &data).await?,
-        Series::Casboots => casboots::info(&mut transaction, &data).await?,
+        Series::Casboots => None,
         Series::CoOp => coop::info(&mut transaction, &data).await?,
         Series::CopaDoBrasil => br::info(&mut transaction, &data).await?,
         Series::Crosskeys => xkeys::info(&mut transaction, &data).await?,
@@ -3727,7 +3727,7 @@ pub(crate) async fn practice_seed(pool: &State<PgPool>, global_state: &State<Arc
                 }
             }, vec![], "Generate Practice Seed")
         },
-        Some(SeedGenType::AlttprAvianart { practice_presets }) if !practice_presets.is_empty() => {
+        Some(SeedGenType::AlttprAvianart { practice_presets, .. }) if !practice_presets.is_empty() => {
             let presets = practice_presets.clone();
             full_form(form_uri, csrf.as_ref(), html! {
                 fieldset {

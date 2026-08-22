@@ -859,7 +859,7 @@ impl Race {
 
     pub(crate) async fn for_homepage(
         transaction: &mut Transaction<'_, Postgres>,
-        http_client: &reqwest::Client,
+        _http_client: &reqwest::Client,
         events: &[event::Data<'_>],
     ) -> Result<Vec<Self>, Error> {
         if events.is_empty() {
@@ -899,10 +899,6 @@ impl Race {
         let mut races = Vec::with_capacity(rows.len());
         for row in rows {
             races.push(Self::from_id_with_team_cache(&mut *transaction, row.id, &mut team_cache).await?);
-        }
-        for event in events.iter().filter(|event| matches!(event.series, Series::NineDaysOfSaws | Series::Pictionary)) {
-            races.retain(|race| race.series != event.series || race.event != event.event);
-            races.extend(Self::for_event(&mut *transaction, http_client, event).await?);
         }
         races.retain(|race| !race.ignored && match race.schedule {
             RaceSchedule::Unscheduled => true,

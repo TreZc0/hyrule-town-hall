@@ -49,6 +49,8 @@ pub(crate) enum SeedGenType {
         practice_choices: Vec<PracticeOption>,
     },
     AlttprAvianart {
+        /// Preset used when a race does not supply one through a draft or per-race settings.
+        default_preset: Option<String>,
         /// Presets to display in the practice seed preset dropdown (from seed_config).
         practice_presets: Vec<PracticeOption>,
     },
@@ -136,11 +138,16 @@ impl SeedGenType {
                 Some(Self::AlttprDoorRando { source, practice_modes, practice_choices })
             }
             "alttpr_avianart" => {
+                let default_preset = seed_config
+                    .and_then(|c| c.get("preset"))
+                    .and_then(|v| v.as_str())
+                    .filter(|preset| !preset.is_empty())
+                    .map(str::to_owned);
                 let practice_presets = seed_config
                     .and_then(|c| c.get("practice_presets"))
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
                     .unwrap_or_default();
-                Some(Self::AlttprAvianart { practice_presets })
+                Some(Self::AlttprAvianart { default_preset, practice_presets })
             }
             "owr" => {
                 let config = seed_config.and_then(|c| serde_json::from_value(c.clone()).ok());
@@ -301,10 +308,65 @@ impl std::str::FromStr for SeedGenType {
         match s {
             "ootr_rsl"        => Ok(Self::OotrRsl),
             "ootr_tfb"        => Ok(Self::OotrTriforceBlitz),
-            "alttpr_avianart" => Ok(Self::AlttprAvianart { practice_presets: vec![] }),
+            "alttpr_avianart" => Ok(Self::AlttprAvianart { default_preset: None, practice_presets: vec![] }),
             "ootr"            => Ok(Self::OoTR),
             "mmr"             => Ok(Self::Mmr),
             _ => Err(UnknownSeedGenType),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AlttprDrSource, SeedGenType};
+
+    #[test]
+    fn parses_configured_avianart_default_preset() {
+        let config = serde_json::json!({
+            "preset": "casualboots",
+            "practice_presets": [{"value": "casualboots", "label": "Casual Boots"}],
+        });
+        let Some(SeedGenType::AlttprAvianart { default_preset, practice_presets }) =
+            SeedGenType::from_db(Some("alttpr_avianart"), Some(&config))
+        else {
+            panic!("expected Avianart seed generator");
+        };
+        assert_eq!(default_preset.as_deref(), Some("casualboots"));
+        assert_eq!(practice_presets.len(), 1);
+        assert_eq!(practice_presets[0].value, "casualboots");
+    }
+
+    #[test]
+    fn parses_configured_mystery_pool_url() {
+        let config = serde_json::json!({
+            "source": "mystery_pool",
+            "mystery_weights_url": "https://example.com/weights.yaml",
+        });
+        let Some(SeedGenType::AlttprDoorRando {
+            source: AlttprDrSource::MysteryPool { weights_url },
+            ..
+        }) = SeedGenType::from_db(Some("alttpr_dr"), Some(&config))
+        else {
+            panic!("expected mystery-pool Door Randomizer seed generator");
+        };
+        assert_eq!(weights_url, "https://example.com/weights.yaml");
+    }
+
+    #[test]
+    fn parses_mutual_choices_without_event_identity() {
+        let config = serde_json::json!({
+            "source": "mutual_choices",
+            "base_settings": {"mode": "open"},
+            "choices": {"keydrop": {"label": "Key Drop Shuffle"}},
+        });
+        let Some(SeedGenType::AlttprDoorRando {
+            source: AlttprDrSource::MutualChoices { config },
+            ..
+        }) = SeedGenType::from_db(Some("alttpr_dr"), Some(&config))
+        else {
+            panic!("expected mutual-choices Door Randomizer seed generator");
+        };
+        assert_eq!(config.base_settings["mode"], "open");
+        assert_eq!(config.choices["keydrop"]["label"], "Key Drop Shuffle");
     }
 }
