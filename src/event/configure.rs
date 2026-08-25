@@ -216,6 +216,11 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, http_client:
                             label(for = "fpa_enabled") : "FPA Enabled";
                             label(class = "help") : "(Announce fair play agreement when official race rooms open)";
                         });
+                        : form_field("auto_start_with_restream", &mut errors, html! {
+                            input(type = "checkbox", id = "auto_start_with_restream", name = "auto_start_with_restream", checked? = ctx.field_value("auto_start_with_restream").map_or(event.auto_start_with_restream, |value| value == "on"));
+                            label(for = "auto_start_with_restream") : "Auto-start races with restreams";
+                            label(class = "help") : "(Restreamers can use !restream when they arrive to disable auto-start until the restream is ready)";
+                        });
                         @if event.discord_guild.is_some() {
                             : form_field("asyncs_active", &mut errors, html! {
                                 input(type = "checkbox", id = "asyncs_active", name = "asyncs_active", checked? = ctx.field_value("asyncs_active").map_or(event.asyncs_active, |value| value == "on"));
@@ -318,6 +323,7 @@ pub(crate) struct ConfigureForm {
     discord_events_enabled: bool,
     discord_events_require_restream: bool,
     fpa_enabled: bool,
+    auto_start_with_restream: bool,
     settings_string: Option<String>,
 }
 
@@ -415,6 +421,9 @@ pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Clie
             }
             if value.fpa_enabled != data.fpa_enabled {
                 sqlx::query!("UPDATE events SET fpa_enabled = $1 WHERE series = $2 AND event = $3", value.fpa_enabled, data.series as _, &data.event).execute(&mut *transaction).await?;
+            }
+            if value.auto_start_with_restream != data.auto_start_with_restream {
+                sqlx::query!("UPDATE events SET auto_start_with_restream = $1 WHERE series = $2 AND event = $3", value.auto_start_with_restream, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
             if matches!(data.rando_version, Some(VersionedBranch::Tww { .. })) {
                 let new_settings_string = value.settings_string.as_deref().filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_owned());

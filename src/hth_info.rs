@@ -269,6 +269,10 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                         span : "HTH invites the assigned restreamer to racetime.gg and promotes them to race monitor. Verify runner feeds, delay, layouts, commentary, tracking, and the broadcast destination before releasing the start.";
                     }
                     div {
+                        strong : "Optional: confirm restream presence";
+                        span : "Events configured to auto-start races with restreams leave auto-start enabled when the room opens. Once restream coverage is present, an authorized race monitor types !restream to disable auto-start and engage the usual restream readiness gate. If nobody arrives to run the restream, auto-start remains enabled.";
+                    }
+                    div {
                         strong : "4. Signal broadcast readiness";
                         span : "The assigned restreamer types !ready in the racetime.gg room. This unlocks auto-start; with multiple language restreams, HTH waits until every assigned restreamer has used the command.";
                     }

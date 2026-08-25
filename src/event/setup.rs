@@ -183,6 +183,12 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             label(class = "help") : " (Announce fair play agreement when official race rooms open)";
                         });
 
+                        : form_field("auto_start_with_restream", &mut errors, html! {
+                            input(type = "checkbox", id = "auto_start_with_restream", name = "auto_start_with_restream", checked? = ctx.field_value("auto_start_with_restream").map_or(event.auto_start_with_restream, |value| value == "on"));
+                            label(for = "auto_start_with_restream") : "Auto-start races with restreams";
+                            label(class = "help") : " (Restreamers can use !restream when they arrive to disable auto-start until the restream is ready)";
+                        });
+
                         : form_field("rando_version_json", &mut errors, html! {
                             label(for = "rando_version_json") : "Randomizer Version (JSON)";
                             textarea(id = "rando_version_json", name = "rando_version_json", rows = "8", style = "font-family: monospace; width: 100%; max-width: 800px;") {
@@ -555,6 +561,7 @@ pub(crate) struct SetupForm {
     emulator_settings_reminder: bool,
     prevent_late_joins: bool,
     fpa_enabled: bool,
+    auto_start_with_restream: bool,
     rando_version_json: Option<String>,
     enter_url: Option<String>,
     teams_url: Option<String>,
@@ -951,6 +958,13 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                 value.fpa_enabled,
                 value.swiss_standings,
                 rando_version.unwrap() as _,
+                event_data.series as _,
+                &event_data.event,
+            ).execute(&mut *transaction).await?;
+
+            sqlx::query!(
+                "UPDATE events SET auto_start_with_restream = $1 WHERE series = $2 AND event = $3",
+                value.auto_start_with_restream,
                 event_data.series as _,
                 &event_data.event,
             ).execute(&mut *transaction).await?;
