@@ -6220,20 +6220,29 @@ pub(crate) async fn finalize_async_if_complete(
         };
 
         if let Some(start_time) = start_time {
-            if let Some(finish_time) = &async_time.finish_time {
+            let end_time = if let Some(finish_time) = &async_time.finish_time {
                 let finish_seconds = finish_time.microseconds / 1_000_000
                     + (finish_time.days as i64) * 86400
                     + (finish_time.months as i64) * 30 * 86400;
 
-                let end_time = start_time + chrono::Duration::seconds(finish_seconds);
+                start_time + chrono::Duration::seconds(finish_seconds)
+            } else {
+                // A forfeit has no finish duration, but it still ends this async part.
+                sqlx::query_scalar::<_, DateTime<Utc>>(
+                    "SELECT COALESCE(player_finished_at, recorded_at, NOW()) FROM async_times WHERE race_id = $1 AND async_part = $2",
+                )
+                    .bind(race_id)
+                    .bind(async_time.async_part)
+                    .fetch_one(&mut **transaction)
+                    .await?
+            };
 
-                match async_time.async_part {
-                    1 => sqlx::query!("UPDATE races SET async_end1 = $1 WHERE id = $2", end_time, race_id).execute(&mut **transaction).await?,
-                    2 => sqlx::query!("UPDATE races SET async_end2 = $1 WHERE id = $2", end_time, race_id).execute(&mut **transaction).await?,
-                    3 => sqlx::query!("UPDATE races SET async_end3 = $1 WHERE id = $2", end_time, race_id).execute(&mut **transaction).await?,
-                    _ => return Ok(()),
-                };
-            }
+            match async_time.async_part {
+                1 => sqlx::query!("UPDATE races SET async_end1 = $1 WHERE id = $2", end_time, race_id).execute(&mut **transaction).await?,
+                2 => sqlx::query!("UPDATE races SET async_end2 = $1 WHERE id = $2", end_time, race_id).execute(&mut **transaction).await?,
+                3 => sqlx::query!("UPDATE races SET async_end3 = $1 WHERE id = $2", end_time, race_id).execute(&mut **transaction).await?,
+                _ => return Ok(()),
+            };
         }
     }
 
