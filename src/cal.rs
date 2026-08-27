@@ -2495,6 +2495,7 @@ pub(crate) async fn create_race_form(mut transaction: Transaction<'_, Postgres>,
                     : " in the scheduling thread to delete them.)";
                 }
             });
+            script(src = static_url!("race-create.js")) {}
         }, errors, "Create")
     } else {
         html! {
