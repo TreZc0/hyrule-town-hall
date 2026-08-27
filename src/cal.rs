@@ -2379,7 +2379,7 @@ pub(crate) async fn create_race_form(mut transaction: Transaction<'_, Postgres>,
             };
             team_data.push((team.id.to_string(), name));
         }
-        team_data.sort_unstable_by(|(_, name1), (_, name2)| name1.cmp(name2));
+        team_data.sort_by_cached_key(|(id, name)| (name.to_lowercase(), id.clone()));
         let phase_round_options = sqlx::query!("SELECT phase, round FROM phase_round_options WHERE series = $1 AND event = $2", event.series as _, &event.event).fetch_all(&mut *transaction).await?;
         let selected_multi_teams = ctx.field_values("multi_teams").collect::<HashSet<_>>();
         let mut errors = ctx.errors().collect_vec();
