@@ -282,6 +282,7 @@ pub(crate) enum Entrants {
     Named(String),
     Two([Entrant; 2]),
     Three([Entrant; 3]),
+    Many(Vec<Team>),
 }
 
 impl Entrants {
@@ -321,6 +322,7 @@ impl Entrants {
                 };
                 ([team1, team2, team3], [p1, p2, p3], [None; 2], [None; 2], [None; 2], [None; 2])
             }
+            Entrants::Many(_) => ([None; 3], [None; 3], [None; 2], [None; 2], [None; 2], [None; 2]),
         }
     }
 }
@@ -520,6 +522,10 @@ pub(crate) struct Race {
 }
 
 impl Race {
+    pub(crate) fn supports_async(&self) -> bool {
+        matches!(self.entrants, Entrants::Two(_) | Entrants::Three(_))
+    }
+
     pub(crate) fn is_custom(&self) -> bool {
         self.custom_title.is_some()
     }
@@ -580,6 +586,9 @@ impl Race {
         transaction: &mut Transaction<'_, Postgres>,
         discord_ctx: &DiscordCtx,
     ) -> Result<String, discord_bot::Error> {
+        if let Some(custom_title) = &self.custom_title {
+            return Ok(custom_title.clone())
+        }
         let mut label = String::new();
         if let Some(ref phase) = self.phase {
             label.push_str(phase);
@@ -604,6 +613,7 @@ impl Race {
             Entrants::Named(ref entrants) => label.push_str(entrants),
             Entrants::Open => label.push_str("(open)"),
             Entrants::Count { total, .. } => label.push_str(&format!("{total} entrants")),
+            Entrants::Many(ref teams) => label.push_str(&format!("{} entrants", teams.len())),
         }
         if let Some(game) = self.game {
             label.push_str(&format!(" (game {game})"));
@@ -785,14 +795,36 @@ impl Race {
                 [Some(p1), Some(p2), Some(p3)] => Entrants::Three([p1, p2, p3]),
                 [Some(p1), Some(p2), None] => Entrants::Two([p1, p2]),
                 [Some(Entrant::Named { name, .. }), None, None] => Entrants::Named(name),
-                [None, None, None] => if let (Some(total), Some(finished)) = (row.total, row.finished) {
-                    Entrants::Count {
-                        total: total as u32,
-                        finished: finished as u32,
+                [None, None, None] => {
+                    let team_ids = sqlx::query_scalar::<_, i64>("SELECT team FROM race_entrants WHERE race = $1 ORDER BY position")
+                        .bind(i64::from(id))
+                        .fetch_all(&mut **transaction)
+                        .await?;
+                    if team_ids.is_empty() {
+                        if let (Some(total), Some(finished)) = (row.total, row.finished) {
+                            Entrants::Count {
+                                total: total as u32,
+                                finished: finished as u32,
+                            }
+                        } else {
+                            Entrants::Open
+                        }
+                    } else {
+                        let mut teams = Vec::with_capacity(team_ids.len());
+                        for team_id in team_ids {
+                            let team_id = Id::from(team_id as u64);
+                            let team = if let Some(team) = team_cache.get(&team_id) {
+                                team.clone()
+                            } else {
+                                let team = Team::from_id(&mut *transaction, team_id).await?.ok_or(Error::UnknownTeam)?;
+                                team_cache.insert(team_id, team.clone());
+                                team
+                            };
+                            teams.push(team);
+                        }
+                        Entrants::Many(teams)
                     }
-                } else {
-                    Entrants::Open
-                },
+                }
                 _ => panic!("unexpected configuration of entrants"),
             }
         };
@@ -1311,6 +1343,7 @@ impl Race {
             Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) => Box::new(iter::empty()) as Box<dyn Iterator<Item = &Team> + Send>,
             Entrants::Two([ref team1, ref team2]) => Box::new([team1, team2].into_iter().filter_map(as_variant!(Entrant::MidosHouseTeam))),
             Entrants::Three([ref team1, ref team2, ref team3]) => Box::new([team1, team2, team3].into_iter().filter_map(as_variant!(Entrant::MidosHouseTeam))),
+            Entrants::Many(ref teams) => Box::new(teams.iter()),
         }
     }
 
@@ -1319,6 +1352,7 @@ impl Race {
         match self.entrants {
             Entrants::Two([Entrant::MidosHouseTeam(ref team1), Entrant::MidosHouseTeam(ref team2)]) => Some(Box::new([team1, team2].into_iter()) as Box<dyn Iterator<Item = &Team> + Send>),
             Entrants::Three([Entrant::MidosHouseTeam(ref team1), Entrant::MidosHouseTeam(ref team2), Entrant::MidosHouseTeam(ref team3)]) => Some(Box::new([team1, team2, team3].into_iter())),
+            Entrants::Many(ref teams) => Some(Box::new(teams.iter())),
             Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) | Entrants::Two(_) | Entrants::Three(_) => None,
         }
     }
@@ -1361,7 +1395,7 @@ impl Race {
         }
 
         Ok(match self.entrants {
-            Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) => None,
+            Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) | Entrants::Many(_) => None,
             Entrants::Two(ref entrants) => {
                 let mut channels = Vec::default();
                 for entrant in entrants {
@@ -1441,7 +1475,7 @@ impl Race {
 
         Ok(if let RaceSchedule::Live { room: Some(_), .. } = self.schedule {
             match self.entrants {
-                Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) => None,
+                Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) | Entrants::Many(_) => None,
                 Entrants::Two(ref entrants) => {
                     let mut channels = Vec::default();
                     for entrant in entrants {
@@ -1530,6 +1564,7 @@ impl Race {
                     }
                     false
                 }
+                Entrants::Many(_) => panic!("custom match cannot be scheduled asynchronously"),
             },
         }
     }
@@ -1537,7 +1572,7 @@ impl Race {
     pub(crate) fn stream_delay(&self, event: &event::Data<'_>) -> Duration {
         match self.entrants {
             Entrants::Open | Entrants::Count { .. } => event.open_stream_delay,
-            Entrants::Two(_) | Entrants::Three(_) | Entrants::Named(_) => event.invitational_stream_delay,
+            Entrants::Two(_) | Entrants::Three(_) | Entrants::Many(_) | Entrants::Named(_) => event.invitational_stream_delay,
         }
     }
 
@@ -1666,6 +1701,26 @@ impl Race {
         sqlx::query!("UPDATE races SET custom_title = $1, custom_create_room = $2, companion_race_id = $3 WHERE id = $4", self.custom_title.as_deref(), self.custom_create_room, self.companion_race_id.map(i64::from), self.id as _)
             .execute(&mut **transaction)
             .await?;
+        if let Entrants::Many(ref teams) = self.entrants {
+            for (index, team) in teams.iter().enumerate() {
+                sqlx::query("INSERT INTO race_entrants (race, team, position) VALUES ($1, $2, $3) ON CONFLICT (race, position) DO UPDATE SET team = EXCLUDED.team")
+                    .bind(i64::from(self.id))
+                    .bind(i64::from(team.id))
+                    .bind(i16::try_from(index + 1).expect("too many race entrants"))
+                    .execute(&mut **transaction)
+                    .await?;
+            }
+            sqlx::query("DELETE FROM race_entrants WHERE race = $1 AND position > $2")
+                .bind(i64::from(self.id))
+                .bind(i16::try_from(teams.len()).expect("too many race entrants"))
+                .execute(&mut **transaction)
+                .await?;
+        } else {
+            sqlx::query("DELETE FROM race_entrants WHERE race = $1")
+                .bind(i64::from(self.id))
+                .execute(&mut **transaction)
+                .await?;
+        }
         Ok(())
     }
 
@@ -1846,24 +1901,34 @@ impl Event {
                 matches!(self.kind, EventKind::Normal | EventKind::Async2).then_some(team2),
                 matches!(self.kind, EventKind::Normal | EventKind::Async3).then_some(team3),
             ].into_iter().filter_map(identity).filter_map(as_variant!(Entrant::MidosHouseTeam))),
+            Entrants::Many(ref teams) => if let EventKind::Normal = self.kind {
+                Box::new(teams.iter()) as Box<dyn Iterator<Item = &Team> + Send>
+            } else {
+                Box::new(iter::empty())
+            },
         }
     }
 
     pub(crate) async fn racetime_users_to_invite(&self, transaction: &mut Transaction<'_, Postgres>, discord_ctx: &DiscordCtx, event: &event::Data<'_>) -> Result<Vec<Result<String, String>>, discord_bot::Error> {
         let mut buf = Vec::default();
         let entrants = match self.race.entrants {
-            Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) => Box::new(iter::empty()) as Box<dyn Iterator<Item = &Entrant> + Send>,
-            Entrants::Two([ref team1, ref team2]) => Box::new([
+            Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) => Vec::new(),
+            Entrants::Two([ref team1, ref team2]) => [
                 matches!(self.kind, EventKind::Normal | EventKind::Async1).then_some(team1),
                 matches!(self.kind, EventKind::Normal | EventKind::Async2).then_some(team2),
-            ].into_iter().filter_map(identity)),
-            Entrants::Three([ref team1, ref team2, ref team3]) => Box::new([
+            ].into_iter().filter_map(identity).cloned().collect(),
+            Entrants::Three([ref team1, ref team2, ref team3]) => [
                 matches!(self.kind, EventKind::Normal | EventKind::Async1).then_some(team1),
                 matches!(self.kind, EventKind::Normal | EventKind::Async2).then_some(team2),
                 matches!(self.kind, EventKind::Normal | EventKind::Async3).then_some(team3),
-            ].into_iter().filter_map(identity)),
+            ].into_iter().filter_map(identity).cloned().collect(),
+            Entrants::Many(ref teams) => if let EventKind::Normal = self.kind {
+                teams.iter().cloned().map(Entrant::MidosHouseTeam).collect()
+            } else {
+                Vec::new()
+            },
         };
-        for entrant in entrants {
+        for entrant in &entrants {
             match entrant {
                 Entrant::MidosHouseTeam(team) => for (member, role) in team.members_roles(&mut *transaction).await? {
                     if event.team_config.role_is_racing(role) {
@@ -1947,7 +2012,7 @@ impl Event {
                     EventKind::Async3 => start3.is_some_and(|start3| start1.is_none_or(|start1| start3 < start1) || start2.is_none_or(|start2| start3 < start2)),
                     EventKind::Normal => unreachable!(),
                 },
-                Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) => false,
+                Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) | Entrants::Many(_) => false,
             },
         }
     }
@@ -2167,6 +2232,7 @@ async fn add_event_races(transaction: &mut Transaction<'_, Postgres>, discord_ct
                             team2.name(&mut *transaction, discord_ctx).await?.unwrap_or(Cow::Borrowed("(unnamed)")),
                         ),
                     },
+                    Entrants::Many(_) => summary_prefix,
                 };
                 cal_event.push(Summary::new(ics::escape_text(if let Some(game) = race.game {
                     format!("{summary_prefix}, game {game}")
@@ -2315,6 +2381,7 @@ pub(crate) async fn create_race_form(mut transaction: Transaction<'_, Postgres>,
         }
         team_data.sort_unstable_by(|(_, name1), (_, name2)| name1.cmp(name2));
         let phase_round_options = sqlx::query!("SELECT phase, round FROM phase_round_options WHERE series = $1 AND event = $2", event.series as _, &event.event).fetch_all(&mut *transaction).await?;
+        let selected_multi_teams = ctx.field_values("multi_teams").collect::<HashSet<_>>();
         let mut errors = ctx.errors().collect_vec();
         full_form(uri!(create_race_post(event.series, &*event.event)), csrf, html! {
             fieldset {
@@ -2322,16 +2389,35 @@ pub(crate) async fn create_race_form(mut transaction: Transaction<'_, Postgres>,
                 : form_field("custom_title", &mut errors, html! {
                     label(for = "custom_title") : "Custom title:";
                     input(type = "text", name = "custom_title", value? = ctx.field_value("custom_title"));
-                    label(class = "help") : "If set, this creates an open custom race and ignores the team fields below.";
+                    label(class = "help") : "With two or more entrants selected below, this names a schedulable custom match. Otherwise it creates an open custom race and ignores the team fields below.";
                 });
                 : form_field("start_date", &mut errors, html! {
                     label(for = "start_date") : "Start date (YYYY-MM-DD HH:MM in your timezone):";
                     input(type = "text", name = "start_date", value? = ctx.field_value("start_date"));
+                    label(class = "help") : "Required for an open custom race. Custom matches start unscheduled.";
                 });
                 input(type = "hidden", name = "timezone", id = "timezone-field", value? = me.as_ref().and_then(|me| me.timezone).map(|timezone| timezone.name()));
                 : form_field("custom_create_room", &mut errors, html! {
                     input(type = "checkbox", id = "custom_create_room", name = "custom_create_room", checked? = ctx.field_value("custom_create_room").map_or(ctx.field_value("custom_title").is_none(), |value| value == "on"));
                     label(for = "custom_create_room") : "Create racetime.gg room automatically";
+                });
+            }
+            fieldset {
+                legend : "Custom match";
+                : form_field("multi_teams", &mut errors, html! {
+                    label(for = "multi_teams") {
+                        @if let TeamConfig::Solo = event.team_config {
+                            : "Players:";
+                        } else {
+                            : "Teams:";
+                        }
+                    }
+                    select(id = "multi_teams", name = "multi_teams", multiple, size = team_data.len().clamp(2, 16)) {
+                        @for (id, name) in &team_data {
+                            option(value = id, selected? = selected_multi_teams.contains(id.as_str())) : name;
+                        }
+                    }
+                    label(class = "help") : "Select two or more entrants. This creates one live-only match with a shared scheduling thread; drafts, async scheduling, and automatic result reporting are disabled.";
                 });
             }
             : form_field("team1", &mut errors, html! {
@@ -2446,6 +2532,8 @@ pub(crate) struct CreateRaceForm {
     team1: Option<Id<Teams>>,
     team2: Option<Id<Teams>>,
     team3: Option<Id<Teams>>,
+    #[field(default = Vec::new())]
+    multi_teams: Vec<Id<Teams>>,
     #[field(default = String::new())]
     phase: String,
     #[field(default = String::new())]
@@ -2474,6 +2562,96 @@ pub(crate) async fn create_race_post(pool: &State<PgPool>, discord_ctx: &State<R
     }
     Ok(if let Some(ref value) = form.value {
         let custom_title = value.custom_title.trim();
+        if !value.multi_teams.is_empty() {
+            if custom_title.is_empty() {
+                form.context.push_error(form::Error::validation("Custom matches need a custom title.").with_name("custom_title"));
+            }
+            if custom_title.chars().count() > 100 {
+                form.context.push_error(form::Error::validation("Custom match titles are limited to 100 characters.").with_name("custom_title"));
+            }
+            if value.multi_teams.len() < 2 {
+                form.context.push_error(form::Error::validation("Select at least two entrants for a custom match.").with_name("multi_teams"));
+            }
+            let mut selected_ids = HashSet::new();
+            if value.multi_teams.iter().any(|team_id| !selected_ids.insert(*team_id)) {
+                form.context.push_error(form::Error::validation("Each entrant can only be selected once.").with_name("multi_teams"));
+            }
+            let available_teams = Team::for_event(&mut transaction, event.series, &event.event).await?
+                .into_iter()
+                .map(|team| (team.id, team))
+                .collect::<HashMap<_, _>>();
+            let mut teams = Vec::with_capacity(value.multi_teams.len());
+            for team_id in &value.multi_teams {
+                if let Some(team) = available_teams.get(team_id) {
+                    teams.push(team.clone());
+                } else {
+                    form.context.push_error(form::Error::validation("Every selected entrant must be an active entrant in this event.").with_name("multi_teams"));
+                    break
+                }
+            }
+            if form.context.errors().next().is_some() {
+                return Ok(RedirectOrContent::Content(create_race_form(transaction, Some(me), uri, csrf.as_ref(), event, form.context, value.team3.is_some()).await?))
+            }
+            let (phase, round) = if value.phase_round.is_empty() {
+                (
+                    (!value.phase.is_empty()).then(|| value.phase.clone()),
+                    (!value.round.is_empty()).then(|| value.round.clone()),
+                )
+            } else {
+                sqlx::query!("SELECT phase, round FROM phase_round_options WHERE series = $1 AND event = $2", event.series as _, &event.event).fetch_all(&mut *transaction).await?
+                    .into_iter()
+                    .find(|row| format!("{} {}", row.phase, row.round) == value.phase_round)
+                    .map(|row| (Some(row.phase), Some(row.round)))
+                    .unwrap_or_else(|| (None, Some(value.phase_round.clone())))
+            };
+            let scheduling_deadline = if let Some(ref round) = round {
+                sqlx::query_scalar!(
+                    "SELECT scheduling_deadline FROM event_round_configs WHERE series = $1 AND event = $2 AND round = $3",
+                    event.series as _, &event.event, round
+                ).fetch_optional(&mut *transaction).await?.flatten()
+            } else {
+                None
+            };
+            let mut race = Race {
+                id: Id::<Races>::new(&mut transaction).await?,
+                series: event.series,
+                event: event.event.to_string(),
+                source: Source::Manual,
+                entrants: Entrants::Many(teams),
+                phase,
+                round,
+                game: None,
+                scheduling_thread: None,
+                schedule: RaceSchedule::Unscheduled,
+                schedule_updated_at: None,
+                fpa_invoked: false,
+                breaks_used: false,
+                draft: None,
+                seed: seed::Data::default(),
+                video_urls: HashMap::default(),
+                restreamers: HashMap::default(),
+                last_edited_by: Some(me.id),
+                last_edited_at: Some(Utc::now()),
+                ignored: false,
+                schedule_locked: false,
+                notified: false,
+                async_notified_1: false,
+                async_notified_2: false,
+                async_notified_3: false,
+                discord_scheduled_event_id: None,
+                volunteer_request_sent: false,
+                volunteer_request_message_id: None,
+                scheduling_deadline,
+                restream_consent_required: false,
+                custom_title: Some(custom_title.to_owned()),
+                custom_create_room: value.custom_create_room,
+                companion_race_id: None,
+            };
+            transaction = discord_bot::create_scheduling_thread(&*discord_ctx.read().await, transaction, &mut race, 1).await?;
+            race.save(&mut transaction).await?;
+            transaction.commit().await?;
+            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(event::races(event.series, &*event.event)))))
+        }
         if !custom_title.is_empty() {
             let start = if value.start_date.is_empty() {
                 form.context.push_error(form::Error::validation("Custom races need a start date.").with_name("start_date"));
@@ -3116,6 +3294,16 @@ pub(crate) async fn race_table(
                                             : format_datetime(start, DateTimeFormat { long: false, running_text: false });
                                         }
                                     }
+                                }
+                            }
+                            Entrants::Many(ref teams) => td(colspan = "6") {
+                                @if let Some(custom_title) = &race.custom_title {
+                                    strong : custom_title;
+                                    br;
+                                }
+                                @for (index, team) in teams.iter().enumerate() {
+                                    @if index > 0 { : ", "; }
+                                    : team.to_html(&mut *transaction, false).await?;
                                 }
                             }
                         }
@@ -4190,6 +4378,7 @@ async fn auto_import_races_inner(db_pool: PgPool, http_client: reqwest::Client, 
                                                         team2.name(&mut transaction, &*discord_ctx.read().await).await?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                                         team3.name(&mut transaction, &*discord_ctx.read().await).await?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                                     ),
+                                                    Entrants::Many(ref teams) => format!("{info_prefix}{}{} entrants", if info_prefix.is_empty() { "" } else { ": " }, teams.len()),
                                                 };
                                                 options.push(CreateSelectMenuOption::new(if let Some(game) = race.game {
                                                     format!("{summary}, game {game}")
@@ -4842,6 +5031,14 @@ pub(crate) async fn edit_race_form(mut transaction: Transaction<'_, Postgres>, d
                     li : p1.to_html(&mut transaction, discord_ctx, false).await?;
                     li : p2.to_html(&mut transaction, discord_ctx, false).await?;
                     li : p3.to_html(&mut transaction, discord_ctx, false).await?;
+                }
+            }
+            Entrants::Many(ref teams) => {
+                p : "Entrants:";
+                ol {
+                    @for team in teams {
+                        li : team.to_html(&mut transaction, false).await?;
+                    }
                 }
             }
         }

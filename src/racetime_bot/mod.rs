@@ -3545,6 +3545,7 @@ async fn combined_room_member_title(transaction: &mut Transaction<'_, Postgres>,
         ),
         Entrants::Named(entrants) => entrants.clone(),
         Entrants::Open | Entrants::Count { .. } => "TBD".to_owned(),
+        Entrants::Many(teams) => race.custom_title.clone().unwrap_or_else(|| format!("{} entrants", teams.len())),
     };
     let game_suffix = race.game.map(|g| format!(" (G{})", g)).unwrap_or_default();
     Ok(if let Some(phase) = &race.phase {
@@ -4983,7 +4984,7 @@ impl RaceHandler<GlobalState> for Handler {
                             [format!("Team A"), format!("Team B")]
                         } else {
                             match cal_event.race.entrants {
-                                Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) => [format!("Team A"), format!("Team B")],
+                                Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) | Entrants::Many(_) => [format!("Team A"), format!("Team B")],
                                 Entrants::Two([Entrant::MidosHouseTeam(ref team1), Entrant::MidosHouseTeam(ref team2)]) => {
                                     let name1 = if_chain! {
                                         if let Ok(member) = team1.members(&mut transaction).await.to_racetime()?.into_iter().exactly_one();
@@ -7333,6 +7334,7 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                     )
                 } else {
                     if_chain! {
+                    if cal_event.race.custom_title.is_none();
                     if let French = event.language;
                     if let (Some(phase), Some(round)) = (cal_event.race.phase.as_ref(), cal_event.race.round.as_ref());
                     if let Some(Some(phase_round)) = sqlx::query_scalar!("SELECT display_fr FROM phase_round_options WHERE series = $1 AND event = $2 AND phase = $3 AND round = $4", event.series as _, &event.event, phase, round).fetch_optional(&mut **transaction).await.to_racetime()?;
@@ -7356,6 +7358,7 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                             },
                             cal::EventKind::Async1 | cal::EventKind::Async2 | cal::EventKind::Async3 => None,
                         },
+                        Entrants::Many(ref teams) => Some(Some(format!("{} entrants", teams.len()))),
                     };
                     then {
                         if let Some(entrants) = entrants {
@@ -7427,6 +7430,7 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                                         team2.name(&mut *transaction, discord_ctx).await.to_racetime()?.unwrap_or(Cow::Borrowed("(unnamed)")),
                                     ),
                                 },
+                                Entrants::Many(ref teams) => format!("{}{} entrants", info_prefix.as_ref().map(|prefix| format!("{prefix} - ")).unwrap_or_default(), teams.len()),
                             }
                         };
                         if let Some(game) = cal_event.race.game {
@@ -7605,6 +7609,11 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                     msg.push(" vs ");
                     msg.mention_entrant(&mut *transaction, event.discord_guild, team3).await.to_racetime()?;
                 }
+                Entrants::Many(ref teams) => {
+                    msg.push_safe(phase_round);
+                    msg.push(" : ");
+                    msg.push_safe(cal_event.race.custom_title.as_deref().map_or_else(|| format!("{} entrants", teams.len()), str::to_owned));
+                }
             }
             msg.push(" <");
             msg.push(room_url_fr.to_string());
@@ -7722,6 +7731,13 @@ pub(crate) async fn create_room(transaction: &mut Transaction<'_, Postgres>, dis
                         msg.push(" vs ");
                         msg.mention_entrant(&mut *transaction, event.discord_guild, team3).await.to_racetime()?;
                     }
+                }
+                Entrants::Many(ref teams) => {
+                    if let Some(prefix) = info_prefix {
+                        msg.push_safe(prefix);
+                        msg.push(": ");
+                    }
+                    msg.push_safe(cal_event.race.custom_title.as_deref().map_or_else(|| format!("{} entrants", teams.len()), str::to_owned));
                 }
             }
             if let Some(game) = cal_event.race.game {

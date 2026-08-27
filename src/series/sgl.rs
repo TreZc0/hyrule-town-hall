@@ -25,7 +25,7 @@ impl RestreamMatch {
             race.round.as_ref().is_some_and(|race_round| race_round == match_round)
         } else {
             match &race.entrants {
-                Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) => false,
+                Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) | Entrants::Many(_) => false,
                 Entrants::Two(entrants) => {
                     if self.players.len() == 2 {
                         for players in self.players.iter().permutations(2) {

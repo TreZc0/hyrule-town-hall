@@ -2476,6 +2476,16 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
 
                             let mut is_runner = false;
                             if !is_organizer {
+                                if let Entrants::Many(teams) = &race.entrants {
+                                    'multi: for team in teams {
+                                        for member in team.members(&mut transaction).await? {
+                                            if member.discord.is_some_and(|discord| discord.id == interaction.user.id) {
+                                                is_runner = true;
+                                                break 'multi
+                                            }
+                                        }
+                                    }
+                                }
                                 let entrant_slice: &[Entrant] = match &race.entrants {
                                     Entrants::Two(arr) => arr.as_slice(),
                                     Entrants::Three(arr) => arr.as_slice(),
@@ -2740,7 +2750,13 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
-                                if event.automated_asyncs && event.discord_async_channel.is_none() {
+                                if !race.supports_async() {
+                                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                        .ephemeral(true)
+                                        .content("Custom matches can only be scheduled as live races.")
+                                    )).await?;
+                                    transaction.rollback().await?;
+                                } else if event.automated_asyncs && event.discord_async_channel.is_none() {
                                     interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                         .ephemeral(true)
                                         .content(if let French = event.language {
@@ -3225,7 +3241,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                 } else {
                                     interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                         .ephemeral(true)
-                                        .content(if event.asyncs_allowed() {
+                                        .content(if event.asyncs_allowed() && race.supports_async() {
                                             if let French = event.language {
                                                 "Désolé, seuls les participants de cette race et les organisateurs peuvent utiliser cette commande."
                                             } else {
@@ -5151,12 +5167,13 @@ async fn runner_timezones_for_entrant(transaction: &mut Transaction<'_, Postgres
 
 async fn runner_timezones_for_race(transaction: &mut Transaction<'_, Postgres>, ctx: &DiscordCtx, race: &Race) -> Result<Vec<RunnerTimezone>, Error> {
     let entrants = match &race.entrants {
-        Entrants::Two(entrants) => entrants.iter().collect_vec(),
-        Entrants::Three(entrants) => entrants.iter().collect_vec(),
-        Entrants::Named(_) | Entrants::Open | Entrants::Count { .. } => Vec::default(),
+        Entrants::Two(entrants) => entrants.to_vec(),
+        Entrants::Three(entrants) => entrants.to_vec(),
+        Entrants::Many(teams) => teams.iter().cloned().map(Entrant::MidosHouseTeam).collect(),
+        Entrants::Named(_) | Entrants::Open | Entrants::Count { .. } => Vec::new(),
     };
     let mut runners = Vec::default();
-    for entrant in entrants {
+    for entrant in &entrants {
         runners.extend(runner_timezones_for_entrant(transaction, ctx, entrant).await?);
     }
     Ok(runners)
@@ -5208,6 +5225,26 @@ fn push_runner_timezones(content: &mut MessageBuilder, runners: &[RunnerTimezone
     }
 }
 
+fn split_discord_message(mut content: String) -> Vec<String> {
+    const LIMIT: usize = 1_900;
+    let mut chunks = Vec::new();
+    while content.len() > LIMIT {
+        let mut cutoff = LIMIT;
+        while !content.is_char_boundary(cutoff) { cutoff -= 1 }
+        if let Some(line_break) = content[..cutoff].rfind('\n') {
+            cutoff = line_break + 1;
+        } else if let Some(space) = content[..cutoff].rfind(' ') {
+            cutoff = space + 1;
+        }
+        chunks.push(content[..cutoff].trim_end().to_owned());
+        content = content[cutoff..].trim_start().to_owned();
+    }
+    if !content.is_empty() {
+        chunks.push(content);
+    }
+    chunks
+}
+
 pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transaction: Transaction<'a, Postgres>, race: &mut Race, game_count: i16) -> Result<Transaction<'a, Postgres>, Error> {
     let event = race.event(&mut transaction).await?;
     let (Some(guild_id), Some(scheduling_channel)) = (event.discord_guild, event.discord_scheduling_channel) else { return Ok(transaction) };
@@ -5215,6 +5252,16 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
         None => return Err(Error::UninitializedDiscordGuild(guild_id)),
         Some(None) => return Err(Error::UnregisteredDiscordGuild(guild_id)),
         Some(Some(command_ids)) => command_ids,
+    };
+    let participant_chunks = if matches!(race.entrants, Entrants::Many(_)) {
+        let mut participants = MessageBuilder::default();
+        for team in race.teams() {
+            participants.mention_team(&mut transaction, Some(guild_id), team).await?;
+            participants.push_line("");
+        }
+        split_discord_message(participants.build())
+    } else {
+        Vec::new()
     };
     let mut title = if_chain! {
         if let French = event.language;
@@ -5235,6 +5282,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
                     team2.name(&mut transaction, ctx).await?.unwrap_or(Cow::Borrowed("(unnamed)")),
                     team3.name(&mut transaction, ctx).await?.unwrap_or(Cow::Borrowed("(unnamed)")),
                 ),
+                Entrants::Many(ref teams) => format!("{info_prefix} : {} entrants", teams.len()),
             }
         } else {
             let info_prefix = format!("{}{}{}",
@@ -5258,9 +5306,13 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
                     team2.name(&mut transaction, ctx).await?.unwrap_or(Cow::Borrowed("(unnamed)")),
                     team3.name(&mut transaction, ctx).await?.unwrap_or(Cow::Borrowed("(unnamed)")),
                 ),
+                Entrants::Many(ref teams) => format!("{info_prefix}{}{} entrants", if info_prefix.is_empty() { "" } else { ": " }, teams.len()),
             }
         }
     };
+    if let Some(custom_title) = &race.custom_title {
+        title.clone_from(custom_title);
+    }
     let runner_timezones = runner_timezones_for_race(&mut transaction, ctx, race).await?;
     let mut content = MessageBuilder::default();
     if_chain! {
@@ -5269,11 +5321,14 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
         if let Some(Some(phase_round)) = sqlx::query_scalar!("SELECT display_fr FROM phase_round_options WHERE series = $1 AND event = $2 AND phase = $3 AND round = $4", event.series as _, &event.event, phase, round).fetch_optional(&mut *transaction).await?;
         if game_count == 1;
         if event.asyncs_allowed();
+        if race.supports_async();
         if let None | Some(draft::Kind::TournoiFrancoS3 | draft::Kind::TournoiFrancoS4) = event.draft_kind();
         then {
-            for team in race.teams() {
-                content.mention_team(&mut transaction, Some(guild_id), team).await?;
-                content.push(' ');
+            if !matches!(race.entrants, Entrants::Many(_)) {
+                for team in race.teams() {
+                    content.mention_team(&mut transaction, Some(guild_id), team).await?;
+                    content.push(' ');
+                }
             }
             content.push("Bienvenue dans votre ");
             content.push_safe(phase_round);
@@ -5295,9 +5350,11 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             content.push_line("");
             content.push("Vous pouvez entrer directement la date (par exemple `vendredi 20h UTC`, `demain 15h CET` ou `vendredi 20h Europe/Paris`) ou utiliser <https://hammertime.cyou/> pour générer un timestamp Discord. Si vous n'indiquez pas de fuseau horaire, votre fuseau horaire de profil sera utilisé s'il est défini ; sinon UTC sera utilisé.");
         } else {
-            for team in race.teams() {
-                content.mention_team(&mut transaction, Some(guild_id), team).await?;
-                content.push(' ');
+            if !matches!(race.entrants, Entrants::Many(_)) {
+                for team in race.teams() {
+                    content.mention_team(&mut transaction, Some(guild_id), team).await?;
+                    content.push(' ');
+                }
             }
             content.push("Welcome to your ");
             if let Some(ref phase) = race.phase {
@@ -5322,7 +5379,7 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
                 content.push_line("");
                 content.push("• ");
                 content.mention_command(command_ids.schedule, "schedule");
-                if event.asyncs_allowed() {
+                if event.asyncs_allowed() && race.supports_async() {
                     content.push(" — schedule (or reschedule) as a live race");
                     content.push_line("");
                     content.push("• ");
@@ -5346,7 +5403,14 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
             }
         }
     };
-    push_runner_timezones(&mut content, &runner_timezones, event.language);
+    let timezone_chunks = if matches!(race.entrants, Entrants::Many(_)) {
+        let mut timezones = MessageBuilder::default();
+        push_runner_timezones(&mut timezones, &runner_timezones, event.language);
+        split_discord_message(timezones.build())
+    } else {
+        push_runner_timezones(&mut content, &runner_timezones, event.language);
+        Vec::new()
+    };
     let goal = racetime_bot::Goal::for_event(race.series, &race.event).expect("Goal not found for event");
     let is_crosskeys = matches!(goal, racetime_bot::Goal::Crosskeys2025 | racetime_bot::Goal::Crosskeys2026);
     let hide_no_delay = is_crosskeys && (event.automated_asyncs || matches!(race.schedule, RaceSchedule::Async { .. }));
@@ -5480,9 +5544,12 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
         thread.say(ctx, content.build()).await?;
         thread.id
     };
+    for chunk in participant_chunks.into_iter().chain(timezone_chunks) {
+        thread_id.say(ctx, chunk).await?;
+    }
     race.scheduling_thread = Some(thread_id);
     if let Some(draft_kind) = event.draft_kind() {
-        if draft_kind.uses_button_draft() {
+        if matches!(race.entrants, Entrants::Two(_) | Entrants::Three(_)) && draft_kind.uses_button_draft() {
             thread_id.send_message(ctx, CreateMessage::new()
                 .content("Any participant may click **Start Draft** to start the draft.")
                 .button(CreateButton::new("draft_start").label("Start Draft").style(ButtonStyle::Primary))

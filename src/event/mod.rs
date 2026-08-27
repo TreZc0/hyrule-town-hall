@@ -1271,6 +1271,37 @@ pub(crate) async fn info(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
     Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &data.display_name, content).await?)
 }
 
+async fn team_has_active_race(
+    transaction: &mut Transaction<'_, Postgres>,
+    series: Series,
+    event: &str,
+    team: Id<Teams>,
+) -> sqlx::Result<bool> {
+    sqlx::query_scalar::<_, bool>(r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM races r
+            WHERE r.series = $1
+              AND r.event = $2
+              AND (
+                  r.team1 = $3 OR r.team2 = $3 OR r.team3 = $3
+                  OR EXISTS (
+                      SELECT 1 FROM race_entrants re
+                      WHERE re.race = r.id AND re.team = $3
+                  )
+              )
+              AND r.scheduling_thread IS NOT NULL
+              AND r.end_time IS NULL
+              AND NOT r.ignored
+        )
+    "#)
+        .bind(series)
+        .bind(event)
+        .bind(i64::from(team))
+        .fetch_one(&mut **transaction)
+        .await
+}
+
 #[rocket::get("/event/<series>/<event>/races")]
 pub(crate) async fn races(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, me: Option<User>, uri: Origin<'_>, series: Series, event: &str) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
@@ -1995,7 +2026,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                         @let ctx = ctx.take_edit();
                         @let mut errors = ctx.errors().collect_vec();
                         @let event_started = data.is_started(&mut transaction).await?;
-                        @let has_active_race = sqlx::query_scalar!(r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND (team1 = $3 OR team2 = $3 OR team3 = $3) AND scheduling_thread IS NOT NULL AND end_time IS NULL AND NOT ignored) AS "exists!""#, data.series as _, &data.event, row.id as _).fetch_one(&mut *transaction).await?;
+                        @let has_active_race = team_has_active_race(&mut transaction, data.series, &data.event, row.id).await?;
                         : full_form(uri!(status_post(data.series, &*data.event)), csrf, html! {
                             : form_field("restream_consent", &mut errors, html! {
                                 input(type = "checkbox", id = "restream_consent", name = "restream_consent", checked? = ctx.field_value("restream_consent").map_or(row.restream_consent, |value| value == "on"));
@@ -2153,7 +2184,7 @@ pub(crate) async fn status_post(pool: &State<PgPool>, http_client: &State<reqwes
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(status_page(transaction, http_client, Some(me), uri, csrf.as_ref(), data, StatusContext::Edit(form.context)).await?)
         } else {
-            let has_active_race = sqlx::query_scalar!(r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND (team1 = $3 OR team2 = $3 OR team3 = $3) AND scheduling_thread IS NOT NULL AND end_time IS NULL AND NOT ignored) AS "exists!""#, data.series as _, &data.event, row.id as _).fetch_one(&mut *transaction).await?;
+            let has_active_race = team_has_active_race(&mut transaction, data.series, &data.event, row.id).await?;
             let mut merged_choices = value.custom_choices.clone();
             if let Some(ref enter_flow) = data.enter_flow {
                 for req in &enter_flow.requirements {
@@ -2819,10 +2850,7 @@ async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf
         r#"SELECT restream_consent, custom_choices AS "custom_choices: Json<HashMap<String, String>>" FROM teams WHERE id = $1"#,
         team as _
     ).fetch_one(&mut *transaction).await?;
-    let has_active_race = sqlx::query_scalar!(
-        r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND (team1 = $3 OR team2 = $3 OR team3 = $3) AND scheduling_thread IS NOT NULL AND end_time IS NULL AND NOT ignored) AS "exists!""#,
-        data.series as _, &data.event, team as _
-    ).fetch_one(&mut *transaction).await?;
+    let has_active_race = team_has_active_race(&mut transaction, data.series, &data.event, team).await?;
     let any_locked = has_active_race || data.enter_flow.as_ref().is_some_and(|ef| {
         ef.requirements.iter().any(|req| match req {
             enter::Requirement::BooleanChoice { locked, .. }
@@ -3109,10 +3137,7 @@ pub(crate) async fn manage_team_choices_post(
         form.context.push_error(form::Error::validation("This event has already ended."));
     }
     Ok(if let Some(ref value) = form.value {
-        let has_active_race = sqlx::query_scalar!(
-            r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND (team1 = $3 OR team2 = $3 OR team3 = $3) AND scheduling_thread IS NOT NULL AND end_time IS NULL AND NOT ignored) AS "exists!""#,
-            data.series as _, &data.event, team as _
-        ).fetch_one(&mut *transaction).await?;
+        let has_active_race = team_has_active_race(&mut transaction, data.series, &data.event, team).await?;
         let any_locked = has_active_race || data.enter_flow.as_ref().is_some_and(|ef| {
             ef.requirements.iter().any(|req| match req {
                 enter::Requirement::BooleanChoice { locked, .. }

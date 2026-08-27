@@ -970,7 +970,7 @@ impl Handler {
     pub(super) async fn official_race_finished(&self, ctx: &RaceContext<GlobalState>, data: RaceData, cal_event: &cal::Event, event: &event::Data<'_>, fpa_invoked: bool, breaks_used: bool, tfb_scores: Option<HashMap<String, tfb::Score>>) -> Result<(), Error> {
         let stream_delay = match cal_event.race.entrants {
             Entrants::Open | Entrants::Count { .. } => event.open_stream_delay,
-            Entrants::Two(_) | Entrants::Three(_) | Entrants::Named(_) => event.invitational_stream_delay,
+            Entrants::Two(_) | Entrants::Three(_) | Entrants::Many(_) | Entrants::Named(_) => event.invitational_stream_delay,
         };
         sleep(stream_delay).await;
         let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
@@ -1214,6 +1214,7 @@ impl Handler {
                         report_ffa(ctx, cal_event, event, room).await?;
                     }
                     Entrants::Named(_) => unimplemented!(),
+                    Entrants::Many(_) => {}, // multi-entrant match lifecycle is tracked, but results are not reported
                     Entrants::Two(_) | Entrants::Three(_) => {
                         let room = Url::parse(&format!("https://{}{}", racetime_host(), data.url)).to_racetime()?;
                         if let Some(mut tfb_scores) = tfb_scores {
@@ -1278,6 +1279,7 @@ impl Handler {
                         report_ffa(ctx, cal_event, event, room).await?;
                     }
                     Entrants::Named(_) => unimplemented!(),
+                    Entrants::Many(_) => {}, // multi-entrant match lifecycle is tracked, but results are not reported
                     Entrants::Two(_) | Entrants::Three(_) => {
                         let mut team_times = HashMap::<_, Vec<_>>::default();
                         let mut team_rooms = HashMap::new();

@@ -883,6 +883,7 @@ pub(crate) fn format_runner_count(race: &Race, companion: Option<&Race>) -> Stri
     match &race.entrants {
         Entrants::Two(_) => "2".to_owned(),
         Entrants::Three(_) => "3".to_owned(),
+        Entrants::Many(teams) => teams.len().to_string(),
         Entrants::Count { total, .. } => total.to_string(),
         _ => "2".to_owned(),
     }
@@ -892,6 +893,7 @@ fn export_runner_count(entrants: &Entrants) -> u32 {
     match entrants {
         Entrants::Two(_) => 2,
         Entrants::Three(_) => 3,
+        Entrants::Many(teams) => teams.len().try_into().expect("too many race entrants"),
         Entrants::Count { total, .. } => *total,
         Entrants::Open | Entrants::Named(_) => 2,
     }
