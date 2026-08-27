@@ -6,3 +6,4 @@ CREATE TABLE public.race_entrants (
     UNIQUE (race, team)
 );
 
+ALTER TABLE race_entrants OWNER TO mido;
