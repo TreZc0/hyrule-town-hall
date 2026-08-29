@@ -6451,6 +6451,24 @@ pub(crate) async fn finalize_async_if_complete(
 
     report_async_race_to_external_platforms(ctx, race, &async_times_parsed, &results).await?;
 
+    // Mark the race itself complete only after every async result has been
+    // confirmed and successfully reported. `team3`, rather than `async_start3`,
+    // determines whether a third result is required: that entrant may not have
+    // scheduled their part yet.
+    sqlx::query!(r#"
+        UPDATE races
+        SET end_time = CASE
+            WHEN team3 IS NULL THEN GREATEST(async_end1, async_end2)
+            ELSE GREATEST(async_end1, async_end2, async_end3)
+        END
+        WHERE id = $1
+          AND async_end1 IS NOT NULL
+          AND async_end2 IS NOT NULL
+          AND (team3 IS NULL OR async_end3 IS NOT NULL)
+    "#, race_id)
+        .execute(&mut **transaction)
+        .await?;
+
     Ok(())
 }
 
