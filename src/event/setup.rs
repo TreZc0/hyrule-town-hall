@@ -389,20 +389,33 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
 }"#;
                                     }
 
-                                    h4(style = "margin-top: 20px; color: #333;") : "Custom Boolean Choice (stored in custom_choices by key):";
+                                    h4(style = "margin-top: 20px; color: #333;") : "Sectioned Custom Choices (stored in custom_choices by key):";
                                     pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
                                         : r#"{
+  "sections": [
+    {
+      "id": "settings",
+      "label": "Settings"
+    },
+    {
+      "id": "advanced",
+      "label": "Advanced Settings",
+      "parent": "settings"
+    }
+  ],
   "requirements": [
     {
       "type": "booleanChoice",
       "key": "hard_mode",
-      "label": "Difficulty: Hard"
+      "label": "Difficulty: Hard",
+      "section": "settings"
     },
     {
       "type": "booleanChoice",
       "key": "hard_mode_locked",
       "label": "Difficulty: Hard (locked after signup)",
-      "locked": true
+      "locked": true,
+      "section": "advanced"
     }
   ]
 }"#;

@@ -852,6 +852,12 @@ footer {
   margin: 3px 6px;
   text-align: center;
 }
+.enter-flow-heading {
+  margin: 1.5rem 0 0.5rem;
+}
+.enter-flow-subheading {
+  margin: 1rem 0 0.35rem;
+}
 .vs1 {
   text-align: end;
 }

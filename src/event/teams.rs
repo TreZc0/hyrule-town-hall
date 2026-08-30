@@ -1210,7 +1210,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
         ShowStatus::None => {}
     }
     if let Some(ref enter_flow) = data.enter_flow {
-        for requirement in &enter_flow.requirements {
+        for requirement in enter_flow.iter_requirements() {
             match requirement {
                 enter::Requirement::BooleanChoice { label, .. } | enter::Requirement::RadioChoice { label, .. } => {
                     column_headers.push(html! {
@@ -1572,7 +1572,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                     @if let Some(unconfirmed) = members.iter().filter(|member| !member.is_confirmed).try_into_nonempty_iter() {
                                         @if let Ok(entrant) = members.iter().exactly_one() {
                                             @if let Some(flow) = &data.enter_flow {
-                                                @for requirement in &flow.requirements {
+                                                @for requirement in flow.iter_requirements() {
                                                     @match requirement {
                                                         enter::Requirement::RaceTime => {}
                                                         enter::Requirement::RaceTimeInvite { .. } => {}
@@ -1685,7 +1685,7 @@ pub(crate) async fn list(pool: &PgPool, http_client: &reqwest::Client, me: Optio
                                 ShowStatus::None => {}
                             }
                             @if let Some(ref enter_flow) = data.enter_flow {
-                                @for requirement in &enter_flow.requirements {
+                                @for requirement in enter_flow.iter_requirements() {
                                     @match requirement {
                                         enter::Requirement::BooleanChoice { key, .. } => td {
                                             @if custom_choices.get(key).is_some_and(|v| v == "yes") {

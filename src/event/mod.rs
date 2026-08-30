@@ -458,7 +458,7 @@ impl<'a> Data<'a> {
     /// Returns `(key, plain_text_label)` for every `BooleanChoice` requirement in the enter flow.
     pub(crate) fn boolean_choice_requirements(&self) -> Vec<(&str, String)> {
         let Some(ref flow) = self.enter_flow else { return vec![] };
-        flow.requirements.iter()
+        flow.iter_requirements()
             .filter_map(|req| {
                 if let enter::Requirement::BooleanChoice { key, label, .. } = req {
                     // Strip HTML tags so the label is safe for plain-text contexts (Discord).
@@ -483,7 +483,7 @@ impl<'a> Data<'a> {
     /// Returns `(key, plain_text_label)` for every `RadioChoice` requirement in the enter flow.
     pub(crate) fn radio_choice_requirements(&self) -> Vec<(&str, String)> {
         let Some(ref flow) = self.enter_flow else { return vec![] };
-        flow.requirements.iter()
+        flow.iter_requirements()
             .filter_map(|req| {
                 if let enter::Requirement::RadioChoice { key, label, .. } = req {
                     let mut plain = String::new();
@@ -506,7 +506,7 @@ impl<'a> Data<'a> {
 
     pub(crate) fn has_custom_choice(&self, choice_key: &str) -> bool {
         self.enter_flow.as_ref().is_some_and(|flow| {
-            flow.requirements.iter().any(|req| match req {
+            flow.iter_requirements().any(|req| match req {
                 enter::Requirement::BooleanChoice { key, .. }
                 | enter::Requirement::RadioChoice { key, .. } => key == choice_key,
                 _ => false,
@@ -2039,8 +2039,11 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                 }
                             });
                             @if let Some(ref enter_flow) = data.enter_flow {
-                                @for requirement in &enter_flow.requirements {
-                                    @if let enter::Requirement::BooleanChoice { key, label, prompt, locked } = requirement {
+                                @for item in enter_flow.display_items(|requirement| matches!(requirement, enter::Requirement::BooleanChoice { .. } | enter::Requirement::RadioChoice { .. })) {
+                                    @match item {
+                                        enter::FlowDisplayItem::Section { section, depth } => : enter::section_heading(section, depth);
+                                        enter::FlowDisplayItem::Requirement(requirement) => {
+                                        @if let enter::Requirement::BooleanChoice { key, label, prompt, locked } = requirement {
                                         @let field_name = format!("custom_choices[{key}]");
                                         @let field_id_yes = format!("custom_choices[{key}]-yes");
                                         @let field_id_no = format!("custom_choices[{key}]-no");
@@ -2075,6 +2078,8 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                             input(id = &field_id_always, type = "radio", name = &field_name, value = "always", checked? = always_checked, disabled? = is_locked);
                                             label(for = &field_id_always) : "Always";
                                         });
+                                    }
+                                        }
                                     }
                                 }
                             }
@@ -2187,7 +2192,7 @@ pub(crate) async fn status_post(pool: &State<PgPool>, http_client: &State<reqwes
             let has_active_race = team_has_active_race(&mut transaction, data.series, &data.event, row.id).await?;
             let mut merged_choices = value.custom_choices.clone();
             if let Some(ref enter_flow) = data.enter_flow {
-                for req in &enter_flow.requirements {
+                for req in enter_flow.iter_requirements() {
                     match req {
                         enter::Requirement::BooleanChoice { key, locked, .. }
                         | enter::Requirement::RadioChoice { key, locked, .. } => {
@@ -2852,7 +2857,7 @@ async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf
     ).fetch_one(&mut *transaction).await?;
     let has_active_race = team_has_active_race(&mut transaction, data.series, &data.event, team).await?;
     let any_locked = has_active_race || data.enter_flow.as_ref().is_some_and(|ef| {
-        ef.requirements.iter().any(|req| match req {
+        ef.iter_requirements().any(|req| match req {
             enter::Requirement::BooleanChoice { locked, .. }
             | enter::Requirement::RadioChoice { locked, .. } => *locked,
             _ => false,
@@ -2943,8 +2948,11 @@ async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf
                     label(for = "choices-restream_consent") : "Okay with being restreamed";
                 }
                 @if let Some(ref enter_flow) = data.enter_flow {
-                    @for requirement in &enter_flow.requirements {
-                        @if let enter::Requirement::BooleanChoice { key, label, prompt, .. } = requirement {
+                    @for item in enter_flow.display_items(|requirement| matches!(requirement, enter::Requirement::BooleanChoice { .. } | enter::Requirement::RadioChoice { .. })) {
+                        @match item {
+                            enter::FlowDisplayItem::Section { section, depth } => : enter::section_heading(section, depth);
+                            enter::FlowDisplayItem::Requirement(requirement) => {
+                            @if let enter::Requirement::BooleanChoice { key, label, prompt, .. } = requirement {
                             @let field_name = format!("custom_choices[{key}]");
                             @let field_id_yes = format!("choices-custom_choices[{key}]-yes");
                             @let field_id_no = format!("choices-custom_choices[{key}]-no");
@@ -2976,6 +2984,8 @@ async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf
                                 label(for = &field_id_random) : "Random";
                                 input(id = &field_id_always, type = "radio", name = &field_name, value = "always", checked? = always_checked);
                                 label(for = &field_id_always) : "Always";
+                            }
+                        }
                             }
                         }
                     }
@@ -3139,7 +3149,7 @@ pub(crate) async fn manage_team_choices_post(
     Ok(if let Some(ref value) = form.value {
         let has_active_race = team_has_active_race(&mut transaction, data.series, &data.event, team).await?;
         let any_locked = has_active_race || data.enter_flow.as_ref().is_some_and(|ef| {
-            ef.requirements.iter().any(|req| match req {
+            ef.iter_requirements().any(|req| match req {
                 enter::Requirement::BooleanChoice { locked, .. }
                 | enter::Requirement::RadioChoice { locked, .. } => *locked,
                 _ => false,
@@ -3152,7 +3162,7 @@ pub(crate) async fn manage_team_choices_post(
             );
         }
         if let Some(ref enter_flow) = data.enter_flow {
-            for req in &enter_flow.requirements {
+            for req in enter_flow.iter_requirements() {
                 match req {
                     enter::Requirement::BooleanChoice { key, .. } => {
                         if let Some(val) = value.custom_choices.get(key.as_str()) {
