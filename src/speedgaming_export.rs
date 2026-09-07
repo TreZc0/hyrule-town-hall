@@ -394,6 +394,14 @@ fn confirmation_episode_id(html: &str) -> Result<i64, Error> {
     episode_id.parse().map_err(|_| Error::InvalidEpisodeId)
 }
 
+fn reject_client_error(form: &'static str, status: reqwest::StatusCode) -> Result<(), Error> {
+    if status.is_client_error() {
+        Err(Error::HttpRejected { form, status })
+    } else {
+        Ok(())
+    }
+}
+
 fn speedgaming_form_time(start: DateTime<Utc>) -> (String, String, String) {
     let start = start.with_timezone(&America::New_York);
     (
@@ -451,8 +459,9 @@ async fn submit_match(http_client: &reqwest::Client, submission: &MatchSubmissio
         ("submit", "Submit Match".to_owned()),
     ];
     let response = http_client.post(&url).header(COOKIE, form.cookie).form(&fields).send().await
-        .map_err(|error| Error::AmbiguousSubmission(error.to_string()))?
-        .error_for_status()
+        .map_err(|error| Error::AmbiguousSubmission(error.to_string()))?;
+    reject_client_error("match", response.status())?;
+    let response = response.error_for_status()
         .map_err(|error| Error::AmbiguousSubmission(error.to_string()))?;
     let html = response.text().await.map_err(|error| Error::AmbiguousSubmission(error.to_string()))?;
     if !html.contains("Match Submission Confirmed") {
@@ -506,6 +515,8 @@ async fn claim_race_export(
             state = 'in_progress', attempt_count = speedgaming_race_exports.attempt_count + 1,
             last_attempt_at = NOW(), last_error = NULL
         WHERE speedgaming_race_exports.state IN ('pending', 'failed')
+           OR (speedgaming_race_exports.state = 'ambiguous'
+               AND speedgaming_race_exports.last_error LIKE '%403 Forbidden%')
         RETURNING true AS "claimed!"
     "#, race_id as _, export_id)
     .fetch_optional(&mut **transaction)
@@ -630,9 +641,7 @@ async fn submit_volunteer(
         .form(&fields)
         .send().await
         .map_err(|error| Error::AmbiguousSubmission(error.to_string()))?;
-    if response.status().is_client_error() {
-        return Err(Error::HttpRejected { form: "volunteer", status: response.status() })
-    }
+    reject_client_error("volunteer", response.status())?;
     let response = response.error_for_status()
         .map_err(|error| Error::AmbiguousSubmission(error.to_string()))?;
     let html = response.text().await.map_err(|error| Error::AmbiguousSubmission(error.to_string()))?;
@@ -943,6 +952,15 @@ mod tests {
     fn parses_episode_id_from_confirmation() {
         let html = "<h1>Match Submission Confirmed</h1> Episode ID: 74585<br/>";
         assert_eq!(confirmation_episode_id(html).unwrap(), 74585);
+    }
+
+    #[test]
+    fn treats_forbidden_submission_as_rejected() {
+        assert!(matches!(
+            reject_client_error("match", reqwest::StatusCode::FORBIDDEN),
+            Err(Error::HttpRejected { form: "match", status }) if status == reqwest::StatusCode::FORBIDDEN,
+        ));
+        assert!(reject_client_error("match", reqwest::StatusCode::INTERNAL_SERVER_ERROR).is_ok());
     }
 
     #[test]
