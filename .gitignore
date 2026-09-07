@@ -1,9 +1,10 @@
-/.cargo/config.toml
+.cargo/config.toml
 /assets/google-client-secret.json
-/target
+target
 .vscode
 .claude
-/localdocs
-/cfg/hth.json
-/tmp
+localdocs
+cfg/hth.json
+tmp
+.tmp
 docs/

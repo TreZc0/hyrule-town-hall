@@ -222,6 +222,7 @@ pub(crate) struct Data<'a> {
     pub(crate) emulator_settings_reminder: bool,
     pub(crate) prevent_late_joins: bool,
     pub(crate) fpa_enabled: bool,
+    pub(crate) auto_start_with_restream: bool,
     pub(crate) manual_reporting_with_breaks: bool,
     pub(crate) language: Language,
     pub(crate) default_volunteer_language: Language,
@@ -312,6 +313,7 @@ impl<'a> Data<'a> {
             emulator_settings_reminder,
             prevent_late_joins,
             fpa_enabled,
+            auto_start_with_restream,
             manual_reporting_with_breaks,
             language AS "language: Language",
             default_volunteer_language AS "default_volunteer_language: Language",
@@ -382,6 +384,7 @@ impl<'a> Data<'a> {
                 emulator_settings_reminder: row.emulator_settings_reminder,
                 prevent_late_joins: row.prevent_late_joins,
                 fpa_enabled: row.fpa_enabled,
+                auto_start_with_restream: row.auto_start_with_restream,
                 manual_reporting_with_breaks: row.manual_reporting_with_breaks,
                 language: row.language,
                 default_volunteer_language: row.default_volunteer_language,
@@ -503,7 +506,7 @@ impl<'a> Data<'a> {
     /// Returns `(key, plain_text_label)` for every custom choice requirement in the enter flow.
     pub(crate) fn choice_requirements(&self) -> Vec<(&str, String)> {
         let Some(ref flow) = self.enter_flow else { return vec![] };
-        flow.requirements.iter()
+        flow.iter_requirements()
             .filter_map(|req| {
                 let (key, label) = match req {
                     enter::Requirement::BooleanChoice { key, label, .. }
@@ -520,6 +523,7 @@ impl<'a> Data<'a> {
                         c if !in_tag => plain.push(c),
                         _ => {}
                     }
+
                 }
                 Some((key.as_str(), plain))
             })
@@ -528,7 +532,7 @@ impl<'a> Data<'a> {
 
     pub(crate) fn has_custom_choice(&self, choice_key: &str) -> bool {
         self.enter_flow.as_ref().is_some_and(|flow| {
-            flow.requirements.iter().any(|req| match req {
+            flow.iter_requirements().any(|req| match req {
                 enter::Requirement::BooleanChoice { key, .. }
                 | enter::Requirement::RadioChoice { key, .. } => key == choice_key,
                 _ => false,
@@ -1169,6 +1173,7 @@ pub(crate) async fn info(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
         Series::TwwrMain => twwrmain::info(&mut transaction, &data).await?,
         Series::WeTryToBeBetter => wttbb::info(&mut transaction, &data).await?,
         Series::BotwAny => botwany::info(&mut transaction, &data).await?,
+        Series::BotwMsr => botwmsr::info(&mut transaction, &data).await?,
         Series::Wolfdash => wolfdash::info(&mut transaction, &data).await?,
     };
     let content = if let Some(custom_html) = custom_description {
@@ -1230,6 +1235,37 @@ pub(crate) async fn info(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
         }
     };
     Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &data.display_name, content).await?)
+}
+
+async fn team_has_active_race(
+    transaction: &mut Transaction<'_, Postgres>,
+    series: Series,
+    event: &str,
+    team: Id<Teams>,
+) -> sqlx::Result<bool> {
+    sqlx::query_scalar::<_, bool>(r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM races r
+            WHERE r.series = $1
+              AND r.event = $2
+              AND (
+                  r.team1 = $3 OR r.team2 = $3 OR r.team3 = $3
+                  OR EXISTS (
+                      SELECT 1 FROM race_entrants re
+                      WHERE re.race = r.id AND re.team = $3
+                  )
+              )
+              AND r.scheduling_thread IS NOT NULL
+              AND r.end_time IS NULL
+              AND NOT r.ignored
+        )
+    "#)
+        .bind(series)
+        .bind(event)
+        .bind(i64::from(team))
+        .fetch_one(&mut **transaction)
+        .await
 }
 
 #[rocket::get("/event/<series>/<event>/races")]
@@ -1880,6 +1916,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                             | Series::WeTryToBeBetter
                             | Series::TwwrMain
                             | Series::BotwAny
+                            | Series::BotwMsr
                             | Series::Wolfdash
                                 => @if let French = data.language {
                                     p : "Planifiez vos matches dans les fils du canal dédié.";
@@ -1956,7 +1993,7 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                         @let ctx = ctx.take_edit();
                         @let mut errors = ctx.errors().collect_vec();
                         @let event_started = data.is_started(&mut transaction).await?;
-                        @let has_active_race = sqlx::query_scalar!(r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND (team1 = $3 OR team2 = $3 OR team3 = $3) AND scheduling_thread IS NOT NULL AND end_time IS NULL AND NOT ignored) AS "exists!""#, data.series as _, &data.event, row.id as _).fetch_one(&mut *transaction).await?;
+                        @let has_active_race = team_has_active_race(&mut transaction, data.series, &data.event, row.id).await?;
                         : full_form(uri!(status_post(data.series, &*data.event)), csrf, html! {
                             : form_field("restream_consent", &mut errors, html! {
                                 input(type = "checkbox", id = "restream_consent", name = "restream_consent", checked? = ctx.field_value("restream_consent").map_or(row.restream_consent, |value| value == "on"));
@@ -1969,8 +2006,11 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                 }
                             });
                             @if let Some(ref enter_flow) = data.enter_flow {
-                                @for requirement in &enter_flow.requirements {
-                                    @if let enter::Requirement::BooleanChoice { key, label, prompt, locked } = requirement {
+                                @for item in enter_flow.display_items(|requirement| matches!(requirement, enter::Requirement::BooleanChoice { .. } | enter::Requirement::RadioChoice { .. })) {
+                                    @match item {
+                                        enter::FlowDisplayItem::Section { section, depth } => : enter::section_heading(section, depth);
+                                        enter::FlowDisplayItem::Requirement(requirement) => {
+                                        @if let enter::Requirement::BooleanChoice { key, label, prompt, locked } = requirement {
                                         @let field_name = format!("custom_choices[{key}]");
                                         @let field_id_yes = format!("custom_choices[{key}]-yes");
                                         @let field_id_no = format!("custom_choices[{key}]-no");
@@ -2005,6 +2045,8 @@ async fn status_page(mut transaction: Transaction<'_, Postgres>, http_client: &r
                                             input(id = &field_id_always, type = "radio", name = &field_name, value = "always", checked? = always_checked, disabled? = is_locked);
                                             label(for = &field_id_always) : "Always";
                                         });
+                                    }
+                                        }
                                     }
                                 }
                             }
@@ -2114,10 +2156,10 @@ pub(crate) async fn status_post(pool: &State<PgPool>, http_client: &State<reqwes
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(status_page(transaction, http_client, Some(me), uri, csrf.as_ref(), data, StatusContext::Edit(form.context)).await?)
         } else {
-            let has_active_race = sqlx::query_scalar!(r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND (team1 = $3 OR team2 = $3 OR team3 = $3) AND scheduling_thread IS NOT NULL AND end_time IS NULL AND NOT ignored) AS "exists!""#, data.series as _, &data.event, row.id as _).fetch_one(&mut *transaction).await?;
+            let has_active_race = team_has_active_race(&mut transaction, data.series, &data.event, row.id).await?;
             let mut merged_choices = value.custom_choices.clone();
             if let Some(ref enter_flow) = data.enter_flow {
-                for req in &enter_flow.requirements {
+                for req in enter_flow.iter_requirements() {
                     match req {
                         enter::Requirement::BooleanChoice { key, locked, .. }
                         | enter::Requirement::RadioChoice { key, locked, .. } => {
@@ -2780,12 +2822,9 @@ async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf
         r#"SELECT restream_consent, custom_choices AS "custom_choices: Json<HashMap<String, String>>" FROM teams WHERE id = $1"#,
         team as _
     ).fetch_one(&mut *transaction).await?;
-    let has_active_race = sqlx::query_scalar!(
-        r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND (team1 = $3 OR team2 = $3 OR team3 = $3) AND scheduling_thread IS NOT NULL AND end_time IS NULL AND NOT ignored) AS "exists!""#,
-        data.series as _, &data.event, team as _
-    ).fetch_one(&mut *transaction).await?;
+    let has_active_race = team_has_active_race(&mut transaction, data.series, &data.event, team).await?;
     let any_locked = has_active_race || data.enter_flow.as_ref().is_some_and(|ef| {
-        ef.requirements.iter().any(|req| match req {
+        ef.iter_requirements().any(|req| match req {
             enter::Requirement::BooleanChoice { locked, .. }
             | enter::Requirement::RadioChoice { locked, .. } => *locked,
             _ => false,
@@ -2876,8 +2915,11 @@ async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf
                     label(for = "choices-restream_consent") : "Okay with being restreamed";
                 }
                 @if let Some(ref enter_flow) = data.enter_flow {
-                    @for requirement in &enter_flow.requirements {
-                        @if let enter::Requirement::BooleanChoice { key, label, prompt, .. } = requirement {
+                    @for item in enter_flow.display_items(|requirement| matches!(requirement, enter::Requirement::BooleanChoice { .. } | enter::Requirement::RadioChoice { .. })) {
+                        @match item {
+                            enter::FlowDisplayItem::Section { section, depth } => : enter::section_heading(section, depth);
+                            enter::FlowDisplayItem::Requirement(requirement) => {
+                            @if let enter::Requirement::BooleanChoice { key, label, prompt, .. } = requirement {
                             @let field_name = format!("custom_choices[{key}]");
                             @let field_id_yes = format!("choices-custom_choices[{key}]-yes");
                             @let field_id_no = format!("choices-custom_choices[{key}]-no");
@@ -2909,6 +2951,8 @@ async fn manage_team_page(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf
                                 label(for = &field_id_random) : "Random";
                                 input(id = &field_id_always, type = "radio", name = &field_name, value = "always", checked? = always_checked);
                                 label(for = &field_id_always) : "Always";
+                            }
+                        }
                             }
                         }
                     }
@@ -3070,12 +3114,9 @@ pub(crate) async fn manage_team_choices_post(
         form.context.push_error(form::Error::validation("This event has already ended."));
     }
     Ok(if let Some(ref value) = form.value {
-        let has_active_race = sqlx::query_scalar!(
-            r#"SELECT EXISTS(SELECT 1 FROM races WHERE series = $1 AND event = $2 AND (team1 = $3 OR team2 = $3 OR team3 = $3) AND scheduling_thread IS NOT NULL AND end_time IS NULL AND NOT ignored) AS "exists!""#,
-            data.series as _, &data.event, team as _
-        ).fetch_one(&mut *transaction).await?;
+        let has_active_race = team_has_active_race(&mut transaction, data.series, &data.event, team).await?;
         let any_locked = has_active_race || data.enter_flow.as_ref().is_some_and(|ef| {
-            ef.requirements.iter().any(|req| match req {
+            ef.iter_requirements().any(|req| match req {
                 enter::Requirement::BooleanChoice { locked, .. }
                 | enter::Requirement::RadioChoice { locked, .. } => *locked,
                 _ => false,
@@ -3088,7 +3129,7 @@ pub(crate) async fn manage_team_choices_post(
             );
         }
         if let Some(ref enter_flow) = data.enter_flow {
-            for req in &enter_flow.requirements {
+            for req in enter_flow.iter_requirements() {
                 match req {
                     enter::Requirement::BooleanChoice { key, .. } => {
                         if let Some(val) = value.custom_choices.get(key.as_str()) {
@@ -3795,7 +3836,7 @@ pub(crate) async fn practice_seed_post(pool: &State<PgPool>, global_state: &Stat
             let settings_string = data.settings_string.ok_or(StatusOrError::Status(Status::NotFound))?;
             let version = data.rando_version;
             transaction.commit().await?;
-            let rx = Arc::clone(&*global_state).roll_twwr_seed(version, settings_string, UnlockSpoilerLog::Now);
+            let rx = Arc::clone(&*global_state).roll_twwr_seed(version, settings_string, UnlockSpoilerLog::Never);
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         },
         SeedGenType::Owr { config } => {

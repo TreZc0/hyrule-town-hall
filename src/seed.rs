@@ -308,8 +308,17 @@ impl Data {
                     Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }.to_seed_data_base()
                 }),
                 (Some(file_stem), locked_spoiler_log_path, None, _, None, None, None) => Some(Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }.to_seed_data_base()),
-                (_, _, _, _, _, Some(uuid), None) => Some(Files::AlttprDoorRando { uuid, is_owr: false }.to_seed_data_base()),
+                // Keep the legacy Crosskeys UUID authoritative even when
+                // seed_data also contains resolved-random metadata. This is
+                // the precedence used by the pre-agnostic application.
+                (_, _, _, _, _, Some(uuid), _) => Some(Files::AlttprDoorRando { uuid, is_owr: false }.to_seed_data_base()),
                 (_, _, _, _, _, _, Some(ref old_data)) => (|| {
+                    // New async seed forms already write canonical seed_data.
+                    // Preserve the complete JSON object (including auxiliary
+                    // metadata) once its typed identity parses successfully.
+                    if Files::from_seed_data(old_data).is_some() {
+                        return Some(old_data.clone());
+                    }
                     if let Some(hash) = old_data.get("avianart_hash").and_then(|v| v.as_str()) {
                         let seed_hash = old_data.get("avianart_seed_hash")
                             .and_then(|v| v.as_str())
@@ -782,4 +791,52 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>,
             }).await?)
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn legacy_load(xkeys_uuid: Option<Uuid>, seed_data: Option<serde_json::Value>) -> Data {
+        Data::from_db(
+            None, None, None, None,
+            None, None, None, None,
+            false, None, xkeys_uuid, seed_data,
+            None, None, None, None, None,
+            None, false,
+        )
+    }
+
+    #[test]
+    fn canonical_async_seed_data_survives_legacy_loader() {
+        let uuid = Uuid::parse_str("58e8c0f4-c1c9-4a62-990f-a2603a126c93").unwrap();
+        let door_rando = serde_json::json!({
+            "type": "alttpr_dr",
+            "uuid": uuid,
+            "resolved_randoms": {"hovering": "never"},
+        });
+        let loaded = legacy_load(None, Some(door_rando.clone()));
+        assert_eq!(loaded.seed_data, Some(door_rando));
+        assert!(matches!(loaded.files(), Some(Files::AlttprDoorRando { uuid: parsed, is_owr: false }) if parsed == uuid));
+
+        let avianart = serde_json::json!({
+            "type": "alttpr_avianart",
+            "hash": "abc123",
+            "seed_hash": ["Bow", "Boomerang", "Hookshot", "Bomb", "Mushroom"],
+            "audit": {"source": "async-form"},
+        });
+        let loaded = legacy_load(None, Some(avianart.clone()));
+        assert_eq!(loaded.seed_data, Some(avianart));
+        assert!(matches!(loaded.files(), Some(Files::AvianartSeed { hash, .. }) if hash == "abc123"));
+    }
+
+    #[test]
+    fn legacy_crosskeys_uuid_remains_authoritative() {
+        let uuid = Uuid::parse_str("d3f46ae6-0746-4dbd-a254-2f36d907e56f").unwrap();
+        let loaded = legacy_load(
+            Some(uuid),
+            Some(serde_json::json!({"resolved_randoms": {"no_delay": "never"}})),
+        );
+        assert!(matches!(loaded.files(), Some(Files::AlttprDoorRando { uuid: parsed, is_owr: false }) if parsed == uuid));
+    }
 }

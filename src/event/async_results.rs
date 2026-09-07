@@ -83,7 +83,7 @@ pub(crate) async fn get(
             QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => {
                 if num_entrants < 20 { 3 } else { 4 }
             }
-            QualifierScoreKind::TwwrMiniblins26 => 3,
+            QualifierScoreKind::TwwrMiniblins26 | QualifierScoreKind::TwwrMain => 3,
         };
 
         let par_time_opt = if finish_times.len() >= par_cutoff {
@@ -110,6 +110,9 @@ pub(crate) async fn get(
             let points = par_time_opt.and_then(|par_time| match score_kind {
                 QualifierScoreKind::TwwrMiniblins26 => {
                     Some((2000.0 + ((1.0 - (time.as_secs_f64() - par_time.as_secs_f64()) / par_time.as_secs_f64()) * 1000.0).floor()).max(100.0))
+                }
+                QualifierScoreKind::TwwrMain => {
+                    Some(((1.0 - (time.as_secs_f64() - par_time.as_secs_f64()) / par_time.as_secs_f64()) * 1000.0).max(100.0))
                 }
                 QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => {
                     Some((100.0 * (2.0 - (time.as_secs_f64() / par_time.as_secs_f64()))).clamp(10.0, 110.0))

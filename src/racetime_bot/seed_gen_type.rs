@@ -30,6 +30,8 @@ pub(crate) struct OwrEventConfig {
     ///   Entries without seed patches are displayed as player rules instead of seed settings.
     /// - `settings`, `placements`, `start_inventory`: patch applied when the choice is enabled.
     ///   Legacy flat patches (bare key→value object, no section keys) are also accepted.
+    /// - `priority`: optional integer; enabled patches are applied from low to high priority,
+    ///   then by key, so a higher-priority patch can intentionally override individual fields.
     /// - `supercedes`: list of choice keys whose patches are suppressed when this choice is enabled.
     /// - `hidden_for_async`: if `true`, this choice is omitted from the scheduling thread display
     ///   for async races (e.g. a rule that only makes sense for a live, streamed race).
@@ -200,7 +202,7 @@ impl SeedGenType {
                     choices.retain(|key, _| !super::choice_entry_hidden_for_async(super::choice_entry(config, key)));
                 }
                 let seed_settings = super::owr_choices_description(&choices, config);
-                if let Some(player_rules) = super::alttpr_dr_player_rules_str(&choices, config) {
+                if let Some(player_rules) = super::alttpr_dr_player_rules_str_filtered(&choices, config, is_async) {
                     Some(format!(
                         "This race will be played with {} as settings.\n\nThis race will be played with {}.",
                         seed_settings,

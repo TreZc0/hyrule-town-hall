@@ -196,6 +196,12 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             label(class = "help") : " (Announce fair play agreement when official race rooms open)";
                         });
 
+                        : form_field("auto_start_with_restream", &mut errors, html! {
+                            input(type = "checkbox", id = "auto_start_with_restream", name = "auto_start_with_restream", checked? = ctx.field_value("auto_start_with_restream").map_or(event.auto_start_with_restream, |value| value == "on"));
+                            label(for = "auto_start_with_restream") : "Auto-start races with restreams";
+                            label(class = "help") : " (Restreamers can use !restream when they arrive to disable auto-start until the restream is ready)";
+                        });
+
                         : form_field("rando_version_json", &mut errors, html! {
                             label(for = "rando_version_json") : "Randomizer Version (JSON)";
                             textarea(id = "rando_version_json", name = "rando_version_json", rows = "8", style = "font-family: monospace; width: 100%; max-width: 800px;") {
@@ -365,6 +371,7 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                                     ("sgl_2024_online", "SGL 2024 Online"),
                                     ("sgl_2025_online", "SGL 2025 Online"),
                                     ("twwr_miniblins26", "TWWR Miniblins 26"),
+                                    ("twwr_main", "TWWR Main"),
                                 ] {
                                     option(value = slug, selected? = ctx.field_value("qualifier_score_kind").map_or(event.qualifier_score_kind_str.as_deref() == Some(slug), |v| v == *slug)) : *label;
                                 }
@@ -639,6 +646,110 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
   "closes": "2024-01-15T23:59:59Z"
 }"#;
                                     }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "Custom Text Field Requirement:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "requirements": [
+    {
+      "type": "textField",
+      "label": "What's your favorite Zelda game?",
+      "long": false,
+      "regex": ".*",
+      "regexErrorMessages": [],
+      "fallbackErrorMessage": "Please provide an answer"
+    }
+  ]
+}"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "Discord Guild with Specific Role:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "requirements": [
+    {
+      "type": "discordGuild",
+      "name": "My Discord Server",
+      "roleId": "123456789012345678"
+    }
+  ]
+}"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "Sectioned Custom Choices (stored in custom_choices by key):";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "sections": [
+    {
+      "id": "settings",
+      "label": "Settings"
+    },
+    {
+      "id": "advanced",
+      "label": "Advanced Settings",
+      "parent": "settings"
+    }
+  ],
+  "requirements": [
+    {
+      "type": "booleanChoice",
+      "key": "hard_mode",
+      "label": "Difficulty: Hard",
+      "section": "settings"
+    },
+    {
+      "type": "booleanChoice",
+      "key": "hard_mode_locked",
+      "label": "Difficulty: Hard (locked after signup)",
+      "locked": true,
+      "section": "advanced"
+    }
+  ]
+}"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "Qualifier Placement Cutoff:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "requirements": [
+    {
+      "type": "qualifierPlacement",
+      "numPlayers": 16,
+      "minRaces": 1,
+      "needFinish": false,
+      "excludePlayers": 0
+    }
+  ]
+}"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "Start.gg Event Signup Validation:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "requirements": [
+    {
+      "type": "startGGEventSignup",
+      "eventSlug": "tournament/wolfdash/event/open-bracket",
+      "text": "Sign up to <a href='https://start.gg/tournament/wolfdash' target='_blank'>WolfDash on start.gg</a>",
+      "errorText": "You must register for WolfDash on start.gg before entering here."
+    }
+  ]
+}"#;
+                                    }
+
+                                    h4(style = "margin-top: 20px; color: #333;") : "External / Manual Requirement:";
+                                    pre(style = "font-size: 14px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                        : r#"{
+  "requirements": [
+    {
+      "type": "external",
+      "html": "Please fill out <a href=\"https://example.com/form\">this form</a>.",
+      "text": "Please fill out the registration form.",
+      "blocksSubmit": true
+    }
+  ]
+}"#;
+                                    }
                                 }
                             }
                         });
@@ -750,6 +861,7 @@ pub(crate) struct SetupForm {
     emulator_settings_reminder: bool,
     prevent_late_joins: bool,
     fpa_enabled: bool,
+    auto_start_with_restream: bool,
     rando_version_json: Option<String>,
     enter_url: Option<String>,
     teams_url: Option<String>,
@@ -1242,6 +1354,13 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                 seed_config_json as _,
             ).execute(&mut *transaction).await?;
 
+            sqlx::query!(
+                "UPDATE events SET auto_start_with_restream = $1 WHERE series = $2 AND event = $3",
+                value.auto_start_with_restream,
+                event_data.series as _,
+                &event_data.event,
+            ).execute(&mut *transaction).await?;
+
             let old_participant_role_id: Option<i64> = sqlx::query_scalar!(
                 "SELECT id FROM discord_roles WHERE series = $1 AND event = $2 AND role IS NULL AND racetime_team IS NULL",
                 event_data.series as _, &event_data.event
@@ -1678,6 +1797,7 @@ fn create_form_content(me: &Option<User>, _uri: &Origin<'_>, csrf: Option<&CsrfT
                                     ("sgl_2024_online", "SGL 2024 Online"),
                                     ("sgl_2025_online", "SGL 2025 Online"),
                                     ("twwr_miniblins26", "TWWR Miniblins 26"),
+                                    ("twwr_main", "TWWR Main"),
                                 ] {
                                     option(value = slug, selected? = ctx.field_value("qualifier_score_kind").map_or(false, |v| v == *slug)) : *label;
                                 }

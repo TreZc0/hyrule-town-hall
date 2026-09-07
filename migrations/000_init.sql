@@ -447,8 +447,7 @@ ALTER TABLE public.looking_for_team OWNER TO mido;
 
 CREATE TABLE public.mw_config (
     verbose_logging boolean NOT NULL,
-    regional_vc boolean NOT NULL,
-    verbose_logging_reason text
+    regional_vc boolean NOT NULL
 );
 
 

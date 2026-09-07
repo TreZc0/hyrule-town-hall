@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, game_id, category_slug, client_id, client_secret, created_at, updated_at\n           FROM game_racetime_connection WHERE game_id = $1 LIMIT 1",
+  "query": "SELECT id, game_id, category_slug, client_id, client_secret, created_at, updated_at\n           FROM game_racetime_connection WHERE game_id = $1",
   "describe": {
     "columns": [
       {
@@ -54,5 +54,5 @@
       true
     ]
   },
-  "hash": "5645c5b76f7e4587ad8ada54c99ff8c51574e6867e3e2c49b922290821e57a4c"
+  "hash": "f84033b58075c9b7b198ac9135e25977562b2a12620a261ebec419e88811a646"
 }

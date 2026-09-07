@@ -154,6 +154,7 @@ async fn compact_title_matchup(
         }
         Entrants::Named(name) => name.clone(),
         Entrants::Open | Entrants::Count { .. } => "Open Race".to_owned(),
+        Entrants::Many(teams) => format!("{} entrants", teams.len()),
     })
 }
 
@@ -238,6 +239,9 @@ async fn generate_event_title(
         }
         Entrants::Open | Entrants::Count { .. } => {
             title.push_str("Open Race");
+        }
+        Entrants::Many(teams) => {
+            title.push_str(&format!("{} entrants", teams.len()));
         }
     }
 

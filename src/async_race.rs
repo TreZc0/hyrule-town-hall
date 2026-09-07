@@ -274,7 +274,7 @@ impl AsyncRaceManager {
             content.push("---");
             content.push_line("");
             content.push(format!("**Seed Settings:** {}", racetime_bot::owr_choices_description(&choices, config)));
-            if let Some(race_options) = racetime_bot::alttpr_dr_player_rules_str(&choices, config) {
+            if let Some(race_options) = racetime_bot::alttpr_dr_player_rules_str_filtered(&choices, config, true) {
                 content.push_line("");
                 content.push(format!("**Race Rules:** {}", race_options));
             }
@@ -1489,31 +1489,48 @@ pub(crate) async fn handle_ready_qualifier(
     }
 
     if let Some(ref seed_data) = seed.seed_data {
-        if let Some(seed::Files::AlttprDoorRando { uuid, is_owr }) = seed::Files::from_seed_data(seed_data) {
-            let prefix = if is_owr { "OR_" } else { "DR_" };
-            let label = if is_owr { "OWR Seed" } else { "Door Rando Seed" };
-            let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").unwrap();
-            patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/{prefix}{uuid}.bps", base_uri()));
-            seed_msg.push(format!("{label}: {}\n", patcher_url));
-        }
-        if let Some(avianart_hash) = seed_data.get("avianart_hash").or_else(|| seed_data.get("hash")).and_then(|v| v.as_str()) {
-            if !avianart_hash.is_empty() {
-                seed_msg.push(format!("Seed URL: https://avianart.games/perm/{}\n", avianart_hash));
+        match seed::Files::from_seed_data(seed_data) {
+            Some(seed::Files::AlttprDoorRando { uuid, is_owr }) => {
+                let prefix = if is_owr { "OR_" } else { "DR_" };
+                let label = if is_owr { "OWR Seed" } else { "Door Rando Seed" };
+                let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html").unwrap();
+                patcher_url.query_pairs_mut().append_pair("patch", &format!("{}/seed/{prefix}{uuid}.bps", base_uri()));
+                seed_msg.push(format!("{label}: {}\n", patcher_url));
             }
-            if let Some(seed_hash) = seed_data.get("avianart_seed_hash").and_then(|v| v.as_str()) {
-                if !seed_hash.is_empty() {
-                    seed_msg.push(format!("**Seed Hash:** {}\n", seed_hash));
+            Some(seed::Files::AvianartSeed { hash, seed_hash }) => {
+                if !hash.is_empty() {
+                    seed_msg.push(format!("Seed URL: https://avianart.games/perm/{hash}\n"));
+                }
+                if let Some(seed_hash) = seed_hash {
+                    seed_msg.push(format!("**Seed Hash:** {}\n", seed_hash.join(", ")));
+                }
+            }
+            _ => {}
+        }
+        if seed::Files::from_seed_data(seed_data).is_none() {
+            if let Some(avianart_hash) = seed_data.get("avianart_hash").and_then(|v| v.as_str()) {
+                if !avianart_hash.is_empty() {
+                    seed_msg.push(format!("Seed URL: https://avianart.games/perm/{}\n", avianart_hash));
+                }
+                if let Some(seed_hash) = seed_data.get("avianart_seed_hash").and_then(|v| v.as_str()) {
+                    if !seed_hash.is_empty() {
+                        seed_msg.push(format!("**Seed Hash:** {}\n", seed_hash));
+                    }
                 }
             }
         }
-        if let Some(permalink) = seed_data.get("permalink").and_then(|v| v.as_str()) {
-            if !permalink.is_empty() {
-                seed_msg.push(format!("**Permalink:** `{}`\n", permalink));
+        if seed_data.get("type").and_then(|value| value.as_str()) == Some("twwr")
+            || seed_data.get("permalink").is_some()
+        {
+            if let Some(permalink) = seed_data.get("permalink").and_then(|v| v.as_str()) {
+                if !permalink.is_empty() {
+                    seed_msg.push(format!("**Permalink:** `{}`\n", permalink));
+                }
             }
-        }
-        if let Some(seed_hash) = seed_data.get("seed_hash").and_then(|v| v.as_str()) {
-            if !seed_hash.is_empty() {
-                seed_msg.push(format!("**Seed Hash:** {}\n", seed_hash));
+            if let Some(seed_hash) = seed_data.get("seed_hash").and_then(|v| v.as_str()) {
+                if !seed_hash.is_empty() {
+                    seed_msg.push(format!("**Seed Hash:** {}\n", seed_hash));
+                }
             }
         }
     }

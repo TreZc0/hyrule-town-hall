@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE races\n        SET end_time = CASE\n            WHEN team3 IS NULL THEN GREATEST(async_end1, async_end2)\n            ELSE GREATEST(async_end1, async_end2, async_end3)\n        END\n        WHERE id = $1\n          AND async_end1 IS NOT NULL\n          AND async_end2 IS NOT NULL\n          AND (team3 IS NULL OR async_end3 IS NOT NULL)\n    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "77ed7ddbc057a44cf8bc89d10f50f491bf768e4d47982833b8ead8aa3f11ee09"
+}

@@ -16,10 +16,37 @@ use {
     },
 };
 
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct Flow {
-    pub(crate) requirements: Vec<Requirement>,
+#[derive(Debug, Clone)]
+pub(super) struct Flow {
+    pub(crate) sections: Vec<Section>,
+    requirements: Vec<RequirementEntry>,
     closes: Option<DateTime<Utc>>,
+}
+
+#[serde_as]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Section {
+    pub(crate) id: String,
+    #[serde_as(as = "DeserializeRawHtml")]
+    pub(crate) label: RawHtml<String>,
+    #[serde(default)]
+    parent: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct RequirementEntry {
+    section: Option<String>,
+    requirement: Requirement,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum FlowDisplayItem<'a> {
+    Section {
+        section: &'a Section,
+        depth: usize,
+    },
+    Requirement(&'a Requirement),
 }
 
 enum DeserializeRawHtml {}
@@ -39,6 +66,118 @@ impl<'de> DeserializeAs<'de, Regex> for DeserializeRegex {
 }
 
 fn make_true() -> bool { true }
+
+impl<'de> Deserialize<'de> for Flow {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct RawFlow {
+            #[serde(default)]
+            sections: Vec<Section>,
+            requirements: Vec<serde_json::Value>,
+            closes: Option<DateTime<Utc>>,
+        }
+
+        let RawFlow { sections, requirements, closes } = RawFlow::deserialize(deserializer)?;
+        let mut parsed_requirements = Vec::with_capacity(requirements.len());
+        for mut value in requirements {
+            let section = match value.as_object_mut().and_then(|object| object.remove("section")) {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(section)) => Some(section),
+                Some(_) => return Err(D::Error::custom("requirement section must be a string")),
+            };
+            let requirement = serde_json::from_value(value).map_err(D::Error::custom)?;
+            parsed_requirements.push(RequirementEntry { section, requirement });
+        }
+
+        let flow = Self { sections, requirements: parsed_requirements, closes };
+        flow.validate().map_err(D::Error::custom)?;
+        Ok(flow)
+    }
+}
+
+impl Flow {
+    fn validate(&self) -> Result<(), String> {
+        let mut section_ids = HashSet::new();
+        for section in &self.sections {
+            if section.id.trim().is_empty() {
+                return Err("section IDs must not be empty".to_owned())
+            }
+            if !section_ids.insert(section.id.as_str()) {
+                return Err(format!("duplicate section ID: {}", section.id))
+            }
+        }
+        for section in &self.sections {
+            if let Some(parent) = section.parent.as_deref() {
+                if !section_ids.contains(parent) {
+                    return Err(format!("section {} references missing parent section {parent}", section.id))
+                }
+                let mut seen = HashSet::from([section.id.as_str()]);
+                let mut current = Some(parent);
+                while let Some(id) = current {
+                    if !seen.insert(id) {
+                        return Err(format!("section hierarchy contains a cycle involving {id}"))
+                    }
+                    current = self.sections.iter().find(|candidate| candidate.id == id).and_then(|candidate| candidate.parent.as_deref());
+                }
+            }
+        }
+        for entry in &self.requirements {
+            if let Some(section) = entry.section.as_deref() {
+                if !section_ids.contains(section) {
+                    return Err(format!("requirement references missing section {section}"))
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.requirements.is_empty()
+    }
+
+    pub(crate) fn iter_requirements(&self) -> impl Iterator<Item = &Requirement> {
+        self.requirements.iter().map(|entry| &entry.requirement)
+    }
+
+    pub(crate) fn display_items(&self, include: impl Fn(&Requirement) -> bool) -> Vec<FlowDisplayItem<'_>> {
+        fn section_has_items(flow: &Flow, section_id: &str, include: &impl Fn(&Requirement) -> bool) -> bool {
+            flow.requirements.iter().any(|entry| entry.section.as_deref() == Some(section_id) && include(&entry.requirement))
+                || flow.sections.iter().filter(|section| section.parent.as_deref() == Some(section_id)).any(|section| section_has_items(flow, &section.id, include))
+        }
+
+        fn append_section<'a>(flow: &'a Flow, section: &'a Section, depth: usize, include: &impl Fn(&Requirement) -> bool, items: &mut Vec<FlowDisplayItem<'a>>) {
+            if !section_has_items(flow, &section.id, include) {
+                return
+            }
+            items.push(FlowDisplayItem::Section { section, depth });
+            items.extend(flow.requirements.iter()
+                .filter(|entry| entry.section.as_deref() == Some(section.id.as_str()) && include(&entry.requirement))
+                .map(|entry| FlowDisplayItem::Requirement(&entry.requirement)));
+            for child in flow.sections.iter().filter(|candidate| candidate.parent.as_deref() == Some(section.id.as_str())) {
+                append_section(flow, child, depth + 1, include, items);
+            }
+        }
+
+        let mut items = self.requirements.iter()
+            .filter(|entry| entry.section.is_none() && include(&entry.requirement))
+            .map(|entry| FlowDisplayItem::Requirement(&entry.requirement))
+            .collect::<Vec<_>>();
+        for section in self.sections.iter().filter(|section| section.parent.is_none()) {
+            append_section(self, section, 0, &include, &mut items);
+        }
+        items
+    }
+}
+
+pub(crate) fn section_heading(section: &Section, depth: usize) -> RawHtml<String> {
+    html! {
+        @if depth == 0 {
+            h3(class = "enter-flow-heading") : section.label.clone();
+        } else {
+            h4(class = "enter-flow-subheading") : section.label.clone();
+        }
+    }
+}
 
 /// Requirements to enter an event
 #[serde_as]
@@ -202,6 +341,14 @@ pub(crate) enum Requirement {
 struct RequirementStatus {
     blocks_submit: bool,
     html_content: Box<dyn FnOnce(&mut Vec<&form::Error<'_>>) -> RawHtml<String> + Send>,
+}
+
+enum RequirementDisplay {
+    Section(RawHtml<String>),
+    Requirement {
+        is_checked: Option<bool>,
+        html_content: Box<dyn FnOnce(&mut Vec<&form::Error<'_>>) -> RawHtml<String> + Send>,
+    },
 }
 
 impl Requirement {
@@ -1054,7 +1201,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
             (Series::Standard, "w") => s::weeklies_enter_form(me.as_ref()),
             _ => match data.team_config {
                 TeamConfig::Solo => {
-                    if let Some(Flow { ref requirements, closes }) = data.enter_flow {
+                    if let Some(ref flow) = data.enter_flow {
                         let opted_out = if let Some(racetime) = me.as_ref().and_then(|me| me.racetime.as_ref()) {
                             sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM opt_outs WHERE series = $1 AND event = $2 AND racetime_id = $3) AS "exists!""#, data.series as _, &data.event, racetime.id).fetch_one(&mut *transaction).await?
                         } else {
@@ -1077,13 +1224,13 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                                     p : "You can no longer enter this event since you have already opted out.";
                                 }
                             }
-                        } else if closes.is_some_and(|closes| closes <= Utc::now()) {
+                        } else if flow.closes.is_some_and(|closes| closes <= Utc::now()) {
                             html! {
                                 article {
                                     p : "The deadline to enter this event has passed.";
                                 }
                             }
-                        } else if requirements.is_empty() {
+                        } else if flow.is_empty() {
                             if data.is_single_race() {
                                 html! {
                                     article {
@@ -1111,13 +1258,18 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                         } else if let Some(ref me) = me {
                             let mut can_submit = true;
                             let mut request_qualifier = false;
-                            let mut requirements_display = Vec::with_capacity(requirements.len());
-                            for requirement in requirements {
-                                let is_checked = requirement.is_checked(&mut transaction, http_client, discord_ctx, me, &data, config).await?;
-                                let status = requirement.check_get(http_client, discord_ctx, &data, is_checked, uri!(get(data.series, &*data.event, defaults.my_role(), defaults.teammate())), &defaults, me, config).await?;
-                                if status.blocks_submit { can_submit = false }
-                                if requirement.request_qualifier(&mut transaction, http_client, discord_ctx, me, &data, config).await?.is_some() { request_qualifier = true }
-                                requirements_display.push((is_checked, status.html_content));
+                            let mut requirements_display = Vec::with_capacity(flow.iter_requirements().count() + flow.sections.len());
+                            for item in flow.display_items(|_| true) {
+                                match item {
+                                    FlowDisplayItem::Section { section, depth } => requirements_display.push(RequirementDisplay::Section(section_heading(section, depth))),
+                                    FlowDisplayItem::Requirement(requirement) => {
+                                        let is_checked = requirement.is_checked(&mut transaction, http_client, discord_ctx, me, &data, config).await?;
+                                        let status = requirement.check_get(http_client, discord_ctx, &data, is_checked, uri!(get(data.series, &*data.event, defaults.my_role(), defaults.teammate())), &defaults, me, config).await?;
+                                        if status.blocks_submit { can_submit = false }
+                                        if requirement.request_qualifier(&mut transaction, http_client, discord_ctx, me, &data, config).await?.is_some() { request_qualifier = true }
+                                        requirements_display.push(RequirementDisplay::Requirement { is_checked, html_content: status.html_content });
+                                    }
+                                }
                             }
                             let preface = html! {
                                 @if data.show_opt_out {
@@ -1134,25 +1286,10 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                                 let mut errors = defaults.errors();
                                 full_form(uri!(post(data.series, &*data.event)), csrf, html! {
                                     : preface;
-                                    @for (is_checked, html_content) in requirements_display {
-                                        div(class = "check-item") {
-                                            div(class = "checkmark") {
-                                                @match is_checked {
-                                                    Some(true) => : "✓";
-                                                    Some(false) => {}
-                                                    None => : "?";
-                                                }
-                                            }
-                                            div : html_content(&mut errors);
-                                        }
-                                    }
-                                }, errors, if request_qualifier { "Enter and Request Seed" } else { "Enter" })
-                            } else {
-                                html! {
-                                    article {
-                                        : preface;
-                                        @for (is_checked, html_content) in requirements_display {
-                                            div(class = "check-item") {
+                                    @for display in requirements_display {
+                                        @match display {
+                                            RequirementDisplay::Section(heading) => : heading;
+                                            RequirementDisplay::Requirement { is_checked, html_content } => div(class = "check-item") {
                                                 div(class = "checkmark") {
                                                     @match is_checked {
                                                         Some(true) => : "✓";
@@ -1160,7 +1297,28 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                                                         None => : "?";
                                                     }
                                                 }
-                                                div : html_content(&mut Vec::default());
+                                                div : html_content(&mut errors);
+                                            }
+                                        }
+                                    }
+                                }, errors, if request_qualifier { "Enter and Request Seed" } else { "Enter" })
+                            } else {
+                                html! {
+                                    article {
+                                        : preface;
+                                        @for display in requirements_display {
+                                            @match display {
+                                                RequirementDisplay::Section(heading) => : heading;
+                                                RequirementDisplay::Requirement { is_checked, html_content } => div(class = "check-item") {
+                                                    div(class = "checkmark") {
+                                                        @match is_checked {
+                                                            Some(true) => : "✓";
+                                                            Some(false) => {}
+                                                            None => : "?";
+                                                        }
+                                                    }
+                                                    div : html_content(&mut Vec::default());
+                                                }
                                             }
                                         }
                                     }
@@ -1346,15 +1504,15 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
         match data.team_config {
             TeamConfig::Solo => {
                 let mut request_qualifier = None;
-                if let Some(Flow { ref requirements, closes }) = data.enter_flow {
-                    if closes.is_some_and(|closes| closes <= Utc::now()) {
+                if let Some(ref flow) = data.enter_flow {
+                    if flow.closes.is_some_and(|closes| closes <= Utc::now()) {
                         form.context.push_error(form::Error::validation("The deadline to enter this event has passed."));
-                    } else if requirements.is_empty() {
+                    } else if flow.is_empty() {
                         if data.is_single_race() {
                             form.context.push_error(form::Error::validation("Signups for this event are not handled by Hyrule Town Hall."));
                         }
                     } else {
-                        for requirement in requirements {
+                        for requirement in flow.iter_requirements() {
                             requirement.check_form(&mut transaction, http_client, discord_ctx, &me, &data, &mut form.context, value, config).await?;
                             if let Some(async_kind) = requirement.request_qualifier(&mut transaction, http_client, discord_ctx, &me, &data, config).await? {
                                 request_qualifier = Some(async_kind);
@@ -1462,8 +1620,8 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                     } else {
                         None
                     };
-                    let Flow { ref requirements, .. } = data.enter_flow.expect("checked above");
-                    for requirement in requirements {
+                    let flow = data.enter_flow.as_ref().expect("checked above");
+                    for requirement in flow.iter_requirements() {
                         if let Requirement::Challonge = requirement {
                             if let Some((ref community, ref tournament)) = challonge_info {
                                 let challonge_username = me.challonge_id.as_deref();
@@ -1856,4 +2014,78 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
         }
     }
     Ok(RedirectOrContent::Content(enter_form(transaction, http_client, discord_ctx, Some(me), uri, csrf.as_ref(), data, pic::EnterFormDefaults::Context(form.context), config).await?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_enter_flow_without_sections_still_deserializes() {
+        let flow: Flow = serde_json::from_str(r#"{
+            "requirements": [
+                {"type": "raceTime"},
+                {"type": "booleanChoice", "key": "hard_mode", "label": "Hard Mode"}
+            ]
+        }"#).expect("legacy enter flow should deserialize");
+
+        assert!(flow.sections.is_empty());
+        assert_eq!(flow.iter_requirements().count(), 2);
+        assert_eq!(flow.display_items(|_| true).len(), 2);
+    }
+
+    #[test]
+    fn sectioned_flow_orders_and_filters_requirements() {
+        let flow: Flow = serde_json::from_str(r#"{
+            "sections": [
+                {"id": "open", "label": "Open"},
+                {"id": "open-specific", "label": "Mode Specific", "parent": "open"},
+                {"id": "unused", "label": "Unused"}
+            ],
+            "requirements": [
+                {"type": "raceTime"},
+                {"type": "booleanChoice", "key": "general", "label": "General", "section": "open"},
+                {"type": "radioChoice", "key": "specific", "label": "Specific", "section": "open-specific"},
+                {"type": "rules", "document": null, "section": "unused"}
+            ]
+        }"#).expect("sectioned enter flow should deserialize");
+
+        let items = flow.display_items(|requirement| matches!(requirement, Requirement::BooleanChoice { .. } | Requirement::RadioChoice { .. }));
+        let labels = items.into_iter().map(|item| match item {
+            FlowDisplayItem::Section { section, depth } => format!("section:{depth}:{}", section.id),
+            FlowDisplayItem::Requirement(Requirement::BooleanChoice { key, .. } | Requirement::RadioChoice { key, .. }) => format!("requirement:{key}"),
+            FlowDisplayItem::Requirement(_) => unreachable!("display filter only includes choices"),
+        }).collect_vec();
+
+        assert_eq!(labels, [
+            "section:0:open",
+            "requirement:general",
+            "section:1:open-specific",
+            "requirement:specific",
+        ]);
+    }
+
+    #[test]
+    fn invalid_section_references_are_rejected() {
+        let error = serde_json::from_str::<Flow>(r#"{
+            "requirements": [
+                {"type": "booleanChoice", "key": "hard_mode", "label": "Hard Mode", "section": "missing"}
+            ]
+        }"#).expect_err("missing section reference should fail");
+
+        assert!(error.to_string().contains("missing section"));
+    }
+
+    #[test]
+    fn cyclic_section_hierarchy_is_rejected() {
+        let error = serde_json::from_str::<Flow>(r#"{
+            "sections": [
+                {"id": "one", "label": "One", "parent": "two"},
+                {"id": "two", "label": "Two", "parent": "one"}
+            ],
+            "requirements": []
+        }"#).expect_err("cyclic section hierarchy should fail");
+
+        assert!(error.to_string().contains("cycle"));
+    }
 }

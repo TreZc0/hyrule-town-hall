@@ -186,7 +186,12 @@ pub(crate) async fn listen(mut shutdown: rocket::Shutdown, clean_shutdown: Arc<M
                                         break
                                     }
                                 };
-                                let mut rx = match seed_gen_type.parse_seed_command(&mut transaction, &global_state, is_official, spoiler_seed, no_password, &args).await {
+                                let unlock_spoiler_log = racetime_bot::seed_command_unlock_spoiler_log(
+                                    spoiler_seed,
+                                    None,
+                                    is_official,
+                                );
+                                let mut rx = match seed_gen_type.parse_seed_command(&mut transaction, &global_state, unlock_spoiler_log, no_password, &args).await {
                                     Ok(SeedCommandParseResult::ConfiguredEvent { .. }) => {
                                         Some(SeedRollUpdate::Error(RollError::Cloned {
                                             debug: String::default(),
