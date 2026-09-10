@@ -6,6 +6,8 @@ use crate::{
     seed, volunteer_requests,
 };
 
+pub(crate) mod ranks;
+
 async fn qualifiers_form(
     mut transaction: Transaction<'_, Postgres>,
     me: User,
@@ -170,6 +172,8 @@ async fn qualifiers_form(
         enabled: true,
     };
 
+    let rank_editor = ranks::editor(&mut transaction, &event, csrf, &ctx).await?;
+
     let current_role_str = event
         .qualifier_notification_role_id
         .map(|id| id.get().to_string())
@@ -177,6 +181,7 @@ async fn qualifiers_form(
     Ok(page(transaction, &Some(me), &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Qualifiers — {}", event.display_name), html! {
         : header;
         article {
+            : rank_editor;
             h2 : "Qualifier Announcement Ping";
             : full_form(uri!(post_notification_role(event.series, &*event.event)), csrf, html! {
                 : form_field("notification_role_id", &mut ctx.errors().collect_vec(), html! {

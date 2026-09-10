@@ -18,6 +18,27 @@ include!(concat!(env!("OUT_DIR"), "/static_files.rs"));
 
 pub(crate) use static_url_impl as static_url;
 
+/// A keyboard- and touch-accessible explanation beside a form label.
+pub(crate) fn setting_label(field: &str, title: &str, content: RawHtml<String>) -> RawHtml<String> {
+    let panel_id = format!("setting-help-{field}");
+    let heading_id = format!("{panel_id}-title");
+    html! {
+        span(class = "setting-label") {
+            label(for = field) : title;
+            button(type = "button", class = "setting-help-trigger", popovertarget = &panel_id,
+                aria_label = format!("Help for {title}"), aria_haspopup = "dialog") : "(?)";
+        }
+        div(id = &panel_id, class = "setting-help", popover = "auto", role = "dialog", aria_labelledby = &heading_id) {
+            div(class = "setting-help-header") {
+                h4(id = heading_id) : title;
+                button(type = "button", class = "setting-help-close", popovertarget = &panel_id,
+                    popovertargetaction = "hide", aria_label = format!("Close help for {title}")) : "Close";
+            }
+            div(class = "setting-help-body", tabindex = "0", autofocus) { : content; }
+        }
+    }
+}
+
 #[derive(Responder)]
 pub(crate) enum RedirectOrContent {
     Redirect(Redirect),
@@ -1029,6 +1050,7 @@ pub(crate) async fn rocket(
             event::qualifiers::get,
             event::qualifiers::post_race,
             event::qualifiers::post_settings,
+            event::qualifiers::ranks::post,
             event::qualifiers::post_pooled_config,
             event::qualifiers::post_pooled_mode,
             event::qualifiers::post_pooled_seed,

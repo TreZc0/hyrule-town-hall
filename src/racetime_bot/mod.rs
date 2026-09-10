@@ -1311,39 +1311,22 @@ impl GlobalState {
         resolved: HashMap<String, bool>,
         config: seed_gen_type::OwrEventConfig,
         resolved_randoms: Option<String>,
+        build: seed_gen_type::OwrBuild,
     ) -> mpsc::Receiver<SeedRollUpdate> {
         let uuid = Uuid::new_v4();
+        let (python, directory) = build.installation();
         match build_dr_yaml_from_config(&config, &resolved, uuid) {
-            Ok(yaml_content) => self.roll_alttpr_dr_seed(
-                yaml_content,
-                uuid,
-                OWR_PYTHON,
-                "/opt/owr",
-                false,
-                "OR_",
-                resolved_randoms,
-            ),
-            Err(e) => alttpr_dr_error_receiver(e.into()),
+            Ok(yaml) => self.roll_alttpr_dr_seed(yaml, uuid, python, directory, false, "OR_", resolved_randoms),
+            Err(error) => alttpr_dr_error_receiver(error.into()),
         }
     }
 
-    /// Pooled qualifiers use a separate tournament installation so updating it
-    /// never changes the generator used by existing OWR events.
+    /// Preserve the tournament installation for existing pooled OWR modes.
     pub(crate) fn roll_pooled_owr_seed(
         self: Arc<Self>,
         config: seed_gen_type::OwrEventConfig,
     ) -> mpsc::Receiver<SeedRollUpdate> {
-        let uuid = Uuid::new_v4();
-        #[cfg(unix)]
-        let python = "/opt/owr_tourney/.venv/bin/python";
-        #[cfg(windows)]
-        let python = "/opt/owr_tourney/.venv/Scripts/python.exe";
-        match build_dr_yaml_from_config(&config, &HashMap::new(), uuid) {
-            Ok(yaml) => {
-                self.roll_alttpr_dr_seed(yaml, uuid, python, "/opt/owr_tourney", false, "OR_", None)
-            }
-            Err(error) => alttpr_dr_error_receiver(error.into()),
-        }
+        self.roll_owr_seed(HashMap::new(), config, None, seed_gen_type::OwrBuild::Tournament)
     }
 
     pub(crate) fn roll_mutual_choices_dr_seed(
@@ -1548,7 +1531,7 @@ impl GlobalState {
                     )),
                 }
             }
-            SeedGenType::Owr { config } => {
+            SeedGenType::Owr { config, build } => {
                 let choices = owr_choices_for_race(&self.db_pool, &cal_event.race).await;
                 let labels: Vec<(String, String)> = event
                     .choice_requirements()
@@ -1558,7 +1541,7 @@ impl GlobalState {
                 let resolved = resolve_all_choices(&choices, config);
                 let resolved_randoms_str =
                     reveal_resolved_randoms_str(&choices, &resolved, config, &labels);
-                self.roll_owr_seed(resolved, config.clone(), resolved_randoms_str)
+                self.roll_owr_seed(resolved, config.clone(), resolved_randoms_str, *build)
             }
             SeedGenType::TWWR { permalink } => {
                 let version = event.rando_version.clone();
@@ -5206,13 +5189,13 @@ impl Handler {
             .start()
             .expect("handling room for official race without start time");
         let delay_until = official_start - TimeDelta::minutes(10);
-        let config = self
+        let (config, build) = self
             .official_data
             .as_ref()
             .and_then(|d| d.event.seed_gen_type.as_ref())
             .and_then(|sgt| {
-                if let seed_gen_type::SeedGenType::Owr { config } = sgt {
-                    Some(config.clone())
+                if let seed_gen_type::SeedGenType::Owr { config, build } = sgt {
+                    Some((config.clone(), *build))
                 } else {
                     None
                 }
@@ -5239,7 +5222,7 @@ impl Handler {
             Some(delay_until),
             ctx.global_state
                 .clone()
-                .roll_owr_seed(resolved, config, resolved_randoms_str),
+                .roll_owr_seed(resolved, config, resolved_randoms_str, build),
             language,
             article,
             format!("seed with {description}"),
@@ -5502,8 +5485,7 @@ impl Handler {
                         .await;
                 }
             }
-            Some(seed_gen_type::SeedGenType::Owr { ref config }) if pooled_mode_name.is_some() => {
-                let resolved = resolve_all_choices(&HashMap::new(), config);
+            Some(seed_gen_type::SeedGenType::Owr { ref config, .. }) if pooled_mode_name.is_some() => {
                 let start = cal_event
                     .start()
                     .expect("official pooled qualifier without start");
@@ -5512,7 +5494,7 @@ impl Handler {
                     pooled_delay_until.or(Some(start - TimeDelta::minutes(10))),
                     ctx.global_state
                         .clone()
-                        .roll_owr_seed(resolved, config.clone(), None),
+                        .roll_pooled_owr_seed(config.clone()),
                     language,
                     article,
                     format!(

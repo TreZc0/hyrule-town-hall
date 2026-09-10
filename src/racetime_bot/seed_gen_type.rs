@@ -40,6 +40,28 @@ pub(crate) struct OwrEventConfig {
     pub(crate) choices: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(unix, derive(Protocol))]
+pub(crate) enum OwrBuild {
+    Regular,
+    Tournament,
+}
+
+impl OwrBuild {
+    pub(crate) fn installation(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Regular => (super::OWR_PYTHON, "/opt/owr"),
+            Self::Tournament => {
+                #[cfg(unix)]
+                let python = "/opt/owr_tourney/.venv/bin/python";
+                #[cfg(windows)]
+                let python = "/opt/owr_tourney/.venv/Scripts/python.exe";
+                (python, "/opt/owr_tourney")
+            }
+        }
+    }
+}
+
 /// Which seed generator an event uses, stored in `events.seed_gen_type`.
 #[derive(Debug, Clone)]
 #[cfg_attr(unix, derive(Protocol))]
@@ -59,6 +81,7 @@ pub(crate) enum SeedGenType {
     },
     /// OWR (Open World Randomizer) — player choices read from `teams.custom_choices`.
     Owr {
+        build: OwrBuild,
         /// Full event config from `events.seed_config`.
         config: OwrEventConfig,
     },
@@ -162,10 +185,13 @@ impl SeedGenType {
                     practice_presets,
                 })
             }
-            "owr" => {
+            name @ ("owr" | "owr_tourney") => {
                 let config = seed_config.and_then(|c| serde_json::from_value(c.clone()).ok());
                 if let Some(config) = config {
-                    Some(Self::Owr { config })
+                    Some(Self::Owr {
+                        build: if name == "owr_tourney" { OwrBuild::Tournament } else { OwrBuild::Regular },
+                        config,
+                    })
                 } else {
                     eprintln!("owr event missing or invalid seed_config — skipping");
                     None
@@ -236,7 +262,7 @@ impl SeedGenType {
                     ))
                 }
             }
-            Self::Owr { config } => {
+            Self::Owr { config, .. } => {
                 let mut choices = super::owr_choices_for_race(db_pool, race).await;
                 if is_async {
                     choices.retain(|key, _| {
@@ -256,7 +282,7 @@ impl SeedGenType {
     /// sorted alphabetically. Used to suggest radioChoice entries on the enter-flow page.
     pub(crate) fn radio_choice_suggestions(&self) -> Vec<(String, String)> {
         let config = match self {
-            Self::Owr { config } => config,
+            Self::Owr { config, .. } => config,
             Self::AlttprDoorRando {
                 source: AlttprDrSource::MutualChoices { config },
                 ..
@@ -303,7 +329,7 @@ impl SeedGenType {
                 source: AlttprDrSource::MutualChoices { config },
                 ..
             }
-            | Self::Owr { config } => config,
+            | Self::Owr { config, .. } => config,
             _ => return None,
         };
         let team_ids = race.teams().map(|t| t.id).collect_vec();
@@ -373,6 +399,29 @@ impl std::str::FromStr for SeedGenType {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn owr_build_selection_preserves_settings_and_choices() {
+        let input = serde_json::json!({
+            "base_settings": {"shuffle": "crossed"},
+            "choices": {"flute": {"label": "Starting flute", "settings": {"flute_mode": "active"}}}
+        });
+        for (slug, expected_build, directory) in [
+            ("owr", super::OwrBuild::Regular, "/opt/owr"),
+            ("owr_tourney", super::OwrBuild::Tournament, "/opt/owr_tourney"),
+        ] {
+            let kind = SeedGenType::from_db(Some(slug), Some(&input)).unwrap();
+            let SeedGenType::Owr { config, build } = &kind else { panic!("expected OWR") };
+            assert_eq!(*build, expected_build);
+            assert_eq!(build.installation().1, directory);
+            assert!(build.installation().0.starts_with(&format!("{directory}/.venv/")));
+            assert_eq!(config.base_settings, input["base_settings"]);
+            assert_eq!(config.choices, input["choices"]);
+            assert_eq!(kind.radio_choice_suggestions(), vec![("flute".into(), "Starting flute".into())]);
+            assert!(kind.has_display_settings());
+            assert!(SeedGenType::from_db(Some(slug), None).is_none());
+        }
+    }
+
     use super::{AlttprDrSource, SeedGenType};
 
     #[test]

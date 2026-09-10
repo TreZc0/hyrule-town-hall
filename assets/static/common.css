@@ -1263,3 +1263,101 @@ p.error {
     word-break: break-word;
   }
 }
+
+/* Detailed setting help opens beside its label and stays available for copying. */
+.setting-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  vertical-align: middle;
+}
+
+.setting-help-trigger {
+  border: 0;
+  border-radius: 3px;
+  padding: 0.15rem 0.3rem;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: help;
+}
+
+.setting-help-trigger:hover,
+.setting-help-trigger:focus-visible {
+  color: var(--hover-text);
+  background: var(--hover-bg);
+}
+
+.setting-help-trigger:focus-visible,
+.setting-help-close:focus-visible,
+.setting-help-body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.setting-help[popover] {
+  display: none;
+  position: fixed;
+  inset: 12vh auto auto 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  width: min(42rem, calc(100vw - 24px));
+  max-height: min(76vh, 44rem);
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: 0.95rem/1.55 system-ui, sans-serif;
+  white-space: normal;
+  text-align: left;
+  box-shadow: 0 8px 32px rgb(0 0 0 / 40%);
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+.setting-help[popover]:popover-open {
+  display: flex;
+  flex-direction: column;
+}
+
+.setting-help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.setting-help-header h4 {
+  margin: 0;
+  font: inherit;
+  font-weight: 700;
+}
+
+.setting-help-close {
+  flex-shrink: 0;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.setting-help-body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0.8rem 1rem;
+  overflow-wrap: anywhere;
+}
+
+.setting-help-body > :first-child { margin-top: 0; }
+.setting-help-body > :last-child { margin-bottom: 0; }
+.setting-help-body pre { overflow-x: auto; font-size: 0.85rem; }
+.setting-help-body details { margin-block: 0.7rem; }
+.setting-help-body summary { cursor: pointer; font-weight: 600; }
+.setting-help-body .help { margin-left: 0; font-style: normal; }

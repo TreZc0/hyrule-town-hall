@@ -49,7 +49,7 @@ pub(crate) fn validate_seed(kind: Option<&str>, config: Option<&Value>) -> Resul
             },
             Some(_) => Err("source must be a string.".into()),
         },
-        "owr" => validate_choices(config),
+        "owr" | "owr_tourney" => validate_choices(config),
         "twwr" => required_string(config, "permalink").map(|_| ()),
         "alttpr_avianart" => {
             if config.get("preset").is_some() {
@@ -179,7 +179,7 @@ pub(crate) fn validate_seed_policies(
         return Err("Unknown spoiler release policy.".into());
     }
     if matches!(preroll, "short" | "long")
-        && generator.is_some_and(|g| matches!(g, "alttpr_dr" | "alttpr_avianart" | "owr" | "twwr"))
+        && generator.is_some_and(|g| matches!(g, "alttpr_dr" | "alttpr_avianart" | "owr" | "owr_tourney" | "twwr"))
     {
         return Err("This seed generator supports None or Medium preroll; Short and Long are not implemented.".into());
     }
@@ -214,6 +214,21 @@ pub(crate) async fn test_pool() -> sqlx::PgPool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn both_owr_builds_require_valid_settings_and_supported_preroll() {
+        for kind in ["owr", "owr_tourney"] {
+            assert!(validate_seed(Some(kind), Some(&serde_json::json!({"base_settings": {}}))).is_ok());
+            assert!(validate_seed(Some(kind), None).is_err());
+            assert!(validate_seed(Some(kind), Some(&serde_json::json!({"base_settings": []}))).is_err());
+            for preroll in ["none", "medium"] {
+                assert!(validate_seed_policies(preroll, "never", Some(kind)).is_ok());
+            }
+            for preroll in ["short", "long"] {
+                assert!(validate_seed_policies(preroll, "never", Some(kind)).is_err());
+            }
+        }
+    }
+
 
     #[test]
     fn qualification_requires_an_explicit_supported_method() {

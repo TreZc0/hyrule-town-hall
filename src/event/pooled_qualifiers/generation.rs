@@ -6,7 +6,7 @@ use racetime_bot::{
 
 pub(crate) fn supported(kind: &SeedGenType) -> bool {
     match kind {
-        SeedGenType::Owr { config }
+        SeedGenType::Owr { config, .. }
         | SeedGenType::AlttprDoorRando {
             source: AlttprDrSource::MutualChoices { config },
             ..
@@ -33,7 +33,7 @@ pub(crate) fn roll(
         return Err(Error::ModeUnavailable);
     }
     Ok(match kind {
-        SeedGenType::Owr { config } => state.roll_pooled_owr_seed(config.clone()),
+        SeedGenType::Owr { config, .. } => state.roll_pooled_owr_seed(config.clone()),
         SeedGenType::AlttprDoorRando {
             source: AlttprDrSource::MutualChoices { config },
             ..
@@ -290,6 +290,7 @@ mod tests {
     #[tokio::test]
     async fn owr_rejects_missing_hash_icons() {
         let kind = SeedGenType::Owr {
+            build: racetime_bot::seed_gen_type::OwrBuild::Tournament,
             config: serde_json::from_value(serde_json::json!({"base_settings":{}})).unwrap(),
         };
         assert!(validate_payload(&kind, &serde_json::json!({"type":"alttpr_owr","uuid":"00000000-0000-0000-0000-000000000001"})).await.is_err());

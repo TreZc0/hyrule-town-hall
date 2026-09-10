@@ -5084,7 +5084,7 @@ pub(crate) async fn practice_seed(
             vec![],
             "Generate Practice Seed",
         ),
-        Some(SeedGenType::Owr { config }) => {
+        Some(SeedGenType::Owr { config, .. }) => {
             let choices: Vec<(String, String)> = racetime_bot::owr_choice_keys(config)
                 .into_iter()
                 .map(|key| {
@@ -5317,7 +5317,7 @@ pub(crate) async fn practice_seed_post(
             );
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         }
-        SeedGenType::Owr { config } => {
+        SeedGenType::Owr { config, build } => {
             transaction.commit().await?;
             let choice_labels = form
                 .choices
@@ -5338,7 +5338,7 @@ pub(crate) async fn practice_seed_post(
                 .map(|k| (k.clone(), racetime_bot::ChoiceValue::Always))
                 .collect();
             let resolved = racetime_bot::resolve_all_choices(&choices, &config);
-            let rx = Arc::clone(&*global_state).roll_owr_seed(resolved, config, None);
+            let rx = Arc::clone(&*global_state).roll_owr_seed(resolved, config, None, build);
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, choice_labels);
         }
         SeedGenType::AlttprDoorRando {

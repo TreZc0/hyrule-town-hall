@@ -10,6 +10,66 @@ use {
     serenity::model::id::RoleId,
 };
 
+
+fn preroll_help() -> RawHtml<String> {
+    html! {
+        p(class = "help") : "Preroll controls advance seed generation, not when entrants receive the seed. For ALTTPR Door Rando, Avianart, both OWR builds and TWWR, None and Medium use the generator's normal timing; Short and Long are not supported. Pooled qualifier seeds are prepared with Generate on the Qualifiers page, independently of this setting.";
+        details {
+            summary : "What each preroll mode means";
+            ul {
+                li : "None: no additional advance-generation policy. This still allows automatic seed generation.";
+                li : "Short: legacy web generation begins at a random time during the five minutes before the seed deadline (normally 20–15 minutes before the race).";
+                li : "Medium: legacy web generation begins between room opening and 15 minutes before the seed deadline (normally 30 minutes before the race), or immediately if that window has passed.";
+                li : "Long: legacy reserve-seed workflow prepares seeds in advance and replenishes the reserve. Requires fixed settings; not supported for ALTTPR, OWR or TWWR.";
+            }
+        }
+    }
+}
+
+fn seed_config_help() -> RawHtml<String> {
+    html! {
+        details {
+            summary : "Seed configuration examples";
+            p : "Copy one JSON object into Seed Config JSON and select the matching generator above. These are examples of the configuration structure; replace settings, presets, URLs and permalinks with those approved for your event.";
+            @for (title, description, config) in [
+                ("OWR — baseline settings (regular or tournament)", "Select owr or owr_tourney. The generator selection chooses the installation; the JSON supplies its settings. For a pooled mode, use this structure in that mode's configuration.", json!({
+                    "base_settings": {"shuffle": "crossed"}, "base_placements": {}, "start_inventory": [], "choices": {}
+                })),
+                ("OWR — player choices (regular or tournament)", "Choices patch the baseline when enabled. The choice key must match the signup booleanChoice or radioChoice field; practice seeds expose these choices too. See Player choices and their effect on seeds above for mutual agreement, random decisions and patch rules. Pooled qualifiers use baseline settings only. Optional priority orders patches, and supercedes suppresses other choices.", json!({
+                    "base_settings": {"shuffle": "crossed"}, "base_placements": {}, "start_inventory": [],
+                    "choices": {"flute": {"label": "Starting activated flute", "settings": {"flute_mode": "active"}, "start_inventory": ["Ocarina (Activated)"]}}
+                })),
+                ("ALTTPR Door Rando — boothisman presets", "Select alttpr_dr. Presets come from a race draft or round mode; practice_modes defines the practice dropdown. This source is not supported for pooled qualifiers.", json!({
+                    "source": "boothisman", "practice_modes": [{"value": "open", "label": "Open"}, {"value": "crosskeys", "label": "Crosskeys"}],
+                    "practice_choices": [{"value": "pots", "label": "Pottery Shuffle"}]
+                })),
+                ("ALTTPR Door Rando — mutual choices", "Select alttpr_dr. base_settings is required. Uses the same choices/placements/inventory structure as OWR, but runs the Door Rando generator.", json!({
+                    "source": "mutual_choices", "base_settings": {"shuffle": "crossed"}, "base_placements": {}, "start_inventory": [], "choices": {}
+                })),
+                ("ALTTPR Door Rando — mystery weights", "Select alttpr_dr. Replace the URL with your event's accessible mystery weights YAML.", json!({
+                    "source": "mystery_pool", "mystery_weights_url": "https://example.com/event-weights.yaml"
+                })),
+                ("ALTTPR Avianart — default and practice presets", "Select alttpr_avianart. preset is the default when no draft supplies one. practice_presets lists available practice options. Pooled modes require a default preset.", json!({
+                    "preset": "casualboots", "practice_presets": [{"value": "casualboots", "label": "Casual Boots"}, {"value": "open", "label": "Open"}]
+                })),
+                ("TWWR — settings permalink", "Select twwr and paste the settings permalink exported by your randomizer. Replace the placeholder before saving.", json!({
+                    "permalink": "PASTE_YOUR_SETTINGS_PERMALINK_HERE"
+                })),
+                ("Manual / external seeds", "Select None. Leave Seed Config JSON empty or use an empty object.", json!({})),
+            ] {
+                details {
+                    summary : title;
+                    p : description;
+                    pre { : serde_json::to_string_pretty(&config).expect("example JSON serializes"); }
+                }
+            }
+            p : "MMR generation is not implemented for official or async events.";
+        }
+    }
+}
+
+mod help;
+
 async fn setup_form(
     mut transaction: Transaction<'_, Postgres>,
     me: Option<User>,
@@ -96,21 +156,21 @@ async fn setup_form(
                         });
 
                         : form_field("start", &mut errors, html! {
-                            label(for = "start") : "Start Time";
+                            : help::label("start", "Start Time");
                             input(type = "datetime-local", id = "start", name = "start", value = ctx.field_value("start").unwrap_or(
                                 &event.start(&mut transaction).await?.map(|dt| dt.format("%Y-%m-%dT%H:%M").to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
 
                         : form_field("end", &mut errors, html! {
-                            label(for = "end") : "End Time";
+                            : help::label("end", "End Time");
                             input(type = "datetime-local", id = "end", name = "end", value = ctx.field_value("end").unwrap_or(
                                 &event.end.map(|dt| dt.format("%Y-%m-%dT%H:%M").to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
 
                         : form_field("url", &mut errors, html! {
-                            label(for = "url") : "Event URL (start.gg/Challonge)";
+                            : help::label("url", "Event URL (start.gg/Challonge)");
                             input(type = "url", id = "url", name = "url", value = ctx.field_value("url").unwrap_or(
                                 &event.url.as_ref().map(|u| u.to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
@@ -124,63 +184,63 @@ async fn setup_form(
                         });
 
                         : form_field("discord_invite_url", &mut errors, html! {
-                            label(for = "discord_invite_url") : "Discord Invite URL";
+                            : help::label("discord_invite_url", "Discord Invite URL");
                             input(type = "url", id = "discord_invite_url", name = "discord_invite_url", value = ctx.field_value("discord_invite_url").unwrap_or(
                                 &event.discord_invite_url.as_ref().map(|u| u.to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
 
                         : form_field("discord_guild", &mut errors, html! {
-                            label(for = "discord_guild") : "Discord Guild ID";
+                            : help::label("discord_guild", "Discord Guild ID");
                             input(type = "text", id = "discord_guild", name = "discord_guild", value = ctx.field_value("discord_guild").unwrap_or(
                                 &event.discord_guild.map(|g| g.get().to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
 
                         : form_field("discord_race_room_channel", &mut errors, html! {
-                            label(for = "discord_race_room_channel") : "Discord Race Room Channel ID";
+                            : help::label("discord_race_room_channel", "Discord Race Room Channel ID");
                             input(type = "text", id = "discord_race_room_channel", name = "discord_race_room_channel", value = ctx.field_value("discord_race_room_channel").unwrap_or(
                                 &event.discord_race_room_channel.map(|c| c.get().to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
 
                         : form_field("discord_race_results_channel", &mut errors, html! {
-                            label(for = "discord_race_results_channel") : "Discord Race Results Channel ID";
+                            : help::label("discord_race_results_channel", "Discord Race Results Channel ID");
                             input(type = "text", id = "discord_race_results_channel", name = "discord_race_results_channel", value = ctx.field_value("discord_race_results_channel").unwrap_or(
                                 &event.discord_race_results_channel.map(|c| c.get().to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
 
                         : form_field("discord_volunteer_info_channel", &mut errors, html! {
-                            label(for = "discord_volunteer_info_channel") : "Discord Volunteer Info Channel ID";
+                            : help::label("discord_volunteer_info_channel", "Discord Volunteer Info Channel ID");
                             input(type = "text", id = "discord_volunteer_info_channel", name = "discord_volunteer_info_channel", value = ctx.field_value("discord_volunteer_info_channel").unwrap_or(
                                 &event.discord_volunteer_info_channel.map(|c| c.get().to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
 
                         : form_field("discord_organizer_channel", &mut errors, html! {
-                            label(for = "discord_organizer_channel") : "Discord Organizer Channel ID";
+                            : help::label("discord_organizer_channel", "Discord Organizer Channel ID");
                             input(type = "text", id = "discord_organizer_channel", name = "discord_organizer_channel", value = ctx.field_value("discord_organizer_channel").unwrap_or(
                                 &event.discord_organizer_channel.map(|c| c.get().to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
 
                         : form_field("discord_scheduling_channel", &mut errors, html! {
-                            label(for = "discord_scheduling_channel") : "Discord Scheduling Channel ID";
+                            : help::label("discord_scheduling_channel", "Discord Scheduling Channel ID");
                             input(type = "text", id = "discord_scheduling_channel", name = "discord_scheduling_channel", value = ctx.field_value("discord_scheduling_channel").unwrap_or(
                                 &event.discord_scheduling_channel.map(|c| c.get().to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
 
                         : form_field("discord_async_channel", &mut errors, html! {
-                            label(for = "discord_async_channel") : "Discord Async Channel ID";
+                            : help::label("discord_async_channel", "Discord Async Channel ID");
                             input(type = "text", id = "discord_async_channel", name = "discord_async_channel", value = ctx.field_value("discord_async_channel").unwrap_or(
                                 &event.discord_async_channel.map(|c| c.get().to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
 
                         : form_field("discord_participant_role", &mut errors, html! {
-                            label(for = "discord_participant_role") : "Discord Participant Role ID";
+                            : help::label("discord_participant_role", "Discord Participant Role ID");
                             input(type = "text", id = "discord_participant_role", name = "discord_participant_role", value = ctx.field_value("discord_participant_role").unwrap_or(
                                 &participant_role_id.map(|id| id.to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
@@ -197,35 +257,35 @@ async fn setup_form(
 
                         : form_field("listed", &mut errors, html! {
                             input(type = "checkbox", id = "listed", name = "listed", checked? = ctx.field_value("listed").map_or(event.listed, |value| value == "on"));
-                            label(for = "listed") : "Listed";
+                            : help::label("listed", "Listed");
                             label(class = "help") : " (Show this event on the main page)";
                         });
 
                         : form_field("emulator_settings_reminder", &mut errors, html! {
                             input(type = "checkbox", id = "emulator_settings_reminder", name = "emulator_settings_reminder", checked? = ctx.field_value("emulator_settings_reminder").map_or(event.emulator_settings_reminder, |value| value == "on"));
-                            label(for = "emulator_settings_reminder") : "Emulator Settings Reminder";
+                            : help::label("emulator_settings_reminder", "Emulator Settings Reminder");
                         });
 
                         : form_field("prevent_late_joins", &mut errors, html! {
                             input(type = "checkbox", id = "prevent_late_joins", name = "prevent_late_joins", checked? = ctx.field_value("prevent_late_joins").map_or(event.prevent_late_joins, |value| value == "on"));
-                            label(for = "prevent_late_joins") : "Prevent Late Joins";
+                            : help::label("prevent_late_joins", "Prevent Late Joins");
                             label(class = "help") : " (Block joining races after they start)";
                         });
 
                         : form_field("fpa_enabled", &mut errors, html! {
                             input(type = "checkbox", id = "fpa_enabled", name = "fpa_enabled", checked? = ctx.field_value("fpa_enabled").map_or(event.fpa_enabled, |value| value == "on"));
-                            label(for = "fpa_enabled") : "FPA Enabled";
+                            : help::label("fpa_enabled", "FPA Enabled");
                             label(class = "help") : " (Announce fair play agreement when official race rooms open)";
                         });
 
                         : form_field("auto_start_with_restream", &mut errors, html! {
                             input(type = "checkbox", id = "auto_start_with_restream", name = "auto_start_with_restream", checked? = ctx.field_value("auto_start_with_restream").map_or(event.auto_start_with_restream, |value| value == "on"));
-                            label(for = "auto_start_with_restream") : "Auto-start races with restreams";
+                            : help::label("auto_start_with_restream", "Auto-start races with restreams");
                             label(class = "help") : " (Restreamers can use !restream when they arrive to disable auto-start until the restream is ready)";
                         });
 
                         : form_field("rando_version_json", &mut errors, html! {
-                            label(for = "rando_version_json") : "Randomizer Version (JSON)";
+                            : help::label("rando_version_json", "Randomizer Version (JSON)");
                             textarea(id = "rando_version_json", name = "rando_version_json", rows = "8", style = "font-family: monospace; width: 100%; max-width: 800px;") {
                                 : ctx.field_value("rando_version_json").unwrap_or(&rando_version_string);
                             }
@@ -241,7 +301,7 @@ async fn setup_form(
                         h3 : "Additional Settings";
 
                         : form_field("enter_url", &mut errors, html! {
-                            label(for = "enter_url") : "Enter URL";
+                            : help::label("enter_url", "Enter URL");
                             input(type = "url", id = "enter_url", name = "enter_url", value = ctx.field_value("enter_url").unwrap_or(
                                 &event.enter_url.as_ref().map(|u| u.to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
@@ -249,7 +309,7 @@ async fn setup_form(
                         });
 
                         : form_field("teams_url", &mut errors, html! {
-                            label(for = "teams_url") : "Teams URL";
+                            : help::label("teams_url", "Teams URL");
                             input(type = "url", id = "teams_url", name = "teams_url", value = ctx.field_value("teams_url").unwrap_or(
                                 &event.teams_url.as_ref().map(|u| u.to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
@@ -257,14 +317,14 @@ async fn setup_form(
                         });
 
                         : form_field("challonge_community", &mut errors, html! {
-                            label(for = "challonge_community") : "Challonge Community";
+                            : help::label("challonge_community", "Challonge Community");
                             input(type = "text", id = "challonge_community", name = "challonge_community", value = ctx.field_value("challonge_community").unwrap_or(
                                 &event.challonge_community.clone().unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
 
                         : form_field("team_config", &mut errors, html! {
-                            label(for = "team_config") : "Team Configuration";
+                            : help::label("team_config", "Team Configuration");
                             select(id = "team_config", name = "team_config", style = "width: 100%; max-width: 600px;") {
                                 option(value = "solo", selected? = ctx.field_value("team_config").map_or(matches!(event.team_config, TeamConfig::Solo), |v| v == "solo")) : "Solo";
                                 option(value = "coop", selected? = ctx.field_value("team_config").map_or(matches!(event.team_config, TeamConfig::CoOp), |v| v == "coop")) : "Co-op";
@@ -275,7 +335,7 @@ async fn setup_form(
                         });
 
                         : form_field("language", &mut errors, html! {
-                            label(for = "language") : "Language";
+                            : help::label("language", "Language");
                             select(id = "language", name = "language", style = "width: 100%; max-width: 600px;") {
                                 option(value = "en", selected? = ctx.field_value("language").map_or(event.language == English, |v| v == "en")) : "English";
                                 option(value = "fr", selected? = ctx.field_value("language").map_or(event.language == French, |v| v == "fr")) : "French";
@@ -285,50 +345,50 @@ async fn setup_form(
                         });
 
                         : form_field("default_game_count", &mut errors, html! {
-                            label(for = "default_game_count") : "Default Game Count";
+                            : help::label("default_game_count", "Default Game Count");
                             input(type = "number", id = "default_game_count", name = "default_game_count", min = "1", value = ctx.field_value("default_game_count").unwrap_or(&event.default_game_count.to_string()), style = "width: 100%; max-width: 600px;");
                         });
 
                         : form_field("open_stream_delay", &mut errors, html! {
-                            label(for = "open_stream_delay") : "Open Stream Delay";
+                            : help::label("open_stream_delay", "Open Stream Delay");
                             input(type = "text", id = "open_stream_delay", name = "open_stream_delay", value = ctx.field_value("open_stream_delay").unwrap_or(&unparse_duration(event.open_stream_delay)), style = "width: 100%; max-width: 600px;");
                             label(class = "help") : " (Format: '15s')";
                         });
 
                         : form_field("invitational_stream_delay", &mut errors, html! {
-                            label(for = "invitational_stream_delay") : "Invitational Stream Delay";
+                            : help::label("invitational_stream_delay", "Invitational Stream Delay");
                             input(type = "text", id = "invitational_stream_delay", name = "invitational_stream_delay", value = ctx.field_value("invitational_stream_delay").unwrap_or(&unparse_duration(event.invitational_stream_delay)), style = "width: 100%; max-width: 600px;");
                             label(class = "help") : " (Format: '30s')";
                         });
 
                         : form_field("hide_teams_tab", &mut errors, html! {
                             input(type = "checkbox", id = "hide_teams_tab", name = "hide_teams_tab", checked? = ctx.field_value("hide_teams_tab").map_or(event.hide_teams_tab, |value| value == "on"));
-                            label(for = "hide_teams_tab") : "Hide Teams Tab";
+                            : help::label("hide_teams_tab", "Hide Teams Tab");
                         });
 
                         : form_field("hide_races_tab", &mut errors, html! {
                             input(type = "checkbox", id = "hide_races_tab", name = "hide_races_tab", checked? = ctx.field_value("hide_races_tab").map_or(event.hide_races_tab, |value| value == "on"));
-                            label(for = "hide_races_tab") : "Hide Races Tab";
+                            : help::label("hide_races_tab", "Hide Races Tab");
                         });
 
                         : form_field("show_qualifier_times", &mut errors, html! {
                             input(type = "checkbox", id = "show_qualifier_times", name = "show_qualifier_times", checked? = ctx.field_value("show_qualifier_times").map_or(event.show_qualifier_times, |value| value == "on"));
-                            label(for = "show_qualifier_times") : "Show Qualifier Times";
+                            : help::label("show_qualifier_times", "Show Qualifier Times");
                         });
 
                         : form_field("swiss_standings", &mut errors, html! {
                             input(type = "checkbox", id = "swiss_standings", name = "swiss_standings", checked? = ctx.field_value("swiss_standings").map_or(event.swiss_standings, |value| value == "on"));
-                            label(for = "swiss_standings") : "Show Swiss Standings Tab";
+                            : help::label("swiss_standings", "Show Swiss Standings Tab");
                         });
 
                         : form_field("automated_asyncs", &mut errors, html! {
                             input(type = "checkbox", id = "automated_asyncs", name = "automated_asyncs", checked? = ctx.field_value("automated_asyncs").map_or(event.automated_asyncs, |value| value == "on"));
-                            label(for = "automated_asyncs") : "Use automated Discord threads for qualifier asyncs";
+                            : help::label("automated_asyncs", "Use automated Discord threads for qualifier asyncs");
                             label(class = "help") : " (When enabled, qualifier requests create private Discord threads with READY/countdown/FINISH buttons)";
                         });
 
                         : form_field("async_start_delay", &mut errors, html! {
-                            label(for = "async_start_delay") : "Force-Start Delay (minutes)";
+                            : help::label("async_start_delay", "Force-Start Delay (minutes)");
                             input(type = "number", id = "async_start_delay", name = "async_start_delay", min = "0", value = ctx.field_value("async_start_delay").unwrap_or(
                                 &event.async_start_delay.map(|d| d.to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 200px;");
@@ -337,24 +397,30 @@ async fn setup_form(
 
                         : form_field("show_opt_out", &mut errors, html! {
                             input(type = "checkbox", id = "show_opt_out", name = "show_opt_out", checked? = ctx.field_value("show_opt_out").map_or(event.show_opt_out, |value| value == "on"));
-                            label(for = "show_opt_out") : "Show Opt-Out";
+                            : help::label("show_opt_out", "Show Opt-Out");
                         });
 
                         : form_field("force_custom_role_binding", &mut errors, html! {
                             input(type = "checkbox", id = "force_custom_role_binding", name = "force_custom_role_binding", checked? = ctx.field_value("force_custom_role_binding").map_or(event.force_custom_role_binding, |value| value == "on"));
-                            label(for = "force_custom_role_binding") : "Use event-specific volunteer roles";
+                            : help::label("force_custom_role_binding", "Use event-specific volunteer roles");
                             label(class = "help") : " (When enabled, uses event-specific role bindings. When disabled, uses game-level volunteer roles.)";
                         });
 
                         h3 : "Racetime Bot Configuration";
 
                         : form_field("racetime_goal_slug", &mut errors, html! {
-                            label(for = "racetime_goal_slug") : "Goal Slug";
+                            : help::label("racetime_goal_slug", "Goal Slug");
                             input(type = "text", id = "racetime_goal_slug", name = "racetime_goal_slug", value = ctx.field_value("racetime_goal_slug").unwrap_or_else(|| event.racetime_goal_slug.as_deref().unwrap_or("")), style = "width: 100%; max-width: 600px;", placeholder = "Exact goal string on racetime.gg (empty = no goal)");
                         });
 
+                        : form_field("is_custom_goal", &mut errors, html! {
+                            input(type = "checkbox", id = "is_custom_goal", name = "is_custom_goal", checked? = ctx.field_value("is_custom_goal").map_or(event.is_custom_goal, |value| value == "on"));
+                            : help::label("is_custom_goal", "Is Custom Goal");
+                            label(class = "help") : " (When enabled, the racetime.gg goal is a custom goal rather than a standard one.)";
+                        });
+
                         : form_field("draft_kind", &mut errors, html! {
-                            label(for = "draft_kind") : "Draft Kind";
+                            : help::label("draft_kind", "Draft Kind");
                             select(id = "draft_kind", name = "draft_kind", style = "width: 100%; max-width: 600px;") {
                                 option(value = "", selected? = ctx.field_value("draft_kind").map_or(event.draft_kind_str.is_none(), |v| v.is_empty())) : "None";
                                 @for (slug, label) in &[
@@ -376,7 +442,7 @@ async fn setup_form(
                         });
 
                         : form_field("draft_config", &mut errors, html! {
-                            label(for = "draft_config") : "Draft Config JSON";
+                            : help::label("draft_config", "Draft Config JSON");
                             textarea(id = "draft_config", name = "draft_config", rows = "6", style = "font-family: monospace; width: 100%; max-width: 800px;") {
                                 : ctx.field_value("draft_config").unwrap_or(&draft_config_string);
                             }
@@ -384,17 +450,17 @@ async fn setup_form(
                         });
 
                         : form_field("qualifier_mode", &mut errors, html! {
-                            label(for = "qualifier_mode") : "Qualification method";
+                            : help::label("qualifier_mode", "Qualification method");
                             select(id = "qualifier_mode", name = "qualifier_mode") {
                                 @for (slug, label) in [("none", "No qualification"), ("rank", "Stored qualifier ranks"), ("single", "Single async qualifier"), ("score", "Configured scoring"), ("pooled_by_mode", "Pooled by mode")] {
                                     option(value = slug, selected? = ctx.field_value("qualifier_mode").unwrap_or(&event.qualifier_mode) == slug) : label;
                                 }
                             }
-                            label(class = "help") : "Choose how entrants qualify. Stored ranks and async submissions only affect qualification when their method is selected. Configured scoring combines live qualifier races and qualifier async results.";
+                            label(class = "help") : "Choose how entrants qualify. For Stored qualifier ranks, assign entrant ranks on the Qualifiers page after creating the event. Ranks and async submissions only affect qualification when their method is selected. Configured scoring combines live qualifier races and qualifier async results.";
                         });
 
                         : form_field("qualifier_score_kind", &mut errors, html! {
-                            label(for = "qualifier_score_kind") : "Qualifier Score Kind";
+                            : help::label("qualifier_score_kind", "Qualifier Score Kind");
                             select(id = "qualifier_score_kind", name = "qualifier_score_kind", style = "width: 100%; max-width: 600px;") {
                                 option(value = "", selected? = ctx.field_value("qualifier_score_kind").map_or(event.qualifier_score_kind_str.is_none(), |v| v.is_empty())) : "None";
                                 @for (slug, label) in &[
@@ -412,7 +478,7 @@ async fn setup_form(
                         });
 
                         : form_field("qualifier_score_config", &mut errors, html! {
-                            label(for = "qualifier_score_config") : "Qualifier scoring parameters (JSON)";
+                            : help::label("qualifier_score_config", "Qualifier scoring parameters (JSON)");
                             textarea(id = "qualifier_score_config", name = "qualifier_score_config", rows = "6", style = "font-family: monospace; width: 100%; max-width: 800px;") {
                                 : ctx.field_value("qualifier_score_config").map(str::to_owned).unwrap_or_else(|| event.qualifier_score_config.as_ref().map(|v| serde_json::to_string_pretty(v).unwrap_or_default()).unwrap_or_default());
                             }
@@ -421,21 +487,21 @@ async fn setup_form(
 
                         : form_field("is_single_race", &mut errors, html! {
                             input(type = "checkbox", id = "is_single_race", name = "is_single_race", checked? = ctx.field_value("is_single_race").map_or(event.is_single_race, |value| value == "on"));
-                            label(for = "is_single_race") : "Single Race Event";
+                            : help::label("is_single_race", "Single Race Event");
                         });
 
                         : form_field("hide_entrants", &mut errors, html! {
                             input(type = "checkbox", id = "hide_entrants", name = "hide_entrants", checked? = ctx.field_value("hide_entrants").map_or(event.hide_entrants, |value| value == "on"));
-                            label(for = "hide_entrants") : "Hide Entrants";
+                            : help::label("hide_entrants", "Hide Entrants");
                         });
 
                         : form_field("start_delay", &mut errors, html! {
-                            label(for = "start_delay") : "Start Delay (seconds)";
+                            : help::label("start_delay", "Start Delay (seconds)");
                             input(type = "number", id = "start_delay", name = "start_delay", value = ctx.field_value("start_delay").unwrap_or(&event.start_delay.to_string()), style = "width: 100%; max-width: 600px;");
                         });
 
                         : form_field("start_delay_open", &mut errors, html! {
-                            label(for = "start_delay_open") : "Start Delay Open (seconds)";
+                            : help::label("start_delay_open", "Start Delay Open (seconds)");
                             input(type = "text", id = "start_delay_open", name = "start_delay_open", value = ctx.field_value("start_delay_open").unwrap_or(
                                 &event.start_delay_open.map(|d| d.to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
@@ -444,11 +510,11 @@ async fn setup_form(
 
                         : form_field("restrict_chat_in_qualifiers", &mut errors, html! {
                             input(type = "checkbox", id = "restrict_chat_in_qualifiers", name = "restrict_chat_in_qualifiers", checked? = ctx.field_value("restrict_chat_in_qualifiers").map_or(event.restrict_chat_in_qualifiers, |value| value == "on"));
-                            label(for = "restrict_chat_in_qualifiers") : "Restrict Chat in Qualifiers";
+                            : help::label("restrict_chat_in_qualifiers", "Restrict Chat in Qualifiers");
                         });
 
                         : form_field("preroll_mode", &mut errors, html! {
-                            label(for = "preroll_mode") : "Preroll Mode";
+                            : help::label("preroll_mode", "Preroll Mode");
                             select(id = "preroll_mode", name = "preroll_mode", style = "width: 100%; max-width: 600px;") {
                                 @for (val, label) in &[("none", "None"), ("short", "Short"), ("medium", "Medium"), ("long", "Long")] {
                                     option(value = val, selected? = ctx.field_value("preroll_mode").map_or(&*event.preroll_mode == *val, |v| v == *val)) : *label;
@@ -457,7 +523,7 @@ async fn setup_form(
                         });
 
                         : form_field("spoiler_unlock", &mut errors, html! {
-                            label(for = "spoiler_unlock") : "Spoiler Log Unlock";
+                            : help::label("spoiler_unlock", "Spoiler Log Unlock");
                             select(id = "spoiler_unlock", name = "spoiler_unlock", style = "width: 100%; max-width: 600px;") {
                                 @for (val, label) in &[("never", "Never"), ("after", "After race"), ("immediately", "Immediately")] {
                                     option(value = val, selected? = ctx.field_value("spoiler_unlock").map_or(&*event.spoiler_unlock == *val, |v| v == *val)) : *label;
@@ -465,34 +531,31 @@ async fn setup_form(
                             }
                         });
 
-                        : form_field("is_custom_goal", &mut errors, html! {
-                            input(type = "checkbox", id = "is_custom_goal", name = "is_custom_goal", checked? = ctx.field_value("is_custom_goal").map_or(event.is_custom_goal, |value| value == "on"));
-                            label(for = "is_custom_goal") : "Is Custom Goal";
-                            label(class = "help") : " (When enabled, the racetime.gg goal is a custom goal rather than a standard one.)";
-                        });
+
 
                         : form_field("startgg_double_rr", &mut errors, html! {
                             input(type = "checkbox", id = "startgg_double_rr", name = "startgg_double_rr", checked? = ctx.field_value("startgg_double_rr").map_or(event.startgg_double_rr, |value| value == "on"));
-                            label(for = "startgg_double_rr") : "start.gg double round-robin mode";
+                            : help::label("startgg_double_rr", "start.gg double round-robin mode");
                             label(class = "help") : " (When enabled with a start.gg round-robin best-of-1 bracket, HTH schedules 2 games per set and force-closes the start.gg set after both are played.)";
                         });
 
                         : form_field("is_live_event", &mut errors, html! {
                             input(type = "checkbox", id = "is_live_event", name = "is_live_event", checked? = ctx.field_value("is_live_event").map_or(event.is_live_event, |value| value == "on"));
-                            label(for = "is_live_event") : "Is Live Event";
+                            : help::label("is_live_event", "Is Live Event");
                             label(class = "help") : " (In-person event: scheduled races after the event starts send notifications instead of creating racetime.gg rooms.)";
                         });
 
                         h3 : "Seed Generation";
 
                         : form_field("seed_gen_type", &mut errors, html! {
-                            label(for = "seed_gen_type") : "Seed Gen Type";
+                            : help::label("seed_gen_type", "Seed Gen Type");
                             select(id = "seed_gen_type", name = "seed_gen_type", style = "width: 100%; max-width: 600px;") {
                                 option(value = "", selected? = ctx.field_value("seed_gen_type").map_or(seed_gen_type_str.is_none(), |v| v.is_empty())) : "None (manual / external)";
                                 @for (val, label) in &[
                                     ("alttpr_dr", "ALTTPR Door Rando"),
                                     ("alttpr_avianart", "ALTTPR Avianart"),
-                                    ("owr", "ALTTPR OWR"),
+                                    ("owr", "ALTTPR OWR (regular build)"),
+                                    ("owr_tourney", "ALTTPR OWR (tournament build)"),
                                     ("ootr", "OoTR"),
                                     ("ootr_tfb", "OoTR Triforce Blitz"),
                                     ("ootr_rsl", "OoTR RSL"),
@@ -502,21 +565,16 @@ async fn setup_form(
                                     option(value = val, selected? = ctx.field_value("seed_gen_type").map_or(seed_gen_type_str.as_deref() == Some(val), |v| v == *val)) : *label;
                                 }
                             }
-                            label(class = "help") : " (Determines how seeds are generated for races in this event.)";
+                            label(class = "help") : "Choose OWR (regular build) for /opt/owr or OWR (tournament build) for /opt/owr_tourney. The selection applies to this event's live, async and practice seeds. Both accept the same JSON structure; use settings supported by the installed build.";
+                            p(class = "help") : "For pooled qualifiers, configure each mode's generator and baseline settings on the Qualifiers page after creating the event. Existing pooled OWR modes also use the tournament build. A branch name in Seed Config JSON does not switch installations.";
                         });
 
                         : form_field("seed_config", &mut errors, html! {
-                            label(for = "seed_config") : "Seed Config JSON";
+                            : help::label("seed_config", "Seed Config JSON");
                             textarea(id = "seed_config", name = "seed_config", rows = "6", style = "font-family: monospace; width: 100%; max-width: 800px;") {
                                 : ctx.field_value("seed_config").unwrap_or(&seed_config_string);
                             }
                             label(class = "help") : " (JSON config for the seed gen type. Leave empty if not applicable.)";
-                            details {
-                                summary : "Examples by seed gen type";
-                                pre(style = "font-size: 13px; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
-                                    : "// alttpr_dr — boothisman.de presets:\n{\"source\": \"boothisman\"}\n\n// alttpr_dr — teams agree on settings via custom_choices:\n{\"source\": \"mutual_choices\"}\n\n// alttpr_dr — mystery pool from a weights URL:\n{\"source\": \"mystery_pool\", \"mystery_weights_url\": \"https://example.com/weights.yaml\"}\n\n// owr — base settings plus per-choice config (label + patch + optional supercedes):\n{\"base_settings\":{\"shuffle\":\"crossed\"},\"choices\":{\"flute\":{\"label\":\"starting activated flute\",\"settings\":{\"flute_mode\":\"active\"},\"start_inventory\":[\"Ocarina (Activated)\"]}}}\n\n// twwr — default permalink:\n{\"permalink\": \"MS45MC4wAEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}";
-                                }
-                            }
                         });
                     }, errors.clone(), "Save Basic Info");
 
@@ -524,7 +582,7 @@ async fn setup_form(
 
                     : full_form(uri!(update_enter_flow(event.series, &*event.event)), csrf, html! {
                         : form_field("enter_flow_json", &mut errors, html! {
-                            label(for = "enter_flow_json") : "Enter Flow JSON";
+                            : help::label("enter_flow_json", "Enter Flow JSON");
                             textarea(id = "enter_flow_json", name = "enter_flow_json", rows = "10", style = "font-family: monospace; width: 100%; max-width: 800px;") {
                                 : ctx.field_value("enter_flow_json").unwrap_or(&enter_flow_string);
                             }
@@ -800,7 +858,7 @@ async fn setup_form(
 
                     : full_form(uri!(add_organizer(event.series, &*event.event)), csrf, html! {
                         : form_field("organizer", &mut errors, html! {
-                            label(for = "organizer") : "Add Organizer";
+                            : help::label("organizer", "Add Organizer");
                             div(class = "autocomplete-container", style = "width: 100%; max-width: 600px;") {
                                 input(type = "text", id = "organizer", name = "organizer", autocomplete = "off", style = "width: 100%;");
                                 div(id = "organizer-suggestions", class = "suggestions", style = "display: none;") {}
@@ -831,7 +889,7 @@ async fn setup_form(
                     h3 : "Copy organizers from another event";
                     : full_form(uri!(copy_organizers(event.series, &*event.event)), csrf, html! {
                         : form_field("source_event", &mut errors, html! {
-                            label(for = "copy_source_event") : "Copy organizers from:";
+                            : help::label("copy_source_event", "Copy organizers from:");
                             select(id = "copy_source_event", name = "source_event") {
                                 option(value = "") : "-- Select event --";
                                 @for ev in &all_events {
@@ -878,6 +936,7 @@ async fn setup_form(
             : header;
             : content;
             script(src = static_url!("user-search.js")) {}
+            script(src = static_url!("setting-help.js")) {}
         },
     )
     .await?)
@@ -2192,7 +2251,7 @@ fn create_form_content(
 
                     : full_form(uri!(create_post), csrf, html! {
                         : form_field("series", &mut errors, html! {
-                            label(for = "series") : "Series";
+                            : help::label("series", "Series");
                             select(id = "series", name = "series", style = "width: 100%; max-width: 600px;") {
                                 @for series in all::<Series>() {
                                     option(value = series.slug(), selected? = ctx.field_value("series").map_or(false, |v| v == series.slug())) : series.display_name();
@@ -2201,7 +2260,7 @@ fn create_form_content(
                         });
 
                         : form_field("event", &mut errors, html! {
-                            label(for = "event") : "Event Slug";
+                            : help::label("event", "Event Slug");
                             input(type = "text", id = "event", name = "event", value = ctx.field_value("event").unwrap_or(&String::new()), style = "width: 100%; max-width: 600px;");
                             label(class = "help") : " (e.g. \"2025\", \"s1\")";
                         });
@@ -2212,7 +2271,7 @@ fn create_form_content(
                         });
 
                         : form_field("team_config", &mut errors, html! {
-                            label(for = "team_config") : "Team Configuration";
+                            : help::label("team_config", "Team Configuration");
                             select(id = "team_config", name = "team_config", style = "width: 100%; max-width: 600px;") {
                                 option(value = "solo", selected? = ctx.field_value("team_config").map_or(true, |v| v == "solo")) : "Solo";
                                 option(value = "coop", selected? = ctx.field_value("team_config").map_or(false, |v| v == "coop")) : "Co-op";
@@ -2223,7 +2282,7 @@ fn create_form_content(
                         });
 
                         : form_field("language", &mut errors, html! {
-                            label(for = "language") : "Language";
+                            : help::label("language", "Language");
                             select(id = "language", name = "language", style = "width: 100%; max-width: 600px;") {
                                 option(value = "en", selected? = ctx.field_value("language").map_or(true, |v| v == "en")) : "English";
                                 option(value = "fr", selected? = ctx.field_value("language").map_or(false, |v| v == "fr")) : "French";
@@ -2234,19 +2293,25 @@ fn create_form_content(
 
                         : form_field("listed", &mut errors, html! {
                             input(type = "checkbox", id = "listed", name = "listed", checked? = ctx.field_value("listed").map_or(false, |value| value == "on"));
-                            label(for = "listed") : "Listed";
+                            : help::label("listed", "Listed");
                             label(class = "help") : " (Show this event on the main page)";
                         });
 
                         h3 : "Racetime Bot Configuration";
 
                         : form_field("racetime_goal_slug", &mut errors, html! {
-                            label(for = "racetime_goal_slug") : "Goal Slug";
+                            : help::label("racetime_goal_slug", "Goal Slug");
                             input(type = "text", id = "racetime_goal_slug", name = "racetime_goal_slug", value = ctx.field_value("racetime_goal_slug").unwrap_or(""), style = "width: 100%; max-width: 600px;", placeholder = "Exact goal string on racetime.gg (empty = no goal)");
                         });
 
+                        : form_field("is_custom_goal", &mut errors, html! {
+                            input(type = "checkbox", id = "is_custom_goal", name = "is_custom_goal", checked? = ctx.field_value("is_custom_goal").map_or(true, |value| value == "on"));
+                            : help::label("is_custom_goal", "Is Custom Goal");
+                            label(class = "help") : " (When enabled, the racetime.gg goal is a custom goal rather than a standard one.)";
+                        });
+
                         : form_field("draft_kind", &mut errors, html! {
-                            label(for = "draft_kind") : "Draft Kind";
+                            : help::label("draft_kind", "Draft Kind");
                             select(id = "draft_kind", name = "draft_kind", style = "width: 100%; max-width: 600px;") {
                                 option(value = "", selected? = ctx.field_value("draft_kind").map_or(true, |v| v.is_empty())) : "None";
                                 @for (slug, label) in &[
@@ -2268,7 +2333,7 @@ fn create_form_content(
                         });
 
                         : form_field("draft_config", &mut errors, html! {
-                            label(for = "draft_config") : "Draft Config JSON";
+                            : help::label("draft_config", "Draft Config JSON");
                             textarea(id = "draft_config", name = "draft_config", rows = "6", style = "font-family: monospace; width: 100%; max-width: 800px;") {
                                 : ctx.field_value("draft_config").unwrap_or(&String::new());
                             }
@@ -2276,17 +2341,17 @@ fn create_form_content(
                         });
 
                         : form_field("qualifier_mode", &mut errors, html! {
-                            label(for = "qualifier_mode") : "Qualification method";
+                            : help::label("qualifier_mode", "Qualification method");
                             select(id = "qualifier_mode", name = "qualifier_mode") {
                                 @for (slug, label) in [("none", "No qualification"), ("rank", "Stored qualifier ranks"), ("single", "Single async qualifier"), ("score", "Configured scoring"), ("pooled_by_mode", "Pooled by mode")] {
                                     option(value = slug, selected? = ctx.field_value("qualifier_mode").unwrap_or("none") == slug) : label;
                                 }
                             }
-                            label(class = "help") : "Choose how entrants qualify. Stored ranks and async submissions only affect qualification when their method is selected. Configured scoring combines live qualifier races and qualifier async results.";
+                            label(class = "help") : "Choose how entrants qualify. For Stored qualifier ranks, assign entrant ranks on the Qualifiers page after creating the event. Ranks and async submissions only affect qualification when their method is selected. Configured scoring combines live qualifier races and qualifier async results.";
                         });
 
                         : form_field("qualifier_score_kind", &mut errors, html! {
-                            label(for = "qualifier_score_kind") : "Qualifier Score Kind";
+                            : help::label("qualifier_score_kind", "Qualifier Score Kind");
                             select(id = "qualifier_score_kind", name = "qualifier_score_kind", style = "width: 100%; max-width: 600px;") {
                                 option(value = "", selected? = ctx.field_value("qualifier_score_kind").map_or(true, |v| v.is_empty())) : "None";
                                 @for (slug, label) in &[
@@ -2298,47 +2363,51 @@ fn create_form_content(
                                     ("twwr_miniblins26", "TWWR Miniblins 26"),
                                     ("twwr_main", "TWWR Main"),
                                 ] {
-                                    option(value = slug, selected? = ctx.field_value("qualifier_score_kind").map_or(false, |v| v == *slug)) : *label;
+                                    @let defaults = super::scoring::ParScoreConfig::for_kind(slug, None)
+                                        .expect("built-in scoring defaults are valid")
+                                        .map(|config| serde_json::to_string_pretty(&config).expect("scoring defaults serialize"))
+                                        .unwrap_or_else(|| "{}".into());
+                                    option(value = slug, data_score_defaults = defaults, selected? = ctx.field_value("qualifier_score_kind").map_or(false, |v| v == *slug)) : *label;
                                 }
                             }
                         });
 
                         : form_field("qualifier_score_config", &mut errors, html! {
-                            label(for = "qualifier_score_config") : "Qualifier scoring parameters (JSON)";
+                            : help::label("qualifier_score_config", "Qualifier scoring parameters (JSON)");
                             textarea(id = "qualifier_score_config", name = "qualifier_score_config", rows = "5", style = "font-family: monospace; width: 100%; max-width: 800px;") {
                                 : ctx.field_value("qualifier_score_config").unwrap_or("");
                             }
-                            label(class = "help") : "Leave empty for the selected strategy's defaults. Example: {\"par_finishers\":4,\"required_finishes\":3,\"counted_attempts\":6,\"best_results\":3}.";
+                            label(class = "help") : "Selecting a scoring kind fills in its default parameters. Edit these values to customize scoring. An empty object means this kind has no configurable parameters.";
                         });
 
                         : form_field("is_single_race", &mut errors, html! {
                             input(type = "checkbox", id = "is_single_race", name = "is_single_race", checked? = ctx.field_value("is_single_race").map_or(false, |value| value == "on"));
-                            label(for = "is_single_race") : "Single Race Event";
+                            : help::label("is_single_race", "Single Race Event");
                         });
 
                         : form_field("hide_entrants", &mut errors, html! {
                             input(type = "checkbox", id = "hide_entrants", name = "hide_entrants", checked? = ctx.field_value("hide_entrants").map_or(false, |value| value == "on"));
-                            label(for = "hide_entrants") : "Hide Entrants";
+                            : help::label("hide_entrants", "Hide Entrants");
                         });
 
                         : form_field("start_delay", &mut errors, html! {
-                            label(for = "start_delay") : "Start Delay (seconds)";
+                            : help::label("start_delay", "Start Delay (seconds)");
                             input(type = "number", id = "start_delay", name = "start_delay", value = ctx.field_value("start_delay").unwrap_or(&"15".to_owned()), style = "width: 100%; max-width: 600px;");
                         });
 
                         : form_field("start_delay_open", &mut errors, html! {
-                            label(for = "start_delay_open") : "Start Delay Open (seconds)";
+                            : help::label("start_delay_open", "Start Delay Open (seconds)");
                             input(type = "text", id = "start_delay_open", name = "start_delay_open", value = ctx.field_value("start_delay_open").unwrap_or(&String::new()), style = "width: 100%; max-width: 600px;");
                             label(class = "help") : " (Leave empty to use same as Start Delay)";
                         });
 
                         : form_field("restrict_chat_in_qualifiers", &mut errors, html! {
                             input(type = "checkbox", id = "restrict_chat_in_qualifiers", name = "restrict_chat_in_qualifiers", checked? = ctx.field_value("restrict_chat_in_qualifiers").map_or(false, |value| value == "on"));
-                            label(for = "restrict_chat_in_qualifiers") : "Restrict Chat in Qualifiers";
+                            : help::label("restrict_chat_in_qualifiers", "Restrict Chat in Qualifiers");
                         });
 
                         : form_field("preroll_mode", &mut errors, html! {
-                            label(for = "preroll_mode") : "Preroll Mode";
+                            : help::label("preroll_mode", "Preroll Mode");
                             select(id = "preroll_mode", name = "preroll_mode", style = "width: 100%; max-width: 600px;") {
                                 @for (val, label) in &[("none", "None"), ("short", "Short"), ("medium", "Medium"), ("long", "Long")] {
                                     option(value = val, selected? = ctx.field_value("preroll_mode").map_or(*val == "medium", |v| v == *val)) : *label;
@@ -2347,7 +2416,7 @@ fn create_form_content(
                         });
 
                         : form_field("spoiler_unlock", &mut errors, html! {
-                            label(for = "spoiler_unlock") : "Spoiler Log Unlock";
+                            : help::label("spoiler_unlock", "Spoiler Log Unlock");
                             select(id = "spoiler_unlock", name = "spoiler_unlock", style = "width: 100%; max-width: 600px;") {
                                 @for (val, label) in &[("never", "Never"), ("after", "After race"), ("immediately", "Immediately")] {
                                     option(value = val, selected? = ctx.field_value("spoiler_unlock").map_or(*val == "after", |v| v == *val)) : *label;
@@ -2355,28 +2424,25 @@ fn create_form_content(
                             }
                         });
 
-                        : form_field("is_custom_goal", &mut errors, html! {
-                            input(type = "checkbox", id = "is_custom_goal", name = "is_custom_goal", checked? = ctx.field_value("is_custom_goal").map_or(true, |value| value == "on"));
-                            label(for = "is_custom_goal") : "Is Custom Goal";
-                            label(class = "help") : " (When enabled, the racetime.gg goal is a custom goal rather than a standard one.)";
-                        });
+
 
                         : form_field("is_live_event", &mut errors, html! {
                             input(type = "checkbox", id = "is_live_event", name = "is_live_event", checked? = ctx.field_value("is_live_event").map_or(false, |value| value == "on"));
-                            label(for = "is_live_event") : "Is Live Event";
+                            : help::label("is_live_event", "Is Live Event");
                             label(class = "help") : " (In-person event: scheduled races after the event starts send notifications instead of creating racetime.gg rooms.)";
                         });
 
                         h3 : "Seed Generation";
 
                         : form_field("seed_gen_type", &mut errors, html! {
-                            label(for = "seed_gen_type") : "Seed Gen Type";
+                            : help::label("seed_gen_type", "Seed Gen Type");
                             select(id = "seed_gen_type", name = "seed_gen_type", style = "width: 100%; max-width: 600px;") {
                                 option(value = "", selected? = ctx.field_value("seed_gen_type").map_or(true, |v| v.is_empty())) : "None (manual / external)";
                                 @for (val, label) in &[
                                     ("alttpr_dr", "ALTTPR Door Rando"),
                                     ("alttpr_avianart", "ALTTPR Avianart"),
-                                    ("owr", "ALTTPR OWR"),
+                                    ("owr", "ALTTPR OWR (regular build)"),
+                                    ("owr_tourney", "ALTTPR OWR (tournament build)"),
                                     ("ootr", "OoTR"),
                                     ("ootr_tfb", "OoTR Triforce Blitz"),
                                     ("ootr_rsl", "OoTR RSL"),
@@ -2386,23 +2452,20 @@ fn create_form_content(
                                     option(value = val, selected? = ctx.field_value("seed_gen_type").map_or(false, |v| v == *val)) : *label;
                                 }
                             }
-                            label(class = "help") : " (Determines how seeds are generated for races in this event.)";
+                            label(class = "help") : "Choose OWR (regular build) for /opt/owr or OWR (tournament build) for /opt/owr_tourney. The selection applies to this event's live, async and practice seeds. Both accept the same JSON structure; use settings supported by the installed build.";
+                            p(class = "help") : "For pooled qualifiers, configure each mode's generator and baseline settings on the Qualifiers page after creating the event. Existing pooled OWR modes also use the tournament build. A branch name in Seed Config JSON does not switch installations.";
                         });
 
                         : form_field("seed_config", &mut errors, html! {
-                            label(for = "seed_config") : "Seed Config JSON";
+                            : help::label("seed_config", "Seed Config JSON");
                             textarea(id = "seed_config", name = "seed_config", rows = "6", style = "font-family: monospace; width: 100%; max-width: 800px;") {
                                 : ctx.field_value("seed_config").unwrap_or(&String::new());
                             }
                             label(class = "help") : " (JSON config for the seed gen type. Leave empty if not applicable.)";
-                            details {
-                                summary : "Examples by seed gen type";
-                                pre(style = "font-size: 13px; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
-                                    : "// alttpr_dr — boothisman.de presets:\n{\"source\": \"boothisman\"}\n\n// alttpr_dr — teams agree on settings via custom_choices:\n{\"source\": \"mutual_choices\"}\n\n// alttpr_dr — mystery pool from a weights URL:\n{\"source\": \"mystery_pool\", \"mystery_weights_url\": \"https://example.com/weights.yaml\"}\n\n// owr — base settings plus per-choice config (label + patch + optional supercedes):\n{\"base_settings\":{\"shuffle\":\"crossed\"},\"choices\":{\"flute\":{\"label\":\"starting activated flute\",\"settings\":{\"flute_mode\":\"active\"},\"start_inventory\":[\"Ocarina (Activated)\"]}}}\n\n// twwr — default permalink:\n{\"permalink\": \"MS45MC4wAEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}";
-                                }
-                            }
                         });
                     }, errors.clone(), "Create Event");
+                    script(src = static_url!("qualifier-score-config.js")) {}
+                    script(src = static_url!("setting-help.js")) {}
                 }
             }
         } else {

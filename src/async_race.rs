@@ -351,7 +351,7 @@ impl AsyncRaceManager {
             event.seed_gen_type.as_ref()
         {
             let choices = racetime_bot::owr_choices_for_race(db_pool, race).await;
-            let Some(racetime_bot::seed_gen_type::SeedGenType::Owr { config }) =
+            let Some(racetime_bot::seed_gen_type::SeedGenType::Owr { config, .. }) =
                 event.seed_gen_type.as_ref()
             else {
                 unreachable!()
